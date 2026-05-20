@@ -1,20 +1,33 @@
 /**
- * M1 minimal dashboard:
- *   - top bar lists installed CLI plugins (loaded from /api/plugins),
- *   - each "Spawn" button creates an agent and opens an XtermPane,
- *   - panes laid out as a simple CSS Grid (M2 will dress this up).
+ * M2 dashboard:
+ *   - top bar lists installed CLI plugins; each button spawns one agent.
+ *   - main area is an adaptive grid: cols = ceil(sqrt(visible)), capped at 6.
+ *   - per-pane minimize / maximize / kill controls.
+ *
+ * Layout invariants (intentional):
+ *   - panes that are minimized or hidden behind a maximize use `display:none`
+ *     and stay mounted, so the WS+PTY stays alive without reconnect cost.
+ *     XtermPane's ResizeObserver no-ops while host is 0x0, then refits when
+ *     visibility returns. Reconnecting would lose terminal scrollback and
+ *     re-trigger the CLI's "Welcome" sequence — both jarring.
+ *   - cols cap at 6: ~Math.ceil(sqrt(40))=7 already gives <250px panes on a
+ *     1500px-wide window; beyond 6 the terminal grid becomes unreadable.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api } from "./api/http";
 import type { CliPluginInfo, SpawnAgentResponse } from "./api/types";
 import { XtermPane } from "./components/XtermPane";
+
+const MAX_COLS = 6;
 
 export default function App() {
   const [plugins, setPlugins] = useState<CliPluginInfo[]>([]);
   const [pluginsError, setPluginsError] = useState<string | null>(null);
   const [agents, setAgents] = useState<SpawnAgentResponse[]>([]);
   const [spawning, setSpawning] = useState(false);
+  const [maximized, setMaximized] = useState<string | null>(null);
+  const [minimized, setMinimized] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     api
@@ -44,7 +57,47 @@ export default function App() {
       console.warn("kill failed", err);
     }
     setAgents((prev) => prev.filter((a) => a.agent_id !== agentId));
+    setMinimized((prev) => {
+      if (!prev.has(agentId)) return prev;
+      const next = new Set(prev);
+      next.delete(agentId);
+      return next;
+    });
+    setMaximized((cur) => (cur === agentId ? null : cur));
   };
+
+  const toggleMinimize = (agentId: string) => {
+    setMinimized((prev) => {
+      const next = new Set(prev);
+      if (next.has(agentId)) next.delete(agentId);
+      else next.add(agentId);
+      return next;
+    });
+    setMaximized((cur) => (cur === agentId ? null : cur));
+  };
+
+  const toggleMaximize = (agentId: string) => {
+    setMaximized((cur) => (cur === agentId ? null : agentId));
+    setMinimized((prev) => {
+      if (!prev.has(agentId)) return prev;
+      const next = new Set(prev);
+      next.delete(agentId);
+      return next;
+    });
+  };
+
+  const visibleAgents = useMemo(() => {
+    if (maximized) return agents.filter((a) => a.agent_id === maximized);
+    return agents.filter((a) => !minimized.has(a.agent_id));
+  }, [agents, maximized, minimized]);
+
+  const cols = useMemo(() => {
+    if (maximized) return 1;
+    if (visibleAgents.length === 0) return 1;
+    return Math.min(MAX_COLS, Math.ceil(Math.sqrt(visibleAgents.length)));
+  }, [maximized, visibleAgents.length]);
+
+  const dockAgents = agents.filter((a) => minimized.has(a.agent_id));
 
   return (
     <div
@@ -65,9 +118,12 @@ export default function App() {
           flexWrap: "wrap",
         }}
       >
-        <strong style={{ fontSize: 14 }}>flockmux M1</strong>
+        <strong style={{ fontSize: 14 }}>flockmux M2</strong>
         <span style={{ color: "#64748b", fontSize: 12 }}>
           local single-user — loopback only
+        </span>
+        <span style={{ color: "#64748b", fontSize: 12 }}>
+          agents: {agents.length} · visible: {visibleAgents.length} · cols: {cols}
         </span>
         <div style={{ flex: 1 }} />
         {pluginsError && (
@@ -94,8 +150,7 @@ export default function App() {
           padding: 8,
           display: "grid",
           gap: 8,
-          gridTemplateColumns:
-            agents.length <= 1 ? "1fr" : "repeat(2, minmax(0, 1fr))",
+          gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`,
           gridAutoRows: "minmax(0, 1fr)",
         }}
       >
@@ -113,42 +168,100 @@ export default function App() {
             No agents yet — pick a CLI above to spawn one.
           </div>
         )}
-        {agents.map((agent) => (
-          <div
-            key={agent.agent_id}
-            style={{
-              display: "flex",
-              flexDirection: "column",
-              border: "1px solid #374151",
-              borderRadius: 6,
-              minHeight: 0,
-              overflow: "hidden",
-            }}
-          >
+        {agents.map((agent) => {
+          const isMinimized = minimized.has(agent.agent_id);
+          const isMaximized = maximized === agent.agent_id;
+          const hidden =
+            (maximized !== null && !isMaximized) || (!maximized && isMinimized);
+          return (
             <div
+              key={agent.agent_id}
               style={{
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-                padding: "4px 8px",
-                background: "#1f2937",
-                fontSize: 12,
+                display: hidden ? "none" : "flex",
+                flexDirection: "column",
+                border: "1px solid #374151",
+                borderRadius: 6,
+                minHeight: 0,
+                overflow: "hidden",
               }}
             >
-              <span>
-                <strong>{agent.role}</strong>
-                <span style={{ color: "#94a3b8", marginLeft: 8 }}>
-                  {agent.cli}
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  padding: "4px 8px",
+                  background: "#1f2937",
+                  fontSize: 12,
+                  gap: 8,
+                }}
+              >
+                <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>
+                  <strong>{agent.role}</strong>
+                  <span style={{ color: "#94a3b8", marginLeft: 8 }}>
+                    {agent.cli}
+                  </span>
                 </span>
-              </span>
-              <button onClick={() => kill(agent.agent_id)}>kill</button>
+                <span style={{ display: "flex", gap: 4 }}>
+                  <button
+                    onClick={() => toggleMinimize(agent.agent_id)}
+                    title="minimize"
+                  >
+                    _
+                  </button>
+                  <button
+                    onClick={() => toggleMaximize(agent.agent_id)}
+                    title={isMaximized ? "restore" : "maximize"}
+                  >
+                    {isMaximized ? "❐" : "□"}
+                  </button>
+                  <button onClick={() => kill(agent.agent_id)} title="kill">
+                    ×
+                  </button>
+                </span>
+              </div>
+              <div style={{ flex: 1, minHeight: 0 }}>
+                <XtermPane agentId={agent.agent_id} />
+              </div>
             </div>
-            <div style={{ flex: 1, minHeight: 0 }}>
-              <XtermPane agentId={agent.agent_id} />
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </main>
+
+      {dockAgents.length > 0 && (
+        <footer
+          style={{
+            display: "flex",
+            gap: 6,
+            flexWrap: "wrap",
+            padding: "6px 8px",
+            background: "#111827",
+            borderTop: "1px solid #374151",
+            fontSize: 12,
+          }}
+        >
+          <span style={{ color: "#64748b", alignSelf: "center" }}>
+            minimized:
+          </span>
+          {dockAgents.map((a) => (
+            <button
+              key={a.agent_id}
+              onClick={() => toggleMinimize(a.agent_id)}
+              title={`restore ${a.agent_id}`}
+              style={{
+                background: "#1f2937",
+                color: "#cbd5f5",
+                border: "1px solid #374151",
+                borderRadius: 4,
+                padding: "2px 8px",
+              }}
+            >
+              {a.role}{" "}
+              <span style={{ color: "#64748b" }}>({a.agent_id.slice(-8)})</span>
+            </button>
+          ))}
+        </footer>
+      )}
     </div>
   );
 }

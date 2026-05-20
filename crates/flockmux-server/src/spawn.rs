@@ -25,13 +25,10 @@ pub fn spawn_agent(
     let agent_id = format!("{}-{}", plugin.id, &Uuid::new_v4().to_string()[..8]);
     let workspace = ensure_workspace(workspace_root, &agent_id)?;
 
-    // Skip claude's "Do you trust this folder?" prompt for workspaces we
-    // created ourselves under ~/.flockmux/.
-    if plugin.auto_trust_workspace && plugin.id == "claude" {
-        if let Err(err) = crate::trust::mark_claude_workspace_trusted(&workspace) {
-            tracing::warn!(?err, "auto-trust patch failed; user will see the prompt");
-        }
-    }
+    // Suppress per-CLI interactive prompts that would block a headless PTY
+    // (claude's "trust folder", codex's "update available"). Each patch is a
+    // no-op when not configured / not applicable.
+    crate::pre_spawn::run_patches(plugin, &workspace);
 
     let mut argv = Vec::with_capacity(2 + plugin.default_args.len());
     argv.push(shim_path.to_string_lossy().into_owned());

@@ -11,3 +11,13 @@ default_args = []
 ready_detect = "shim_osc"
 mcp_inject = "none"
 home_env = "HOME"
+# Codex prints "Update available! Press enter to continue" on startup which
+# blocks the headless PTY. Pre-spawn we set
+# `~/.codex/version.json: dismissed_version = latest_version` so the gate is
+# already cleared. Codex still tells the user about updates outside flockmux.
+auto_dismiss_update = true
+# Codex also asks "Do you trust the contents of this directory?" the first
+# time it sees a path. Workspaces under ~/.flockmux/workspaces/ are flockmux's
+# own — append `[projects."<ws>"] trust_level = "trusted"` to
+# ~/.codex/config.toml pre-spawn.
+auto_trust_workspace = true

@@ -28,3 +28,6 @@ parking_lot.workspace = true
 futures = "0.3"
 flockmux-protocol = { path = "../flockmux-protocol" }
 flockmux-pty = { path = "../flockmux-pty" }
+
+[dev-dependencies]
+tempfile = "3"

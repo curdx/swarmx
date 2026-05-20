@@ -9,10 +9,10 @@
 //! Bind: 127.0.0.1:7777 (loopback only — no auth, single-user local).
 
 mod plugins;
+mod pre_spawn;
 mod registry;
 mod routes;
 mod spawn;
-mod trust;
 
 use anyhow::{Context, Result};
 use axum::{

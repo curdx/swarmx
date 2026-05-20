@@ -33,6 +33,13 @@ pub struct CliPlugin {
     /// `~/.claude.json: projects[<ws>].hasTrustDialogAccepted = true`).
     #[serde(default)]
     pub auto_trust_workspace: bool,
+    /// If true, the host suppresses the CLI's "an update is available"
+    /// prompt before spawn — those prompts otherwise block the headless PTY
+    /// waiting on a single keystroke we have no way to deliver. Currently
+    /// only honoured for `id = "codex"` (writes
+    /// `~/.codex/version.json: dismissed_version = latest_version`).
+    #[serde(default)]
+    pub auto_dismiss_update: bool,
 }
 
 fn default_ready_detect() -> String { "shim_osc".into() }
