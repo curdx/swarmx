@@ -221,7 +221,7 @@ export default function App() {
                 </span>
               </div>
               <div style={{ flex: 1, minHeight: 0 }}>
-                <XtermPane agentId={agent.agent_id} />
+                <XtermPane agentId={agent.agent_id} visible={!hidden} />
               </div>
             </div>
           );

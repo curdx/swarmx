@@ -8,17 +8,18 @@
  *                          ←──── binary: [4B seq][PTY bytes]
  *                                text:   ServerControl JSON
  *
- * M1 scope:
- *   - WebGL renderer with Canvas fallback on context loss.
- *   - Unicode 11 + FitAddon + WebLinks.
+ * M2 renderer policy: WebGL is gated through `lib/webglPool` so the page
+ * stays under the browser's ~16-context limit. Panes that don't get a slot
+ * (cap reached, in cooldown after a context-loss event, or `visible=false`)
+ * fall back to xterm's DOM renderer — slower but never lost. Slots are
+ * released the instant a pane goes hidden and re-acquired on show.
+ *
+ * Other notes:
+ *   - Unicode 11 + FitAddon + WebLinks load once at mount.
  *   - seq number is read but only validated for monotonicity (no resume
  *     replay yet — M3).
  *   - ACK is batched every 5KB or 50ms (server-side currently ignores
  *     them; harmless to send).
- *
- * References:
- *   - hermes-agent web/src/pages/ChatPage.tsx (xterm WebGL + ResizeObserver)
- *   - golutra src/features/terminal/TerminalPane.vue (WebGL cooldown, ACK)
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -28,9 +29,16 @@ import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { WebglAddon } from "@xterm/addon-webgl";
 import type { ServerControl, ClientControl } from "../api/types";
+import { acquireSlot, releaseSlot, reportContextLoss } from "../lib/webglPool";
 
 interface Props {
   agentId: string;
+  /**
+   * When false the pane is hidden (display:none or behind another maximised
+   * pane). We dispose the WebGL addon and release its pool slot so other
+   * panes can take it; on next `true` we try to reacquire.
+   */
+  visible?: boolean;
   onShimReady?: () => void;
   onShimExit?: (code: number) => void;
 }
@@ -39,8 +47,16 @@ const ACK_BYTES = 5 * 1024;
 const ACK_INTERVAL_MS = 50;
 const RESIZE_DEBOUNCE_MS = 150;
 
-export function XtermPane({ agentId, onShimReady, onShimExit }: Props) {
+export function XtermPane({
+  agentId,
+  visible = true,
+  onShimReady,
+  onShimExit,
+}: Props) {
   const hostRef = useRef<HTMLDivElement | null>(null);
+  const termRef = useRef<Terminal | null>(null);
+  const webglRef = useRef<WebglAddon | null>(null);
+  const fitAddonRef = useRef<FitAddon | null>(null);
   const [status, setStatus] = useState<
     "connecting" | "spawning" | "ready" | "exited" | "error"
   >("connecting");
@@ -73,22 +89,10 @@ export function XtermPane({ agentId, onShimReady, onShimExit }: Props) {
 
     term.open(host);
 
-    let webgl: WebglAddon | null = null;
-    try {
-      webgl = new WebglAddon();
-      webgl.onContextLoss(() => {
-        webgl?.dispose();
-        webgl = null;
-        // eslint-disable-next-line no-console
-        console.warn(
-          `[XtermPane ${agentId}] WebGL context lost; falling back to canvas`,
-        );
-      });
-      term.loadAddon(webgl);
-    } catch (err) {
-      // eslint-disable-next-line no-console
-      console.warn(`[XtermPane ${agentId}] WebGL not available`, err);
-    }
+    termRef.current = term;
+    fitAddonRef.current = fitAddon;
+    // WebGL is attached/detached by the `visible`-driven effect below — DOM
+    // is the default renderer until that effect grants a pool slot.
 
     // Defer first fit() until host actually has layout dimensions — calling
     // it synchronously after term.open() blows up with "dimensions undefined"
@@ -259,14 +263,75 @@ export function XtermPane({ agentId, onShimReady, onShimExit }: Props) {
         /* noop */
       }
       try {
-        webgl?.dispose();
+        webglRef.current?.dispose();
       } catch {
         /* noop */
       }
+      webglRef.current = null;
+      releaseSlot(agentId);
+      termRef.current = null;
+      fitAddonRef.current = null;
       term.dispose();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agentId]);
+
+  // Visibility-driven WebGL acquire/release. Separate effect so it can run
+  // after the terminal is mounted *and* whenever the parent toggles `visible`
+  // (maximize/minimize). DOM is the silent fallback when we can't get a slot.
+  useEffect(() => {
+    const term = termRef.current;
+    const fit = fitAddonRef.current;
+    if (!term) return;
+
+    if (visible) {
+      if (webglRef.current) return;
+      if (!acquireSlot(agentId)) {
+        // Cap reached or in cooldown — stay on DOM renderer.
+        return;
+      }
+      try {
+        const webgl = new WebglAddon();
+        webgl.onContextLoss(() => {
+          // eslint-disable-next-line no-console
+          console.warn(`[XtermPane ${agentId}] WebGL context lost`);
+          reportContextLoss(agentId);
+          try {
+            webgl.dispose();
+          } catch {
+            /* noop */
+          }
+          if (webglRef.current === webgl) webglRef.current = null;
+        });
+        term.loadAddon(webgl);
+        webglRef.current = webgl;
+        // Re-fit after attaching — atlas resets glyph cache and the new
+        // renderer needs the current cols/rows to match the host.
+        requestAnimationFrame(() => {
+          try {
+            fit?.fit();
+          } catch {
+            /* noop */
+          }
+        });
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn(`[XtermPane ${agentId}] WebGL acquire failed`, err);
+        releaseSlot(agentId);
+      }
+    } else {
+      // Hidden: free the slot so visible panes can have it.
+      if (webglRef.current) {
+        try {
+          webglRef.current.dispose();
+        } catch {
+          /* noop */
+        }
+        webglRef.current = null;
+      }
+      releaseSlot(agentId);
+    }
+  }, [visible, agentId]);
 
   return (
     <div
