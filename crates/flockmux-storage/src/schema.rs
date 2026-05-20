@@ -1,0 +1,48 @@
+//! Migration runner. Single-shot for now (only 0001_init) but structured so
+//! future migrations slot in as additional `include_str!` entries.
+//!
+//! Each migration runs inside `BEGIN IMMEDIATE` so a concurrent reader
+//! cannot observe a half-applied schema (SQLite WAL allows readers during
+//! writes, and our triggers + FTS5 are not atomic-without-tx).
+
+use anyhow::{Context, Result};
+use rusqlite::Connection;
+
+const MIGRATION_0001: &str = include_str!("../migrations/0001_init.sql");
+
+pub(crate) fn run_migrations(conn: &mut Connection) -> Result<()> {
+    let current = current_version(conn).unwrap_or(0);
+    tracing::debug!(current, "running flockmux-storage migrations");
+
+    if current < 1 {
+        apply(conn, 1, MIGRATION_0001).context("apply migration 0001")?;
+    }
+    Ok(())
+}
+
+fn current_version(conn: &Connection) -> Result<i64> {
+    // schema_version may not exist yet (fresh DB).
+    let exists: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='schema_version'",
+        [],
+        |row| row.get(0),
+    )?;
+    if exists == 0 {
+        return Ok(0);
+    }
+    let v: i64 = conn.query_row(
+        "SELECT COALESCE(MAX(version), 0) FROM schema_version",
+        [],
+        |row| row.get(0),
+    )?;
+    Ok(v)
+}
+
+fn apply(conn: &mut Connection, version: i64, sql: &str) -> Result<()> {
+    let tx = conn.transaction()?;
+    // execute_batch handles the multi-statement migration in one call.
+    tx.execute_batch(sql)
+        .with_context(|| format!("execute migration {version}"))?;
+    tx.commit()?;
+    Ok(())
+}

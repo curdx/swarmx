@@ -49,6 +49,16 @@ dashmap = "6"
 parking_lot = "0.12"
 uuid = { version = "1", features = ["v4", "serde"] }
 
+# storage
+rusqlite = { version = "0.39", features = ["bundled", "limits"] }
+r2d2 = "0.8"
+r2d2_sqlite = "0.34"
+
+# swarm
+notify = "8.2"
+notify-debouncer-full = "0.7"
+sha2 = "0.10"
+
 [profile.release]
 lto = "thin"
 codegen-units = 1
