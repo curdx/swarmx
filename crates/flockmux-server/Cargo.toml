@@ -1,0 +1,30 @@
+[package]
+name = "flockmux-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "flockmux-server"
+path = "src/main.rs"
+
+[dependencies]
+axum.workspace = true
+tower.workspace = true
+tower-http.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+bytes.workspace = true
+dashmap.workspace = true
+uuid.workspace = true
+parking_lot.workspace = true
+futures = "0.3"
+flockmux-protocol = { path = "../flockmux-protocol" }
+flockmux-pty = { path = "../flockmux-pty" }

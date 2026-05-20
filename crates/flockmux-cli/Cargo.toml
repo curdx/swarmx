@@ -1,0 +1,12 @@
+[package]
+name = "flockmux-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "flockmux"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true

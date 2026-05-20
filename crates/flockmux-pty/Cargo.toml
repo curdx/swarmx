@@ -1,0 +1,15 @@
+[package]
+name = "flockmux-pty"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+portable-pty.workspace = true
+tokio.workspace = true
+bytes.workspace = true
+tracing.workspace = true
+parking_lot.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+flockmux-protocol = { path = "../flockmux-protocol" }

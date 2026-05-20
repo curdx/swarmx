@@ -1,0 +1,12 @@
+[package]
+name = "flockmux-swarm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+tokio.workspace = true
+dashmap.workspace = true
+serde.workspace = true
+tracing.workspace = true
+flockmux-protocol = { path = "../flockmux-protocol" }

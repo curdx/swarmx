@@ -1,0 +1,19 @@
+# Claude Code CLI plugin.
+#
+# Spawned under flockmux-shim. HOME is passed through so the agent reads
+# OAuth credentials from ~/.claude/.credentials.json on first launch (and
+# subsequent launches skip the OAuth flow).
+#
+# `mcp_inject` is "none" in M1 — we hook MCP injection in M4 when the
+# swarm-mcp server lands.
+
+id = "claude"
+display_name = "Claude Code"
+binary = "claude"
+default_args = []
+ready_detect = "shim_osc"
+mcp_inject = "none"
+home_env = "HOME"
+# Workspaces we create under ~/.flockmux/workspaces/ are trusted by
+# construction; pre-patch the per-project flag so claude doesn't prompt.
+auto_trust_workspace = true

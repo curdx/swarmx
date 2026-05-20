@@ -1,0 +1,55 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/flockmux-protocol",
+    "crates/flockmux-shim",
+    "crates/flockmux-pty",
+    "crates/flockmux-server",
+    "crates/flockmux-swarm",
+    "crates/flockmux-mcp",
+    "crates/flockmux-storage",
+    "crates/flockmux-recorder",
+    "crates/flockmux-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.83"
+license = "MIT"
+authors = ["flockmux contributors"]
+
+[workspace.dependencies]
+# async runtime
+tokio = { version = "1.41", features = ["full"] }
+tokio-util = { version = "0.7", features = ["io"] }
+
+# web
+axum = { version = "0.7", features = ["ws", "macros"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["fs", "cors", "trace"] }
+
+# pty
+portable-pty = "0.9"
+
+# serde / json
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+
+# error / log
+anyhow = "1"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# misc
+bytes = "1.7"
+dashmap = "6"
+parking_lot = "0.12"
+uuid = { version = "1", features = ["v4", "serde"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true

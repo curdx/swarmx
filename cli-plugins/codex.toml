@@ -1,0 +1,13 @@
+# OpenAI Codex CLI plugin.
+#
+# Spawned under flockmux-shim. HOME is passed through so the agent reads
+# OAuth credentials from ~/.codex/auth.json (codex >= 0.x stores OAuth
+# tokens there after `codex login`).
+
+id = "codex"
+display_name = "Codex CLI"
+binary = "codex"
+default_args = []
+ready_detect = "shim_osc"
+mcp_inject = "none"
+home_env = "HOME"

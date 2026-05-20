@@ -1,0 +1,28 @@
+/target
+**/*.rs.bk
+Cargo.lock
+
+# frontend
+/web/node_modules
+/web/dist
+/web/.vite
+
+# data
+/data
+/.flockmux
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+
+# editor
+.DS_Store
+.idea
+.vscode/*
+!.vscode/extensions.json
+
+# logs
+*.log
+
+# local scratch (screenshots, manual repro, etc.)
+/.tmp
