@@ -1,6 +1,8 @@
 /target
 **/*.rs.bk
-Cargo.lock
+# Cargo.lock is committed — flockmux ships binaries, and locked deps make
+# `cargo build` reproducible across machines. (Skipped only for pure-library
+# crates, which this workspace isn't.)
 
 # frontend
 /web/node_modules
