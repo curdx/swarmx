@@ -8,6 +8,7 @@
 /web/node_modules
 /web/dist
 /web/.vite
+/web/tsconfig.tsbuildinfo
 
 # data
 /data
@@ -28,3 +29,4 @@
 
 # local scratch (screenshots, manual repro, etc.)
 /.tmp
+/.flockmux-ui-screens

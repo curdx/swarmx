@@ -18,8 +18,10 @@ import { useEffect, useMemo, useState } from "react";
 import { api } from "./api/http";
 import type { CliPluginInfo, SpawnAgentResponse } from "./api/types";
 import { XtermPane } from "./components/XtermPane";
+import { SwarmPanel } from "./components/SwarmPanel";
 
 const MAX_COLS = 6;
+const SWARM_PANEL_KEY = "flockmux:swarmPanelOpen";
 
 export default function App() {
   const [plugins, setPlugins] = useState<CliPluginInfo[]>([]);
@@ -28,6 +30,21 @@ export default function App() {
   const [spawning, setSpawning] = useState(false);
   const [maximized, setMaximized] = useState<string | null>(null);
   const [minimized, setMinimized] = useState<Set<string>>(new Set());
+  const [swarmOpen, setSwarmOpen] = useState<boolean>(() => {
+    try {
+      return window.localStorage.getItem(SWARM_PANEL_KEY) === "1";
+    } catch {
+      return false;
+    }
+  });
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(SWARM_PANEL_KEY, swarmOpen ? "1" : "0");
+    } catch {
+      // ignore
+    }
+  }, [swarmOpen]);
 
   useEffect(() => {
     api
@@ -161,8 +178,30 @@ export default function App() {
             + {p.display_name}
           </button>
         ))}
+        <button
+          onClick={() => setSwarmOpen((v) => !v)}
+          title="toggle swarm panel"
+          style={{
+            background: swarmOpen ? "#1e3a8a" : "#1f2937",
+            color: "#e2e8f0",
+            border: "1px solid #374151",
+            borderRadius: 4,
+            padding: "2px 8px",
+            fontSize: 12,
+          }}
+        >
+          {swarmOpen ? "hide swarm" : "show swarm"}
+        </button>
       </header>
 
+      <div
+        style={{
+          flex: 1,
+          minHeight: 0,
+          display: "flex",
+          flexDirection: "row",
+        }}
+      >
       <main
         style={{
           flex: 1,
@@ -247,6 +286,8 @@ export default function App() {
           );
         })}
       </main>
+        {swarmOpen && <SwarmPanel />}
+      </div>
 
       {dockAgents.length > 0 && (
         <footer

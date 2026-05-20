@@ -48,4 +48,88 @@ export interface AgentInfo {
   workspace: string;
   shim_ready: boolean;
   shim_exit: number | null;
+  killed_at?: number | null;
+  spawned_at?: number | null;
 }
+
+// ── M3 swarm DTOs ────────────────────────────────────────────────────────
+
+export interface MessageRecord {
+  id: number;
+  from_agent: string;
+  to_agent: string;
+  kind: string;
+  body: string;
+  sent_at: number;
+  delivered_at: number | null;
+  read_at: number | null;
+}
+
+export interface SendMessageRequest {
+  from?: string;
+  to: string;
+  kind: string;
+  body: string;
+}
+
+export interface BlackboardEntry {
+  path: string;
+  sha256: string;
+  at: number;
+  op: string;
+}
+
+export interface BlackboardSnapshot {
+  path: string;
+  content: string;
+  sha256: string;
+  at: number;
+}
+
+export interface WriteBlackboardRequest {
+  agent_id?: string;
+  content: string;
+}
+
+// ── M3 recording DTOs ────────────────────────────────────────────────────
+
+export interface RecordingInfo {
+  id: string;
+  agent_id: string;
+  started_at: number;
+  finalized_at: number | null;
+  duration_ms: number | null;
+  cols: number;
+  rows: number;
+  last_seq: number | null;
+}
+
+// ── /ws/swarm event stream ───────────────────────────────────────────────
+
+export type SwarmAgentState =
+  | "spawning"
+  | "ready"
+  | "thinking"
+  | "idle"
+  | "exited";
+
+export type SwarmEvent =
+  | { type: "agent_state"; agent_id: string; state: SwarmAgentState }
+  | {
+      type: "message";
+      id: number;
+      from_agent: string;
+      to_agent: string;
+      kind: string;
+      body: string;
+      sent_at: number;
+    }
+  | {
+      type: "blackboard_changed";
+      id: number;
+      agent_id: string | null;
+      op: string;
+      path: string;
+      sha256: string;
+      at: number;
+    };
