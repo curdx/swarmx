@@ -9,6 +9,7 @@ use anyhow::{Context, Result};
 use rusqlite::Connection;
 
 const MIGRATION_0001: &str = include_str!("../migrations/0001_init.sql");
+const MIGRATION_0002: &str = include_str!("../migrations/0002_pty_recordings.sql");
 
 pub(crate) fn run_migrations(conn: &mut Connection) -> Result<()> {
     let current = current_version(conn).unwrap_or(0);
@@ -16,6 +17,9 @@ pub(crate) fn run_migrations(conn: &mut Connection) -> Result<()> {
 
     if current < 1 {
         apply(conn, 1, MIGRATION_0001).context("apply migration 0001")?;
+    }
+    if current < 2 {
+        apply(conn, 2, MIGRATION_0002).context("apply migration 0002")?;
     }
     Ok(())
 }

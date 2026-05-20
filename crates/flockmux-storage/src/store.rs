@@ -5,7 +5,7 @@
 use crate::connection::Customizer;
 use crate::models::{
     AgentRecord, BlackboardOpRecord, ListMessagesOpts, MessageRecord, NewAgent, NewBlackboardOp,
-    NewMessage,
+    NewMessage, NewRecording, RecordingRecord,
 };
 use crate::schema;
 use anyhow::{Context, Result};
@@ -350,6 +350,115 @@ impl Store {
         })
         .await
         .context("spawn_blocking list_blackboard_ops")?
+    }
+
+    // ── pty recordings ───────────────────────────────────────────────────
+
+    pub async fn record_recording_start(&self, rec: NewRecording) -> Result<()> {
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let conn = pool.get()?;
+            conn.execute(
+                "INSERT INTO pty_recordings (id, agent_id, path, started_at, cols, rows) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![rec.id, rec.agent_id, rec.path, rec.started_at, rec.cols, rec.rows],
+            )?;
+            Ok(())
+        })
+        .await
+        .context("spawn_blocking record_recording_start")?
+    }
+
+    pub async fn record_recording_finalize(
+        &self,
+        id: String,
+        finalized_at: i64,
+        duration_ms: i64,
+        last_seq: i64,
+    ) -> Result<()> {
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let conn = pool.get()?;
+            conn.execute(
+                "UPDATE pty_recordings \
+                 SET finalized_at = ?2, duration_ms = ?3, last_seq = ?4 \
+                 WHERE id = ?1 AND finalized_at IS NULL",
+                params![id, finalized_at, duration_ms, last_seq],
+            )?;
+            Ok(())
+        })
+        .await
+        .context("spawn_blocking record_recording_finalize")?
+    }
+
+    pub async fn list_recordings(&self, agent_id: Option<String>) -> Result<Vec<RecordingRecord>> {
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || -> Result<Vec<RecordingRecord>> {
+            let conn = pool.get()?;
+            let (sql, bound): (&str, Vec<rusqlite::types::Value>) = match &agent_id {
+                Some(a) => (
+                    "SELECT id, agent_id, path, started_at, finalized_at, duration_ms, \
+                            cols, rows, last_seq \
+                     FROM pty_recordings WHERE agent_id = ?1 \
+                     ORDER BY started_at DESC LIMIT 200",
+                    vec![a.clone().into()],
+                ),
+                None => (
+                    "SELECT id, agent_id, path, started_at, finalized_at, duration_ms, \
+                            cols, rows, last_seq \
+                     FROM pty_recordings \
+                     ORDER BY started_at DESC LIMIT 200",
+                    Vec::new(),
+                ),
+            };
+            let mut stmt = conn.prepare(sql)?;
+            let rows = stmt.query_map(rusqlite::params_from_iter(bound.iter()), |row| {
+                Ok(RecordingRecord {
+                    id: row.get(0)?,
+                    agent_id: row.get(1)?,
+                    path: row.get(2)?,
+                    started_at: row.get(3)?,
+                    finalized_at: row.get(4)?,
+                    duration_ms: row.get(5)?,
+                    cols: row.get(6)?,
+                    rows: row.get(7)?,
+                    last_seq: row.get(8)?,
+                })
+            })?;
+            rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+        })
+        .await
+        .context("spawn_blocking list_recordings")?
+    }
+
+    pub async fn get_recording(&self, id: String) -> Result<Option<RecordingRecord>> {
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || -> Result<Option<RecordingRecord>> {
+            let conn = pool.get()?;
+            let mut stmt = conn.prepare(
+                "SELECT id, agent_id, path, started_at, finalized_at, duration_ms, \
+                        cols, rows, last_seq \
+                 FROM pty_recordings WHERE id = ?1",
+            )?;
+            let mut rows = stmt.query(params![id])?;
+            if let Some(row) = rows.next()? {
+                Ok(Some(RecordingRecord {
+                    id: row.get(0)?,
+                    agent_id: row.get(1)?,
+                    path: row.get(2)?,
+                    started_at: row.get(3)?,
+                    finalized_at: row.get(4)?,
+                    duration_ms: row.get(5)?,
+                    cols: row.get(6)?,
+                    rows: row.get(7)?,
+                    last_seq: row.get(8)?,
+                }))
+            } else {
+                Ok(None)
+            }
+        })
+        .await
+        .context("spawn_blocking get_recording")?
     }
 
     pub async fn search_blackboard(&self, query: String) -> Result<Vec<BlackboardOpRecord>> {

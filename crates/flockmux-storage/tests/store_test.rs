@@ -2,7 +2,7 @@
 //! `TempDir` so they parallelise safely.
 
 use flockmux_storage::{
-    ListMessagesOpts, NewAgent, NewBlackboardOp, NewMessage, Store,
+    ListMessagesOpts, NewAgent, NewBlackboardOp, NewMessage, NewRecording, Store,
 };
 use tempfile::TempDir;
 
@@ -284,6 +284,71 @@ async fn blackboard_search_fts5() {
         .unwrap();
     assert_eq!(hits.len(), 1);
     assert_eq!(hits[0].path, "spec.md");
+}
+
+// ── recordings ───────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn recording_start_then_finalize() {
+    let (_dir, store) = fresh_store().await;
+    store
+        .record_recording_start(NewRecording {
+            id: "rec-1".into(),
+            agent_id: "a-1".into(),
+            path: "/tmp/rec-1.cast".into(),
+            started_at: ts(0),
+            cols: 120,
+            rows: 32,
+        })
+        .await
+        .unwrap();
+
+    let r = store.get_recording("rec-1".into()).await.unwrap().unwrap();
+    assert_eq!(r.agent_id, "a-1");
+    assert_eq!(r.cols, 120);
+    assert!(r.finalized_at.is_none());
+    assert!(r.duration_ms.is_none());
+
+    store
+        .record_recording_finalize("rec-1".into(), ts(100), 100, 17)
+        .await
+        .unwrap();
+    let r = store.get_recording("rec-1".into()).await.unwrap().unwrap();
+    assert_eq!(r.finalized_at, Some(ts(100)));
+    assert_eq!(r.duration_ms, Some(100));
+    assert_eq!(r.last_seq, Some(17));
+
+    // Idempotent: second finalize is a no-op (first non-NULL wins).
+    store
+        .record_recording_finalize("rec-1".into(), ts(999), 999, 999)
+        .await
+        .unwrap();
+    let r = store.get_recording("rec-1".into()).await.unwrap().unwrap();
+    assert_eq!(r.finalized_at, Some(ts(100)));
+}
+
+#[tokio::test]
+async fn recordings_listed_by_agent() {
+    let (_dir, store) = fresh_store().await;
+    for (i, agent) in [("rec-1", "a-1"), ("rec-2", "a-1"), ("rec-3", "a-2")] {
+        store
+            .record_recording_start(NewRecording {
+                id: i.into(),
+                agent_id: agent.into(),
+                path: format!("/tmp/{}.cast", i),
+                started_at: ts(0),
+                cols: 80,
+                rows: 24,
+            })
+            .await
+            .unwrap();
+    }
+    let for_a1 = store.list_recordings(Some("a-1".into())).await.unwrap();
+    assert_eq!(for_a1.len(), 2);
+    assert!(for_a1.iter().all(|r| r.agent_id == "a-1"));
+
+    let all = store.list_recordings(None).await.unwrap();
+    assert_eq!(all.len(), 3);
 }
 
 #[tokio::test]

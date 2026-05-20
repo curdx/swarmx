@@ -88,3 +88,29 @@ pub struct BlackboardOpRecord {
     pub sha256: String,
     pub at: i64,
 }
+
+/// New PTY recording (insert payload for [`crate::Store::record_recording_start`]).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NewRecording {
+    pub id: String,
+    pub agent_id: String,
+    /// Absolute path to the .cast file on disk.
+    pub path: String,
+    pub started_at: i64,
+    pub cols: i64,
+    pub rows: i64,
+}
+
+/// Full pty_recordings row.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecordingRecord {
+    pub id: String,
+    pub agent_id: String,
+    pub path: String,
+    pub started_at: i64,
+    pub finalized_at: Option<i64>,
+    pub duration_ms: Option<i64>,
+    pub cols: i64,
+    pub rows: i64,
+    pub last_seq: Option<i64>,
+}
