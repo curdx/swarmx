@@ -9,7 +9,7 @@ use axum::{
     response::IntoResponse,
     Json,
 };
-use flockmux_protocol::rest::{CliPluginInfo, SpawnAgentRequest, SpawnAgentResponse};
+use flockmux_protocol::rest::{AgentInfo, CliPluginInfo, SpawnAgentRequest, SpawnAgentResponse};
 use serde_json::json;
 use std::path::PathBuf;
 
@@ -64,6 +64,27 @@ pub async fn spawn(
     };
     state.registry.insert(result.agent_id, result.slot);
     Ok(Json(resp))
+}
+
+pub async fn list_agents(State(state): State<AppState>) -> impl IntoResponse {
+    let items: Vec<AgentInfo> = state
+        .registry
+        .list()
+        .into_iter()
+        .map(|(id, slot)| {
+            let slot = slot.lock();
+            let lc = *slot.lifecycle.lock();
+            AgentInfo {
+                agent_id: id,
+                cli: slot.cli.clone(),
+                role: slot.role.clone(),
+                workspace: slot.workspace.clone(),
+                shim_ready: lc.shim_ready,
+                shim_exit: lc.shim_exit,
+            }
+        })
+        .collect();
+    Json(items)
 }
 
 pub async fn kill(

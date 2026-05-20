@@ -5,47 +5,66 @@
 //!   * text frame: ServerControl JSON (Hello, ShimReady, ShimExit, Eof, Error)
 //!
 //! Client → server:
-//!   * binary frame (raw keystroke bytes, ignored seq prefix not used here)
+//!   * binary frame: raw keystroke bytes
 //!   * text frame: ClientControl JSON (Resize / Ack / Resume / Signal / Kill / Detach)
 //!
-//! M1 caveats:
-//!   * No ring buffer yet → `Resume` is acknowledged with `Hello{seq_start: …}`
-//!     but real replay lands in M3.
-//!   * Ack is parsed and ignored (a future cursor for the ring buffer).
+//! Resume protocol (M3):
+//!   The client passes `?last_seq=N` on the WebSocket URL. The server snapshots
+//!   the per-agent `PtyStream`:
 //!
-//! Translation source: hermes-agent `hermes_cli/web_server.py:3402-3509`.
+//!     - `last_seq` absent / 0  → cursor = current head; client gets live tail
+//!       only (no replay).
+//!     - `last_seq` = X with X+1 in the buffer → cursor = X; client gets the
+//!       intervening bytes immediately and Hello.seq_start = X+1.
+//!     - `last_seq` = X but the buffer has evicted X+1 → cursor = current head;
+//!       Hello.seq_start > X+1 (the client infers the gap from the jump and
+//!       drops local scrollback). An `Error` frame is also sent for UX.
+//!
+//!   The single writer task uses `fetch_since(cursor)` + `wait_changed` to
+//!   relay bytes; it also subscribes to the per-agent lifecycle broadcast so
+//!   ShimReady/ShimExit fire live to every attached client (with the snapshot
+//!   inlined in Hello so resume attaches see correct status without waiting).
 
+use crate::registry::LifecycleEvent;
 use crate::AppState;
 use axum::{
     extract::{
         ws::{Message, WebSocket},
-        Path, State, WebSocketUpgrade,
+        Path, Query, State, WebSocketUpgrade,
     },
     response::IntoResponse,
 };
 use bytes::Bytes;
 use flockmux_protocol::ws_pty::{ClientControl, ServerControl, Signal};
-use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::Arc;
+use futures::{SinkExt, StreamExt};
+use serde::Deserialize;
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
-// Recognise the shim's OSC ready / exit markers in the PTY byte stream so we
-// can surface them as structured `ServerControl` events. These match
-// `flockmux-shim/src/main.rs`.
-const OSC_READY: &[u8] = b"\x1b]633;A\x07";
-const OSC_EXIT_PREFIX: &[u8] = b"\x1b]633;D;";
-const OSC_TERMINATOR: u8 = 0x07;
+#[derive(Debug, Deserialize, Default)]
+pub struct AttachQuery {
+    /// Last seq the client successfully received on its previous attach.
+    /// Server tries to replay `last_seq+1..=head`; falls back to live-tail
+    /// with a gap signal if the buffer no longer holds that range.
+    #[serde(default)]
+    last_seq: Option<u32>,
+}
 
 pub async fn pty_ws(
     ws: WebSocketUpgrade,
     State(state): State<AppState>,
     Path(agent_id): Path<String>,
+    Query(params): Query<AttachQuery>,
 ) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| handle_socket(socket, state, agent_id))
+    ws.on_upgrade(move |socket| handle_socket(socket, state, agent_id, params))
 }
 
-async fn handle_socket(mut socket: WebSocket, state: AppState, agent_id: String) {
+async fn handle_socket(
+    mut socket: WebSocket,
+    state: AppState,
+    agent_id: String,
+    params: AttachQuery,
+) {
     let slot_arc = match state.registry.get(&agent_id) {
         Some(s) => s,
         None => {
@@ -62,71 +81,184 @@ async fn handle_socket(mut socket: WebSocket, state: AppState, agent_id: String)
         }
     };
 
-    // Claim the output receiver. Single-consumer for M1 — second attach
-    // gets a clean error.
-    let (output_rx, input_tx) = {
-        let mut slot = slot_arc.lock();
-        let rx = slot.output_rx.take();
-        (rx, slot.input_tx.clone())
+    // Clone the bits we need so we can drop the slot lock before any await.
+    let (stream, input_tx, lifecycle_tx, lifecycle_snapshot) = {
+        let slot = slot_arc.lock();
+        let lifecycle_snapshot = *slot.lifecycle.lock();
+        (
+            slot.stream.clone(),
+            slot.input_tx.clone(),
+            slot.lifecycle_tx.clone(),
+            lifecycle_snapshot,
+        )
     };
 
-    let mut output_rx = match output_rx {
-        Some(rx) => rx,
-        None => {
-            let _ = socket
-                .send(Message::Text(
-                    serde_json::to_string(&ServerControl::Error {
-                        message: "agent already attached; M2 will allow multi-attach".into(),
-                    })
-                    .unwrap(),
-                ))
-                .await;
-            let _ = socket.close().await;
-            return;
+    // Resolve `last_seq` against the buffer's current state. `cursor` is the
+    // last seq the client is considered to have already received; the writer
+    // task will start emitting bytes with seq > cursor.
+    let snap = stream.snapshot();
+    let head = snap.next_seq.saturating_sub(1);
+    let mut gap_seq_lost: Option<(u32, u32)> = None;
+    let cursor: u32 = match params.last_seq {
+        None | Some(0) => head, // fresh attach: live-tail only
+        Some(x) => {
+            if x >= head {
+                // Client claims to know more than us — clamp to head, no replay.
+                head
+            } else {
+                // Caller wants x+1..=head. Check buffer can satisfy.
+                match snap.oldest_buffered {
+                    Some(oldest) if x + 1 >= oldest => x,
+                    Some(oldest) => {
+                        gap_seq_lost = Some((x + 1, oldest.saturating_sub(1)));
+                        head
+                    }
+                    None => head, // buffer empty; nothing to replay anyway
+                }
+            }
         }
     };
+    let seq_start = cursor.saturating_add(1);
 
-    // Send Hello first so the client knows it can start counting seq.
     let hello = serde_json::to_string(&ServerControl::Hello {
-        seq_start: 1,
+        seq_start,
         agent_id: agent_id.clone(),
+        shim_ready: lifecycle_snapshot.shim_ready,
+        shim_exit: lifecycle_snapshot.shim_exit,
     })
     .unwrap();
     if socket.send(Message::Text(hello)).await.is_err() {
         return;
     }
+    if let Some((lo, hi)) = gap_seq_lost {
+        let _ = socket
+            .send(Message::Text(
+                serde_json::to_string(&ServerControl::Error {
+                    message: format!(
+                        "resume gap: seqs {lo}..={hi} evicted before reconnect; \
+                         restarting from {seq_start}"
+                    ),
+                })
+                .unwrap(),
+            ))
+            .await;
+    }
 
-    info!(agent = %agent_id, "pty ws attached");
+    info!(agent = %agent_id, %cursor, last_seq = ?params.last_seq, "pty ws attached");
 
-    let seq = Arc::new(AtomicU32::new(0));
-
-    // Split the socket for concurrent send / recv.
     let (mut sender, mut receiver) = socket.split();
 
-    // ---- server → client pump ----
-    let seq_writer = seq.clone();
+    // ---- server → client pump --------------------------------------------
     let agent_for_writer = agent_id.clone();
+    let stream_for_writer = stream.clone();
+    let slot_for_writer = slot_arc.clone();
+    let mut lifecycle_rx = lifecycle_tx.subscribe();
     let writer_task = tokio::spawn(async move {
-        let mut osc_buf: Vec<u8> = Vec::new();
-        while let Some(chunk) = output_rx.recv().await {
-            // Scan the chunk for OSC ready / exit markers. Buffer across
-            // chunk boundaries since OSC sequences can span reads.
-            scan_osc(&mut osc_buf, &chunk, &mut sender).await;
+        let mut cursor = cursor;
+        loop {
+            // Drain everything currently available.
+            match stream_for_writer.fetch_since(cursor) {
+                crate::pty_stream::FetchResult::Ok(entries) => {
+                    for (seq, bytes) in entries {
+                        let frame = flockmux_protocol::ws_pty::pack_binary(seq, &bytes);
+                        if sender.send(Message::Binary(frame)).await.is_err() {
+                            debug!(agent = %agent_for_writer, "ws writer closed mid-drain");
+                            return;
+                        }
+                        cursor = seq;
+                    }
+                }
+                crate::pty_stream::FetchResult::Gap { current_seq } => {
+                    // Buffer evicted bytes we promised. Tell client and jump
+                    // forward; this should only happen if the writer falls
+                    // behind producer by more than MAX_BUFFER_BYTES, which is
+                    // a pathological case (slow network on heavy CLI output).
+                    let _ = sender
+                        .send(Message::Text(
+                            serde_json::to_string(&ServerControl::Error {
+                                message: format!(
+                                    "byte buffer overran subscriber; jumped from \
+                                     seq {cursor} to {current_seq}"
+                                ),
+                            })
+                            .unwrap(),
+                        ))
+                        .await;
+                    cursor = current_seq;
+                }
+            }
 
-            let next = seq_writer.fetch_add(1, Ordering::Relaxed) + 1;
-            let frame = flockmux_protocol::ws_pty::pack_binary(next, &chunk);
-            if sender.send(Message::Binary(frame)).await.is_err() {
-                debug!(agent = %agent_for_writer, "ws writer closed");
-                break;
+            let snap = stream_for_writer.snapshot();
+            if snap.closed && cursor >= snap.next_seq.saturating_sub(1) {
+                // Drained + closed. Send Eof and exit.
+                let _ = sender
+                    .send(Message::Text(
+                        serde_json::to_string(&ServerControl::Eof).unwrap(),
+                    ))
+                    .await;
+                let _ = sender.close().await;
+                return;
+            }
+
+            // Wait for new bytes OR a lifecycle event, whichever lands first.
+            tokio::select! {
+                _ = stream_for_writer.wait_changed(cursor) => {
+                    // loop around to fetch_since
+                }
+                event = lifecycle_rx.recv() => {
+                    match event {
+                        Ok(LifecycleEvent::ShimReady) => {
+                            let _ = sender
+                                .send(Message::Text(
+                                    serde_json::to_string(&ServerControl::ShimReady).unwrap(),
+                                ))
+                                .await;
+                        }
+                        Ok(LifecycleEvent::ShimExit(code)) => {
+                            let _ = sender
+                                .send(Message::Text(
+                                    serde_json::to_string(&ServerControl::ShimExit { code })
+                                        .unwrap(),
+                                ))
+                                .await;
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                            // We missed a lifecycle event. The shim_ready /
+                            // shim_exit snapshot in Hello covered initial
+                            // state; if it changed since then we just lost
+                            // the live signal. Re-query and synthesise.
+                            // (broadcast capacity is 16 so this is unlikely.)
+                            let snap_l = *slot_for_writer.lock().lifecycle.lock();
+                            if snap_l.shim_ready {
+                                let _ = sender
+                                    .send(Message::Text(
+                                        serde_json::to_string(&ServerControl::ShimReady)
+                                            .unwrap(),
+                                    ))
+                                    .await;
+                            }
+                            if let Some(code) = snap_l.shim_exit {
+                                let _ = sender
+                                    .send(Message::Text(
+                                        serde_json::to_string(&ServerControl::ShimExit {
+                                            code,
+                                        })
+                                        .unwrap(),
+                                    ))
+                                    .await;
+                            }
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                            // Producer dropped — agent died. Loop will see
+                            // stream.closed on next iter.
+                        }
+                    }
+                }
             }
         }
-        // PTY EOF → tell client.
-        let eof = serde_json::to_string(&ServerControl::Eof).unwrap();
-        let _ = sender.send(Message::Text(eof)).await;
-        let _ = sender.close().await;
     });
 
-    // ---- client → server pump ----
+    // ---- client → server pump --------------------------------------------
     while let Some(msg) = receiver.next().await {
         let msg = match msg {
             Ok(m) => m,
@@ -159,9 +291,8 @@ async fn handle_socket(mut socket: WebSocket, state: AppState, agent_id: String)
                     }
                 }
             }
-            Message::Ping(p) => {
-                // axum auto-replies, but be explicit for completeness.
-                let _ = p;
+            Message::Ping(_) => {
+                // axum auto-replies.
             }
             Message::Close(_) => break,
             _ => {}
@@ -177,7 +308,7 @@ async fn handle_socket(mut socket: WebSocket, state: AppState, agent_id: String)
 
 async fn apply_control(
     ctrl: ClientControl,
-    slot: &Arc<parking_lot::Mutex<crate::registry::AgentSlot>>,
+    slot: &std::sync::Arc<parking_lot::Mutex<crate::registry::AgentSlot>>,
     input_tx: &mpsc::Sender<Bytes>,
 ) {
     match ctrl {
@@ -188,17 +319,21 @@ async fn apply_control(
             }
         }
         ClientControl::Ack { seq } => {
-            // M1: ignored. M3 will advance the ring buffer's confirmed
-            // cursor here.
+            // M3: parsed but not yet used as a back-pressure signal — the
+            // ring buffer evicts on byte cap, not on ack. Ack is retained in
+            // the protocol so we can wire selective retention later (e.g.,
+            // recorder watermark, multi-attach slowest-consumer).
             let _ = seq;
         }
         ClientControl::Resume { last_seq } => {
-            // M1: no replay. Just log so we know the client tried.
-            let _ = last_seq;
+            // Post-attach Resume is a no-op in M3 — clients should reconnect
+            // with `?last_seq=N` instead, which avoids the mid-stream
+            // cursor-rewind race. Logged for visibility.
+            tracing::debug!(last_seq, "Resume control received post-attach; ignored");
         }
         ClientControl::Signal { sig } => {
             // Emit the raw control byte the PTY would deliver for a terminal
-            // keypress. (Real signal delivery via kill(2) lands in M2.)
+            // keypress. (Real signal delivery via kill(2) lands later.)
             let byte: u8 = match sig {
                 Signal::Sigint => 0x03,  // Ctrl+C
                 Signal::Sigterm => 0x03, // fall back to Ctrl+C semantically
@@ -217,67 +352,3 @@ async fn apply_control(
     }
 }
 
-// ---- OSC scanner ---------------------------------------------------------
-
-use axum::extract::ws::Message as WsMsg;
-use futures::stream::SplitSink;
-use futures::SinkExt;
-use futures::StreamExt;
-
-async fn send_text(sender: &mut SplitSink<WebSocket, WsMsg>, ev: ServerControl) {
-    let _ = sender
-        .send(Message::Text(serde_json::to_string(&ev).unwrap()))
-        .await;
-}
-
-/// Look for `\x1b]633;A\x07` (ready) and `\x1b]633;D;<code>\x07` (exit) in
-/// the PTY output. Anything found is surfaced as a `ServerControl` JSON
-/// event *in addition* to the raw bytes being forwarded — the front-end
-/// keeps writing them to the terminal as well (the OSC is harmless if the
-/// terminal recognises it; ours doesn't render it).
-async fn scan_osc(
-    buf: &mut Vec<u8>,
-    chunk: &[u8],
-    sender: &mut SplitSink<WebSocket, WsMsg>,
-) {
-    buf.extend_from_slice(chunk);
-
-    loop {
-        // Cap buffer growth — OSC sequences are short, so anything beyond
-        // a few hundred bytes without finding one means we're holding non-
-        // OSC junk forever.
-        if buf.len() > 4096 {
-            let keep_from = buf.len() - 256;
-            buf.drain(..keep_from);
-        }
-
-        if let Some(pos) = find(&buf, OSC_READY) {
-            buf.drain(..pos + OSC_READY.len());
-            send_text(sender, ServerControl::ShimReady).await;
-            continue;
-        }
-        if let Some(pos) = find(&buf, OSC_EXIT_PREFIX) {
-            let after = pos + OSC_EXIT_PREFIX.len();
-            if let Some(end_rel) = buf[after..].iter().position(|&b| b == OSC_TERMINATOR) {
-                let code_bytes = &buf[after..after + end_rel];
-                let code = std::str::from_utf8(code_bytes)
-                    .ok()
-                    .and_then(|s| s.parse::<i32>().ok())
-                    .unwrap_or(-1);
-                buf.drain(..after + end_rel + 1);
-                send_text(sender, ServerControl::ShimExit { code }).await;
-                continue;
-            } else {
-                // Wait for more bytes.
-                break;
-            }
-        }
-        break;
-    }
-}
-
-fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    haystack
-        .windows(needle.len())
-        .position(|w| w == needle)
-}

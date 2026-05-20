@@ -34,6 +34,26 @@ export default function App() {
       .listPlugins()
       .then(setPlugins)
       .catch((err: Error) => setPluginsError(err.message));
+    // Reattach to agents that survived a page reload. The server-side
+    // registry outlives the WS, so a refresh / new tab should pick up
+    // existing PTYs instead of stranding them.
+    api
+      .listAgents()
+      .then((items) => {
+        if (items.length === 0) return;
+        setAgents(
+          items.map((a) => ({
+            agent_id: a.agent_id,
+            cli: a.cli,
+            role: a.role,
+            workspace: a.workspace,
+          })),
+        );
+      })
+      .catch((err: Error) => {
+        // eslint-disable-next-line no-console
+        console.warn("listAgents failed", err);
+      });
   }, []);
 
   const spawn = async (cli: string) => {

@@ -10,13 +10,14 @@
 
 mod plugins;
 mod pre_spawn;
+mod pty_stream;
 mod registry;
 mod routes;
 mod spawn;
 
 use anyhow::{Context, Result};
 use axum::{
-    routing::{delete, get, post},
+    routing::{delete, get},
     Router,
 };
 use std::net::SocketAddr;
@@ -65,7 +66,10 @@ async fn main() -> Result<()> {
 
     let app = Router::new()
         .route("/api/plugins", get(routes::rest::list_plugins))
-        .route("/api/agent", post(routes::rest::spawn))
+        .route(
+            "/api/agent",
+            get(routes::rest::list_agents).post(routes::rest::spawn),
+        )
         .route("/api/agent/:id", delete(routes::rest::kill))
         .route("/ws/pty/:agent_id", get(routes::pty_ws::pty_ws))
         .layer(CorsLayer::permissive())  // localhost dev convenience

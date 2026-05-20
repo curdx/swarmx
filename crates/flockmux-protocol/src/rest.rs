@@ -28,3 +28,16 @@ pub struct CliPluginInfo {
     pub display_name: String,
     pub binary: String,
 }
+
+/// One entry in `GET /api/agent`. Mirrors `SpawnAgentResponse` plus
+/// `shim_ready` / `shim_exit` so a reconnecting UI can render initial
+/// status before its WS Hello frame arrives.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentInfo {
+    pub agent_id: String,
+    pub cli: String,
+    pub role: String,
+    pub workspace: String,
+    pub shim_ready: bool,
+    pub shim_exit: Option<i32>,
+}

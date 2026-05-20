@@ -45,9 +45,25 @@ pub enum Signal {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerControl {
-    /// First frame after accept; tells the client which seq the byte stream
-    /// will start from (0 for fresh, last_seq+1 for resume).
-    Hello { seq_start: u32, agent_id: String },
+    /// First frame after accept. `seq_start` is the seq of the FIRST byte
+    /// the client will receive after Hello. For a fresh attach this equals
+    /// the producer's next_seq (live-tail; no replay). For a successful
+    /// resume after `?last_seq=X`, this equals `X + 1`. If the server
+    /// could not honour the resume (gap — buffer evicted the requested
+    /// seq), `seq_start` will be greater than `X + 1` and the client
+    /// should treat the missing range as unrecoverable scrollback.
+    ///
+    /// `shim_ready` / `shim_exit` carry the agent's lifecycle state at the
+    /// time of attach so that a reconnecting client doesn't have to wait
+    /// for the next ShimReady/ShimExit event to know the CLI's status.
+    Hello {
+        seq_start: u32,
+        agent_id: String,
+        #[serde(default)]
+        shim_ready: bool,
+        #[serde(default)]
+        shim_exit: Option<i32>,
+    },
     /// Shim emitted the OSC ready sequence; CLI is up.
     ShimReady,
     /// Shim emitted the OSC exit sequence; CLI exited.

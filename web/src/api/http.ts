@@ -1,4 +1,5 @@
 import type {
+  AgentInfo,
   CliPluginInfo,
   SpawnAgentRequest,
   SpawnAgentResponse,
@@ -30,6 +31,7 @@ async function request<T>(
 
 export const api = {
   listPlugins: () => request<CliPluginInfo[]>("GET", "/api/plugins"),
+  listAgents: () => request<AgentInfo[]>("GET", "/api/agent"),
   spawnAgent: (req: SpawnAgentRequest) =>
     request<SpawnAgentResponse>("POST", "/api/agent", req),
   killAgent: (id: string) => request<void>("DELETE", `/api/agent/${id}`),

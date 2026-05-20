@@ -2,7 +2,13 @@
 // ts-rs auto-generation lands in M3 once flockmux-protocol grows.
 
 export type ServerControl =
-  | { type: "hello"; seq_start: number; agent_id: string }
+  | {
+      type: "hello";
+      seq_start: number;
+      agent_id: string;
+      shim_ready?: boolean;
+      shim_exit?: number | null;
+    }
   | { type: "shim_ready" }
   | { type: "shim_exit"; code: number }
   | { type: "eof" }
@@ -33,4 +39,13 @@ export interface SpawnAgentResponse {
   cli: string;
   role: string;
   workspace: string;
+}
+
+export interface AgentInfo {
+  agent_id: string;
+  cli: string;
+  role: string;
+  workspace: string;
+  shim_ready: boolean;
+  shim_exit: number | null;
 }

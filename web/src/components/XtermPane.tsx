@@ -16,8 +16,11 @@
  *
  * Other notes:
  *   - Unicode 11 + FitAddon + WebLinks load once at mount.
- *   - seq number is read but only validated for monotonicity (no resume
- *     replay yet — M3).
+ *   - seq monotonicity + resume: lastSeq is persisted in sessionStorage so a
+ *     remount (StrictMode dev, tab switch via portal, page refresh) reconnects
+ *     with `?last_seq=N` and replays the gap from the server's per-agent ring
+ *     buffer. If the server reports a gap (Hello.seq_start > lastSeq+1) we
+ *     clear local scrollback — the missing range is unrecoverable.
  *   - ACK is batched every 5KB or 50ms (server-side currently ignores
  *     them; harmless to send).
  */
@@ -46,6 +49,32 @@ interface Props {
 const ACK_BYTES = 5 * 1024;
 const ACK_INTERVAL_MS = 50;
 const RESIZE_DEBOUNCE_MS = 150;
+
+const lastSeqKey = (agentId: string) => `flockmux:lastSeq:${agentId}`;
+const readLastSeq = (agentId: string): number => {
+  try {
+    const v = window.sessionStorage.getItem(lastSeqKey(agentId));
+    if (!v) return 0;
+    const n = parseInt(v, 10);
+    return Number.isFinite(n) && n >= 0 ? n : 0;
+  } catch {
+    return 0;
+  }
+};
+const writeLastSeq = (agentId: string, seq: number) => {
+  try {
+    window.sessionStorage.setItem(lastSeqKey(agentId), String(seq));
+  } catch {
+    /* sessionStorage may be unavailable */
+  }
+};
+const clearLastSeq = (agentId: string) => {
+  try {
+    window.sessionStorage.removeItem(lastSeqKey(agentId));
+  } catch {
+    /* noop */
+  }
+};
 
 export function XtermPane({
   agentId,
@@ -111,11 +140,13 @@ export function XtermPane({
 
     // ---- WebSocket bridge ------------------------------------------------
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const wsUrl = `${proto}//${window.location.host}/ws/pty/${encodeURIComponent(agentId)}`;
+    const resumeFrom = readLastSeq(agentId);
+    const qs = resumeFrom > 0 ? `?last_seq=${resumeFrom}` : "";
+    const wsUrl = `${proto}//${window.location.host}/ws/pty/${encodeURIComponent(agentId)}${qs}`;
     const ws = new WebSocket(wsUrl);
     ws.binaryType = "arraybuffer";
 
-    let lastSeq = 0;
+    let lastSeq = resumeFrom;
     let unackedBytes = 0;
     let ackTimer: number | null = null;
     let shimExited = false;
@@ -177,13 +208,17 @@ export function XtermPane({
         console.warn(`[XtermPane ${agentId}] non-monotonic seq ${seq} ≤ ${lastSeq}`);
       } else {
         if (seq !== lastSeq + 1 && lastSeq !== 0) {
-          // Gap detected — in M3 we'll request resume; for M1 just warn.
+          // Gap detected mid-stream. Hello-driven gaps are already handled
+          // (server inlines an Error frame + we reset scrollback), so this
+          // path only fires if the ring buffer evicted bytes between
+          // Hello and the first chunk — pathological but log it.
           // eslint-disable-next-line no-console
           console.warn(
-            `[XtermPane ${agentId}] seq gap: expected ${lastSeq + 1}, got ${seq}`,
+            `[XtermPane ${agentId}] seq gap mid-stream: expected ${lastSeq + 1}, got ${seq}`,
           );
         }
         lastSeq = seq;
+        writeLastSeq(agentId, seq);
       }
       term.write(bytes);
 
@@ -199,9 +234,36 @@ export function XtermPane({
     const handleServerControl = (msg: ServerControl) => {
       if (disposed) return;
       switch (msg.type) {
-        case "hello":
+        case "hello": {
+          const expected = lastSeq + 1;
+          if (lastSeq > 0 && msg.seq_start > expected) {
+            // Server couldn't replay everything we asked for — the missing
+            // range is gone. Drop local scrollback so what the user sees
+            // matches what's actually buffered server-side.
+            term.reset();
+            // eslint-disable-next-line no-console
+            console.warn(
+              `[XtermPane ${agentId}] resume gap: expected seq ${expected}, server starts at ${msg.seq_start}`,
+            );
+          }
           lastSeq = msg.seq_start - 1;
+          writeLastSeq(agentId, lastSeq);
+          // Hello carries the current lifecycle snapshot so a reconnect
+          // doesn't sit in "spawning" forever waiting for an event that
+          // already fired before we attached.
+          if (msg.shim_ready) {
+            setStatus("ready");
+            setStatusDetail("");
+            onShimReady?.();
+          }
+          if (typeof msg.shim_exit === "number") {
+            shimExited = true;
+            setStatus("exited");
+            setStatusDetail(`exit ${msg.shim_exit}`);
+            onShimExit?.(msg.shim_exit);
+          }
           break;
+        }
         case "shim_ready":
           setStatus("ready");
           setStatusDetail("");
@@ -212,13 +274,17 @@ export function XtermPane({
           setStatus("exited");
           setStatusDetail(`exit ${msg.code}`);
           onShimExit?.(msg.code);
+          clearLastSeq(agentId);
           break;
         case "eof":
           shimExited = true;
           setStatus("exited");
           setStatusDetail("EOF");
+          clearLastSeq(agentId);
           break;
         case "error":
+          // Resume-gap errors come through here. We've already reset the
+          // terminal in the Hello branch; surface the message for UX.
           setStatus("error");
           setStatusDetail(msg.message);
           break;
