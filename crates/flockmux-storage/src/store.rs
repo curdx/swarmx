@@ -34,8 +34,14 @@ impl Store {
 
     fn open_blocking(path: &Path) -> Result<Self> {
         let manager = SqliteConnectionManager::file(path);
+        // `min_idle(0)` keeps r2d2 from eagerly opening every connection at
+        // `build()` time. Eager parallel opens race on the very first
+        // `PRAGMA journal_mode=WAL`, producing "database is locked" noise in
+        // the boot log. Lazy creation lets WAL get set by the first checkout
+        // and persisted to the file before any sibling connection appears.
         let pool = Pool::builder()
             .max_size(8)
+            .min_idle(Some(0))
             .connection_customizer(Box::new(Customizer))
             .build(manager)
             .context("build r2d2 pool")?;

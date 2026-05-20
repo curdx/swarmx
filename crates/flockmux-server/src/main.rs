@@ -20,6 +20,8 @@ use axum::{
     routing::{delete, get},
     Router,
 };
+use flockmux_storage::Store;
+use flockmux_swarm::{Swarm, WatcherHandle};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -33,6 +35,12 @@ pub struct AppState {
     pub registry: registry::Registry,
     pub shim_path: PathBuf,
     pub workspaces_root: PathBuf,
+    pub store: Arc<Store>,
+    pub swarm: Arc<Swarm>,
+    pub blackboard_root: PathBuf,
+    /// Keeps the notify-debouncer alive for the program's lifetime. Wrapped
+    /// in `Arc` so `AppState` stays `Clone`. Drop terminates the watcher.
+    pub _watcher: Arc<WatcherHandle>,
 }
 
 #[tokio::main]
@@ -57,11 +65,30 @@ async fn main() -> Result<()> {
     std::fs::create_dir_all(&workspaces_root)?;
     info!(workspaces = %workspaces_root.display(), "workspaces root");
 
+    let db_path = db_path_default();
+    if let Some(parent) = db_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    info!(db = %db_path.display(), "opening sqlite store");
+    let store = Arc::new(Store::open(&db_path).await.context("open store")?);
+
+    let blackboard_root = blackboard_root_default();
+    std::fs::create_dir_all(&blackboard_root)?;
+    info!(blackboard = %blackboard_root.display(), "blackboard root");
+    let swarm = Swarm::new(store.clone(), blackboard_root.clone());
+    let watcher = WatcherHandle::spawn(blackboard_root.clone(), swarm.clone())
+        .context("spawn blackboard watcher")?;
+    let watcher = Arc::new(watcher);
+
     let state = AppState {
         plugins: Arc::new(plugin_registry),
         registry: registry::Registry::new(),
         shim_path,
         workspaces_root,
+        store,
+        swarm,
+        blackboard_root,
+        _watcher: watcher,
     };
 
     let app = Router::new()
@@ -71,6 +98,19 @@ async fn main() -> Result<()> {
             get(routes::rest::list_agents).post(routes::rest::spawn),
         )
         .route("/api/agent/:id", delete(routes::rest::kill))
+        .route(
+            "/api/message",
+            get(routes::swarm::list_messages).post(routes::swarm::send_message),
+        )
+        .route(
+            "/api/blackboard",
+            get(routes::swarm::list_blackboard_paths),
+        )
+        .route(
+            "/api/blackboard/*path",
+            get(routes::swarm::read_blackboard).put(routes::swarm::write_blackboard),
+        )
+        .route("/ws/swarm", get(routes::ws_swarm::ws_swarm))
         .route("/ws/pty/:agent_id", get(routes::pty_ws::pty_ws))
         .layer(CorsLayer::permissive())  // localhost dev convenience
         .layer(TraceLayer::new_for_http())
@@ -91,4 +131,24 @@ fn workspaces_root_default() -> PathBuf {
         return PathBuf::from(home).join(".flockmux").join("workspaces");
     }
     PathBuf::from(".flockmux/workspaces")
+}
+
+fn db_path_default() -> PathBuf {
+    if let Ok(p) = std::env::var("FLOCKMUX_DB_PATH") {
+        return PathBuf::from(p);
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        return PathBuf::from(home).join(".flockmux").join("flockmux.db");
+    }
+    PathBuf::from(".flockmux/flockmux.db")
+}
+
+fn blackboard_root_default() -> PathBuf {
+    if let Ok(p) = std::env::var("FLOCKMUX_BLACKBOARD_DIR") {
+        return PathBuf::from(p);
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        return PathBuf::from(home).join(".flockmux").join("blackboard");
+    }
+    PathBuf::from(".flockmux/blackboard")
 }

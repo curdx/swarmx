@@ -14,11 +14,14 @@ pub(crate) struct Customizer;
 
 impl CustomizeConnection<Connection, r2d2_sqlite::rusqlite::Error> for Customizer {
     fn on_acquire(&self, conn: &mut Connection) -> Result<(), r2d2_sqlite::rusqlite::Error> {
+        // Set busy_timeout FIRST so the subsequent PRAGMA journal_mode=WAL
+        // can wait its turn instead of erroring with SQLITE_BUSY when the
+        // pool spins up multiple fresh connections in parallel.
+        conn.pragma_update(None, "busy_timeout", 5_000)?;
         // WAL is sticky to the file but `journal_mode` is a query, not a
-        // statement — using `pragma_update` would error. Use `query_row`.
+        // statement — `pragma_update` would error. Use `query_row`.
         conn.query_row("PRAGMA journal_mode=WAL", [], |_| Ok(()))?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
-        conn.pragma_update(None, "busy_timeout", 5_000)?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
         Ok(())
     }

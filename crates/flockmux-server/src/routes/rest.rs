@@ -1,6 +1,7 @@
 //! REST endpoints. Loopback-only; no auth (per user decision — local single-user).
 
 use crate::plugins::CliPlugin;
+use crate::registry::LifecycleEvent;
 use crate::spawn::spawn_agent;
 use crate::AppState;
 use axum::{
@@ -10,8 +11,18 @@ use axum::{
     Json,
 };
 use flockmux_protocol::rest::{AgentInfo, CliPluginInfo, SpawnAgentRequest, SpawnAgentResponse};
+use flockmux_protocol::ws_swarm::{AgentState, SwarmEvent};
+use flockmux_storage::NewAgent;
 use serde_json::json;
 use std::path::PathBuf;
+
+fn now_ms() -> i64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
 
 pub async fn list_plugins(State(state): State<AppState>) -> impl IntoResponse {
     let plugins: Vec<CliPluginInfo> = state
@@ -56,24 +67,104 @@ pub async fn spawn(
             )
         })?;
 
+    let agent_id = result.agent_id.clone();
+    let spawned_at = now_ms();
+
+    // Persist the spawn. PTY is already live; on store failure we log and
+    // keep the in-memory agent — the user can still attach and use it.
+    if let Err(e) = state
+        .store
+        .record_agent_spawn(NewAgent {
+            id: agent_id.clone(),
+            cli: result.slot.cli.clone(),
+            role: result.slot.role.clone(),
+            workspace: result.slot.workspace.clone(),
+            spawned_at,
+        })
+        .await
+    {
+        tracing::warn!(?e, agent = %agent_id, "record_agent_spawn failed");
+    }
+
+    // Reserve an inbox slot and immediately drop the receiver: M3 doesn't
+    // route swarm messages into PTY stdin (claude/codex are fullscreen
+    // alt-screen TUIs). Delivery is SQLite + ws/swarm only; M4 MCP will
+    // plug a real consumer in here.
+    drop(state.swarm.register_agent(agent_id.clone()));
+
+    state.swarm.publish_event(SwarmEvent::AgentState {
+        agent_id: agent_id.clone(),
+        state: AgentState::Spawning,
+    });
+
+    // Fan ShimReady / ShimExit into SQLite + ws/swarm. The task exits when
+    // every sender on `lifecycle_tx` is dropped (i.e. after the slot is
+    // removed and the PTY pump finishes).
+    {
+        let mut lifecycle_rx = result.slot.lifecycle_tx.subscribe();
+        let store = state.store.clone();
+        let swarm = state.swarm.clone();
+        let agent_for_task = agent_id.clone();
+        tokio::spawn(async move {
+            loop {
+                match lifecycle_rx.recv().await {
+                    Ok(LifecycleEvent::ShimReady) => {
+                        let at = now_ms();
+                        if let Err(e) =
+                            store.record_shim_ready(agent_for_task.clone(), at).await
+                        {
+                            tracing::warn!(?e, agent = %agent_for_task, "record_shim_ready failed");
+                        }
+                        swarm.publish_event(SwarmEvent::AgentState {
+                            agent_id: agent_for_task.clone(),
+                            state: AgentState::Ready,
+                        });
+                    }
+                    Ok(LifecycleEvent::ShimExit(code)) => {
+                        let at = now_ms();
+                        if let Err(e) = store
+                            .record_shim_exit(agent_for_task.clone(), code, at)
+                            .await
+                        {
+                            tracing::warn!(?e, agent = %agent_for_task, "record_shim_exit failed");
+                        }
+                        swarm.publish_event(SwarmEvent::AgentState {
+                            agent_id: agent_for_task.clone(),
+                            state: AgentState::Exited,
+                        });
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!(agent = %agent_for_task, lagged = n, "lifecycle subscriber lagged");
+                        continue;
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+            }
+            tracing::debug!(agent = %agent_for_task, "lifecycle subscriber closed");
+        });
+    }
+
     let resp = SpawnAgentResponse {
-        agent_id: result.agent_id.clone(),
+        agent_id: agent_id.clone(),
         cli: result.slot.cli.clone(),
         role: result.slot.role.clone(),
         workspace: result.slot.workspace.clone(),
     };
-    state.registry.insert(result.agent_id, result.slot);
+    state.registry.insert(agent_id, result.slot);
     Ok(Json(resp))
 }
 
 pub async fn list_agents(State(state): State<AppState>) -> impl IntoResponse {
-    let items: Vec<AgentInfo> = state
-        .registry
-        .list()
-        .into_iter()
-        .map(|(id, slot)| {
-            let slot = slot.lock();
-            let lc = *slot.lifecycle.lock();
+    // Build a snapshot of the live in-memory registry first — for live
+    // agents the in-memory `Lifecycle` is the source of truth (it tracks
+    // OSC markers that may not yet be persisted to SQLite).
+    let mut live: std::collections::HashMap<String, AgentInfo> =
+        std::collections::HashMap::new();
+    for (id, slot) in state.registry.list() {
+        let slot = slot.lock();
+        let lc = *slot.lifecycle.lock();
+        live.insert(
+            id.clone(),
             AgentInfo {
                 agent_id: id,
                 cli: slot.cli.clone(),
@@ -81,9 +172,45 @@ pub async fn list_agents(State(state): State<AppState>) -> impl IntoResponse {
                 workspace: slot.workspace.clone(),
                 shim_ready: lc.shim_ready,
                 shim_exit: lc.shim_exit,
+                killed_at: None,
+                spawned_at: None,
+            },
+        );
+    }
+
+    // Union with SQLite history so a freshly-started server can still tell
+    // the UI about agents from prior runs. Live entries win — they keep
+    // their `shim_ready`/`shim_exit` derived from the in-memory lifecycle.
+    let mut items: Vec<AgentInfo> = Vec::new();
+    match state.store.list_agents().await {
+        Ok(rows) => {
+            for row in rows {
+                if let Some(mut info) = live.remove(&row.id) {
+                    // Backfill the timestamps from SQLite but keep the
+                    // live lifecycle snapshot.
+                    info.spawned_at = Some(row.spawned_at);
+                    items.push(info);
+                } else {
+                    items.push(AgentInfo {
+                        agent_id: row.id,
+                        cli: row.cli,
+                        role: row.role,
+                        workspace: row.workspace,
+                        shim_ready: row.shim_ready_at.is_some(),
+                        shim_exit: row.shim_exit_code,
+                        killed_at: row.killed_at,
+                        spawned_at: Some(row.spawned_at),
+                    });
+                }
             }
-        })
-        .collect();
+        }
+        Err(e) => {
+            tracing::warn!(?e, "list_agents: store.list_agents failed; live-only view");
+        }
+    }
+    // Any live entries that weren't in the store (shouldn't happen, but
+    // be defensive) get appended at the end.
+    items.extend(live.into_values());
     Json(items)
 }
 
@@ -93,8 +220,25 @@ pub async fn kill(
 ) -> impl IntoResponse {
     match state.registry.remove(&agent_id) {
         Some(slot) => {
-            let slot = slot.lock();
-            slot.bridge.kill();
+            {
+                let slot = slot.lock();
+                slot.bridge.kill();
+            }
+            // Drop the in-memory inbox before persisting the kill so any
+            // in-flight send_message sees "no inbox" rather than racing
+            // against a half-torn-down agent.
+            state.swarm.unregister_agent(&agent_id);
+            if let Err(e) = state
+                .store
+                .record_agent_kill(agent_id.clone(), now_ms())
+                .await
+            {
+                tracing::warn!(?e, agent = %agent_id, "record_agent_kill failed");
+            }
+            state.swarm.publish_event(SwarmEvent::AgentState {
+                agent_id: agent_id.clone(),
+                state: AgentState::Exited,
+            });
             (StatusCode::NO_CONTENT, Json(json!({"ok": true})))
         }
         None => (
