@@ -12,9 +12,11 @@ use axum::{
 };
 use flockmux_protocol::rest::{AgentInfo, CliPluginInfo, SpawnAgentRequest, SpawnAgentResponse};
 use flockmux_protocol::ws_swarm::{AgentState, SwarmEvent};
-use flockmux_storage::NewAgent;
+use flockmux_recorder::{Recorder, RecorderConfig};
+use flockmux_storage::{NewAgent, NewRecording};
 use serde_json::json;
 use std::path::PathBuf;
+use uuid::Uuid;
 
 fn now_ms() -> i64 {
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -59,16 +61,47 @@ pub async fn spawn(
         .map(PathBuf::from)
         .unwrap_or_else(|| state.workspaces_root.clone());
 
-    let result = spawn_agent(&plugin, req.role, &workspace_root, &state.shim_path)
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": e.to_string()})),
-            )
-        })?;
+    let spawned_at = now_ms();
+
+    // Mint the recording id + path up front so spawn_agent can hand the
+    // pump a writer handle. If the recorder fails to open, we still spawn
+    // the agent (recording is best-effort, not load-bearing for M3).
+    let recording_id = format!("rec-{}", &Uuid::new_v4().to_string()[..12]);
+    let recording_path = state
+        .recordings_root
+        .join(format!("{}.cast", recording_id));
+    let recorder = match Recorder::start(RecorderConfig {
+        agent_id: String::new(), // filled in by the writer config; informational only
+        cols: 120,
+        rows: 32,
+        started_at_ms: spawned_at,
+        file_path: recording_path.clone(),
+    })
+    .await
+    {
+        Ok(r) => Some(r),
+        Err(e) => {
+            tracing::warn!(?e, "recorder open failed; spawning agent without recording");
+            None
+        }
+    };
+    let recorder_handle = recorder.as_ref().map(|r| r.handle());
+
+    let result = spawn_agent(
+        &plugin,
+        req.role,
+        &workspace_root,
+        &state.shim_path,
+        recorder_handle,
+    )
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": e.to_string()})),
+        )
+    })?;
 
     let agent_id = result.agent_id.clone();
-    let spawned_at = now_ms();
 
     // Persist the spawn. PTY is already live; on store failure we log and
     // keep the in-memory agent — the user can still attach and use it.
@@ -141,6 +174,46 @@ pub async fn spawn(
                 }
             }
             tracing::debug!(agent = %agent_for_task, "lifecycle subscriber closed");
+        });
+    }
+
+    // Persist the recording-start + spawn a background task that awaits
+    // EOF and persists the finalize. Recording is best-effort: if the
+    // recorder failed to open earlier, both halves are skipped.
+    if let Some(rec) = recorder {
+        let new_rec = NewRecording {
+            id: recording_id.clone(),
+            agent_id: agent_id.clone(),
+            path: recording_path.to_string_lossy().into_owned(),
+            started_at: spawned_at,
+            cols: 120,
+            rows: 32,
+        };
+        if let Err(e) = state.store.record_recording_start(new_rec).await {
+            tracing::warn!(?e, agent = %agent_id, "record_recording_start failed");
+        }
+        let store = state.store.clone();
+        let rec_id_for_task = recording_id.clone();
+        let agent_for_task = agent_id.clone();
+        tokio::spawn(async move {
+            match rec.wait_finalize().await {
+                Ok(fin) => {
+                    if let Err(e) = store
+                        .record_recording_finalize(
+                            rec_id_for_task,
+                            fin.finalized_at_ms,
+                            fin.duration_ms,
+                            fin.last_seq,
+                        )
+                        .await
+                    {
+                        tracing::warn!(?e, agent = %agent_for_task, "record_recording_finalize failed");
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(?e, agent = %agent_for_task, "recorder wait_finalize failed");
+                }
+            }
         });
     }
 

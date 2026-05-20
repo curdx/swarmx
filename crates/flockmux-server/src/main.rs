@@ -38,6 +38,7 @@ pub struct AppState {
     pub store: Arc<Store>,
     pub swarm: Arc<Swarm>,
     pub blackboard_root: PathBuf,
+    pub recordings_root: PathBuf,
     /// Keeps the notify-debouncer alive for the program's lifetime. Wrapped
     /// in `Arc` so `AppState` stays `Clone`. Drop terminates the watcher.
     pub _watcher: Arc<WatcherHandle>,
@@ -80,6 +81,10 @@ async fn main() -> Result<()> {
         .context("spawn blackboard watcher")?;
     let watcher = Arc::new(watcher);
 
+    let recordings_root = recordings_root_default();
+    std::fs::create_dir_all(&recordings_root)?;
+    info!(recordings = %recordings_root.display(), "recordings root");
+
     let state = AppState {
         plugins: Arc::new(plugin_registry),
         registry: registry::Registry::new(),
@@ -88,6 +93,7 @@ async fn main() -> Result<()> {
         store,
         swarm,
         blackboard_root,
+        recordings_root,
         _watcher: watcher,
     };
 
@@ -110,6 +116,11 @@ async fn main() -> Result<()> {
             "/api/blackboard/*path",
             get(routes::swarm::read_blackboard).put(routes::swarm::write_blackboard),
         )
+        .route(
+            "/api/recording",
+            get(routes::recording::list_recordings),
+        )
+        .route("/api/recording/:id", get(routes::recording::get_recording))
         .route("/ws/swarm", get(routes::ws_swarm::ws_swarm))
         .route("/ws/pty/:agent_id", get(routes::pty_ws::pty_ws))
         .layer(CorsLayer::permissive())  // localhost dev convenience
@@ -151,4 +162,14 @@ fn blackboard_root_default() -> PathBuf {
         return PathBuf::from(home).join(".flockmux").join("blackboard");
     }
     PathBuf::from(".flockmux/blackboard")
+}
+
+fn recordings_root_default() -> PathBuf {
+    if let Ok(p) = std::env::var("FLOCKMUX_RECORDINGS_DIR") {
+        return PathBuf::from(p);
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        return PathBuf::from(home).join(".flockmux").join("recordings");
+    }
+    PathBuf::from(".flockmux/recordings")
 }

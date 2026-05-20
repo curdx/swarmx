@@ -30,6 +30,7 @@ flockmux-protocol = { path = "../flockmux-protocol" }
 flockmux-pty = { path = "../flockmux-pty" }
 flockmux-storage = { path = "../flockmux-storage" }
 flockmux-swarm = { path = "../flockmux-swarm" }
+flockmux-recorder = { path = "../flockmux-recorder" }
 sha2 = { workspace = true }
 
 [dev-dependencies]

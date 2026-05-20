@@ -5,6 +5,7 @@ use crate::pty_stream::PtyStream;
 use crate::registry::{AgentSlot, Lifecycle, LifecycleEvent};
 use anyhow::{Context, Result};
 use flockmux_pty::{PtyBridge, PtyHandles, SpawnOpts};
+use flockmux_recorder::RecorderHandle;
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -23,11 +24,16 @@ pub struct AgentSpawn {
 
 /// `shim_path` is the absolute path to `flockmux-shim`. Caller normally
 /// derives it from `std::env::current_exe()` parent + "flockmux-shim".
+///
+/// `recorder` is an optional asciicast v2 sink. When set, the PTY pump
+/// mirrors every chunk (including OSC lifecycle markers) into the
+/// recorder; when unset, the recording layer is bypassed.
 pub fn spawn_agent(
     plugin: &CliPlugin,
     role: Option<String>,
     workspace_root: &Path,
     shim_path: &Path,
+    recorder: Option<RecorderHandle>,
 ) -> Result<AgentSpawn> {
     let agent_id = format!("{}-{}", plugin.id, &Uuid::new_v4().to_string()[..8]);
     let workspace = ensure_workspace(workspace_root, &agent_id)?;
@@ -102,15 +108,23 @@ pub fn spawn_agent(
         let lifecycle = lifecycle.clone();
         let lifecycle_tx = lifecycle_tx.clone();
         let agent_id_for_log = agent_id.clone();
+        let recorder = recorder.clone();
         tokio::spawn(async move {
             let mut output_rx = output_rx;
             let mut osc_buf: Vec<u8> = Vec::new();
             while let Some(chunk) = output_rx.recv().await {
                 scan_osc(&mut osc_buf, &chunk, &lifecycle, &lifecycle_tx);
+                if let Some(rec) = &recorder {
+                    rec.write_chunk(chunk.clone());
+                }
                 stream.append(chunk);
             }
             tracing::debug!(agent = %agent_id_for_log, "pty output drained, closing stream");
             stream.close();
+            // Dropping `recorder` here is what signals EOF to the writer
+            // task — every clone of the handle (including this pump's) is
+            // gone, the mpsc closes, and `wait_finalize` resolves.
+            drop(recorder);
         });
     }
 

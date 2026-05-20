@@ -105,3 +105,24 @@ pub struct BlackboardEntry {
     pub at: i64,
     pub op: String,
 }
+
+// ── recording DTOs (M3 #19) ──────────────────────────────────────────────
+
+/// One entry in `GET /api/recording`. The .cast file content is *not*
+/// inlined — clients hit `GET /api/recording/:id` to stream the bytes.
+/// `finalized_at = None` means the recording is still live (its agent's
+/// PTY hasn't EOFed yet).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecordingInfo {
+    pub id: String,
+    pub agent_id: String,
+    pub started_at: i64,
+    #[serde(default)]
+    pub finalized_at: Option<i64>,
+    #[serde(default)]
+    pub duration_ms: Option<i64>,
+    pub cols: i64,
+    pub rows: i64,
+    #[serde(default)]
+    pub last_seq: Option<i64>,
+}
