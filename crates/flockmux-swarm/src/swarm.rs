@@ -46,6 +46,7 @@ pub struct NewMessage {
     pub kind: String,
     pub body: String,
     pub sent_at: i64,
+    pub in_reply_to: Option<i64>,
 }
 
 pub struct Swarm {
@@ -115,6 +116,7 @@ impl Swarm {
                 kind: msg.kind.clone(),
                 body: msg.body.clone(),
                 sent_at: msg.sent_at,
+                in_reply_to: msg.in_reply_to,
             })
             .await
             .context("store.insert_message")?;
@@ -127,6 +129,7 @@ impl Swarm {
             kind: record.kind.clone(),
             body: record.body.clone(),
             sent_at: record.sent_at,
+            in_reply_to: record.in_reply_to,
         });
 
         // Try the in-memory inbox; if absent or full, the message stays in
@@ -154,6 +157,34 @@ impl Swarm {
             }
         }
         Ok(record)
+    }
+
+    /// Mark a batch of messages as read on behalf of `to_agent`. Returns
+    /// the ids that this call actually updated (idempotent — repeats are a
+    /// no-op). Broadcasts a `MessageRead` event so subscribers (UI badge,
+    /// future read-receipts UI) can decrement live.
+    pub async fn mark_read(
+        &self,
+        to_agent: String,
+        ids: Vec<i64>,
+    ) -> Result<Vec<i64>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let at = now_ms();
+        let marked = self
+            .store
+            .mark_read(ids, to_agent.clone(), at)
+            .await
+            .context("store.mark_read")?;
+        if !marked.is_empty() {
+            let _ = self.events_tx.send(SwarmEvent::MessageRead {
+                ids: marked.clone(),
+                to_agent,
+                at,
+            });
+        }
+        Ok(marked)
     }
 
     /// Write `content` to a path relative to the blackboard root. Records

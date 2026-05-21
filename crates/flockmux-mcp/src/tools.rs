@@ -56,13 +56,14 @@ pub fn tool_descriptors() -> Vec<Value> {
     vec![
         json!({
             "name": "swarm_send_message",
-            "description": "Send a message to another flockmux agent. Use this to coordinate with other agents in the swarm — share findings, request help, hand off work. The `from` field is set automatically to your own agent id.",
+            "description": "Send a message to another flockmux agent. Use this to coordinate with other agents in the swarm — share findings, request help, hand off work. The `from` field is set automatically to your own agent id. Pass `in_reply_to` with another message's id to thread a reply.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "to":   { "type": "string", "description": "Recipient agent id, e.g. 'claude-abc12345'. Use swarm_list_agents to discover ids." },
                     "kind": { "type": "string", "description": "Message kind label. Use 'note' for general comms, 'ask' to request something, 'reply' when answering." },
-                    "body": { "type": "string", "description": "Message body (plain text or markdown)." }
+                    "body": { "type": "string", "description": "Message body (plain text or markdown)." },
+                    "in_reply_to": { "type": "integer", "description": "Optional parent message id (see ids from swarm_list_messages). Threads this message as a reply.", "minimum": 1 }
                 },
                 "required": ["to", "kind", "body"],
                 "additionalProperties": false
@@ -70,7 +71,7 @@ pub fn tool_descriptors() -> Vec<Value> {
         }),
         json!({
             "name": "swarm_list_messages",
-            "description": "List recent messages addressed to you. Call this near the start of a task to pick up handoffs / context from other agents. By default returns the 20 most recent.",
+            "description": "List recent messages addressed to you. Call this near the start of a task to pick up handoffs / context from other agents. By default returns the 20 most recent. SIDE EFFECT: messages returned are marked as read for you — the UI badge for their senders drops to zero after this call.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -192,12 +193,16 @@ async fn send_message(ctx: &ToolContext, args: &Value) -> Result<String, String>
     let to = arg_str(args, "to")?;
     let kind = arg_str(args, "kind")?;
     let body = arg_str(args, "body")?;
-    let payload = json!({
+    let in_reply_to = arg_i64_opt(args, "in_reply_to");
+    let mut payload = json!({
         "from": ctx.agent_id,
         "to": to,
         "kind": kind,
         "body": body,
     });
+    if let Some(parent) = in_reply_to {
+        payload["in_reply_to"] = json!(parent);
+    }
     let url = format!("{}/api/message", ctx.server_url);
     let resp = ctx
         .http
@@ -214,16 +219,64 @@ async fn send_message(ctx: &ToolContext, args: &Value) -> Result<String, String>
         .await
         .map_err(|e| format!("malformed response from {url}: {e}"))?;
     let id = value.get("id").and_then(|v| v.as_i64()).unwrap_or(-1);
-    Ok(format!(
+    let mut out = format!(
         "Sent message #{id} from {} to {to} (kind={kind}, {} chars).",
         ctx.agent_id,
         body.chars().count(),
-    ))
+    );
+    if let Some(parent) = in_reply_to {
+        out.push_str(&format!(" In reply to #{parent}."));
+    }
+    Ok(out)
 }
 
 async fn list_messages(ctx: &ToolContext, args: &Value) -> Result<String, String> {
     let limit = arg_i64_opt(args, "limit").unwrap_or(DEFAULT_LIMIT);
     let only_undelivered = arg_bool_opt(args, "only_undelivered").unwrap_or(false);
+    let rows = fetch_messages(ctx, limit, only_undelivered).await?;
+
+    // The mark_read side effect only fires for messages addressed to us
+    // (to_agent == ctx.agent_id) that have not yet been read. The REST
+    // endpoint enforces the same restriction, but pre-filtering keeps the
+    // request body tight when an agent passes only_undelivered or has been
+    // CC'd via a future fan-out.
+    let unread_ids: Vec<i64> = rows
+        .iter()
+        .filter(|m| {
+            m.get("to_agent").and_then(|v| v.as_str()) == Some(ctx.agent_id.as_str())
+                && m.get("read_at").map(|v| v.is_null()).unwrap_or(true)
+        })
+        .filter_map(|m| m.get("id").and_then(|v| v.as_i64()))
+        .collect();
+
+    let (marked_count, mark_err) = if unread_ids.is_empty() {
+        (0usize, None)
+    } else {
+        match try_mark_read(ctx, &ctx.agent_id, unread_ids.clone()).await {
+            Ok(n) => (n, None),
+            Err(msg) => (0, Some(msg)),
+        }
+    };
+
+    let unread_set: std::collections::HashSet<i64> = unread_ids.iter().copied().collect();
+    let mut out = format_messages_with_state(&rows, &ctx.agent_id, only_undelivered, &unread_set);
+    if marked_count > 0 {
+        out.push_str(&format!(
+            "\nMarked {marked_count} message(s) as read."
+        ));
+    }
+    if let Some(err) = mark_err {
+        out.push_str(&format!("\n(note: failed to mark read: {err})"));
+    }
+    Ok(out)
+}
+
+/// Pure fetch — no side effects. Returns the rows verbatim from the server.
+async fn fetch_messages(
+    ctx: &ToolContext,
+    limit: i64,
+    only_undelivered: bool,
+) -> Result<Vec<Value>, String> {
     let url = format!("{}/api/message", ctx.server_url);
     let resp = ctx
         .http
@@ -239,11 +292,40 @@ async fn list_messages(ctx: &ToolContext, args: &Value) -> Result<String, String
     if !resp.status().is_success() {
         return Err(http_err_text(resp).await);
     }
-    let rows: Vec<Value> = resp
+    resp.json::<Vec<Value>>()
+        .await
+        .map_err(|e| format!("malformed response from {url}: {e}"))
+}
+
+/// Best-effort POST to /api/message/read. Returns the number of ids actually
+/// marked (the server may report fewer than we asked for — idempotent). On
+/// transport / HTTP error returns Err so the caller can surface a footnote.
+async fn try_mark_read(
+    ctx: &ToolContext,
+    to: &str,
+    ids: Vec<i64>,
+) -> Result<usize, String> {
+    let url = format!("{}/api/message/read", ctx.server_url);
+    let resp = ctx
+        .http
+        .post(&url)
+        .json(&json!({ "to": to, "ids": ids }))
+        .send()
+        .await
+        .map_err(|e| format!("flockmux-server unreachable at {url}: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(http_err_text(resp).await);
+    }
+    let body: Value = resp
         .json()
         .await
         .map_err(|e| format!("malformed response from {url}: {e}"))?;
-    Ok(format_messages(&rows, &ctx.agent_id, only_undelivered))
+    let marked = body
+        .get("marked")
+        .and_then(|v| v.as_array())
+        .map(|a| a.len())
+        .unwrap_or(0);
+    Ok(marked)
 }
 
 async fn search_messages(ctx: &ToolContext, args: &Value) -> Result<String, String> {
@@ -268,8 +350,20 @@ async fn search_messages(ctx: &ToolContext, args: &Value) -> Result<String, Stri
         return Ok(format!("No messages match query '{q}'."));
     }
     let mut out = format!("Found {} message(s) matching '{q}':\n", rows.len());
+    // Search doesn't mark anything read; pass an empty set so every row
+    // shows its persisted-state flag (✓ for read, ★ for still-unread).
+    let empty: std::collections::HashSet<i64> = std::collections::HashSet::new();
     for (i, m) in rows.iter().take(limit as usize).enumerate() {
-        out.push_str(&format_message_line(i, m));
+        let id = m.get("id").and_then(|v| v.as_i64()).unwrap_or(-1);
+        let is_unread = m.get("read_at").map(|v| v.is_null()).unwrap_or(true);
+        // For search output, ★ means "still unread" (persisted state),
+        // not "freshly marked this call" — pass the id into the set so the
+        // formatter renders ★ for it.
+        let mut local = empty.clone();
+        if is_unread {
+            local.insert(id);
+        }
+        out.push_str(&format_message_line(i, m, &local));
         out.push('\n');
     }
     Ok(out)
@@ -398,31 +492,49 @@ async fn write_blackboard(ctx: &ToolContext, args: &Value) -> Result<String, Str
 
 // ── formatting helpers ───────────────────────────────────────────────────
 
-fn format_messages(rows: &[Value], me: &str, only_undelivered: bool) -> String {
+/// Format with awareness of which ids are newly-read this call.
+/// `★` = was unread coming in (will be / has been marked by this call).
+/// `✓` = already read before this call (read_at != null at fetch time).
+fn format_messages_with_state(
+    rows: &[Value],
+    me: &str,
+    only_undelivered: bool,
+    newly_read: &std::collections::HashSet<i64>,
+) -> String {
     if rows.is_empty() {
         let qualifier = if only_undelivered { " undelivered" } else { "" };
         return format!("No{qualifier} messages for {me}.");
     }
-    let mut out = format!("{} message(s) for {me}:\n", rows.len());
+    let new_count = newly_read.len();
+    let read_count = rows.len() - new_count;
+    let mut out = format!(
+        "{} message(s) for {me} ({new_count} new, {read_count} already read):\n",
+        rows.len()
+    );
     for (i, m) in rows.iter().enumerate() {
-        out.push_str(&format_message_line(i, m));
+        out.push_str(&format_message_line(i, m, newly_read));
         out.push('\n');
     }
     out
 }
 
-fn format_message_line(idx: usize, m: &Value) -> String {
+fn format_message_line(
+    idx: usize,
+    m: &Value,
+    newly_read: &std::collections::HashSet<i64>,
+) -> String {
     let id = m.get("id").and_then(|v| v.as_i64()).unwrap_or(-1);
     let from = m.get("from_agent").and_then(|v| v.as_str()).unwrap_or("?");
     let to = m.get("to_agent").and_then(|v| v.as_str()).unwrap_or("?");
     let kind = m.get("kind").and_then(|v| v.as_str()).unwrap_or("?");
     let body = m.get("body").and_then(|v| v.as_str()).unwrap_or("");
-    let delivered = m
-        .get("delivered_at")
-        .map(|v| !v.is_null())
-        .unwrap_or(false);
-    let flag = if delivered { " " } else { "★" };
-    format!("  {flag} [{idx}] #{id}  {from} → {to}  ({kind})\n      {body}", )
+    let flag = if newly_read.contains(&id) { "★" } else { "✓" };
+    let reply = m
+        .get("in_reply_to")
+        .and_then(|v| v.as_i64())
+        .map(|p| format!("  ↩ #{p}"))
+        .unwrap_or_default();
+    format!("  {flag} [{idx}] #{id}  {from} → {to}  ({kind}){reply}\n      {body}")
 }
 
 #[cfg(test)]
@@ -434,9 +546,18 @@ mod tests {
     use std::sync::Arc;
     use tokio::sync::Mutex;
 
+    /// State shared by stub routes. `messages` is the canonical list of rows;
+    /// `mark_read_calls` records every POST body so tests can assert exactly
+    /// which ids the MCP tool sent.
+    #[derive(Default)]
+    struct StubState {
+        messages: Vec<Value>,
+        mark_read_calls: Vec<Value>,
+    }
+
     /// Minimal stub of flockmux-server's REST surface. Each test starts one
     /// of these on a random port so we can hit the real reqwest client.
-    fn build_app(state: Arc<Mutex<Vec<Value>>>) -> Router {
+    fn build_app(state: Arc<Mutex<StubState>>) -> Router {
         Router::new()
             .route("/api/agent", get({
                 || async {
@@ -456,7 +577,7 @@ mod tests {
                     let state = state.clone();
                     async move {
                         let mut s = state.lock().await;
-                        let id = (s.len() as i64) + 1;
+                        let id = (s.messages.len() as i64) + 1;
                         let row = json!({
                             "id": id,
                             "from_agent": body.get("from").cloned().unwrap_or(json!("system")),
@@ -466,8 +587,9 @@ mod tests {
                             "sent_at": 1700,
                             "delivered_at": null,
                             "read_at": null,
+                            "in_reply_to": body.get("in_reply_to").cloned().unwrap_or(Value::Null),
                         });
-                        s.push(row.clone());
+                        s.messages.push(row.clone());
                         Json(row)
                     }
                 }
@@ -478,7 +600,7 @@ mod tests {
                     async move {
                         let s = state.lock().await;
                         let to = q.get("to").cloned();
-                        let rows: Vec<Value> = s.iter()
+                        let rows: Vec<Value> = s.messages.iter()
                             .filter(|m| match &to {
                                 Some(t) => m.get("to_agent").and_then(|v| v.as_str()) == Some(t.as_str()),
                                 None => true,
@@ -486,6 +608,33 @@ mod tests {
                             .cloned()
                             .collect();
                         Json(rows)
+                    }
+                }
+            }))
+            .route("/api/message/read", post({
+                let state = state.clone();
+                move |Json(body): Json<Value>| {
+                    let state = state.clone();
+                    async move {
+                        let mut s = state.lock().await;
+                        s.mark_read_calls.push(body.clone());
+                        let to = body.get("to").and_then(|v| v.as_str()).unwrap_or("");
+                        let ids: Vec<i64> = body
+                            .get("ids")
+                            .and_then(|v| v.as_array())
+                            .map(|a| a.iter().filter_map(|x| x.as_i64()).collect())
+                            .unwrap_or_default();
+                        let mut marked = Vec::new();
+                        for m in s.messages.iter_mut() {
+                            let id = m.get("id").and_then(|v| v.as_i64()).unwrap_or(-1);
+                            let to_match = m.get("to_agent").and_then(|v| v.as_str()) == Some(to);
+                            let unread = m.get("read_at").map(|v| v.is_null()).unwrap_or(true);
+                            if to_match && unread && ids.contains(&id) {
+                                m["read_at"] = json!(9999);
+                                marked.push(id);
+                            }
+                        }
+                        Json(json!({ "marked": marked, "at": 9999 }))
                     }
                 }
             }))
@@ -516,8 +665,8 @@ mod tests {
             }))
     }
 
-    async fn start_stub() -> (SocketAddr, Arc<Mutex<Vec<Value>>>) {
-        let state: Arc<Mutex<Vec<Value>>> = Arc::new(Mutex::new(Vec::new()));
+    async fn start_stub() -> (SocketAddr, Arc<Mutex<StubState>>) {
+        let state: Arc<Mutex<StubState>> = Arc::new(Mutex::new(StubState::default()));
         let app = build_app(state.clone());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -525,6 +674,13 @@ mod tests {
             axum::serve(listener, app).await.unwrap();
         });
         (addr, state)
+    }
+
+    /// Helper: seed the stub with pre-existing rows so list_messages tests
+    /// don't have to round-trip through send_message first.
+    async fn seed_messages(state: &Arc<Mutex<StubState>>, rows: Vec<Value>) {
+        let mut s = state.lock().await;
+        s.messages = rows;
     }
 
     fn ctx_for(addr: SocketAddr, agent_id: &str) -> ToolContext {
@@ -638,5 +794,119 @@ mod tests {
             assert!(t["description"].is_string());
             assert!(t["inputSchema"]["type"] == "object");
         }
+    }
+
+    fn make_row(id: i64, from: &str, to: &str, body: &str, read_at: Option<i64>, in_reply_to: Option<i64>) -> Value {
+        json!({
+            "id": id,
+            "from_agent": from,
+            "to_agent": to,
+            "kind": "note",
+            "body": body,
+            "sent_at": 1000 + id,
+            "delivered_at": null,
+            "read_at": read_at,
+            "in_reply_to": in_reply_to,
+        })
+    }
+
+    #[tokio::test]
+    async fn list_messages_marks_unread_subset_read() {
+        let (addr, state) = start_stub().await;
+        // Seed: two rows for codex-bbb, one unread (id=1) and one already
+        // read (id=2 has read_at=500). The mark_read call should only carry
+        // id=1.
+        seed_messages(&state, vec![
+            make_row(1, "claude-aaa", "codex-bbb", "fresh", None, None),
+            make_row(2, "claude-aaa", "codex-bbb", "stale", Some(500), None),
+        ]).await;
+
+        let ctx = ctx_for(addr, "codex-bbb");
+        let out = call_tool(&ctx, "swarm_list_messages", &json!({})).await;
+        assert_eq!(out["isError"], json!(false));
+        let text = out["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("2 message(s) for codex-bbb (1 new, 1 already read)"), "got: {text}");
+        assert!(text.contains("Marked 1 message(s) as read."), "missing mark footer: {text}");
+
+        let s = state.lock().await;
+        assert_eq!(s.mark_read_calls.len(), 1, "exactly one POST /api/message/read");
+        let call = &s.mark_read_calls[0];
+        assert_eq!(call.get("to").and_then(|v| v.as_str()), Some("codex-bbb"));
+        let ids: Vec<i64> = call.get("ids").and_then(|v| v.as_array()).unwrap()
+            .iter().filter_map(|x| x.as_i64()).collect();
+        assert_eq!(ids, vec![1], "only the unread id should be marked");
+    }
+
+    #[tokio::test]
+    async fn list_messages_idempotent_when_all_already_read() {
+        let (addr, state) = start_stub().await;
+        seed_messages(&state, vec![
+            make_row(1, "claude-aaa", "codex-bbb", "old1", Some(100), None),
+            make_row(2, "claude-aaa", "codex-bbb", "old2", Some(200), None),
+        ]).await;
+
+        let ctx = ctx_for(addr, "codex-bbb");
+        let out = call_tool(&ctx, "swarm_list_messages", &json!({})).await;
+        let text = out["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("2 message(s) for codex-bbb (0 new, 2 already read)"), "got: {text}");
+        assert!(!text.contains("Marked "), "no mark footer expected: {text}");
+
+        let s = state.lock().await;
+        assert_eq!(s.mark_read_calls.len(), 0, "no POST when nothing unread");
+    }
+
+    #[tokio::test]
+    async fn send_message_in_reply_to_passes_through() {
+        let (addr, state) = start_stub().await;
+        let ctx = ctx_for(addr, "claude-aaa");
+        let out = call_tool(&ctx, "swarm_send_message", &json!({
+            "to": "codex-bbb",
+            "kind": "reply",
+            "body": "pong",
+            "in_reply_to": 6
+        })).await;
+        assert_eq!(out["isError"], json!(false));
+        let text = out["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("In reply to #6"), "missing reply footer: {text}");
+
+        let s = state.lock().await;
+        let row = s.messages.last().expect("stub recorded send");
+        assert_eq!(row.get("in_reply_to").and_then(|v| v.as_i64()), Some(6));
+    }
+
+    #[tokio::test]
+    async fn send_message_without_in_reply_to_omits_field() {
+        let (addr, state) = start_stub().await;
+        let ctx = ctx_for(addr, "claude-aaa");
+        let out = call_tool(&ctx, "swarm_send_message", &json!({
+            "to": "codex-bbb",
+            "kind": "note",
+            "body": "ping"
+        })).await;
+        let text = out["content"][0]["text"].as_str().unwrap();
+        assert!(!text.contains("In reply to"), "should not advertise a reply: {text}");
+
+        let s = state.lock().await;
+        let row = s.messages.last().expect("stub recorded send");
+        assert!(row.get("in_reply_to").map(|v| v.is_null()).unwrap_or(true),
+            "in_reply_to should be null/absent: {row}");
+    }
+
+    #[tokio::test]
+    async fn list_messages_renders_reply_lineage() {
+        let (addr, state) = start_stub().await;
+        // Order matches the real server: newest first.
+        seed_messages(&state, vec![
+            make_row(42, "claude-aaa", "codex-bbb", "child",  None,      Some(38)),
+            make_row(38, "claude-aaa", "codex-bbb", "parent", Some(500), None),
+        ]).await;
+
+        let ctx = ctx_for(addr, "codex-bbb");
+        let out = call_tool(&ctx, "swarm_list_messages", &json!({})).await;
+        let text = out["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("↩ #38"), "reply marker missing: {text}");
+        // The freshly-marked row is the child (#42); parent stays ✓.
+        assert!(text.contains("★ [0] #42"), "star marker for unread child missing: {text}");
+        assert!(text.contains("✓ [1] #38"), "check marker for read parent missing: {text}");
     }
 }

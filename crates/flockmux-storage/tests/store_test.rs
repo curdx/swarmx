@@ -94,6 +94,7 @@ async fn message_insert_list_filter() {
             kind: "note".into(),
             body: "hello b".into(),
             sent_at: ts(1),
+            in_reply_to: None,
         })
         .await
         .unwrap();
@@ -104,6 +105,7 @@ async fn message_insert_list_filter() {
             kind: "note".into(),
             body: "hi a".into(),
             sent_at: ts(2),
+            in_reply_to: None,
         })
         .await
         .unwrap();
@@ -132,6 +134,7 @@ async fn message_search_fts5() {
             kind: "note".into(),
             body: "schedule a meeting tomorrow about the planner".into(),
             sent_at: ts(1),
+            in_reply_to: None,
         })
         .await
         .unwrap();
@@ -142,6 +145,7 @@ async fn message_search_fts5() {
             kind: "note".into(),
             body: "just a chatty hello, nothing planned".into(),
             sent_at: ts(2),
+            in_reply_to: None,
         })
         .await
         .unwrap();
@@ -165,6 +169,7 @@ async fn mark_delivered_only_undelivered() {
             kind: "note".into(),
             body: "one".into(),
             sent_at: ts(1),
+            in_reply_to: None,
         })
         .await
         .unwrap();
@@ -175,6 +180,7 @@ async fn mark_delivered_only_undelivered() {
             kind: "note".into(),
             body: "two".into(),
             sent_at: ts(2),
+            in_reply_to: None,
         })
         .await
         .unwrap();
@@ -195,6 +201,180 @@ async fn mark_delivered_only_undelivered() {
         .unwrap();
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].id, m2.id);
+}
+
+#[tokio::test]
+async fn mark_read_sets_timestamp_and_returns_ids() {
+    let (_dir, store) = fresh_store().await;
+    let m1 = store
+        .insert_message(NewMessage {
+            from_agent: "a".into(),
+            to_agent: "b".into(),
+            kind: "note".into(),
+            body: "one".into(),
+            sent_at: ts(1),
+            in_reply_to: None,
+        })
+        .await
+        .unwrap();
+    let m2 = store
+        .insert_message(NewMessage {
+            from_agent: "a".into(),
+            to_agent: "b".into(),
+            kind: "note".into(),
+            body: "two".into(),
+            sent_at: ts(2),
+            in_reply_to: None,
+        })
+        .await
+        .unwrap();
+
+    let marked = store
+        .mark_read(vec![m1.id, m2.id], "b".into(), ts(10))
+        .await
+        .unwrap();
+    assert_eq!(marked.len(), 2);
+    assert!(marked.contains(&m1.id) && marked.contains(&m2.id));
+
+    let rows = store
+        .list_messages(ListMessagesOpts {
+            to_agent: Some("b".into()),
+            limit: 50,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert!(rows.iter().all(|r| r.read_at == Some(ts(10))));
+
+    // Idempotent: second call returns empty (read_at already set).
+    let again = store
+        .mark_read(vec![m1.id, m2.id], "b".into(), ts(99))
+        .await
+        .unwrap();
+    assert!(again.is_empty());
+}
+
+#[tokio::test]
+async fn mark_read_refuses_cross_agent() {
+    let (_dir, store) = fresh_store().await;
+    let m1 = store
+        .insert_message(NewMessage {
+            from_agent: "a".into(),
+            to_agent: "b".into(),
+            kind: "note".into(),
+            body: "for b only".into(),
+            sent_at: ts(1),
+            in_reply_to: None,
+        })
+        .await
+        .unwrap();
+
+    // Wrong recipient: c tries to mark b's mail read.
+    let marked = store
+        .mark_read(vec![m1.id], "c".into(), ts(10))
+        .await
+        .unwrap();
+    assert!(marked.is_empty(), "cross-agent mark must be a no-op");
+
+    let row = store
+        .list_messages(ListMessagesOpts {
+            to_agent: Some("b".into()),
+            limit: 50,
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .pop()
+        .unwrap();
+    assert!(row.read_at.is_none(), "row stayed unread");
+}
+
+#[tokio::test]
+async fn count_unread_excludes_read() {
+    let (_dir, store) = fresh_store().await;
+    let m1 = store
+        .insert_message(NewMessage {
+            from_agent: "a".into(),
+            to_agent: "b".into(),
+            kind: "note".into(),
+            body: "one".into(),
+            sent_at: ts(1),
+            in_reply_to: None,
+        })
+        .await
+        .unwrap();
+    let _m2 = store
+        .insert_message(NewMessage {
+            from_agent: "a".into(),
+            to_agent: "b".into(),
+            kind: "note".into(),
+            body: "two".into(),
+            sent_at: ts(2),
+            in_reply_to: None,
+        })
+        .await
+        .unwrap();
+    // Unrelated recipient — must not count.
+    let _other = store
+        .insert_message(NewMessage {
+            from_agent: "a".into(),
+            to_agent: "c".into(),
+            kind: "note".into(),
+            body: "for c".into(),
+            sent_at: ts(3),
+            in_reply_to: None,
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(store.count_unread("b".into()).await.unwrap(), 2);
+
+    store
+        .mark_read(vec![m1.id], "b".into(), ts(10))
+        .await
+        .unwrap();
+    assert_eq!(store.count_unread("b".into()).await.unwrap(), 1);
+    assert_eq!(store.count_unread("c".into()).await.unwrap(), 1);
+}
+
+#[tokio::test]
+async fn insert_and_list_round_trip_in_reply_to() {
+    let (_dir, store) = fresh_store().await;
+    let parent = store
+        .insert_message(NewMessage {
+            from_agent: "a".into(),
+            to_agent: "b".into(),
+            kind: "note".into(),
+            body: "first ping".into(),
+            sent_at: ts(1),
+            in_reply_to: None,
+        })
+        .await
+        .unwrap();
+    let reply = store
+        .insert_message(NewMessage {
+            from_agent: "b".into(),
+            to_agent: "a".into(),
+            kind: "note".into(),
+            body: "pong".into(),
+            sent_at: ts(2),
+            in_reply_to: Some(parent.id),
+        })
+        .await
+        .unwrap();
+    assert_eq!(reply.in_reply_to, Some(parent.id));
+
+    let listed = store
+        .list_messages(ListMessagesOpts {
+            limit: 50,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let reply_row = listed.iter().find(|r| r.id == reply.id).unwrap();
+    assert_eq!(reply_row.in_reply_to, Some(parent.id));
+    let parent_row = listed.iter().find(|r| r.id == parent.id).unwrap();
+    assert!(parent_row.in_reply_to.is_none());
 }
 
 // ── blackboard ───────────────────────────────────────────────────────────

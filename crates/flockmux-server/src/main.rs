@@ -17,7 +17,7 @@ mod spawn;
 
 use anyhow::{Context, Result};
 use axum::{
-    routing::{delete, get},
+    routing::{delete, get, post},
     Router,
 };
 use flockmux_storage::Store;
@@ -141,12 +141,24 @@ async fn main() -> Result<()> {
             get(routes::swarm::list_messages).post(routes::swarm::send_message),
         )
         .route(
+            "/api/message/read",
+            post(routes::swarm::mark_messages_read),
+        )
+        .route(
+            "/api/message/unread_count",
+            get(routes::swarm::unread_count),
+        )
+        .route(
             "/api/blackboard",
             get(routes::swarm::list_blackboard_paths),
         )
         .route(
             "/api/blackboard/*path",
             get(routes::swarm::read_blackboard).put(routes::swarm::write_blackboard),
+        )
+        .route(
+            "/api/blackboard-history/*path",
+            get(routes::swarm::blackboard_history),
         )
         .route(
             "/api/recording",

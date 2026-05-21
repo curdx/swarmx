@@ -7,7 +7,10 @@
 id = "codex"
 display_name = "Codex CLI"
 binary = "codex"
-default_args = []
+# Skip approval prompts + sandbox. --yolo is an alias for the same
+# preset; we use the canonical long form so the intent is explicit in
+# logs. Codex still refuses to start under root, which we never do.
+default_args = ["--dangerously-bypass-approvals-and-sandbox"]
 ready_detect = "shim_osc"
 # M4 honors `auto_inject_mcp = true` and appends a single global
 # `[mcp_servers.flockmux-swarm]` section to ~/.codex/config.toml.

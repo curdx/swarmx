@@ -9,7 +9,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api/http";
-import type { BlackboardEntry } from "../api/types";
+import type { BlackboardEntry, BlackboardHistoryEntry } from "../api/types";
 
 interface Props {
   /** Latest swarm `blackboard_changed` event observed by the parent. */
@@ -25,6 +25,10 @@ export function BlackboardPanel({ liveChange }: Props) {
   const [info, setInfo] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [newPath, setNewPath] = useState("");
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [history, setHistory] = useState<BlackboardHistoryEntry[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [versionPreview, setVersionPreview] = useState<BlackboardHistoryEntry | null>(null);
 
   const isDirty = useMemo(() => content !== originalContent, [content, originalContent]);
 
@@ -38,6 +42,18 @@ export function BlackboardPanel({ liveChange }: Props) {
     }
   };
 
+  const refreshHistory = async (path: string) => {
+    setHistoryLoading(true);
+    try {
+      const rows = await api.listBlackboardHistory(path, 50, false);
+      setHistory(rows);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
+
   const openPath = async (path: string) => {
     if (isDirty && selected && selected !== path) {
       const ok = confirm(`Discard unsaved changes to "${selected}"?`);
@@ -45,6 +61,7 @@ export function BlackboardPanel({ liveChange }: Props) {
     }
     setSelected(path);
     setInfo(null);
+    setVersionPreview(null);
     try {
       const snap = await api.readBlackboard(path);
       setContent(snap.content);
@@ -54,6 +71,23 @@ export function BlackboardPanel({ liveChange }: Props) {
       setError((e as Error).message);
       setContent("");
       setOriginalContent("");
+    }
+    // Best-effort: history count drives the toggle label; failures are
+    // logged into `error` but don't block the editor.
+    refreshHistory(path);
+  };
+
+  const openVersion = async (entry: BlackboardHistoryEntry) => {
+    // The list call strips content by default; fetch the full row for the
+    // selected version. We re-query the same endpoint with include_content
+    // so each click is at most one byte-heavy request.
+    setVersionPreview(entry);
+    try {
+      const rows = await api.listBlackboardHistory(entry.path, 200, true);
+      const full = rows.find((r) => r.id === entry.id);
+      if (full) setVersionPreview(full);
+    } catch (e) {
+      setError((e as Error).message);
     }
   };
 
@@ -95,6 +129,7 @@ export function BlackboardPanel({ liveChange }: Props) {
     if (!liveChange) return;
     refreshList();
     if (selected && liveChange.path === selected) {
+      refreshHistory(selected);
       if (isDirty) {
         setInfo(
           `⚠ ${liveChange.path} changed on disk (op=${liveChange.op}) — local edits unsaved`,
@@ -161,17 +196,80 @@ export function BlackboardPanel({ liveChange }: Props) {
               <span style={{ flex: 1, fontSize: 12, color: "#cbd5f5" }}>
                 {selected} {isDirty && <em style={{ color: "#fbbf24" }}>(unsaved)</em>}
               </span>
+              <button
+                onClick={() => setHistoryOpen((v) => !v)}
+                title="show write history"
+                style={historyToggle}
+              >
+                history ({history.length}
+                {historyLoading ? "…" : ""})
+              </button>
               <button onClick={save} disabled={saving || !isDirty}>
                 save
               </button>
             </div>
+            {historyOpen && (
+              <div style={historyDrawer}>
+                {history.length === 0 && (
+                  <div style={{ ...emptyHint, marginTop: 4 }}>No history.</div>
+                )}
+                {history.map((h) => {
+                  const isPreview = versionPreview?.id === h.id;
+                  return (
+                    <button
+                      key={h.id}
+                      onClick={() => openVersion(h)}
+                      style={{
+                        ...historyRow,
+                        background: isPreview ? "#1e3a8a" : "transparent",
+                      }}
+                      title={new Date(h.at).toLocaleString()}
+                    >
+                      <span style={{ color: "#fbbf24" }}>
+                        {h.sha256.slice(0, 12)}
+                      </span>
+                      <span style={{ color: "#94a3b8", marginLeft: 6 }}>
+                        {h.agent_id ?? "external"}
+                      </span>
+                      <span style={{ color: "#64748b", marginLeft: 6 }}>
+                        {h.op}
+                      </span>
+                      <span style={{ color: "#64748b", marginLeft: 6 }}>
+                        {formatRelative(h.at)}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
             {info && <div style={infoRow}>{info}</div>}
-            <textarea
-              value={content}
-              onChange={(e) => setContent(e.target.value)}
-              style={editor}
-              spellCheck={false}
-            />
+            {versionPreview ? (
+              <>
+                <div style={versionHeader}>
+                  <span style={{ flex: 1 }}>
+                    viewing version {versionPreview.sha256.slice(0, 12)}…
+                    ({versionPreview.agent_id ?? "external"},{" "}
+                    {new Date(versionPreview.at).toLocaleString()})
+                  </span>
+                  <button onClick={() => setVersionPreview(null)}>
+                    close
+                  </button>
+                </div>
+                <textarea
+                  value={versionPreview.content ?? "(content not fetched)"}
+                  readOnly
+                  style={{ ...editor, background: "#101a2f" }}
+                  spellCheck={false}
+                />
+              </>
+            ) : (
+              <textarea
+                value={content}
+                onChange={(e) => setContent(e.target.value)}
+                style={editor}
+                spellCheck={false}
+              />
+            )}
           </>
         ) : (
           <div style={emptyHint}>Select a path on the left.</div>
@@ -180,6 +278,14 @@ export function BlackboardPanel({ liveChange }: Props) {
       </div>
     </div>
   );
+}
+
+function formatRelative(ms: number): string {
+  const diff = Date.now() - ms;
+  if (diff < 60_000) return "just now";
+  if (diff < 3600_000) return `${Math.floor(diff / 60_000)}m ago`;
+  if (diff < 86400_000) return `${Math.floor(diff / 3600_000)}h ago`;
+  return `${Math.floor(diff / 86400_000)}d ago`;
 }
 
 function formatTime(ms: number): string {
@@ -274,4 +380,46 @@ const infoRow: React.CSSProperties = {
   fontSize: 11,
   padding: "4px 8px",
   background: "#1f2937",
+};
+
+const historyToggle: React.CSSProperties = {
+  background: "transparent",
+  color: "#94a3b8",
+  border: "1px solid #374151",
+  borderRadius: 4,
+  fontSize: 11,
+  padding: "2px 6px",
+  cursor: "pointer",
+};
+
+const historyDrawer: React.CSSProperties = {
+  borderBottom: "1px solid #374151",
+  maxHeight: 180,
+  overflowY: "auto",
+  background: "#0b1220",
+  display: "flex",
+  flexDirection: "column",
+};
+
+const historyRow: React.CSSProperties = {
+  textAlign: "left",
+  border: "none",
+  borderBottom: "1px solid #1f2937",
+  padding: "4px 8px",
+  fontSize: 11,
+  color: "#cbd5f5",
+  cursor: "pointer",
+  fontFamily:
+    "ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace",
+};
+
+const versionHeader: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 4,
+  padding: "4px 8px",
+  background: "#1f2937",
+  fontSize: 11,
+  color: "#cbd5f5",
+  borderBottom: "1px solid #374151",
 };

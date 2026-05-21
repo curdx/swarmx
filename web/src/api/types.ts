@@ -63,6 +63,7 @@ export interface MessageRecord {
   sent_at: number;
   delivered_at: number | null;
   read_at: number | null;
+  in_reply_to: number | null;
 }
 
 export interface SendMessageRequest {
@@ -70,6 +71,32 @@ export interface SendMessageRequest {
   to: string;
   kind: string;
   body: string;
+  in_reply_to?: number;
+}
+
+export interface MarkReadRequest {
+  to: string;
+  ids: number[];
+}
+
+export interface MarkReadResponse {
+  marked: number[];
+  at: number;
+}
+
+export interface UnreadCountResponse {
+  to: string;
+  count: number;
+}
+
+export interface BlackboardHistoryEntry {
+  id: number;
+  agent_id: string | null;
+  op: string;
+  path: string;
+  sha256: string;
+  at: number;
+  content?: string | null;
 }
 
 export interface BlackboardEntry {
@@ -123,6 +150,13 @@ export type SwarmEvent =
       kind: string;
       body: string;
       sent_at: number;
+      in_reply_to?: number | null;
+    }
+  | {
+      type: "message_read";
+      ids: number[];
+      to_agent: string;
+      at: number;
     }
   | {
       type: "blackboard_changed";

@@ -63,6 +63,9 @@ pub struct SendMessageRequest {
     pub to: String,
     pub kind: String,
     pub body: String,
+    /// Optional parent message id; threads this message as a reply.
+    #[serde(default)]
+    pub in_reply_to: Option<i64>,
 }
 
 /// Returned by `POST /api/message` so the client knows the persisted row.
@@ -76,6 +79,47 @@ pub struct MessageRecord {
     pub sent_at: i64,
     pub delivered_at: Option<i64>,
     pub read_at: Option<i64>,
+    #[serde(default)]
+    pub in_reply_to: Option<i64>,
+}
+
+/// `POST /api/message/read` payload. The server enforces `to` matches each
+/// id's actual recipient, so callers can't mark someone else's mail read.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MarkReadRequest {
+    pub to: String,
+    pub ids: Vec<i64>,
+}
+
+/// `POST /api/message/read` response. `marked` is the subset that this call
+/// actually updated (idempotent — repeats return empty).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MarkReadResponse {
+    pub marked: Vec<i64>,
+    pub at: i64,
+}
+
+/// `GET /api/message/unread_count?to=<agent>` response.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UnreadCountResponse {
+    pub to: String,
+    pub count: i64,
+}
+
+/// One row from `GET /api/blackboard-history/*path`. `content` is omitted by
+/// default (`?include_content=true` to include) so listing 50 versions of a
+/// large file doesn't blow up the JSON payload.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlackboardHistoryEntry {
+    pub id: i64,
+    #[serde(default)]
+    pub agent_id: Option<String>,
+    pub op: String,
+    pub path: String,
+    pub sha256: String,
+    pub at: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
 }
 
 /// `PUT /api/blackboard/:path` payload. The path itself rides in the URL;

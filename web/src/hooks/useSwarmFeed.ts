@@ -59,15 +59,22 @@ export function useSwarmFeed({ onEvent, onReconnect }: Options): SwarmFeedStatus
 
       next.onmessage = (msg) => {
         if (typeof msg.data !== "string") return;
+        let parsed: unknown;
         try {
-          const ev = JSON.parse(msg.data) as SwarmEvent;
-          // Ignore the server-side "lagged" sentinel which uses a different
-          // top-level shape than SwarmEvent. SwarmEvent always carries a
-          // discriminator we recognise.
-          if (!ev || typeof (ev as { type?: unknown }).type !== "string") return;
-          onEventRef.current(ev);
+          parsed = JSON.parse(msg.data);
         } catch {
-          // ignore malformed frames
+          return;
+        }
+        if (!parsed || typeof (parsed as { type?: unknown }).type !== "string") {
+          // Server-side "lagged" sentinel or other non-event frame.
+          return;
+        }
+        try {
+          onEventRef.current(parsed as SwarmEvent);
+        } catch (err) {
+          // A future server may emit a variant this build doesn't know about;
+          // surface it but don't crash the panel.
+          console.warn("swarm event handler threw", err, parsed);
         }
       };
 

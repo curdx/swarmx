@@ -151,9 +151,16 @@ impl Store {
         tokio::task::spawn_blocking(move || -> Result<MessageRecord> {
             let conn = pool.get()?;
             conn.execute(
-                "INSERT INTO messages (from_agent, to_agent, kind, body, sent_at) \
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![msg.from_agent, msg.to_agent, msg.kind, msg.body, msg.sent_at],
+                "INSERT INTO messages (from_agent, to_agent, kind, body, sent_at, in_reply_to) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    msg.from_agent,
+                    msg.to_agent,
+                    msg.kind,
+                    msg.body,
+                    msg.sent_at,
+                    msg.in_reply_to
+                ],
             )?;
             let id = conn.last_insert_rowid();
             Ok(MessageRecord {
@@ -165,6 +172,7 @@ impl Store {
                 sent_at: msg.sent_at,
                 delivered_at: None,
                 read_at: None,
+                in_reply_to: msg.in_reply_to,
             })
         })
         .await
@@ -200,7 +208,7 @@ impl Store {
             bound.push(limit.into());
 
             let sql = format!(
-                "SELECT id, from_agent, to_agent, kind, body, sent_at, delivered_at, read_at \
+                "SELECT id, from_agent, to_agent, kind, body, sent_at, delivered_at, read_at, in_reply_to \
                  FROM messages \
                  {where_sql} \
                  ORDER BY id DESC \
@@ -217,6 +225,7 @@ impl Store {
                     sent_at: row.get(5)?,
                     delivered_at: row.get(6)?,
                     read_at: row.get(7)?,
+                    in_reply_to: row.get(8)?,
                 })
             })?;
             rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
@@ -232,7 +241,7 @@ impl Store {
             // Join messages_fts → messages on rowid; order by FTS rank.
             let mut stmt = conn.prepare(
                 "SELECT m.id, m.from_agent, m.to_agent, m.kind, m.body, m.sent_at, \
-                        m.delivered_at, m.read_at \
+                        m.delivered_at, m.read_at, m.in_reply_to \
                  FROM messages_fts \
                  JOIN messages m ON m.id = messages_fts.rowid \
                  WHERE messages_fts MATCH ?1 \
@@ -249,6 +258,7 @@ impl Store {
                     sent_at: row.get(5)?,
                     delivered_at: row.get(6)?,
                     read_at: row.get(7)?,
+                    in_reply_to: row.get(8)?,
                 })
             })?;
             rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
@@ -279,6 +289,60 @@ impl Store {
         })
         .await
         .context("spawn_blocking mark_delivered")?
+    }
+
+    /// Mark messages as read on behalf of `to_agent`. Refuses cross-agent
+    /// marks (the WHERE `to_agent = ?` clause) and is idempotent
+    /// (`read_at IS NULL`). Returns the ids actually updated this call so
+    /// the swarm can broadcast a tight `MessageRead` event.
+    pub async fn mark_read(
+        &self,
+        ids: Vec<i64>,
+        to_agent: String,
+        at_ms: i64,
+    ) -> Result<Vec<i64>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || -> Result<Vec<i64>> {
+            let mut conn = pool.get()?;
+            let tx = conn.transaction()?;
+            let mut marked = Vec::with_capacity(ids.len());
+            {
+                let mut stmt = tx.prepare(
+                    "UPDATE messages SET read_at = ?1 \
+                     WHERE id = ?2 AND to_agent = ?3 AND read_at IS NULL \
+                     RETURNING id",
+                )?;
+                for id in &ids {
+                    let mut rows = stmt.query(params![at_ms, id, to_agent])?;
+                    if let Some(row) = rows.next()? {
+                        marked.push(row.get::<_, i64>(0)?);
+                    }
+                }
+            }
+            tx.commit()?;
+            Ok(marked)
+        })
+        .await
+        .context("spawn_blocking mark_read")?
+    }
+
+    /// Count messages for `to_agent` that have not yet been read.
+    pub async fn count_unread(&self, to_agent: String) -> Result<i64> {
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || -> Result<i64> {
+            let conn = pool.get()?;
+            let n: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM messages WHERE to_agent = ?1 AND read_at IS NULL",
+                params![to_agent],
+                |row| row.get(0),
+            )?;
+            Ok(n)
+        })
+        .await
+        .context("spawn_blocking count_unread")?
     }
 
     // ── blackboard ───────────────────────────────────────────────────────

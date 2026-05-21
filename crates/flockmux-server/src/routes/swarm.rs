@@ -7,7 +7,8 @@ use axum::{
     Json,
 };
 use flockmux_protocol::rest::{
-    BlackboardEntry, BlackboardSnapshot, MessageRecord, SendMessageRequest, WriteBlackboardRequest,
+    BlackboardEntry, BlackboardHistoryEntry, BlackboardSnapshot, MarkReadRequest, MarkReadResponse,
+    MessageRecord, SendMessageRequest, UnreadCountResponse, WriteBlackboardRequest,
 };
 use flockmux_storage::ListMessagesOpts;
 use flockmux_swarm::NewMessage;
@@ -58,6 +59,7 @@ pub async fn list_messages(
                 sent_at: r.sent_at,
                 delivered_at: r.delivered_at,
                 read_at: r.read_at,
+                in_reply_to: r.in_reply_to,
             })
             .collect(),
     ))
@@ -76,6 +78,7 @@ pub async fn send_message(
             kind: req.kind,
             body: req.body,
             sent_at: now_ms(),
+            in_reply_to: req.in_reply_to,
         })
         .await
         .map_err(internal_err)?;
@@ -88,7 +91,77 @@ pub async fn send_message(
         sent_at: record.sent_at,
         delivered_at: record.delivered_at,
         read_at: record.read_at,
+        in_reply_to: record.in_reply_to,
     }))
+}
+
+/// `POST /api/message/read` — caller declares which messages it has read.
+/// The server filters by `to_agent` so cross-agent marks are silently
+/// dropped (no error, just an empty `marked` list).
+pub async fn mark_messages_read(
+    State(state): State<AppState>,
+    Json(req): Json<MarkReadRequest>,
+) -> Result<Json<MarkReadResponse>, (StatusCode, Json<serde_json::Value>)> {
+    let at = now_ms();
+    let marked = state
+        .swarm
+        .mark_read(req.to, req.ids)
+        .await
+        .map_err(internal_err)?;
+    Ok(Json(MarkReadResponse { marked, at }))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UnreadCountQuery {
+    pub to: String,
+}
+
+pub async fn unread_count(
+    State(state): State<AppState>,
+    Query(q): Query<UnreadCountQuery>,
+) -> Result<Json<UnreadCountResponse>, (StatusCode, Json<serde_json::Value>)> {
+    let count = state
+        .store
+        .count_unread(q.to.clone())
+        .await
+        .map_err(internal_err)?;
+    Ok(Json(UnreadCountResponse { to: q.to, count }))
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub struct BlackboardHistoryQuery {
+    #[serde(default)]
+    pub limit: Option<i64>,
+    #[serde(default)]
+    pub include_content: Option<bool>,
+}
+
+pub async fn blackboard_history(
+    State(state): State<AppState>,
+    Path(path): Path<String>,
+    Query(opts): Query<BlackboardHistoryQuery>,
+) -> Result<Json<Vec<BlackboardHistoryEntry>>, (StatusCode, Json<serde_json::Value>)> {
+    let ops = state
+        .store
+        .list_blackboard_ops(Some(path))
+        .await
+        .map_err(internal_err)?;
+    let include_content = opts.include_content.unwrap_or(false);
+    let limit = opts.limit.unwrap_or(50).max(1) as usize;
+    Ok(Json(
+        ops.into_iter()
+            .take(limit)
+            .map(|r| BlackboardHistoryEntry {
+                id: r.id,
+                agent_id: r.agent_id,
+                op: r.op,
+                path: r.path,
+                sha256: r.sha256,
+                at: r.at,
+                content: if include_content { Some(r.content) } else { None },
+            })
+            .collect(),
+    ))
 }
 
 pub async fn list_blackboard_paths(

@@ -33,6 +33,7 @@ async fn register_send_receive() {
             kind: "note".into(),
             body: "hi b".into(),
             sent_at: 1,
+            in_reply_to: None,
         })
         .await
         .unwrap();
@@ -73,6 +74,7 @@ async fn message_persists_even_without_inbox() {
             kind: "note".into(),
             body: "queued for later".into(),
             sent_at: 1,
+            in_reply_to: None,
         })
         .await
         .unwrap();
@@ -208,4 +210,87 @@ async fn watcher_skips_self_write() {
         .unwrap();
     let ops: Vec<&str> = history.iter().map(|r| r.op.as_str()).collect();
     assert_eq!(ops, vec!["write"], "watcher must not echo self-writes");
+}
+
+#[tokio::test]
+async fn mark_read_broadcasts_event() {
+    let (_dir, swarm) = fresh().await;
+    let mut sub = swarm.subscribe();
+    let m = swarm
+        .send_message(NewMessage {
+            from_agent: "a".into(),
+            to_agent: "b".into(),
+            kind: "note".into(),
+            body: "ping".into(),
+            sent_at: 1,
+            in_reply_to: None,
+        })
+        .await
+        .unwrap();
+    // Drain the Message broadcast first.
+    let _ = timeout(Duration::from_millis(500), sub.recv()).await;
+
+    let marked = swarm.mark_read("b".into(), vec![m.id]).await.unwrap();
+    assert_eq!(marked, vec![m.id]);
+
+    let ev = timeout(Duration::from_millis(500), sub.recv())
+        .await
+        .expect("event timed out")
+        .unwrap();
+    match ev {
+        SwarmEvent::MessageRead { ids, to_agent, .. } => {
+            assert_eq!(ids, vec![m.id]);
+            assert_eq!(to_agent, "b");
+        }
+        other => panic!("unexpected: {other:?}"),
+    }
+
+    // Second call is idempotent — empty marked list, no broadcast.
+    let again = swarm.mark_read("b".into(), vec![m.id]).await.unwrap();
+    assert!(again.is_empty());
+    let no_event = timeout(Duration::from_millis(150), sub.recv()).await;
+    assert!(no_event.is_err(), "no broadcast when nothing changed");
+}
+
+#[tokio::test]
+async fn send_message_with_in_reply_to_threads() {
+    let (_dir, swarm) = fresh().await;
+    let mut sub = swarm.subscribe();
+    let parent = swarm
+        .send_message(NewMessage {
+            from_agent: "a".into(),
+            to_agent: "b".into(),
+            kind: "note".into(),
+            body: "first".into(),
+            sent_at: 1,
+            in_reply_to: None,
+        })
+        .await
+        .unwrap();
+    // Drain parent's broadcast.
+    let _ = timeout(Duration::from_millis(500), sub.recv()).await;
+
+    let reply = swarm
+        .send_message(NewMessage {
+            from_agent: "b".into(),
+            to_agent: "a".into(),
+            kind: "note".into(),
+            body: "pong".into(),
+            sent_at: 2,
+            in_reply_to: Some(parent.id),
+        })
+        .await
+        .unwrap();
+    assert_eq!(reply.in_reply_to, Some(parent.id));
+
+    let ev = timeout(Duration::from_millis(500), sub.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    match ev {
+        SwarmEvent::Message { in_reply_to, .. } => {
+            assert_eq!(in_reply_to, Some(parent.id))
+        }
+        other => panic!("unexpected: {other:?}"),
+    }
 }

@@ -21,6 +21,17 @@ pub enum SwarmEvent {
         kind: String,
         body: String,
         sent_at: i64,
+        /// Parent message id when this is a reply. Optional so old clients
+        /// (which serialize without the field) still round-trip.
+        #[serde(default)]
+        in_reply_to: Option<i64>,
+    },
+    /// A batch of messages was marked read on behalf of `to_agent`. Used by
+    /// the UI to decrement the unread badge live without a REST poll.
+    MessageRead {
+        ids: Vec<i64>,
+        to_agent: String,
+        at: i64,
     },
     /// A blackboard file changed. `agent_id == None` means the change
     /// came from outside flockmux (the watcher fallback path) — e.g. the

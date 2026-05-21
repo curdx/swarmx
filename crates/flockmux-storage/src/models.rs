@@ -35,6 +35,9 @@ pub struct NewMessage {
     pub kind: String,
     pub body: String,
     pub sent_at: i64,
+    /// Optional parent message id to thread this reply to.
+    #[serde(default)]
+    pub in_reply_to: Option<i64>,
 }
 
 /// Full message row.
@@ -48,6 +51,8 @@ pub struct MessageRecord {
     pub sent_at: i64,
     pub delivered_at: Option<i64>,
     pub read_at: Option<i64>,
+    #[serde(default)]
+    pub in_reply_to: Option<i64>,
 }
 
 /// Filter options for [`crate::Store::list_messages`].

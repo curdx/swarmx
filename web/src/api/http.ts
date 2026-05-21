@@ -1,13 +1,16 @@
 import type {
   AgentInfo,
   BlackboardEntry,
+  BlackboardHistoryEntry,
   BlackboardSnapshot,
   CliPluginInfo,
+  MarkReadResponse,
   MessageRecord,
   RecordingInfo,
   SendMessageRequest,
   SpawnAgentRequest,
   SpawnAgentResponse,
+  UnreadCountResponse,
   WriteBlackboardRequest,
 } from "./types";
 
@@ -64,6 +67,10 @@ export const api = {
     request<MessageRecord[]>("GET", `/api/message${qs(q as Record<string, string | number | boolean | undefined>)}`),
   sendMessage: (req: SendMessageRequest) =>
     request<MessageRecord>("POST", "/api/message", req),
+  markMessagesRead: (to: string, ids: number[]) =>
+    request<MarkReadResponse>("POST", "/api/message/read", { to, ids }),
+  unreadCount: (to: string) =>
+    request<UnreadCountResponse>("GET", `/api/message/unread_count${qs({ to })}`),
   listBlackboard: () =>
     request<BlackboardEntry[]>("GET", "/api/blackboard"),
   readBlackboard: (path: string) =>
@@ -73,6 +80,11 @@ export const api = {
       "PUT",
       `/api/blackboard/${encodeURI(path)}`,
       req,
+    ),
+  listBlackboardHistory: (path: string, limit = 50, includeContent = false) =>
+    request<BlackboardHistoryEntry[]>(
+      "GET",
+      `/api/blackboard-history/${encodeURI(path)}${qs({ limit, include_content: includeContent })}`,
     ),
 
   // M3 recordings
