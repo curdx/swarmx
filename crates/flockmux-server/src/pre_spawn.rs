@@ -378,33 +378,40 @@ fn find_section_range(haystack: &str, header: &str) -> Option<(usize, usize)> {
 //   - Codex   (~/.codex/hooks.json):           timeout in **seconds**.
 // Mixing them silently truncates / explodes the cap. Read carefully.
 //
-// The hook command line is built once per spawn and embedded into the JSON:
+// The hook command line is identical across every spawn:
 //
-//   <mcp_bin> wake-check --agent-id <agent_id> --server <server_url>
+//   <mcp_bin> wake-check --server <server_url>
 //
-// `mcp_bin` is an absolute path (PreSpawnCtx already resolves it), so the
-// hook is immune to PATH drift between user shell and CLI subprocess.
+// We deliberately do NOT embed agent_id here. Codex 0.130+ keys hook
+// trust by config hash (incl. command string); a per-spawn agent_id in
+// the command would make every new agent count as a "new or changed"
+// hook and re-prompt /hooks. Instead wake_check reads agent_id from the
+// `cwd` field of the stdin JSON the CLI feeds it — flockmux workspaces
+// are always created at `<root>/<agent_id>`, so the basename IS the
+// agent_id (see `flockmux_mcp::wake_check::agent_id_from_stdin_cwd`).
+//
+// `mcp_bin` is an absolute path (PreSpawnCtx already resolves it), so
+// the hook is immune to PATH drift between user shell and CLI subprocess.
 
 const WAKE_HOOK_TIMEOUT_MS: i64 = 10_000; // claude wants ms
 const WAKE_HOOK_TIMEOUT_S: i64 = 10; // codex wants s
 
-fn render_wake_command(mcp_bin: &Path, agent_id: &str, server_url: &str) -> String {
+fn render_wake_command(mcp_bin: &Path, server_url: &str) -> String {
     format!(
-        "{} wake-check --agent-id {} --server {}",
+        "{} wake-check --server {}",
         // Note: we don't shell-quote because spawn pipelines invoke the
-        // string via the CLI's shell-out path (claude/codex both use sh
-        // -c). agent_id is alnum + dash (server-allocated), server_url is
-        // an http/https URL — neither contains shell metachars in practice.
+        // string via the CLI's shell-out path (claude/codex both use
+        // sh -c). server_url is an http/https URL — no shell metachars
+        // in practice.
         mcp_bin.to_string_lossy(),
-        agent_id,
         server_url,
     )
 }
 
 /// Merge a flockmux wake-check entry into `root.hooks.Stop`. Idempotent on
-/// the agent_id-bearing command string: re-installing for the same agent
-/// drops the prior row and re-appends, so repeat spawns don't grow the
-/// array. Different agent_ids coexist as separate rows.
+/// the command string: re-installing collapses to one row. Since the
+/// command no longer encodes agent_id, ALL spawns share the same hash,
+/// which is exactly what we want for trust persistence.
 fn merge_stop_hook(root: &mut Value, command: &str, timeout: i64) {
     // Ensure `hooks` exists and is an object.
     if !root.is_object() {
@@ -458,7 +465,6 @@ fn merge_stop_hook(root: &mut Value, command: &str, timeout: i64) {
 /// inside the flockmux-managed workspace anyway.
 pub fn install_claude_stop_hook(
     workspace: &Path,
-    agent_id: &str,
     mcp_bin: &Path,
     server_url: &str,
 ) -> Result<()> {
@@ -466,12 +472,11 @@ pub fn install_claude_stop_hook(
     fs::create_dir_all(&cfg_dir)
         .with_context(|| format!("mkdir {}", cfg_dir.display()))?;
     let cfg = cfg_dir.join("settings.local.json");
-    install_claude_stop_hook_at(&cfg, agent_id, mcp_bin, server_url)
+    install_claude_stop_hook_at(&cfg, mcp_bin, server_url)
 }
 
 fn install_claude_stop_hook_at(
     cfg: &Path,
-    agent_id: &str,
     mcp_bin: &Path,
     server_url: &str,
 ) -> Result<()> {
@@ -483,7 +488,7 @@ fn install_claude_stop_hook_at(
         json!({})
     };
 
-    let command = render_wake_command(mcp_bin, agent_id, server_url);
+    let command = render_wake_command(mcp_bin, server_url);
     merge_stop_hook(&mut root, &command, WAKE_HOOK_TIMEOUT_MS);
     write_json_atomic(cfg, &root)
 }
@@ -493,7 +498,6 @@ fn install_claude_stop_hook_at(
 /// settings.local.json but `timeout` is in **seconds**, not ms.
 pub fn install_codex_stop_hook(
     workspace: &Path,
-    agent_id: &str,
     mcp_bin: &Path,
     server_url: &str,
 ) -> Result<()> {
@@ -501,12 +505,11 @@ pub fn install_codex_stop_hook(
     fs::create_dir_all(&cfg_dir)
         .with_context(|| format!("mkdir {}", cfg_dir.display()))?;
     let cfg = cfg_dir.join("hooks.json");
-    install_codex_stop_hook_at(&cfg, agent_id, mcp_bin, server_url)
+    install_codex_stop_hook_at(&cfg, mcp_bin, server_url)
 }
 
 fn install_codex_stop_hook_at(
     cfg: &Path,
-    agent_id: &str,
     mcp_bin: &Path,
     server_url: &str,
 ) -> Result<()> {
@@ -518,7 +521,7 @@ fn install_codex_stop_hook_at(
         json!({})
     };
 
-    let command = render_wake_command(mcp_bin, agent_id, server_url);
+    let command = render_wake_command(mcp_bin, server_url);
     merge_stop_hook(&mut root, &command, WAKE_HOOK_TIMEOUT_S);
     write_json_atomic(cfg, &root)
 }
@@ -581,7 +584,6 @@ fn run_claude_patches(
     if plugin.auto_inject_stop_hook {
         if let Err(err) = install_claude_stop_hook(
             workspace,
-            &ctx.agent_id,
             &ctx.mcp_bin,
             &ctx.server_url,
         ) {
@@ -627,7 +629,6 @@ fn run_codex_patches(
     if plugin.auto_inject_stop_hook {
         if let Err(err) = install_codex_stop_hook(
             workspace,
-            &ctx.agent_id,
             &ctx.mcp_bin,
             &ctx.server_url,
         ) {
@@ -1058,7 +1059,7 @@ trust_level = \"trusted\"\n";
         let dir = tempdir().unwrap();
         let cfg = dir.path().join("settings.local.json");
         let bin = dir.path().join("flockmux-mcp");
-        install_claude_stop_hook_at(&cfg, "claude-aaa", &bin, "http://127.0.0.1:7777").unwrap();
+        install_claude_stop_hook_at(&cfg, &bin, "http://127.0.0.1:7777").unwrap();
 
         let root: Value = serde_json::from_slice(&fs::read(&cfg).unwrap()).unwrap();
         let stop = root["hooks"]["Stop"].as_array().expect("hooks.Stop is array");
@@ -1067,9 +1068,12 @@ trust_level = \"trusted\"\n";
         assert_eq!(inner["type"], json!("command"));
         assert_eq!(inner["timeout"], json!(10_000), "claude timeout in ms");
         let cmd = inner["command"].as_str().unwrap();
-        assert!(cmd.contains("wake-check --agent-id claude-aaa"), "got: {cmd}");
+        assert!(cmd.contains("wake-check"), "got: {cmd}");
         assert!(cmd.contains("--server http://127.0.0.1:7777"), "got: {cmd}");
         assert!(cmd.contains(bin.to_string_lossy().as_ref()), "absolute bin path: {cmd}");
+        // Trust-stability invariant: command must NOT carry per-spawn identity,
+        // otherwise codex 0.130+ would re-prompt /hooks on every new agent.
+        assert!(!cmd.contains("--agent-id"), "agent_id must NOT be in command: {cmd}");
     }
 
     #[test]
@@ -1077,7 +1081,7 @@ trust_level = \"trusted\"\n";
         let dir = tempdir().unwrap();
         let cfg = dir.path().join("hooks.json");
         let bin = dir.path().join("flockmux-mcp");
-        install_codex_stop_hook_at(&cfg, "codex-bbb", &bin, "http://127.0.0.1:7777").unwrap();
+        install_codex_stop_hook_at(&cfg, &bin, "http://127.0.0.1:7777").unwrap();
 
         let root: Value = serde_json::from_slice(&fs::read(&cfg).unwrap()).unwrap();
         let stop = root["hooks"]["Stop"].as_array().expect("hooks.Stop is array");
@@ -1090,7 +1094,9 @@ trust_level = \"trusted\"\n";
             "codex timeout in SECONDS — ms would be 2.7h timeout",
         );
         let cmd = inner["command"].as_str().unwrap();
-        assert!(cmd.contains("wake-check --agent-id codex-bbb"), "got: {cmd}");
+        assert!(cmd.contains("wake-check"), "got: {cmd}");
+        // See claude_stop_hook_creates_settings_local for the why.
+        assert!(!cmd.contains("--agent-id"), "agent_id must NOT be in command: {cmd}");
     }
 
     #[test]
@@ -1114,7 +1120,7 @@ trust_level = \"trusted\"\n";
         fs::write(&cfg, serde_json::to_vec_pretty(&original).unwrap()).unwrap();
 
         let bin = dir.path().join("flockmux-mcp");
-        install_claude_stop_hook_at(&cfg, "claude-aaa", &bin, "http://127.0.0.1:7777").unwrap();
+        install_claude_stop_hook_at(&cfg, &bin, "http://127.0.0.1:7777").unwrap();
 
         let after: Value = serde_json::from_slice(&fs::read(&cfg).unwrap()).unwrap();
         // PreToolUse must be untouched.
@@ -1139,34 +1145,41 @@ trust_level = \"trusted\"\n";
         let cfg = dir.path().join("hooks.json");
         let bin = dir.path().join("flockmux-mcp");
 
-        install_codex_stop_hook_at(&cfg, "codex-xxx", &bin, "http://127.0.0.1:7777").unwrap();
-        install_codex_stop_hook_at(&cfg, "codex-xxx", &bin, "http://127.0.0.1:7777").unwrap();
-        install_codex_stop_hook_at(&cfg, "codex-xxx", &bin, "http://127.0.0.1:7777").unwrap();
+        install_codex_stop_hook_at(&cfg, &bin, "http://127.0.0.1:7777").unwrap();
+        install_codex_stop_hook_at(&cfg, &bin, "http://127.0.0.1:7777").unwrap();
+        install_codex_stop_hook_at(&cfg, &bin, "http://127.0.0.1:7777").unwrap();
 
         let root: Value = serde_json::from_slice(&fs::read(&cfg).unwrap()).unwrap();
         let stop = root["hooks"]["Stop"].as_array().unwrap();
-        assert_eq!(stop.len(), 1, "re-running the same agent_id must not accumulate entries");
+        assert_eq!(stop.len(), 1, "repeated install must not accumulate entries");
     }
 
+    /// Trust-persistence guard: every spawn must produce the EXACT same hook
+    /// command, otherwise codex 0.130+ would re-prompt /hooks each time.
+    /// Multiple installs (even logically representing different agents) must
+    /// collapse to a single Stop hook row identical to the first install.
     #[test]
-    fn claude_stop_hook_distinct_agent_ids_coexist() {
+    fn claude_stop_hook_command_is_stable_across_installs() {
         let dir = tempdir().unwrap();
         let cfg = dir.path().join("settings.local.json");
         let bin = dir.path().join("flockmux-mcp");
 
-        install_claude_stop_hook_at(&cfg, "claude-A", &bin, "http://127.0.0.1:7777").unwrap();
-        install_claude_stop_hook_at(&cfg, "claude-B", &bin, "http://127.0.0.1:7777").unwrap();
+        install_claude_stop_hook_at(&cfg, &bin, "http://127.0.0.1:7777").unwrap();
+        let first: Value = serde_json::from_slice(&fs::read(&cfg).unwrap()).unwrap();
+        let first_cmd = first["hooks"]["Stop"][0]["hooks"][0]["command"]
+            .as_str()
+            .unwrap()
+            .to_string();
 
-        let root: Value = serde_json::from_slice(&fs::read(&cfg).unwrap()).unwrap();
-        let stop = root["hooks"]["Stop"].as_array().unwrap();
-        assert_eq!(stop.len(), 2, "two different agent_ids should coexist");
-        // Both rows present, agent_ids differ.
-        let cmds: Vec<&str> = stop
-            .iter()
-            .map(|e| e["hooks"][0]["command"].as_str().unwrap())
-            .collect();
-        assert!(cmds.iter().any(|c| c.contains("claude-A")));
-        assert!(cmds.iter().any(|c| c.contains("claude-B")));
+        install_claude_stop_hook_at(&cfg, &bin, "http://127.0.0.1:7777").unwrap();
+        let second: Value = serde_json::from_slice(&fs::read(&cfg).unwrap()).unwrap();
+        let second_stop = second["hooks"]["Stop"].as_array().unwrap();
+        assert_eq!(second_stop.len(), 1, "second install must dedupe to 1");
+        assert_eq!(
+            second_stop[0]["hooks"][0]["command"].as_str().unwrap(),
+            first_cmd,
+            "command string must be byte-identical to keep trust hash stable",
+        );
     }
 
     #[test]
@@ -1178,7 +1191,7 @@ trust_level = \"trusted\"\n";
         let dir = tempdir().unwrap();
         let cfg = dir.path().join("settings.local.json");
         let bin = dir.path().join("flockmux-mcp");
-        install_claude_stop_hook_at(&cfg, "claude-aaa", &bin, "http://127.0.0.1:7777").unwrap();
+        install_claude_stop_hook_at(&cfg, &bin, "http://127.0.0.1:7777").unwrap();
 
         let root: Value = serde_json::from_slice(&fs::read(&cfg).unwrap()).unwrap();
         for entry in root["hooks"]["Stop"].as_array().unwrap() {
@@ -1201,7 +1214,7 @@ trust_level = \"trusted\"\n";
         });
         fs::write(&cfg, serde_json::to_vec_pretty(&original).unwrap()).unwrap();
         let bin = dir.path().join("flockmux-mcp");
-        install_claude_stop_hook_at(&cfg, "claude-keep", &bin, "http://127.0.0.1:7777").unwrap();
+        install_claude_stop_hook_at(&cfg, &bin, "http://127.0.0.1:7777").unwrap();
         let after: Value = serde_json::from_slice(&fs::read(&cfg).unwrap()).unwrap();
         // Unrelated fields must survive.
         assert_eq!(after["permissions"]["allow"], json!(["Bash"]));

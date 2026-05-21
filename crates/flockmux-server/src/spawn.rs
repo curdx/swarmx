@@ -4,12 +4,15 @@ use crate::plugins::CliPlugin;
 use crate::pty_stream::PtyStream;
 use crate::registry::{AgentSlot, Lifecycle, LifecycleEvent};
 use anyhow::{Context, Result};
+use bytes::Bytes;
 use flockmux_pty::{PtyBridge, PtyHandles, SpawnOpts};
 use flockmux_recorder::RecorderHandle;
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
+use std::time::{Duration, Instant};
+use tokio::sync::mpsc;
 use uuid::Uuid;
 
 // OSC markers the shim emits — kept identical to flockmux-shim/src/main.rs.
@@ -132,6 +135,19 @@ pub fn spawn_agent(
     let input_tx = bridge.input_sender();
     let bridge = Arc::new(bridge);
 
+    // Optional auto-answer for first-spawn confirmation dialogs that block
+    // a headless PTY — e.g. codex 0.130+'s "Hooks need review" menu, which
+    // pops up the first time codex sees a non-managed hook with a previously
+    // unseen file-path trust key. The user can't reach the codex TUI to
+    // pick "2 Trust all and continue" because the dialog is gating input,
+    // so we synthesize the keystrokes for them. Per-CLI opt-in via plugin
+    // manifest so claude (no such dialog) stays untouched.
+    let dialog_auto_answer = if plugin.auto_answer_hooks_dialog {
+        Some(DialogAutoAnswer::new(input_tx.clone(), &agent_id))
+    } else {
+        None
+    };
+
     // Drain the PTY's output mpsc into the shared resume buffer. The pump
     // owns the receiver for the agent's whole lifetime — WS subscribers
     // read from the buffer, never the mpsc. EOF closes the buffer so any
@@ -153,11 +169,15 @@ pub fn spawn_agent(
         let lifecycle_tx = lifecycle_tx.clone();
         let agent_id_for_log = agent_id.clone();
         let recorder = recorder.clone();
+        let mut dialog_auto_answer = dialog_auto_answer;
         tokio::spawn(async move {
             let mut output_rx = output_rx;
             let mut osc_buf: Vec<u8> = Vec::new();
             while let Some(chunk) = output_rx.recv().await {
                 scan_osc(&mut osc_buf, &chunk, &lifecycle, &lifecycle_tx);
+                if let Some(answerer) = dialog_auto_answer.as_mut() {
+                    answerer.scan(&chunk);
+                }
                 if let Some(rec) = &recorder {
                     rec.write_chunk(chunk.clone());
                 }
@@ -285,6 +305,191 @@ pub fn locate_shim() -> Result<PathBuf> {
 /// codex can launch it directly.
 pub fn locate_mcp() -> Result<PathBuf> {
     locate_sibling_bin("flockmux-mcp", "FLOCKMUX_MCP_PATH")
+}
+
+/// Auto-answer a first-spawn confirmation dialog that would otherwise block
+/// the PTY. Designed for codex 0.130+'s "Hooks need review" menu: when codex
+/// sees a hooks.json file path it hasn't recorded a trust hash for, it draws
+/// a numbered menu in the TUI and waits for a keystroke before continuing.
+/// Because flockmux mints a fresh workspace per spawn and codex keys trust
+/// by absolute hooks.json path, the dialog reappears every time even after
+/// the user has approved an identical hook elsewhere — so we synthesize
+/// "2\r" (Trust all and continue) on the user's behalf.
+///
+/// Safety constraints baked in:
+/// 1. Single-shot per agent — once we've sent the response we mark `fired`
+///    and never touch the PTY again, even if the dialog text appears later.
+/// 2. Time-boxed — the scanner shuts off after `WINDOW` regardless of
+///    whether the dialog ever appeared. A 30-second window covers cold
+///    starts; anything later is either a different dialog or user-typed.
+/// 3. Specific needle — matching the literal heading "Hooks need review"
+///    (a 17-byte ASCII run codex's ratatui dialog draws in one go). We do
+///    NOT match shorter strings like "Trust" or "hook" that could appear
+///    in routine output.
+/// 4. Buffer bounded — we keep a sliding 8KB window so a chatty agent
+///    can't OOM us by streaming gigabytes before the dialog appears.
+///
+/// This auto-answer is intentionally implemented host-side (not in the
+/// client xterm) so it works regardless of which UI is attached, including
+/// no UI at all (`flockmux-cli` headless / agent-to-agent only).
+struct DialogAutoAnswer {
+    /// Bytes to look for in PTY output to recognize the dialog state.
+    needle: &'static [u8],
+    /// What to inject into PTY input to dismiss the dialog. For codex the
+    /// menu's #2 option is "Trust all and continue"; pressing Enter
+    /// confirms.
+    response: &'static [u8],
+    /// Stop scanning at this instant — even if the dialog never appeared,
+    /// we don't want to be perpetually pattern-matching against routine
+    /// agent output.
+    deadline: Instant,
+    /// One-shot guard: flips to true after we've sent the response.
+    fired: bool,
+    /// Sliding window over PTY output. Bounded by `MAX_BUFFER`.
+    buf: Vec<u8>,
+    /// Cloned PtyBridge input channel. `try_send` is non-blocking and used
+    /// from the sync `scan` path; the channel has plenty of capacity for a
+    /// 2-byte response and we degrade silently if full.
+    input_tx: mpsc::Sender<Bytes>,
+    /// Agent_id for log lines only — never written into PTY.
+    agent_id: String,
+}
+
+impl DialogAutoAnswer {
+    const WINDOW: Duration = Duration::from_secs(30);
+    const MAX_BUFFER: usize = 8 * 1024;
+
+    fn new(input_tx: mpsc::Sender<Bytes>, agent_id: &str) -> Self {
+        Self {
+            // codex 0.132 draws this verbatim as the dialog heading. Test
+            // your local codex `/hooks` panel to confirm if a future version
+            // renames it.
+            needle: b"Hooks need review",
+            // 2 = "Trust all and continue", \r = Enter to confirm.
+            response: b"2\r",
+            deadline: Instant::now() + Self::WINDOW,
+            fired: false,
+            buf: Vec::with_capacity(2048),
+            input_tx,
+            agent_id: agent_id.to_string(),
+        }
+    }
+
+    fn scan(&mut self, chunk: &[u8]) {
+        if self.fired {
+            return;
+        }
+        if Instant::now() > self.deadline {
+            return;
+        }
+        self.buf.extend_from_slice(chunk);
+        if self.buf.len() > Self::MAX_BUFFER {
+            let keep_from = self.buf.len() - 1024;
+            self.buf.drain(..keep_from);
+        }
+        if find(&self.buf, self.needle).is_some() {
+            self.fired = true;
+            // try_send is non-blocking; if the channel is full something
+            // is very wrong but it's not worth blocking the PTY pump for.
+            match self.input_tx.try_send(Bytes::from_static(self.response)) {
+                Ok(()) => {
+                    tracing::info!(
+                        agent = %self.agent_id,
+                        "auto-answered codex Hooks-need-review dialog (sent 2+Enter)",
+                    );
+                }
+                Err(err) => {
+                    tracing::warn!(
+                        agent = %self.agent_id,
+                        ?err,
+                        "auto-answer try_send failed; user will need to dismiss dialog manually",
+                    );
+                }
+            }
+            self.buf.clear();
+        }
+    }
+}
+
+#[cfg(test)]
+mod dialog_auto_answer_tests {
+    use super::*;
+
+    fn make_pair() -> (DialogAutoAnswer, mpsc::Receiver<Bytes>) {
+        let (tx, rx) = mpsc::channel::<Bytes>(8);
+        let aa = DialogAutoAnswer::new(tx, "codex-test");
+        (aa, rx)
+    }
+
+    #[tokio::test]
+    async fn sends_response_on_match() {
+        let (mut aa, mut rx) = make_pair();
+        aa.scan(b"some noise before the dialog\n");
+        aa.scan(b"\nHooks need review\n1 hook is new\n");
+        // Should have sent "2\r" exactly once.
+        let got = rx.try_recv().expect("response should have been queued");
+        assert_eq!(&got[..], b"2\r");
+        assert!(rx.try_recv().is_err(), "no second response");
+        assert!(aa.fired, "fired flag should be set");
+    }
+
+    #[tokio::test]
+    async fn single_shot_after_fired() {
+        let (mut aa, mut rx) = make_pair();
+        aa.scan(b"Hooks need review");
+        let _ = rx.try_recv().expect("first response sent");
+        // Even if the dialog text repeats, never fire again.
+        aa.scan(b"Hooks need review again somehow");
+        assert!(
+            rx.try_recv().is_err(),
+            "second match must NOT enqueue another response",
+        );
+    }
+
+    #[tokio::test]
+    async fn matches_across_chunk_boundary() {
+        let (mut aa, mut rx) = make_pair();
+        // Split the needle across two chunks — the sliding buffer must
+        // stitch them back together before matching.
+        aa.scan(b"Hooks ne");
+        assert!(rx.try_recv().is_err(), "no premature match");
+        aa.scan(b"ed review");
+        let got = rx.try_recv().expect("match after stitching chunks");
+        assert_eq!(&got[..], b"2\r");
+    }
+
+    #[tokio::test]
+    async fn ignores_unrelated_substrings() {
+        let (mut aa, mut rx) = make_pair();
+        aa.scan(b"Trust this folder? hook count: 0");
+        aa.scan(b"reviewing your code changes now");
+        assert!(rx.try_recv().is_err(), "substring 'hook' / 'review' alone must NOT trigger");
+        assert!(!aa.fired);
+    }
+
+    #[tokio::test]
+    async fn does_not_fire_after_window_expires() {
+        let (mut aa, mut rx) = make_pair();
+        // Synthesize an expired deadline so we don't actually sleep 30s.
+        aa.deadline = Instant::now() - Duration::from_secs(1);
+        aa.scan(b"Hooks need review");
+        assert!(rx.try_recv().is_err(), "expired window must not fire");
+        assert!(!aa.fired);
+    }
+
+    #[tokio::test]
+    async fn buffer_stays_bounded_under_chatty_input() {
+        let (mut aa, _rx) = make_pair();
+        // Push many small chunks of unrelated bytes.
+        for _ in 0..200 {
+            aa.scan(&[b'.'; 1024]);
+        }
+        assert!(
+            aa.buf.len() <= DialogAutoAnswer::MAX_BUFFER,
+            "buffer must stay capped (got {})",
+            aa.buf.len(),
+        );
+    }
 }
 
 /// Probe `<binary> --help` once and cache whether `flag` appears anywhere

@@ -64,6 +64,19 @@ pub struct CliPlugin {
     /// entry is appended once (idempotent on re-spawn).
     #[serde(default)]
     pub auto_inject_stop_hook: bool,
+    /// If true, the host watches PTY output for a "Hooks need review"
+    /// confirmation dialog and auto-injects "2\r" (Trust all + Enter) so
+    /// the spawn doesn't sit indefinitely waiting on a UI keystroke.
+    ///
+    /// Specifically targets codex 0.130+'s first-spawn dialog: codex keys
+    /// hook trust by absolute hooks.json path, and flockmux uses a fresh
+    /// workspace per spawn, so the dialog reappears every time. claude has
+    /// no equivalent dialog and should leave this off.
+    ///
+    /// Single-shot (per agent) with a 30-second window — see
+    /// `spawn::DialogAutoAnswer`.
+    #[serde(default)]
+    pub auto_answer_hooks_dialog: bool,
 }
 
 fn default_ready_detect() -> String { "shim_osc".into() }

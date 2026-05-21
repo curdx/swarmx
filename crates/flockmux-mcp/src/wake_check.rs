@@ -35,11 +35,22 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Args)]
 pub struct WakeCheckArgs {
-    /// Which agent this hook speaks for. Baked into the hook command string
-    /// at spawn time — we deliberately don't read it from env or stdin so
-    /// behavior is identical across CLIs / shells / debug invocations.
+    /// Optional override of which agent this hook speaks for. Normally the
+    /// hook command in `<workspace>/.codex/hooks.json` (or its claude
+    /// equivalent) omits this flag — we instead derive agent_id from the
+    /// `cwd` field of the CLI-supplied stdin JSON.
+    ///
+    /// Why: codex 0.130+ keys hook trust by hook-config hash (including the
+    /// command string). Embedding a per-spawn `--agent-id <id>` makes every
+    /// new agent's hook count as a "new or changed" hook and re-prompts the
+    /// `/hooks` review dialog. Keeping the command string stable across all
+    /// spawns and reading agent_id at runtime collapses that to a one-time
+    /// trust per machine.
+    ///
+    /// The flag is preserved as a back-door for tests and ad-hoc
+    /// invocations where stdin isn't a valid Stop-hook JSON.
     #[arg(long)]
-    pub agent_id: String,
+    pub agent_id: Option<String>,
 
     /// Base URL of the flockmux-server REST API.
     #[arg(long, default_value = "http://127.0.0.1:7777")]
@@ -86,16 +97,36 @@ pub async fn run(args: WakeCheckArgs) -> Result<()> {
     // From here on: every branch ends in emit_stdout(...) + Ok(()). No `?`
     // bubbling that could result in a non-zero exit.
 
-    // ── 1. stdin: extract stop_hook_active ───────────────────────────────
+    // ── 1. stdin: extract stop_hook_active + (maybe) agent_id ────────────
     let stdin_bytes = read_stdin_bounded().await;
-    let stop_hook_active = parse_stop_hook_active(&stdin_bytes);
-    if stop_hook_active {
+    let stdin_json: Option<Value> = serde_json::from_slice(&stdin_bytes).ok();
+    if parse_stop_hook_active(&stdin_bytes) {
         emit_noop();
         return Ok(());
     }
 
+    // agent_id: prefer the CLI flag (legacy + tests), otherwise derive from
+    // the stdin `cwd` field (claude + codex both feed `{"cwd":"<workspace>"}`
+    // and our workspaces are `<root>/<agent_id>`, so the path basename IS
+    // the agent_id). Falling through to neither = silent noop — we can't
+    // sensibly probe unread mail without knowing who we're acting for.
+    let agent_id = match args.agent_id.as_deref() {
+        Some(s) if !s.is_empty() => s.to_string(),
+        _ => match agent_id_from_stdin_cwd(stdin_json.as_ref()) {
+            Some(id) => id,
+            None => {
+                eprintln!(
+                    "wake-check: no --agent-id flag and stdin lacks usable cwd; \
+                     skipping wake"
+                );
+                emit_noop();
+                return Ok(());
+            }
+        },
+    };
+
     // ── 2. throttle gate ─────────────────────────────────────────────────
-    let state_path = throttle_path(&args.agent_id, args.state_dir.as_deref());
+    let state_path = throttle_path(&agent_id, args.state_dir.as_deref());
     let now_ms = unix_ms();
     let state = read_throttle(&state_path).unwrap_or_default();
     let throttle_window_ms = args.throttle_secs.saturating_mul(1000);
@@ -107,7 +138,7 @@ pub async fn run(args: WakeCheckArgs) -> Result<()> {
     }
 
     // ── 3. HTTP: GET /api/message/unread_count?to=<agent_id> ─────────────
-    let count = match fetch_unread_count(&args.server, &args.agent_id).await {
+    let count = match fetch_unread_count(&args.server, &agent_id).await {
         Ok(n) => n,
         Err(err) => {
             // Any transport / HTTP failure is a graceful degrade — never
@@ -203,6 +234,23 @@ fn parse_stop_hook_active(bytes: &[u8]) -> bool {
     v.get("stop_hook_active")
         .and_then(|x| x.as_bool())
         .unwrap_or(false)
+}
+
+/// Both claude and codex feed Stop hooks a JSON object containing the
+/// session's `cwd`. flockmux workspaces are always created at
+/// `<root>/<agent_id>` (see `spawn::ensure_workspace`), so the basename of
+/// `cwd` IS the agent_id. Returns None if the field is missing, empty, or
+/// somehow non-Unicode — caller falls back to noop.
+fn agent_id_from_stdin_cwd(stdin: Option<&Value>) -> Option<String> {
+    let cwd = stdin?.get("cwd")?.as_str()?;
+    if cwd.is_empty() {
+        return None;
+    }
+    let basename = Path::new(cwd).file_name()?.to_str()?;
+    if basename.is_empty() {
+        return None;
+    }
+    Some(basename.to_string())
 }
 
 // ── HTTP ─────────────────────────────────────────────────────────────────
@@ -331,7 +379,7 @@ mod tests {
 
     fn args_for(addr: SocketAddr, agent_id: &str, state_dir: &Path) -> WakeCheckArgs {
         WakeCheckArgs {
-            agent_id: agent_id.into(),
+            agent_id: Some(agent_id.into()),
             server: format!("http://{addr}"),
             throttle_secs: 30,
             max_wakes_per_window: 3,
@@ -485,7 +533,7 @@ mod tests {
         let state_dir = dir.path().to_path_buf();
         // Point at a port that almost certainly has nothing listening.
         let args = WakeCheckArgs {
-            agent_id: "test-agent".into(),
+            agent_id: Some("test-agent".into()),
             server: "http://127.0.0.1:1".into(),
             throttle_secs: 30,
             max_wakes_per_window: 3,
@@ -494,6 +542,44 @@ mod tests {
         run(args).await.unwrap();
         let path = throttle_path("test-agent", Some(&state_dir));
         assert!(!path.exists(), "no throttle write when server unreachable");
+    }
+
+    // ── 3. agent_id derivation from stdin cwd ─────────────────────────────
+
+    #[test]
+    fn agent_id_from_cwd_takes_basename() {
+        let v = json!({ "cwd": "/Users/wdx/.flockmux/workspaces/codex-6d068ccb" });
+        assert_eq!(
+            agent_id_from_stdin_cwd(Some(&v)).as_deref(),
+            Some("codex-6d068ccb"),
+        );
+    }
+
+    #[test]
+    fn agent_id_from_cwd_handles_trailing_slash() {
+        let v = json!({ "cwd": "/tmp/ws/claude-abc12345/" });
+        // Path::file_name strips a single trailing slash on Unix.
+        assert_eq!(
+            agent_id_from_stdin_cwd(Some(&v)).as_deref(),
+            Some("claude-abc12345"),
+        );
+    }
+
+    #[test]
+    fn agent_id_from_cwd_missing_field_returns_none() {
+        let v = json!({ "session_id": "no-cwd-here" });
+        assert!(agent_id_from_stdin_cwd(Some(&v)).is_none());
+    }
+
+    #[test]
+    fn agent_id_from_cwd_no_json_returns_none() {
+        assert!(agent_id_from_stdin_cwd(None).is_none());
+    }
+
+    #[test]
+    fn agent_id_from_cwd_empty_string_returns_none() {
+        let v = json!({ "cwd": "" });
+        assert!(agent_id_from_stdin_cwd(Some(&v)).is_none());
     }
 
     #[test]
