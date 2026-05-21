@@ -170,3 +170,45 @@ pub struct RecordingInfo {
     #[serde(default)]
     pub last_seq: Option<i64>,
 }
+
+/// Public summary of a loaded spell. Returned by `GET /api/spells` so
+/// the UI can populate a launcher dropdown.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SpellInfo {
+    pub name: String,
+    pub description: String,
+    /// Roles the spell will spawn, in declaration order. UI shows this so
+    /// users know what the spell will fork on their machine before clicking
+    /// "run".
+    pub agents: Vec<SpellAgentInfo>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SpellAgentInfo {
+    pub role: String,
+    pub cli: String,
+}
+
+/// `POST /api/spell/run` request body.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RunSpellRequest {
+    pub name: String,
+    /// Free-form task description; substituted into each agent's
+    /// `system_prompt` wherever `{task}` appears.
+    pub task: String,
+}
+
+/// `POST /api/spell/run` response. Lists the agents the runner actually
+/// spawned (role → agent_id), so the UI can deep-link directly into them.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RunSpellResponse {
+    pub spell: String,
+    pub agents: Vec<RunSpellAgent>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RunSpellAgent {
+    pub role: String,
+    pub cli: String,
+    pub agent_id: String,
+}

@@ -3,6 +3,7 @@
 use crate::plugins::CliPlugin;
 use crate::registry::LifecycleEvent;
 use crate::spawn::spawn_agent;
+use crate::spells;
 use crate::AppState;
 use axum::{
     extract::{Path, State},
@@ -10,11 +11,15 @@ use axum::{
     response::IntoResponse,
     Json,
 };
-use flockmux_protocol::rest::{AgentInfo, CliPluginInfo, SpawnAgentRequest, SpawnAgentResponse};
+use flockmux_protocol::rest::{
+    AgentInfo, CliPluginInfo, RunSpellAgent, RunSpellRequest, RunSpellResponse, SpawnAgentRequest,
+    SpawnAgentResponse, SpellAgentInfo, SpellInfo,
+};
 use flockmux_protocol::ws_swarm::{AgentState, SwarmEvent};
 use flockmux_recorder::{Recorder, RecorderConfig};
 use flockmux_storage::{NewAgent, NewRecording};
 use serde_json::json;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use uuid::Uuid;
 
@@ -44,22 +49,52 @@ pub async fn spawn(
     State(state): State<AppState>,
     Json(req): Json<SpawnAgentRequest>,
 ) -> Result<Json<SpawnAgentResponse>, (StatusCode, Json<serde_json::Value>)> {
-    let plugin: CliPlugin = state
-        .plugins
-        .get(&req.cli)
-        .cloned()
-        .ok_or_else(|| {
-            (
-                StatusCode::NOT_FOUND,
-                Json(json!({"error": format!("unknown cli plugin: {}", req.cli)})),
-            )
-        })?;
-
     let workspace_root = req
         .workspace
         .as_deref()
         .map(PathBuf::from)
         .unwrap_or_else(|| state.workspaces_root.clone());
+    let outcome = spawn_with_bookkeeping(&state, &req.cli, req.role, workspace_root)
+        .await
+        .map_err(|(status, msg)| (status, Json(json!({"error": msg}))))?;
+    Ok(Json(SpawnAgentResponse {
+        agent_id: outcome.agent_id,
+        cli: outcome.cli,
+        role: outcome.role,
+        workspace: outcome.workspace,
+    }))
+}
+
+/// Outcome of [`spawn_with_bookkeeping`]. Carries the identity bits the
+/// HTTP handler needs to build a response **and** a fresh lifecycle
+/// subscription so longer-running orchestrators (spells) can await
+/// `ShimReady` before injecting bootstrap input.
+pub(crate) struct SpawnOutcome {
+    pub agent_id: String,
+    pub cli: String,
+    pub role: String,
+    pub workspace: String,
+    pub lifecycle_rx: tokio::sync::broadcast::Receiver<LifecycleEvent>,
+}
+
+/// Shared "spawn + register + wire bookkeeping" pipeline used by both
+/// POST /api/agent and the spell runner. Identical end state to the
+/// previous monolithic handler — only the return path differs.
+///
+/// On success the agent is fully live: PTY pumping, registry insert
+/// done, swarm inbox registered, SQLite + ws/swarm fan-out task spawned,
+/// recording file open and finalize-watcher scheduled.
+pub(crate) async fn spawn_with_bookkeeping(
+    state: &AppState,
+    cli: &str,
+    role: Option<String>,
+    workspace_root: PathBuf,
+) -> Result<SpawnOutcome, (StatusCode, String)> {
+    let plugin: CliPlugin = state
+        .plugins
+        .get(cli)
+        .cloned()
+        .ok_or_else(|| (StatusCode::NOT_FOUND, format!("unknown cli plugin: {cli}")))?;
 
     let spawned_at = now_ms();
 
@@ -89,19 +124,14 @@ pub async fn spawn(
 
     let result = spawn_agent(
         &plugin,
-        req.role,
+        role,
         &workspace_root,
         &state.shim_path,
         &state.mcp_bin,
         &state.server_url,
         recorder_handle,
     )
-    .map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"error": e.to_string()})),
-        )
-    })?;
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     let agent_id = result.agent_id.clone();
 
@@ -121,10 +151,6 @@ pub async fn spawn(
         tracing::warn!(?e, agent = %agent_id, "record_agent_spawn failed");
     }
 
-    // Reserve an inbox slot and immediately drop the receiver: M3 doesn't
-    // route swarm messages into PTY stdin (claude/codex are fullscreen
-    // alt-screen TUIs). Delivery is SQLite + ws/swarm only; M4 MCP will
-    // plug a real consumer in here.
     drop(state.swarm.register_agent(agent_id.clone()));
 
     state.swarm.publish_event(SwarmEvent::AgentState {
@@ -132,9 +158,10 @@ pub async fn spawn(
         state: AgentState::Spawning,
     });
 
-    // Fan ShimReady / ShimExit into SQLite + ws/swarm. The task exits when
-    // every sender on `lifecycle_tx` is dropped (i.e. after the slot is
-    // removed and the PTY pump finishes).
+    // Subscribe twice: once for our own internal SQLite+swarm fan-out
+    // task, and a fresh receiver for the caller (so e.g. the spell runner
+    // can `await` ShimReady without racing the bookkeeping task).
+    let lifecycle_rx_for_caller = result.slot.lifecycle_tx.subscribe();
     {
         let mut lifecycle_rx = result.slot.lifecycle_tx.subscribe();
         let store = state.store.clone();
@@ -179,9 +206,6 @@ pub async fn spawn(
         });
     }
 
-    // Persist the recording-start + spawn a background task that awaits
-    // EOF and persists the finalize. Recording is best-effort: if the
-    // recorder failed to open earlier, both halves are skipped.
     if let Some(rec) = recorder {
         let new_rec = NewRecording {
             id: recording_id.clone(),
@@ -219,14 +243,15 @@ pub async fn spawn(
         });
     }
 
-    let resp = SpawnAgentResponse {
+    let outcome = SpawnOutcome {
         agent_id: agent_id.clone(),
         cli: result.slot.cli.clone(),
         role: result.slot.role.clone(),
         workspace: result.slot.workspace.clone(),
+        lifecycle_rx: lifecycle_rx_for_caller,
     };
     state.registry.insert(agent_id, result.slot);
-    Ok(Json(resp))
+    Ok(outcome)
 }
 
 pub async fn list_agents(State(state): State<AppState>) -> impl IntoResponse {
@@ -322,3 +347,216 @@ pub async fn kill(
         ),
     }
 }
+
+// ────────────────────────────────────────────────────────────────────────
+// Spell endpoints
+// ────────────────────────────────────────────────────────────────────────
+
+pub async fn list_spells(State(state): State<AppState>) -> impl IntoResponse {
+    let items: Vec<SpellInfo> = state
+        .spells
+        .list()
+        .into_iter()
+        .map(|s| SpellInfo {
+            name: s.manifest.name.clone(),
+            description: s.manifest.description.clone(),
+            agents: s
+                .manifest
+                .agents
+                .iter()
+                .map(|a| SpellAgentInfo {
+                    role: a.role.clone(),
+                    cli: a.cli.clone(),
+                })
+                .collect(),
+        })
+        .collect();
+    Json(items)
+}
+
+/// Run a spell: spawn all declared agents, wait for each to become ready,
+/// then PTY-inject its rendered system_prompt to bootstrap the turn.
+///
+/// We deliberately fail-soft on per-agent bootstrap injection failures —
+/// the spawn already succeeded by that point, and the user can still
+/// interact with the agent manually. Returning 500 would mislead them
+/// into thinking nothing was spawned, when in fact N agents are now live
+/// in the registry.
+pub async fn run_spell(
+    State(state): State<AppState>,
+    Json(req): Json<RunSpellRequest>,
+) -> Result<Json<RunSpellResponse>, (StatusCode, Json<serde_json::Value>)> {
+    let spell = state
+        .spells
+        .get(&req.name)
+        .cloned()
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": format!("unknown spell: {}", req.name)})),
+            )
+        })?;
+
+    // Phase 1: spawn all agents up-front (no PTY input yet) so each one's
+    // agent_id is known before we render any prompt. Otherwise the writer's
+    // prompt couldn't reference critic's id.
+    let mut outcomes: Vec<(SpawnOutcome, String)> = Vec::with_capacity(spell.manifest.agents.len());
+    for agent_def in &spell.manifest.agents {
+        let out = spawn_with_bookkeeping(
+            &state,
+            &agent_def.cli,
+            Some(agent_def.role.clone()),
+            state.workspaces_root.clone(),
+        )
+        .await
+        .map_err(|(status, msg)| {
+            (
+                status,
+                Json(json!({
+                    "error": format!("spell `{}` failed at agent `{}`: {}", req.name, agent_def.role, msg)
+                })),
+            )
+        })?;
+        outcomes.push((out, agent_def.system_prompt.clone()));
+    }
+
+    // Build role → agent_id map for {<role>_id} substitution.
+    let role_to_id: HashMap<String, String> = outcomes
+        .iter()
+        .map(|(o, _)| (o.role.clone(), o.agent_id.clone()))
+        .collect();
+
+    let spell_name = spell.manifest.name.clone();
+    // Phase 2: for each agent, wait until shim_ready then inject the
+    // rendered prompt. Spawn this off into background tasks so the HTTP
+    // response returns promptly — the user wants to see the agents pop
+    // up in the UI, not wait 5+ seconds for all bootstraps to land.
+    for (out, raw_prompt) in outcomes.iter() {
+        if raw_prompt.trim().is_empty() {
+            continue;
+        }
+        let prompt = spells::render_prompt(raw_prompt, &req.task, &role_to_id);
+        let agent_id = out.agent_id.clone();
+        let mut rx = out.lifecycle_rx.resubscribe();
+        let registry = state.registry.clone();
+        let spell_name_for_task = spell_name.clone();
+        tokio::spawn(async move {
+            // Check first whether ShimReady already fired in the gap
+            // between spawn_agent returning and our subscribe — the PTY
+            // pump task is concurrent with the spawn caller, so for fast
+            // CLIs (or warm filesystem caches) OSC_READY can arrive
+            // BEFORE we have a receiver hooked up. Reading the mutex
+            // covers that race; if shim_ready is already true we bypass
+            // the broadcast wait entirely.
+            let already_ready = registry
+                .get(&agent_id)
+                .map(|s| s.lock().lifecycle.lock().shim_ready)
+                .unwrap_or(false);
+            if !already_ready {
+                let bootstrap = async {
+                    loop {
+                        match rx.recv().await {
+                            Ok(LifecycleEvent::ShimReady) => return Ok(()),
+                            Ok(LifecycleEvent::ShimExit(code)) => {
+                                return Err(format!(
+                                    "agent exited before ShimReady (code={code})"
+                                ));
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                                return Err("lifecycle channel closed".into());
+                            }
+                        }
+                    }
+                };
+                match tokio::time::timeout(std::time::Duration::from_secs(30), bootstrap).await {
+                    Ok(Ok(())) => {}
+                    Ok(Err(msg)) => {
+                        tracing::warn!(spell = %spell_name_for_task, agent = %agent_id, msg = %msg, "spell bootstrap aborted");
+                        return;
+                    }
+                    Err(_) => {
+                        tracing::warn!(spell = %spell_name_for_task, agent = %agent_id, "spell bootstrap timed out waiting for ShimReady");
+                        return;
+                    }
+                }
+            }
+            // Grace period before injecting the bootstrap prompt. Two
+            // distinct waits are stacked here:
+            //
+            // - Input-stack settle (XtermPane has the same logic): codex's
+            //   ratatui crossterm poll attaches just after OSC_READY and
+            //   ~300ms covers the race.
+            // - MCP server connect: claude/codex spawn MCP subprocesses
+            //   AFTER their UI shows ready, taking 1–3 s. If we fire the
+            //   prompt before flockmux-swarm finishes the handshake, the
+            //   agent reads its toolset, sees no swarm tools, and hand-
+            //   waves with "I don't have a swarm_send_message tool" —
+            //   exactly what we observed in practice. Empirically the
+            //   "MCP Wait for Servers" banner in claude clears at ~2 s
+            //   on this machine; 2500 ms gives breathing room while still
+            //   keeping bootstrap under 3 s end-to-end.
+            tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
+            let slot_lock = match registry.get(&agent_id) {
+                Some(s) => s,
+                None => {
+                    tracing::warn!(spell = %spell_name_for_task, agent = %agent_id, "agent slot vanished before bootstrap");
+                    return;
+                }
+            };
+            let input_tx = slot_lock.lock().input_tx.clone();
+            // Submission strategy: send the prompt body and the Enter
+            // keystroke as TWO separate frames with a delay between.
+            //
+            // Why: claude/codex TUIs heuristically classify a burst of
+            // bytes containing newlines as a *paste* (claude renders
+            // "[Pasted text #N +M lines]" placeholder). If \r is part of
+            // the same burst, it becomes a paste-newline (a literal line
+            // break within the message body) rather than a submit. By
+            // splitting and letting the TUI settle the paste first, the
+            // standalone \r reads as the Enter key the way the user
+            // would have pressed it.
+            //
+            // The 150ms gap is empirical: shorter (~50ms) sometimes
+            // missed the boundary on cold-start codex; longer hurts
+            // user-perceived bootstrap time without measurable benefit.
+            let body = prompt.into_bytes();
+            let body_len = body.len();
+            let lossy = String::from_utf8_lossy(&body);
+            let has_unsubst = lossy.contains("{task}")
+                || lossy.contains("{writer_id}")
+                || lossy.contains("{critic_id}")
+                || lossy.contains("{editor_id}");
+            if let Err(err) = input_tx.send(bytes::Bytes::from(body)).await {
+                tracing::warn!(spell = %spell_name_for_task, agent = %agent_id, ?err, "PTY paste send failed during spell bootstrap");
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+            if let Err(err) = input_tx.send(bytes::Bytes::from_static(b"\r")).await {
+                tracing::warn!(spell = %spell_name_for_task, agent = %agent_id, ?err, "PTY submit send failed during spell bootstrap");
+                return;
+            }
+            tracing::info!(
+                spell = %spell_name_for_task,
+                agent = %agent_id,
+                bytes = body_len,
+                has_unsubstituted_placeholders = has_unsubst,
+                "spell bootstrap prompt injected"
+            );
+        });
+    }
+
+    let resp = RunSpellResponse {
+        spell: req.name,
+        agents: outcomes
+            .into_iter()
+            .map(|(o, _)| RunSpellAgent {
+                role: o.role,
+                cli: o.cli,
+                agent_id: o.agent_id,
+            })
+            .collect(),
+    };
+    Ok(Json(resp))
+}
+

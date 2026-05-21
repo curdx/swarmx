@@ -7,9 +7,12 @@ import type {
   MarkReadResponse,
   MessageRecord,
   RecordingInfo,
+  RunSpellRequest,
+  RunSpellResponse,
   SendMessageRequest,
   SpawnAgentRequest,
   SpawnAgentResponse,
+  SpellInfo,
   UnreadCountResponse,
   WriteBlackboardRequest,
 } from "./types";
@@ -94,4 +97,9 @@ export const api = {
       `/api/recording${qs({ agent_id: agentId })}`,
     ),
   recordingCastUrl: (id: string) => `/api/recording/${encodeURIComponent(id)}`,
+
+  // M5c spells
+  listSpells: () => request<SpellInfo[]>("GET", "/api/spells"),
+  runSpell: (req: RunSpellRequest) =>
+    request<RunSpellResponse>("POST", "/api/spell/run", req),
 };

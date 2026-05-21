@@ -118,6 +118,35 @@ export interface WriteBlackboardRequest {
   content: string;
 }
 
+// ── M5c spell DTOs ───────────────────────────────────────────────────────
+
+export interface SpellAgentInfo {
+  role: string;
+  cli: string;
+}
+
+export interface SpellInfo {
+  name: string;
+  description: string;
+  agents: SpellAgentInfo[];
+}
+
+export interface RunSpellRequest {
+  name: string;
+  task: string;
+}
+
+export interface RunSpellAgent {
+  role: string;
+  cli: string;
+  agent_id: string;
+}
+
+export interface RunSpellResponse {
+  spell: string;
+  agents: RunSpellAgent[];
+}
+
 // ── M3 recording DTOs ────────────────────────────────────────────────────
 
 export interface RecordingInfo {

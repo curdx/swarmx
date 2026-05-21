@@ -14,6 +14,7 @@ mod pty_stream;
 mod registry;
 mod routes;
 mod spawn;
+mod spells;
 
 use anyhow::{Context, Result};
 use axum::{
@@ -32,6 +33,11 @@ use tracing::info;
 #[derive(Clone)]
 pub struct AppState {
     pub plugins: Arc<plugins::PluginRegistry>,
+    /// Loaded spell manifests. Optional — a fresh checkout may have no
+    /// `spells/` directory and the server still starts. Spells are read
+    /// once at startup; no hot-reload (each spell run is a fresh read of
+    /// in-memory state).
+    pub spells: Arc<spells::SpellRegistry>,
     pub registry: registry::Registry,
     pub shim_path: PathBuf,
     /// Absolute path to the `flockmux-mcp` binary. Baked into per-spawn
@@ -65,6 +71,12 @@ async fn main() -> Result<()> {
     let plugin_registry = plugins::PluginRegistry::load_dir(&plugins_dir)
         .with_context(|| format!("load plugins from {}", plugins_dir.display()))?;
     info!(count = plugin_registry.list().len(), "plugins loaded");
+
+    let spells_dir = spells::default_spells_dir();
+    info!(dir = %spells_dir.display(), "loading spells");
+    let spell_registry = spells::SpellRegistry::load_dir(&spells_dir)
+        .with_context(|| format!("load spells from {}", spells_dir.display()))?;
+    info!(count = spell_registry.list().len(), "spells loaded");
 
     let shim_path = spawn::locate_shim().context("locate flockmux-shim")?;
     info!(shim = %shim_path.display(), "shim located");
@@ -117,6 +129,7 @@ async fn main() -> Result<()> {
 
     let state = AppState {
         plugins: Arc::new(plugin_registry),
+        spells: Arc::new(spell_registry),
         registry: registry::Registry::new(),
         shim_path,
         mcp_bin,
@@ -165,6 +178,8 @@ async fn main() -> Result<()> {
             get(routes::recording::list_recordings),
         )
         .route("/api/recording/:id", get(routes::recording::get_recording))
+        .route("/api/spells", get(routes::rest::list_spells))
+        .route("/api/spell/run", post(routes::rest::run_spell))
         .route("/ws/swarm", get(routes::ws_swarm::ws_swarm))
         .route("/ws/pty/:agent_id", get(routes::pty_ws::pty_ws))
         .layer(CorsLayer::permissive())  // localhost dev convenience

@@ -19,6 +19,7 @@ import { api } from "./api/http";
 import type { CliPluginInfo, SpawnAgentResponse } from "./api/types";
 import { XtermPane } from "./components/XtermPane";
 import { SwarmPanel } from "./components/SwarmPanel";
+import { SpellsLauncher } from "./components/SpellsLauncher";
 
 const MAX_COLS = 6;
 const SWARM_PANEL_KEY = "flockmux:swarmPanelOpen";
@@ -46,6 +47,33 @@ export default function App() {
     }
   }, [swarmOpen]);
 
+  // Pull /api/agent and replace the in-memory pane list with everything
+  // the server still considers live. Used on mount (reattach after
+  // refresh) AND after a spell run (multiple new agents need to appear
+  // without an extra ws/swarm round-trip).
+  const refreshAgents = async () => {
+    try {
+      const items = await api.listAgents();
+      const live = items.filter(
+        (a) => a.killed_at == null && a.shim_exit == null,
+      );
+      // Replace, don't merge: SQLite IS the source of truth for who's
+      // alive. The previous in-memory list might hold a row that the
+      // server just killed.
+      setAgents(
+        live.map((a) => ({
+          agent_id: a.agent_id,
+          cli: a.cli,
+          role: a.role,
+          workspace: a.workspace,
+        })),
+      );
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn("listAgents failed", err);
+    }
+  };
+
   useEffect(() => {
     api
       .listPlugins()
@@ -53,30 +81,9 @@ export default function App() {
       .catch((err: Error) => setPluginsError(err.message));
     // Reattach to agents that survived a page reload. The server-side
     // registry outlives the WS, so a refresh / new tab should pick up
-    // existing PTYs instead of stranding them. Skip rows the server has
-    // already marked dead (killed_at / shim_exit) — those belong to a
-    // previous server process and their PTY is gone; remounting only
-    // earns us "WS closed (code 1005)".
-    api
-      .listAgents()
-      .then((items) => {
-        const live = items.filter(
-          (a) => a.killed_at == null && a.shim_exit == null,
-        );
-        if (live.length === 0) return;
-        setAgents(
-          live.map((a) => ({
-            agent_id: a.agent_id,
-            cli: a.cli,
-            role: a.role,
-            workspace: a.workspace,
-          })),
-        );
-      })
-      .catch((err: Error) => {
-        // eslint-disable-next-line no-console
-        console.warn("listAgents failed", err);
-      });
+    // existing PTYs instead of stranding them.
+    refreshAgents();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const spawn = async (cli: string) => {
@@ -184,6 +191,7 @@ export default function App() {
             + {p.display_name}
           </button>
         ))}
+        <SpellsLauncher onSpellLaunched={refreshAgents} />
         <button
           onClick={() => setSwarmOpen((v) => !v)}
           title="toggle swarm panel"
