@@ -1,15 +1,17 @@
 /**
  * RecordingsPanel — lists asciicast v2 files captured by flockmux-recorder.
  *
- * No in-browser playback yet (M5 lands `asciinema-player`); for now each row
- * exposes a "raw .cast" link so users can download / inspect the file. The
- * server serves it as `application/x-asciicast`, which browsers typically
- * treat as a download.
+ * Each row exposes a "▶ play" toggle that expands an inline asciinema-player
+ * (WASM-backed terminal session player from the official npm package). The
+ * "raw .cast" / "download" links remain as escape hatches for offline
+ * inspection. Only one player is mounted per row at a time; closing the row
+ * disposes the player's WASM/canvas resources via the wrapper's cleanup.
  */
 
 import { useEffect, useState } from "react";
 import { api } from "../api/http";
 import type { RecordingInfo } from "../api/types";
+import { AsciicastPlayer } from "./AsciicastPlayer";
 
 interface Props {
   /** Bump this whenever the parent sees a swarm event that may affect the
@@ -22,6 +24,10 @@ export function RecordingsPanel({ refreshTick }: Props) {
   const [items, setItems] = useState<RecordingInfo[]>([]);
   const [filter, setFilter] = useState("");
   const [error, setError] = useState<string | null>(null);
+  // Which row's player is currently expanded. Single-open by design: each
+  // player instance owns a WASM context, so multiple simultaneous expansions
+  // would pile up resources for sessions the user isn't watching.
+  const [openId, setOpenId] = useState<string | null>(null);
 
   const refresh = async () => {
     try {
@@ -85,6 +91,17 @@ export function RecordingsPanel({ refreshTick }: Props) {
                 {r.last_seq != null && <> · {r.last_seq}B</>}
               </div>
               <div style={{ display: "flex", gap: 4, marginTop: 4 }}>
+                <button
+                  onClick={() => setOpenId(openId === r.id ? null : r.id)}
+                  style={linkButton}
+                  title={
+                    live
+                      ? "Live recordings can be played but won't advance past the bytes already written"
+                      : "Play this recording"
+                  }
+                >
+                  {openId === r.id ? "× close" : "▶ play"}
+                </button>
                 <a
                   href={api.recordingCastUrl(r.id)}
                   target="_blank"
@@ -101,6 +118,20 @@ export function RecordingsPanel({ refreshTick }: Props) {
                   download
                 </a>
               </div>
+              {openId === r.id && (
+                <div style={{ marginTop: 6 }}>
+                  <AsciicastPlayer
+                    src={api.recordingCastUrl(r.id)}
+                    cols={r.cols}
+                    rows={r.rows}
+                  />
+                  <div style={playerHint}>
+                    Tip: press <kbd>f</kbd> for fullscreen — at sidebar
+                    width the 120×32 terminal is fit to {r.cols} cols and
+                    text gets very small.
+                  </div>
+                </div>
+              )}
             </div>
           );
         })}
@@ -169,6 +200,13 @@ const errorRow: React.CSSProperties = {
   fontSize: 11,
   padding: "4px 8px",
   background: "#1f2937",
+};
+
+const playerHint: React.CSSProperties = {
+  fontSize: 10,
+  color: "#64748b",
+  marginTop: 4,
+  lineHeight: 1.3,
 };
 
 const emptyHint: React.CSSProperties = {
