@@ -366,73 +366,272 @@ fn find_section_range(haystack: &str, header: &str) -> Option<(usize, usize)> {
     start.map(|s| (s, haystack.len()))
 }
 
-/// Run all configured pre-spawn patches for `plugin`. Failures are logged at
-/// `warn!` but never propagated — at worst the user sees the prompt we tried
-/// to suppress (or the agent is missing the swarm tool block), which is
-/// annoying but not fatal.
+// ── Stop-hook patches (M5b wake) ─────────────────────────────────────────
+//
+// Each CLI ships a Stop event hook system; we use it to push a synthetic
+// continuation prompt whenever the agent has unread swarm mail. Both CLIs
+// agree on the wire protocol:
+//   stdout JSON `{}`                                  → no-op
+//   stdout JSON `{"decision":"block", "reason":...}`  → continue another turn
+// but they DIFFER on the config schema's `timeout` unit:
+//   - Claude  (~/.claude/settings.local.json): timeout in **milliseconds**.
+//   - Codex   (~/.codex/hooks.json):           timeout in **seconds**.
+// Mixing them silently truncates / explodes the cap. Read carefully.
+//
+// The hook command line is built once per spawn and embedded into the JSON:
+//
+//   <mcp_bin> wake-check --agent-id <agent_id> --server <server_url>
+//
+// `mcp_bin` is an absolute path (PreSpawnCtx already resolves it), so the
+// hook is immune to PATH drift between user shell and CLI subprocess.
+
+const WAKE_HOOK_TIMEOUT_MS: i64 = 10_000; // claude wants ms
+const WAKE_HOOK_TIMEOUT_S: i64 = 10; // codex wants s
+
+fn render_wake_command(mcp_bin: &Path, agent_id: &str, server_url: &str) -> String {
+    format!(
+        "{} wake-check --agent-id {} --server {}",
+        // Note: we don't shell-quote because spawn pipelines invoke the
+        // string via the CLI's shell-out path (claude/codex both use sh
+        // -c). agent_id is alnum + dash (server-allocated), server_url is
+        // an http/https URL — neither contains shell metachars in practice.
+        mcp_bin.to_string_lossy(),
+        agent_id,
+        server_url,
+    )
+}
+
+/// Merge a flockmux wake-check entry into `root.hooks.Stop`. Idempotent on
+/// the agent_id-bearing command string: re-installing for the same agent
+/// drops the prior row and re-appends, so repeat spawns don't grow the
+/// array. Different agent_ids coexist as separate rows.
+fn merge_stop_hook(root: &mut Value, command: &str, timeout: i64) {
+    // Ensure `hooks` exists and is an object.
+    if !root.is_object() {
+        *root = json!({});
+    }
+    let obj = root.as_object_mut().unwrap();
+    let hooks = obj.entry("hooks").or_insert_with(|| json!({}));
+    if !hooks.is_object() {
+        *hooks = json!({});
+    }
+    let hooks_obj = hooks.as_object_mut().unwrap();
+    let stop = hooks_obj.entry("Stop").or_insert_with(|| json!([]));
+    if !stop.is_array() {
+        *stop = json!([]);
+    }
+    let stop_arr = stop.as_array_mut().unwrap();
+
+    // Drop any prior entry carrying the exact same command (same agent_id).
+    stop_arr.retain(|entry| {
+        let matches = entry
+            .get("hooks")
+            .and_then(|v| v.as_array())
+            .map(|inner| {
+                inner.iter().any(|h| {
+                    h.get("command").and_then(|v| v.as_str()) == Some(command)
+                })
+            })
+            .unwrap_or(false);
+        !matches
+    });
+
+    // Append at the END so user-declared Stop hooks fire first — friendly
+    // behavior: their lint / test gating isn't bypassed by our wake noise.
+    // Claude requires `matcher: ""`; codex tolerates its absence but we set
+    // it for uniformity.
+    stop_arr.push(json!({
+        "matcher": "",
+        "hooks": [{
+            "type": "command",
+            "command": command,
+            "timeout": timeout,
+        }]
+    }));
+}
+
+/// Write a workspace-local `.claude/settings.local.json` carrying a Stop
+/// hook that calls `flockmux-mcp wake-check`.
+///
+/// Project-local (workspace-scoped) on purpose: we don't want to pollute
+/// the user's `~/.claude/settings.json`, and the hook is only meaningful
+/// inside the flockmux-managed workspace anyway.
+pub fn install_claude_stop_hook(
+    workspace: &Path,
+    agent_id: &str,
+    mcp_bin: &Path,
+    server_url: &str,
+) -> Result<()> {
+    let cfg_dir = workspace.join(".claude");
+    fs::create_dir_all(&cfg_dir)
+        .with_context(|| format!("mkdir {}", cfg_dir.display()))?;
+    let cfg = cfg_dir.join("settings.local.json");
+    install_claude_stop_hook_at(&cfg, agent_id, mcp_bin, server_url)
+}
+
+fn install_claude_stop_hook_at(
+    cfg: &Path,
+    agent_id: &str,
+    mcp_bin: &Path,
+    server_url: &str,
+) -> Result<()> {
+    let mut root: Value = if cfg.is_file() {
+        let bytes = fs::read(cfg).with_context(|| format!("read {}", cfg.display()))?;
+        serde_json::from_slice(&bytes)
+            .with_context(|| format!("parse {}", cfg.display()))?
+    } else {
+        json!({})
+    };
+
+    let command = render_wake_command(mcp_bin, agent_id, server_url);
+    merge_stop_hook(&mut root, &command, WAKE_HOOK_TIMEOUT_MS);
+    write_json_atomic(cfg, &root)
+}
+
+/// Write a workspace-local `.codex/hooks.json` carrying a Stop hook that
+/// calls `flockmux-mcp wake-check`. Same structural shape as claude's
+/// settings.local.json but `timeout` is in **seconds**, not ms.
+pub fn install_codex_stop_hook(
+    workspace: &Path,
+    agent_id: &str,
+    mcp_bin: &Path,
+    server_url: &str,
+) -> Result<()> {
+    let cfg_dir = workspace.join(".codex");
+    fs::create_dir_all(&cfg_dir)
+        .with_context(|| format!("mkdir {}", cfg_dir.display()))?;
+    let cfg = cfg_dir.join("hooks.json");
+    install_codex_stop_hook_at(&cfg, agent_id, mcp_bin, server_url)
+}
+
+fn install_codex_stop_hook_at(
+    cfg: &Path,
+    agent_id: &str,
+    mcp_bin: &Path,
+    server_url: &str,
+) -> Result<()> {
+    let mut root: Value = if cfg.is_file() {
+        let bytes = fs::read(cfg).with_context(|| format!("read {}", cfg.display()))?;
+        serde_json::from_slice(&bytes)
+            .with_context(|| format!("parse {}", cfg.display()))?
+    } else {
+        json!({})
+    };
+
+    let command = render_wake_command(mcp_bin, agent_id, server_url);
+    merge_stop_hook(&mut root, &command, WAKE_HOOK_TIMEOUT_S);
+    write_json_atomic(cfg, &root)
+}
+
+/// Dispatch into per-CLI patch sequences. Each CLI has its own readable
+/// top-to-bottom block listing every patch that applies to it; the host
+/// never interleaves them. Failures are logged at `warn!` but never
+/// propagated — at worst the user sees the prompt we tried to suppress
+/// (or the agent is missing the swarm tool block), which is annoying but
+/// not fatal.
+///
+/// Adding a new CLI is two steps:
+///   1. add a `cli-plugins/<id>.toml` and set the auto-* flags you want;
+///   2. add a `run_<id>_patches` fn here and route to it from the match.
 pub fn run_patches(
     plugin: &crate::plugins::CliPlugin,
     workspace: &Path,
     ctx: &PreSpawnCtx,
 ) {
+    match plugin.id.as_str() {
+        "claude" => run_claude_patches(plugin, workspace, ctx),
+        "codex" => run_codex_patches(plugin, workspace, ctx),
+        other => {
+            tracing::debug!(
+                cli = %other,
+                "no pre-spawn patch handler registered for this CLI"
+            );
+        }
+    }
+}
+
+/// All `claude`-specific pre-spawn patches, in execution order. Each step
+/// is gated on its `auto_*` flag in the plugin manifest, so a host that
+/// only wants trust auto-accept (no MCP, no hook) can opt out cleanly.
+fn run_claude_patches(
+    plugin: &crate::plugins::CliPlugin,
+    workspace: &Path,
+    ctx: &PreSpawnCtx,
+) {
+    // 1. Auto-accept "Do you trust this folder?" — workspaces are flockmux-owned.
     if plugin.auto_trust_workspace {
-        match plugin.id.as_str() {
-            "claude" => {
-                if let Err(err) = mark_claude_workspace_trusted(workspace) {
-                    tracing::warn!(?err, cli = %plugin.id, "auto-trust patch failed");
-                }
-            }
-            "codex" => {
-                if let Err(err) = mark_codex_workspace_trusted(workspace) {
-                    tracing::warn!(?err, cli = %plugin.id, "auto-trust patch failed");
-                }
-            }
-            other => {
-                tracing::debug!(
-                    cli = %other,
-                    "auto_trust_workspace set but no handler — ignored"
-                );
-            }
+        if let Err(err) = mark_claude_workspace_trusted(workspace) {
+            tracing::warn!(?err, "claude: auto-trust patch failed");
         }
     }
-    if plugin.auto_dismiss_update {
-        match plugin.id.as_str() {
-            "codex" => {
-                if let Err(err) = mark_codex_update_dismissed() {
-                    tracing::warn!(?err, cli = %plugin.id, "auto-dismiss-update patch failed");
-                }
-            }
-            other => {
-                tracing::debug!(
-                    cli = %other,
-                    "auto_dismiss_update set but no handler — ignored"
-                );
-            }
-        }
-    }
+    // 2. Register flockmux-swarm as a local-scope MCP server with this
+    //    spawn's agent_id baked into args + env.
     if plugin.auto_inject_mcp {
-        match plugin.id.as_str() {
-            "claude" => {
-                if let Err(err) = mark_claude_mcp_local(
-                    workspace,
-                    &ctx.agent_id,
-                    &ctx.mcp_bin,
-                    &ctx.server_url,
-                ) {
-                    tracing::warn!(?err, cli = %plugin.id, "mcp-inject patch failed");
-                }
-            }
-            "codex" => {
-                if let Err(err) = ensure_codex_mcp_global(&ctx.mcp_bin) {
-                    tracing::warn!(?err, cli = %plugin.id, "mcp-inject patch failed");
-                }
-            }
-            other => {
-                tracing::debug!(
-                    cli = %other,
-                    "auto_inject_mcp set but no handler — ignored"
-                );
-            }
+        if let Err(err) = mark_claude_mcp_local(
+            workspace,
+            &ctx.agent_id,
+            &ctx.mcp_bin,
+            &ctx.server_url,
+        ) {
+            tracing::warn!(?err, "claude: mcp-inject patch failed");
+        }
+    }
+    // 3. Install <workspace>/.claude/settings.local.json Stop hook (M5b
+    //    wake-check). Timeout is in MILLISECONDS for claude.
+    if plugin.auto_inject_stop_hook {
+        if let Err(err) = install_claude_stop_hook(
+            workspace,
+            &ctx.agent_id,
+            &ctx.mcp_bin,
+            &ctx.server_url,
+        ) {
+            tracing::warn!(?err, "claude: stop-hook install failed");
+        }
+    }
+}
+
+/// All `codex`-specific pre-spawn patches, in execution order. Codex has
+/// one extra step over claude (auto-dismiss the "update available" prompt
+/// that blocks a headless PTY), and writes to different files / different
+/// timeout units — keep them paired here so the differences are visible
+/// at a glance.
+fn run_codex_patches(
+    plugin: &crate::plugins::CliPlugin,
+    workspace: &Path,
+    ctx: &PreSpawnCtx,
+) {
+    // 1. Auto-accept "Do you trust the contents of this directory?".
+    if plugin.auto_trust_workspace {
+        if let Err(err) = mark_codex_workspace_trusted(workspace) {
+            tracing::warn!(?err, "codex: auto-trust patch failed");
+        }
+    }
+    // 2. Mark the latest codex release as already-dismissed so the
+    //    "Update available! Press enter to continue" prompt is skipped.
+    //    (claude has no equivalent prompt.)
+    if plugin.auto_dismiss_update {
+        if let Err(err) = mark_codex_update_dismissed() {
+            tracing::warn!(?err, "codex: auto-dismiss-update patch failed");
+        }
+    }
+    // 3. Ensure ~/.codex/config.toml has the global flockmux-swarm MCP
+    //    server block. Per-spawn identity rides in via FLOCKMUX_AGENT_ID
+    //    env passthrough (whitelisted in env_vars).
+    if plugin.auto_inject_mcp {
+        if let Err(err) = ensure_codex_mcp_global(&ctx.mcp_bin) {
+            tracing::warn!(?err, "codex: mcp-inject patch failed");
+        }
+    }
+    // 4. Install <workspace>/.codex/hooks.json Stop hook (M5b wake-check).
+    //    Timeout is in SECONDS for codex — different from claude.
+    if plugin.auto_inject_stop_hook {
+        if let Err(err) = install_codex_stop_hook(
+            workspace,
+            &ctx.agent_id,
+            &ctx.mcp_bin,
+            &ctx.server_url,
+        ) {
+            tracing::warn!(?err, "codex: stop-hook install failed");
         }
     }
 }
@@ -850,5 +1049,164 @@ trust_level = \"trusted\"\n";
         assert_eq!(end, body.len());
         let section = &body[start..end];
         assert!(section.contains("command = \"foo\""));
+    }
+
+    // ── M5b Stop-hook install patches ─────────────────────────────────────
+
+    #[test]
+    fn claude_stop_hook_creates_settings_local() {
+        let dir = tempdir().unwrap();
+        let cfg = dir.path().join("settings.local.json");
+        let bin = dir.path().join("flockmux-mcp");
+        install_claude_stop_hook_at(&cfg, "claude-aaa", &bin, "http://127.0.0.1:7777").unwrap();
+
+        let root: Value = serde_json::from_slice(&fs::read(&cfg).unwrap()).unwrap();
+        let stop = root["hooks"]["Stop"].as_array().expect("hooks.Stop is array");
+        assert_eq!(stop.len(), 1);
+        let inner = stop[0]["hooks"][0].clone();
+        assert_eq!(inner["type"], json!("command"));
+        assert_eq!(inner["timeout"], json!(10_000), "claude timeout in ms");
+        let cmd = inner["command"].as_str().unwrap();
+        assert!(cmd.contains("wake-check --agent-id claude-aaa"), "got: {cmd}");
+        assert!(cmd.contains("--server http://127.0.0.1:7777"), "got: {cmd}");
+        assert!(cmd.contains(bin.to_string_lossy().as_ref()), "absolute bin path: {cmd}");
+    }
+
+    #[test]
+    fn codex_stop_hook_creates_hooks_json() {
+        let dir = tempdir().unwrap();
+        let cfg = dir.path().join("hooks.json");
+        let bin = dir.path().join("flockmux-mcp");
+        install_codex_stop_hook_at(&cfg, "codex-bbb", &bin, "http://127.0.0.1:7777").unwrap();
+
+        let root: Value = serde_json::from_slice(&fs::read(&cfg).unwrap()).unwrap();
+        let stop = root["hooks"]["Stop"].as_array().expect("hooks.Stop is array");
+        assert_eq!(stop.len(), 1);
+        let inner = stop[0]["hooks"][0].clone();
+        assert_eq!(inner["type"], json!("command"));
+        assert_eq!(
+            inner["timeout"],
+            json!(10),
+            "codex timeout in SECONDS — ms would be 2.7h timeout",
+        );
+        let cmd = inner["command"].as_str().unwrap();
+        assert!(cmd.contains("wake-check --agent-id codex-bbb"), "got: {cmd}");
+    }
+
+    #[test]
+    fn claude_stop_hook_merges_existing_user_hooks() {
+        let dir = tempdir().unwrap();
+        let cfg = dir.path().join("settings.local.json");
+        // Pre-seed with a user-defined PreToolUse hook + a user-defined Stop
+        // hook. Both must survive verbatim.
+        let original = json!({
+            "hooks": {
+                "PreToolUse": [{
+                    "matcher": "Bash",
+                    "hooks": [{ "type": "command", "command": "/usr/local/bin/user-lint", "timeout": 5000 }]
+                }],
+                "Stop": [{
+                    "matcher": "",
+                    "hooks": [{ "type": "command", "command": "/usr/local/bin/user-stop", "timeout": 5000 }]
+                }]
+            }
+        });
+        fs::write(&cfg, serde_json::to_vec_pretty(&original).unwrap()).unwrap();
+
+        let bin = dir.path().join("flockmux-mcp");
+        install_claude_stop_hook_at(&cfg, "claude-aaa", &bin, "http://127.0.0.1:7777").unwrap();
+
+        let after: Value = serde_json::from_slice(&fs::read(&cfg).unwrap()).unwrap();
+        // PreToolUse must be untouched.
+        let pre = after["hooks"]["PreToolUse"].as_array().unwrap();
+        assert_eq!(pre.len(), 1);
+        assert_eq!(pre[0]["hooks"][0]["command"], json!("/usr/local/bin/user-lint"));
+        // Stop now has TWO entries: the user's (first) and flockmux (last).
+        let stop = after["hooks"]["Stop"].as_array().unwrap();
+        assert_eq!(stop.len(), 2, "user hook should be preserved + wake-check appended");
+        assert_eq!(
+            stop[0]["hooks"][0]["command"],
+            json!("/usr/local/bin/user-stop"),
+            "user hook stays first",
+        );
+        let cmd = stop[1]["hooks"][0]["command"].as_str().unwrap();
+        assert!(cmd.contains("wake-check"), "flockmux entry appended at end: {cmd}");
+    }
+
+    #[test]
+    fn codex_stop_hook_idempotent_on_repeat_install() {
+        let dir = tempdir().unwrap();
+        let cfg = dir.path().join("hooks.json");
+        let bin = dir.path().join("flockmux-mcp");
+
+        install_codex_stop_hook_at(&cfg, "codex-xxx", &bin, "http://127.0.0.1:7777").unwrap();
+        install_codex_stop_hook_at(&cfg, "codex-xxx", &bin, "http://127.0.0.1:7777").unwrap();
+        install_codex_stop_hook_at(&cfg, "codex-xxx", &bin, "http://127.0.0.1:7777").unwrap();
+
+        let root: Value = serde_json::from_slice(&fs::read(&cfg).unwrap()).unwrap();
+        let stop = root["hooks"]["Stop"].as_array().unwrap();
+        assert_eq!(stop.len(), 1, "re-running the same agent_id must not accumulate entries");
+    }
+
+    #[test]
+    fn claude_stop_hook_distinct_agent_ids_coexist() {
+        let dir = tempdir().unwrap();
+        let cfg = dir.path().join("settings.local.json");
+        let bin = dir.path().join("flockmux-mcp");
+
+        install_claude_stop_hook_at(&cfg, "claude-A", &bin, "http://127.0.0.1:7777").unwrap();
+        install_claude_stop_hook_at(&cfg, "claude-B", &bin, "http://127.0.0.1:7777").unwrap();
+
+        let root: Value = serde_json::from_slice(&fs::read(&cfg).unwrap()).unwrap();
+        let stop = root["hooks"]["Stop"].as_array().unwrap();
+        assert_eq!(stop.len(), 2, "two different agent_ids should coexist");
+        // Both rows present, agent_ids differ.
+        let cmds: Vec<&str> = stop
+            .iter()
+            .map(|e| e["hooks"][0]["command"].as_str().unwrap())
+            .collect();
+        assert!(cmds.iter().any(|c| c.contains("claude-A")));
+        assert!(cmds.iter().any(|c| c.contains("claude-B")));
+    }
+
+    #[test]
+    fn stop_hook_json_shape_validates_required_fields() {
+        // Reference-project lesson (openclaw zod-schema): every hook entry
+        // must carry `type`, `command`, `timeout` — otherwise the CLI
+        // silently skips the hook with no error, which would be invisible
+        // in production.
+        let dir = tempdir().unwrap();
+        let cfg = dir.path().join("settings.local.json");
+        let bin = dir.path().join("flockmux-mcp");
+        install_claude_stop_hook_at(&cfg, "claude-aaa", &bin, "http://127.0.0.1:7777").unwrap();
+
+        let root: Value = serde_json::from_slice(&fs::read(&cfg).unwrap()).unwrap();
+        for entry in root["hooks"]["Stop"].as_array().unwrap() {
+            assert!(entry["matcher"].is_string(), "matcher field present");
+            for h in entry["hooks"].as_array().unwrap() {
+                assert_eq!(h["type"], json!("command"), "every hook is type=command");
+                assert!(h["command"].is_string(), "command is a string");
+                assert!(h["timeout"].is_i64(), "timeout is an integer");
+            }
+        }
+    }
+
+    #[test]
+    fn stop_hook_preserves_unrelated_top_level_keys() {
+        let dir = tempdir().unwrap();
+        let cfg = dir.path().join("settings.local.json");
+        let original = json!({
+            "permissions": { "allow": ["Bash"] },
+            "userOptions": { "model": "sonnet-4-6" }
+        });
+        fs::write(&cfg, serde_json::to_vec_pretty(&original).unwrap()).unwrap();
+        let bin = dir.path().join("flockmux-mcp");
+        install_claude_stop_hook_at(&cfg, "claude-keep", &bin, "http://127.0.0.1:7777").unwrap();
+        let after: Value = serde_json::from_slice(&fs::read(&cfg).unwrap()).unwrap();
+        // Unrelated fields must survive.
+        assert_eq!(after["permissions"]["allow"], json!(["Bash"]));
+        assert_eq!(after["userOptions"]["model"], json!("sonnet-4-6"));
+        // Wake hook still got added.
+        assert!(after["hooks"]["Stop"].is_array());
     }
 }

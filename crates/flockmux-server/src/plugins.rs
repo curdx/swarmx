@@ -51,6 +51,19 @@ pub struct CliPlugin {
     ///     in via the `FLOCKMUX_AGENT_ID` env passthrough)
     #[serde(default)]
     pub auto_inject_mcp: bool,
+    /// If true, the host installs a workspace-local Stop hook that runs
+    /// `flockmux-mcp wake-check` at every turn boundary, giving the agent
+    /// a synthetic continuation prompt whenever its swarm inbox has unread
+    /// messages. Currently honoured for:
+    ///   - `id = "claude"` — writes `<workspace>/.claude/settings.local.json`
+    ///     `hooks.Stop[]` (timeout in milliseconds).
+    ///   - `id = "codex"`  — writes `<workspace>/.codex/hooks.json`
+    ///     `hooks.Stop[]` (timeout in seconds).
+    ///
+    /// Merge-not-clobber: existing user hooks are preserved; flockmux's
+    /// entry is appended once (idempotent on re-spawn).
+    #[serde(default)]
+    pub auto_inject_stop_hook: bool,
 }
 
 fn default_ready_detect() -> String { "shim_osc".into() }

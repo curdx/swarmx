@@ -1,36 +1,42 @@
-//! flockmux-mcp binary: tokio stdio loop driving the MCP dispatcher.
+//! flockmux-mcp binary entry. Two modes:
 //!
-//! Operationally:
-//!   - stdin  → newline-delimited JSON-RPC requests (one per line).
-//!   - stdout → newline-delimited JSON-RPC responses. NOTHING ELSE may go
-//!              here; tracing / panics go to stderr.
-//!   - EOF on stdin = graceful shutdown.
+//!   - **default** (no subcommand): tokio stdio loop driving the MCP
+//!     dispatcher. Stdin = newline-delimited JSON-RPC, stdout = same,
+//!     stderr = tracing. EOF on stdin shuts the process down gracefully.
+//!   - **`wake-check`**: invoked by Claude Code / Codex CLI as a Stop hook.
+//!     Reads `/api/message/unread_count` and emits a single JSON line on
+//!     stdout that tells the CLI whether to keep the agent's turn going.
+//!     Always exit 0; see `wake_check.rs` for the wire protocol.
 //!
-//! Identity:
-//!   - `--agent-id` (or env `FLOCKMUX_AGENT_ID`): which agent we're acting
-//!     as. Required. If missing, exit 1 — claude / codex will surface
-//!     "server failed" in their /mcp panel.
-//!   - `--server-url` (or env `FLOCKMUX_SERVER_URL`): where the REST API
-//!     lives. Defaults to `http://127.0.0.1:7777`.
+//! Identity (default mode):
+//!   - `--agent-id` (or env `FLOCKMUX_AGENT_ID`): which agent we speak for.
+//!   - `--server-url` (or env `FLOCKMUX_SERVER_URL`): REST base URL.
 
 use anyhow::{Context, Result};
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use flockmux_mcp::handlers::dispatch;
 use flockmux_mcp::protocol::{JsonRpcRequest, JsonRpcResponse, PARSE_ERROR};
 use flockmux_mcp::tools::ToolContext;
+use flockmux_mcp::wake_check::{self, WakeCheckArgs};
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tracing::{debug, warn};
 
 #[derive(Debug, Parser)]
 #[command(name = "flockmux-mcp", about = "flockmux swarm MCP stdio server")]
-struct Args {
-    /// Which agent we speak for. Required — comes from the spawn-time env
-    /// `FLOCKMUX_AGENT_ID` that flockmux-server injects into the subprocess.
-    #[arg(long, env = "FLOCKMUX_AGENT_ID")]
-    agent_id: String,
+struct Cli {
+    #[command(subcommand)]
+    cmd: Option<Cmd>,
 
-    /// Base URL of the flockmux-server REST API.
+    // The default (stdio JSON-RPC) flags live on the root so existing
+    // invocations `flockmux-mcp --agent-id <id>` keep working without a
+    // subcommand prefix.
+    /// Which agent we speak for (default mode only). Required when no
+    /// subcommand is given.
+    #[arg(long, env = "FLOCKMUX_AGENT_ID")]
+    agent_id: Option<String>,
+
+    /// Base URL of the flockmux-server REST API (default mode only).
     #[arg(
         long,
         env = "FLOCKMUX_SERVER_URL",
@@ -39,9 +45,17 @@ struct Args {
     server_url: String,
 }
 
+#[derive(Debug, Subcommand)]
+enum Cmd {
+    /// Stop-hook helper: probe unread count and emit a continuation hint
+    /// for Claude Code / Codex when the agent has unread swarm messages.
+    WakeCheck(WakeCheckArgs),
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Tracing must NEVER write to stdout — stdout is the JSON-RPC stream.
+    // Tracing must NEVER write to stdout — stdout is reserved for the wire
+    // protocol of whichever mode we're in.
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_env("FLOCKMUX_MCP_LOG")
@@ -50,16 +64,26 @@ async fn main() -> Result<()> {
         .with_writer(std::io::stderr)
         .init();
 
-    let args = Args::parse();
-    let ctx = ToolContext::new(args.agent_id.clone(), args.server_url.clone())
-        .context("build ToolContext (reqwest client)")?;
+    let cli = Cli::parse();
 
-    debug!(agent_id = %args.agent_id, server = %args.server_url, "flockmux-mcp starting");
-
-    run(ctx).await
+    match cli.cmd {
+        Some(Cmd::WakeCheck(args)) => {
+            wake_check::run(args).await?;
+            Ok(())
+        }
+        None => {
+            let agent_id = cli
+                .agent_id
+                .context("--agent-id (or FLOCKMUX_AGENT_ID) required for stdio mode")?;
+            let ctx = ToolContext::new(agent_id.clone(), cli.server_url.clone())
+                .context("build ToolContext (reqwest client)")?;
+            debug!(agent_id = %agent_id, server = %cli.server_url, "flockmux-mcp starting");
+            run_stdio(ctx).await
+        }
+    }
 }
 
-async fn run(ctx: ToolContext) -> Result<()> {
+async fn run_stdio(ctx: ToolContext) -> Result<()> {
     let stdin = tokio::io::stdin();
     let mut reader = BufReader::new(stdin).lines();
     let mut stdout = tokio::io::stdout();

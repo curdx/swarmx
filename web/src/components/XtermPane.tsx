@@ -33,6 +33,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { WebglAddon } from "@xterm/addon-webgl";
 import type { ServerControl, ClientControl } from "../api/types";
 import { acquireSlot, releaseSlot, reportContextLoss } from "../lib/webglPool";
+import { inputPolicyFor } from "../lib/cliInputPolicy";
 
 interface Props {
   agentId: string;
@@ -151,6 +152,60 @@ export function XtermPane({
     let ackTimer: number | null = null;
     let shimExited = false;
 
+    // ---- per-CLI input gating ------------------------------------------
+    // Keystrokes are dropped on the floor until the CLI is "really" ready:
+    // shim_ready ⇒ true AND the per-CLI settle delay has elapsed. Codex's
+    // TUI emits OSC_READY before its input poll is attached; bytes sent in
+    // that window get swallowed by the startup banner, manifesting as
+    // "first Enter is a newline, not a submit". Anything typed before that
+    // moment is buffered (not dropped) so the user doesn't lose work.
+    const inputPolicy = inputPolicyFor(agentId);
+    let inputUnlocked = false;
+    let settleTimer: number | null = null;
+    const pendingChunks: Uint8Array[] = [];
+    let pendingBytes = 0;
+
+    const sendBytes = (bytes: Uint8Array) => {
+      if (ws.readyState !== WebSocket.OPEN) return;
+      ws.send(bytes);
+    };
+
+    const flushPendingInput = () => {
+      if (pendingChunks.length === 0) return;
+      let total = 0;
+      for (const c of pendingChunks) total += c.byteLength;
+      const combined = new Uint8Array(total);
+      let off = 0;
+      for (const c of pendingChunks) {
+        combined.set(c, off);
+        off += c.byteLength;
+      }
+      pendingChunks.length = 0;
+      pendingBytes = 0;
+      sendBytes(combined);
+    };
+
+    const unlockInput = () => {
+      if (inputUnlocked) return;
+      inputUnlocked = true;
+      flushPendingInput();
+    };
+
+    const onShimReadySignal = () => {
+      if (disposed || inputUnlocked) return;
+      // Already had ready event (Hello/event); arm the settle timer once.
+      if (settleTimer !== null) return;
+      if (inputPolicy.postReadyDelayMs <= 0) {
+        unlockInput();
+        return;
+      }
+      settleTimer = window.setTimeout(() => {
+        settleTimer = null;
+        if (disposed) return;
+        unlockInput();
+      }, inputPolicy.postReadyDelayMs);
+    };
+
     const sendCtrl = (msg: ClientControl) => {
       if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
     };
@@ -254,12 +309,16 @@ export function XtermPane({
           if (msg.shim_ready) {
             setStatus("ready");
             setStatusDetail("");
+            onShimReadySignal();
             onShimReady?.();
           }
           if (typeof msg.shim_exit === "number") {
             shimExited = true;
             setStatus("exited");
             setStatusDetail(`exit ${msg.shim_exit}`);
+            // Unlock input on exit so any final bytes (e.g. user Ctrl-C
+            // after seeing the exit banner) aren't permanently buffered.
+            unlockInput();
             onShimExit?.(msg.shim_exit);
           }
           break;
@@ -267,12 +326,14 @@ export function XtermPane({
         case "shim_ready":
           setStatus("ready");
           setStatusDetail("");
+          onShimReadySignal();
           onShimReady?.();
           break;
         case "shim_exit":
           shimExited = true;
           setStatus("exited");
           setStatusDetail(`exit ${msg.code}`);
+          unlockInput();
           onShimExit?.(msg.code);
           clearLastSeq(agentId);
           break;
@@ -292,10 +353,27 @@ export function XtermPane({
     };
 
     // ---- keystroke input ------------------------------------------------
+    // Per-CLI gating: until `inputUnlocked === true`, keystrokes are buffered
+    // (capped at preReadyBufferMax) and flushed in a single send the moment
+    // the gate opens. Anything beyond the cap is dropped with a warn — that
+    // path indicates an abnormal volume of pre-ready typing/pasting.
     const dataDisp = term.onData((data: string) => {
       if (ws.readyState !== WebSocket.OPEN) return;
+      const bytes = new TextEncoder().encode(data);
+      if (!inputUnlocked) {
+        if (pendingBytes + bytes.byteLength > inputPolicy.preReadyBufferMax) {
+          // eslint-disable-next-line no-console
+          console.warn(
+            `[XtermPane ${agentId}] pre-ready buffer full (${pendingBytes}B); dropping ${bytes.byteLength}B`,
+          );
+          return;
+        }
+        pendingChunks.push(bytes);
+        pendingBytes += bytes.byteLength;
+        return;
+      }
       // Send as binary (UTF-8 bytes) so multi-byte sequences land intact.
-      ws.send(new TextEncoder().encode(data));
+      sendBytes(bytes);
     });
 
     // ---- resize handling ------------------------------------------------
@@ -322,6 +400,9 @@ export function XtermPane({
       ro.disconnect();
       if (resizeTimer !== null) window.clearTimeout(resizeTimer);
       if (ackTimer !== null) window.clearTimeout(ackTimer);
+      if (settleTimer !== null) window.clearTimeout(settleTimer);
+      pendingChunks.length = 0;
+      pendingBytes = 0;
       dataDisp.dispose();
       try {
         ws.close();

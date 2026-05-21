@@ -25,3 +25,9 @@ auto_trust_workspace = true
 # (local scope ⇒ no "trust this MCP server?" prompt). Per-spawn entry
 # carries the agent_id.
 auto_inject_mcp = true
+# Pre-spawn writes a `Stop` hook into <workspace>/.claude/settings.local.json
+# that calls `flockmux-mcp wake-check`. At every turn boundary the hook
+# probes /api/message/unread_count; if the agent has unread mail, the hook
+# returns `{decision:"block", reason:"..."}` and claude continues into a
+# new turn that picks the messages up via swarm_list_messages.
+auto_inject_stop_hook = true

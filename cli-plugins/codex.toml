@@ -32,3 +32,9 @@ auto_dismiss_update = true
 # own — append `[projects."<ws>"] trust_level = "trusted"` to
 # ~/.codex/config.toml pre-spawn.
 auto_trust_workspace = true
+# Pre-spawn writes a `Stop` hook into <workspace>/.codex/hooks.json that
+# calls `flockmux-mcp wake-check`. At every turn boundary the hook probes
+# /api/message/unread_count; if the agent has unread mail, the hook returns
+# `{decision:"block", reason:"..."}` and codex continues into a new turn
+# that picks the messages up via swarm_list_messages.
+auto_inject_stop_hook = true
