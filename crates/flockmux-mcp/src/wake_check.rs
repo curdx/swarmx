@@ -178,9 +178,23 @@ pub async fn run(args: WakeCheckArgs) -> Result<()> {
         eprintln!("wake-check: throttle write failed: {err}");
     }
 
+    // Why this exact wording: codex 0.132's swarm_send_message tool calls
+    // observed in the wild often omit `in_reply_to`, which breaks the
+    // threading view in the UI. Naming the field explicitly + tying it
+    // to "the original `id`" turns it from a guessable optional into a
+    // step in the recipe. The "Do not respond ... outside the swarm" line
+    // stops the agent from acknowledging the wake in its own PTY output
+    // (which would otherwise leak the system prompt to the human user).
     let reason = format!(
-        "You have {count} unread swarm message(s). Use the swarm_list_messages \
-         tool now to read and respond to them before doing anything else."
+        "You have {count} unread swarm message(s). Steps:\n\
+         1. Call swarm_list_messages to read them — this also marks them \
+         delivered/read.\n\
+         2. For each message that warrants a response, call \
+         swarm_send_message with `kind: \"reply\"` AND \
+         `in_reply_to: <that message's id>` so the threading stays \
+         intact.\n\
+         Do not produce any user-facing output about these messages \
+         outside the swarm tool calls."
     );
     emit_block(&reason);
     Ok(())
