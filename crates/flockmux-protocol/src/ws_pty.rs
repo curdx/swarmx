@@ -2,7 +2,9 @@
 //!
 //! Binary frames carry PTY bytes prefixed by a 4-byte big-endian seq counter:
 //!
-//!     [seq(u32 BE)][raw PTY bytes ...]
+//! ```text
+//! [seq(u32 BE)][raw PTY bytes ...]
+//! ```
 //!
 //! Text frames carry JSON control messages — resize / ack / resume / signal /
 //! kill / detach. Two separate frame types because:

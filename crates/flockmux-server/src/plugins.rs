@@ -40,6 +40,17 @@ pub struct CliPlugin {
     /// `~/.codex/version.json: dismissed_version = latest_version`).
     #[serde(default)]
     pub auto_dismiss_update: bool,
+    /// If true, the host writes (or refreshes) an MCP server entry pointing
+    /// at the `flockmux-mcp` binary so the spawned agent can call swarm
+    /// tools (send_message / blackboard / …) from inside its native toolbox.
+    /// Currently honoured for:
+    ///   - `id = "claude"` — writes `~/.claude.json projects.<ws>.mcpServers.flockmux-swarm`
+    ///     (local scope, no approval prompt; per-spawn entry carries agent_id)
+    ///   - `id = "codex"`  — appends `[mcp_servers.flockmux-swarm]` to
+    ///     `~/.codex/config.toml` (global config; per-spawn identity rides
+    ///     in via the `FLOCKMUX_AGENT_ID` env passthrough)
+    #[serde(default)]
+    pub auto_inject_mcp: bool,
 }
 
 fn default_ready_detect() -> String { "shim_osc".into() }

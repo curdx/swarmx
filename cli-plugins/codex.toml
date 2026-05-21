@@ -9,8 +9,16 @@ display_name = "Codex CLI"
 binary = "codex"
 default_args = []
 ready_detect = "shim_osc"
-mcp_inject = "none"
+# M4 honors `auto_inject_mcp = true` and appends a single global
+# `[mcp_servers.flockmux-swarm]` section to ~/.codex/config.toml.
+# `mcp_inject` is kept as documentation of which channel is used.
+mcp_inject = "codex_global_toml"
 home_env = "HOME"
+# Pre-spawn ensures ~/.codex/config.toml carries one global
+# `[mcp_servers.flockmux-swarm]` block. Per-spawn agent identity rides in
+# via the FLOCKMUX_AGENT_ID env passthrough (codex spawns the MCP
+# subprocess with the parent's env restricted to env_vars whitelist).
+auto_inject_mcp = true
 # Codex prints "Update available! Press enter to continue" on startup which
 # blocks the headless PTY. Pre-spawn we set
 # `~/.codex/version.json: dismissed_version = latest_version` so the gate is

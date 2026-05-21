@@ -34,6 +34,13 @@ pub struct AppState {
     pub plugins: Arc<plugins::PluginRegistry>,
     pub registry: registry::Registry,
     pub shim_path: PathBuf,
+    /// Absolute path to the `flockmux-mcp` binary. Baked into per-spawn
+    /// MCP config entries so claude / codex launch the swarm bridge with
+    /// no PATH lookup.
+    pub mcp_bin: PathBuf,
+    /// Base URL of this server's own REST API (loopback only today).
+    /// Stamped into MCP entries so the subprocess knows where to talk.
+    pub server_url: String,
     pub workspaces_root: PathBuf,
     pub store: Arc<Store>,
     pub swarm: Arc<Swarm>,
@@ -61,6 +68,9 @@ async fn main() -> Result<()> {
 
     let shim_path = spawn::locate_shim().context("locate flockmux-shim")?;
     info!(shim = %shim_path.display(), "shim located");
+
+    let mcp_bin = spawn::locate_mcp().context("locate flockmux-mcp")?;
+    info!(mcp = %mcp_bin.display(), "mcp binary located");
 
     let workspaces_root = workspaces_root_default();
     std::fs::create_dir_all(&workspaces_root)?;
@@ -102,10 +112,15 @@ async fn main() -> Result<()> {
     std::fs::create_dir_all(&recordings_root)?;
     info!(recordings = %recordings_root.display(), "recordings root");
 
+    let server_url = std::env::var("FLOCKMUX_SERVER_URL")
+        .unwrap_or_else(|_| "http://127.0.0.1:7777".into());
+
     let state = AppState {
         plugins: Arc::new(plugin_registry),
         registry: registry::Registry::new(),
         shim_path,
+        mcp_bin,
+        server_url,
         workspaces_root,
         store,
         swarm,

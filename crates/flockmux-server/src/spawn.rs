@@ -25,6 +25,13 @@ pub struct AgentSpawn {
 /// `shim_path` is the absolute path to `flockmux-shim`. Caller normally
 /// derives it from `std::env::current_exe()` parent + "flockmux-shim".
 ///
+/// `mcp_bin` is the absolute path to `flockmux-mcp` (the swarm MCP stdio
+/// server). It's baked into per-spawn MCP config entries written under
+/// pre-spawn patches so claude / codex can launch it on first tool call.
+///
+/// `server_url` is the base URL of the flockmux-server REST API that the
+/// MCP subprocess will speak to. Loopback today.
+///
 /// `recorder` is an optional asciicast v2 sink. When set, the PTY pump
 /// mirrors every chunk (including OSC lifecycle markers) into the
 /// recorder; when unset, the recording layer is bypassed.
@@ -33,6 +40,8 @@ pub fn spawn_agent(
     role: Option<String>,
     workspace_root: &Path,
     shim_path: &Path,
+    mcp_bin: &Path,
+    server_url: &str,
     recorder: Option<RecorderHandle>,
 ) -> Result<AgentSpawn> {
     let agent_id = format!("{}-{}", plugin.id, &Uuid::new_v4().to_string()[..8]);
@@ -40,8 +49,15 @@ pub fn spawn_agent(
 
     // Suppress per-CLI interactive prompts that would block a headless PTY
     // (claude's "trust folder", codex's "update available"). Each patch is a
-    // no-op when not configured / not applicable.
-    crate::pre_spawn::run_patches(plugin, &workspace);
+    // no-op when not configured / not applicable. The MCP-inject patch is
+    // also routed here since it shares the "pre-spawn home dir mutation"
+    // shape.
+    let pre_ctx = crate::pre_spawn::PreSpawnCtx {
+        agent_id: agent_id.clone(),
+        mcp_bin: mcp_bin.to_path_buf(),
+        server_url: server_url.to_string(),
+    };
+    crate::pre_spawn::run_patches(plugin, &workspace, &pre_ctx);
 
     let mut argv = Vec::with_capacity(2 + plugin.default_args.len());
     argv.push(shim_path.to_string_lossy().into_owned());
@@ -71,8 +87,14 @@ pub fn spawn_agent(
     if let Ok(path) = std::env::var("PATH") {
         env.insert("PATH".into(), path);
     }
-    // Telemetry / lifecycle env for future MCP injection.
+    // Identity env passed to the CLI. codex picks `FLOCKMUX_AGENT_ID` /
+    // `FLOCKMUX_SERVER_URL` up via the `env_vars` whitelist in
+    // ~/.codex/config.toml and forwards them to the MCP subprocess. claude
+    // also forwards them by spec (any vars present in the spawn env that
+    // match the MCP entry's `env` block) — and the local-scope MCP entry
+    // we write already lists them explicitly, so this is belt + braces.
     env.insert("FLOCKMUX_AGENT_ID".into(), agent_id.clone());
+    env.insert("FLOCKMUX_SERVER_URL".into(), server_url.to_string());
 
     let argv_strings: Vec<String> = argv;
 
@@ -233,22 +255,33 @@ fn ensure_workspace(root: &Path, agent_id: &str) -> Result<PathBuf> {
 /// `cargo run`, since `current_exe` points into `target/debug/deps/...`
 /// for tests but `target/debug/` for `cargo run`.
 pub fn locate_shim() -> Result<PathBuf> {
-    if let Ok(p) = std::env::var("FLOCKMUX_SHIM_PATH") {
+    locate_sibling_bin("flockmux-shim", "FLOCKMUX_SHIM_PATH")
+}
+
+/// Find `flockmux-mcp` next to the current executable (same heuristic as
+/// `locate_shim`). The path is baked into MCP config entries so claude /
+/// codex can launch it directly.
+pub fn locate_mcp() -> Result<PathBuf> {
+    locate_sibling_bin("flockmux-mcp", "FLOCKMUX_MCP_PATH")
+}
+
+fn locate_sibling_bin(name: &str, env_override: &str) -> Result<PathBuf> {
+    if let Ok(p) = std::env::var(env_override) {
         return Ok(PathBuf::from(p));
     }
     let exe = std::env::current_exe().context("current_exe")?;
     if let Some(dir) = exe.parent() {
         let cand = dir.join(if cfg!(windows) {
-            "flockmux-shim.exe"
+            format!("{name}.exe")
         } else {
-            "flockmux-shim"
+            name.to_string()
         });
         if cand.is_file() {
             return Ok(cand);
         }
     }
     anyhow::bail!(
-        "flockmux-shim not found next to flockmux-server. Build it with \
-         `cargo build -p flockmux-shim` or set FLOCKMUX_SHIM_PATH"
+        "{name} not found next to flockmux-server. Build it with \
+         `cargo build -p {name}` or set {env_override}"
     )
 }

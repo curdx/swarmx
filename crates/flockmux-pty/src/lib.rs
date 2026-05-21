@@ -296,14 +296,16 @@ mod tests {
 
     #[test]
     fn spawn_rejects_empty_argv() {
-        let err = PtyBridge::spawn(SpawnOpts {
+        let result = PtyBridge::spawn(SpawnOpts {
             argv: &[],
             cwd: None,
             env: HashMap::new(),
             cols: 80,
             rows: 24,
-        })
-        .unwrap_err();
+        });
+        let Err(err) = result else {
+            panic!("expected empty-argv to be rejected, got Ok(_)")
+        };
         assert!(err.to_string().contains("argv must not be empty"));
     }
 }

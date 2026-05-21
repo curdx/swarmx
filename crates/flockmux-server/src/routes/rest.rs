@@ -92,6 +92,8 @@ pub async fn spawn(
         req.role,
         &workspace_root,
         &state.shim_path,
+        &state.mcp_bin,
+        &state.server_url,
         recorder_handle,
     )
     .map_err(|e| {
