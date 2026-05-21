@@ -9,7 +9,7 @@ use flockmux_recorder::RecorderHandle;
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use uuid::Uuid;
 
 // OSC markers the shim emits — kept identical to flockmux-shim/src/main.rs.
@@ -59,10 +59,32 @@ pub fn spawn_agent(
     };
     crate::pre_spawn::run_patches(plugin, &workspace, &pre_ctx);
 
-    let mut argv = Vec::with_capacity(2 + plugin.default_args.len());
+    let mut argv = Vec::with_capacity(2 + plugin.default_args.len() + 1);
     argv.push(shim_path.to_string_lossy().into_owned());
     argv.push(plugin.binary.clone());
     argv.extend(plugin.default_args.iter().cloned());
+
+    // codex 0.130 gates non-managed Stop hooks behind an in-app /hooks
+    // trust-review prompt — workspace-local hooks.json gets installed but
+    // never executes until the user manually approves it. PR #21768 ships
+    // `--dangerously-bypass-hook-trust` to skip the review for automation
+    // hosts like us. The flag isn't in 0.130 yet (codex aborts spawn on
+    // unknown argv), so probe `<binary> --help` once per process and only
+    // inject the flag if it's already supported. Net effect:
+    //   - codex 0.130: probe -> false, argv unchanged, hooks.json stays
+    //     dormant (known constraint, documented in auto-memory).
+    //   - codex >=0.131 (future): probe -> true, flag injected, our
+    //     existing hooks.json install becomes immediately effective with
+    //     zero config change on flockmux's side.
+    if plugin.id == "codex"
+        && binary_supports_flag(&plugin.binary, "--dangerously-bypass-hook-trust")
+    {
+        argv.push("--dangerously-bypass-hook-trust".into());
+        tracing::info!(
+            agent = %agent_id,
+            "codex --dangerously-bypass-hook-trust supported; injecting"
+        );
+    }
 
     // Env: pass through HOME so the CLI finds its OAuth credentials
     // (~/.claude or ~/.codex). Drop everything else from the parent
@@ -263,6 +285,47 @@ pub fn locate_shim() -> Result<PathBuf> {
 /// codex can launch it directly.
 pub fn locate_mcp() -> Result<PathBuf> {
     locate_sibling_bin("flockmux-mcp", "FLOCKMUX_MCP_PATH")
+}
+
+/// Probe `<binary> --help` once and cache whether `flag` appears anywhere
+/// in stdout or stderr. Used to feature-detect CLI flags whose absence
+/// would crash spawn (codex 0.130 rejects unknown argv with non-zero exit
+/// — adding a future-only flag unconditionally would brick every spawn on
+/// the older version).
+///
+/// Cache key is `(binary, flag)` so different plugins probing different
+/// flags don't collide. The cache is process-lifetime — a CLI upgrade
+/// requires a server restart to re-probe, which is fine for the local
+/// single-user model.
+///
+/// Errors and timeouts on the probe fall through as `false`: if we can't
+/// confirm the flag is supported, we don't inject it.
+fn binary_supports_flag(binary: &str, flag: &str) -> bool {
+    static CACHE: OnceLock<Mutex<HashMap<(String, String), bool>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+
+    let key = (binary.to_string(), flag.to_string());
+    if let Some(&v) = cache.lock().get(&key) {
+        return v;
+    }
+
+    let supported = std::process::Command::new(binary)
+        .arg("--help")
+        .output()
+        .ok()
+        .map(|o| {
+            let stdout = String::from_utf8_lossy(&o.stdout);
+            let stderr = String::from_utf8_lossy(&o.stderr);
+            stdout.contains(flag) || stderr.contains(flag)
+        })
+        .unwrap_or(false);
+
+    tracing::info!(
+        binary, flag, supported,
+        "binary flag probe result"
+    );
+    cache.lock().insert(key, supported);
+    supported
 }
 
 fn locate_sibling_bin(name: &str, env_override: &str) -> Result<PathBuf> {
