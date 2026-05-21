@@ -373,3 +373,91 @@ async fn store_survives_reopen() {
     assert_eq!(agents.len(), 1);
     assert_eq!(agents[0].id, "persist-1");
 }
+
+// ── orphan settlement on server restart ──────────────────────────────────
+
+#[tokio::test]
+async fn mark_orphan_agents_killed_only_alive_rows() {
+    let (_dir, store) = fresh_store().await;
+    store
+        .record_agent_spawn(NewAgent {
+            id: "alive-1".into(),
+            cli: "claude".into(),
+            role: "claude".into(),
+            workspace: "/tmp/x".into(),
+            spawned_at: ts(0),
+        })
+        .await
+        .unwrap();
+    store
+        .record_agent_spawn(NewAgent {
+            id: "killed-1".into(),
+            cli: "claude".into(),
+            role: "claude".into(),
+            workspace: "/tmp/y".into(),
+            spawned_at: ts(0),
+        })
+        .await
+        .unwrap();
+    store
+        .record_agent_kill("killed-1".into(), ts(50))
+        .await
+        .unwrap();
+
+    let n = store.mark_orphan_agents_killed(ts(100)).await.unwrap();
+    assert_eq!(n, 1, "only the alive-1 row should be updated");
+
+    let agents = store.list_agents().await.unwrap();
+    let alive = agents.iter().find(|a| a.id == "alive-1").unwrap();
+    let killed = agents.iter().find(|a| a.id == "killed-1").unwrap();
+    assert_eq!(alive.killed_at, Some(ts(100)));
+    assert_eq!(killed.killed_at, Some(ts(50)), "prior kill timestamp wins");
+}
+
+#[tokio::test]
+async fn mark_orphan_recordings_finalized_only_live_rows() {
+    let (_dir, store) = fresh_store().await;
+    store
+        .record_recording_start(NewRecording {
+            id: "live".into(),
+            agent_id: "a".into(),
+            path: "/tmp/live.cast".into(),
+            started_at: ts(0),
+            cols: 80,
+            rows: 24,
+        })
+        .await
+        .unwrap();
+    store
+        .record_recording_start(NewRecording {
+            id: "done".into(),
+            agent_id: "a".into(),
+            path: "/tmp/done.cast".into(),
+            started_at: ts(0),
+            cols: 80,
+            rows: 24,
+        })
+        .await
+        .unwrap();
+    store
+        .record_recording_finalize("done".into(), ts(50), 50, 7)
+        .await
+        .unwrap();
+
+    let n = store
+        .mark_orphan_recordings_finalized(ts(100))
+        .await
+        .unwrap();
+    assert_eq!(n, 1, "only the live row should be settled");
+
+    let live = store.get_recording("live".into()).await.unwrap().unwrap();
+    assert_eq!(live.finalized_at, Some(ts(100)));
+    // duration / last_seq stay NULL — we don't fabricate metrics.
+    assert!(live.duration_ms.is_none());
+    assert!(live.last_seq.is_none());
+
+    let done = store.get_recording("done".into()).await.unwrap().unwrap();
+    assert_eq!(done.finalized_at, Some(ts(50)));
+    assert_eq!(done.duration_ms, Some(50));
+    assert_eq!(done.last_seq, Some(7));
+}

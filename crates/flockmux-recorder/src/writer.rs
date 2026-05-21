@@ -174,6 +174,15 @@ async fn writer_loop(
             io_failed = true;
             continue;
         }
+        // asciicast files are commonly tailed live (asciinema-player can
+        // stream a growing file). Without per-event flush the BufWriter
+        // holds everything until shutdown — so a live recording looks
+        // empty on disk until the agent exits.
+        if let Err(e) = writer.flush().await {
+            tracing::warn!(?e, path = %path.display(), "flush cast event");
+            io_failed = true;
+            continue;
+        }
     }
     if let Err(e) = writer.flush().await {
         tracing::warn!(?e, path = %path.display(), "flush cast on close");

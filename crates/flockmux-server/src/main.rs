@@ -72,6 +72,23 @@ async fn main() -> Result<()> {
     }
     info!(db = %db_path.display(), "opening sqlite store");
     let store = Arc::new(Store::open(&db_path).await.context("open store")?);
+    // Any agent / recording left "live" in the DB belongs to a previous
+    // server process that died before kill / finalize. Settle them so the
+    // UI doesn't keep reattaching to dead PTYs or showing "● live" forever.
+    let orphan_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    match store.mark_orphan_agents_killed(orphan_at).await {
+        Ok(n) if n > 0 => info!(orphans = n, "settled orphan live agents"),
+        Ok(_) => {}
+        Err(err) => tracing::warn!(?err, "mark_orphan_agents_killed failed"),
+    }
+    match store.mark_orphan_recordings_finalized(orphan_at).await {
+        Ok(n) if n > 0 => info!(orphans = n, "settled orphan live recordings"),
+        Ok(_) => {}
+        Err(err) => tracing::warn!(?err, "mark_orphan_recordings_finalized failed"),
+    }
 
     let blackboard_root = blackboard_root_default();
     std::fs::create_dir_all(&blackboard_root)?;

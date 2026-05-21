@@ -218,7 +218,14 @@ fn ensure_workspace(root: &Path, agent_id: &str) -> Result<PathBuf> {
     let dir = root.join(agent_id);
     std::fs::create_dir_all(&dir)
         .with_context(|| format!("create workspace {}", dir.display()))?;
-    Ok(dir)
+    // Resolve symlinks so the path matches what the spawned CLI sees after
+    // its own canonicalize step. On macOS `/tmp` is a symlink to
+    // `/private/tmp`, and claude / codex both trust by canonical path —
+    // without this, our trust-patch key wouldn't match and the prompt
+    // resurfaces.
+    let canonical = std::fs::canonicalize(&dir)
+        .with_context(|| format!("canonicalize workspace {}", dir.display()))?;
+    Ok(canonical)
 }
 
 /// Find `flockmux-shim` next to the current executable. Falls back to

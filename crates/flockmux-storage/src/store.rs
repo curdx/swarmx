@@ -391,6 +391,47 @@ impl Store {
         .context("spawn_blocking record_recording_finalize")?
     }
 
+    /// Mark agents whose PTY died with the server (rows with NULL
+    /// `killed_at`) as killed at `at_ms`. Companion to
+    /// `mark_orphan_recordings_finalized`: after a crash restart the
+    /// in-memory registry is empty, but `/api/agent` still returns these
+    /// rows — without settling them, the UI's reattach reconnects WS to a
+    /// non-existent PTY and shows "WS closed (code 1005)" forever.
+    pub async fn mark_orphan_agents_killed(&self, at_ms: i64) -> Result<usize> {
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || -> Result<usize> {
+            let conn = pool.get()?;
+            let n = conn.execute(
+                "UPDATE agents SET killed_at = ?1 WHERE killed_at IS NULL",
+                params![at_ms],
+            )?;
+            Ok(n)
+        })
+        .await
+        .context("spawn_blocking mark_orphan_agents_killed")?
+    }
+
+    /// Finalize any recording rows left in the "live" state — i.e. the
+    /// previous server died (crash, SIGKILL, container restart) before its
+    /// recorder task could call `record_recording_finalize`. Without this,
+    /// the panel shows orphans as "● live" forever. We mark `finalized_at`
+    /// so the row visibly settles; `duration_ms` and `last_seq` stay NULL
+    /// since we cannot recover them accurately from a half-flushed .cast.
+    pub async fn mark_orphan_recordings_finalized(&self, at_ms: i64) -> Result<usize> {
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || -> Result<usize> {
+            let conn = pool.get()?;
+            let n = conn.execute(
+                "UPDATE pty_recordings SET finalized_at = ?1 \
+                 WHERE finalized_at IS NULL",
+                params![at_ms],
+            )?;
+            Ok(n)
+        })
+        .await
+        .context("spawn_blocking mark_orphan_recordings_finalized")?
+    }
+
     pub async fn list_recordings(&self, agent_id: Option<String>) -> Result<Vec<RecordingRecord>> {
         let pool = self.pool.clone();
         tokio::task::spawn_blocking(move || -> Result<Vec<RecordingRecord>> {

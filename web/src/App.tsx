@@ -53,13 +53,19 @@ export default function App() {
       .catch((err: Error) => setPluginsError(err.message));
     // Reattach to agents that survived a page reload. The server-side
     // registry outlives the WS, so a refresh / new tab should pick up
-    // existing PTYs instead of stranding them.
+    // existing PTYs instead of stranding them. Skip rows the server has
+    // already marked dead (killed_at / shim_exit) — those belong to a
+    // previous server process and their PTY is gone; remounting only
+    // earns us "WS closed (code 1005)".
     api
       .listAgents()
       .then((items) => {
-        if (items.length === 0) return;
+        const live = items.filter(
+          (a) => a.killed_at == null && a.shim_exit == null,
+        );
+        if (live.length === 0) return;
         setAgents(
-          items.map((a) => ({
+          live.map((a) => ({
             agent_id: a.agent_id,
             cli: a.cli,
             role: a.role,
