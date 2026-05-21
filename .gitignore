@@ -29,4 +29,5 @@
 
 # local scratch (screenshots, manual repro, etc.)
 /.tmp
+/.tmp-screenshots
 /.flockmux-ui-screens
