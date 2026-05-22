@@ -113,6 +113,33 @@ pub fn spawn_agent(
         );
     }
 
+    // claude: point at the per-agent MCP config file pre_spawn just wrote.
+    // `--strict-mcp-config` makes claude ignore `~/.claude.json` entirely so
+    // a sibling spawn that overwrote the workspace's mcpServers section (the
+    // shared_workspace collision that hung M6b run #4) can no longer leak
+    // someone else's agent_id into our MCP server. Skipped if the file
+    // wasn't written (no $HOME) — fall back to legacy ~/.claude.json path.
+    if plugin.id == "claude" && plugin.auto_inject_mcp {
+        if let Some(path) = crate::pre_spawn::claude_per_agent_mcp_config_path(&agent_id) {
+            if path.is_file() {
+                argv.push("--mcp-config".into());
+                argv.push(path.to_string_lossy().into_owned());
+                argv.push("--strict-mcp-config".into());
+                tracing::info!(
+                    agent = %agent_id,
+                    mcp_config = %path.display(),
+                    "claude per-agent MCP config injected (bypasses ~/.claude.json collision)"
+                );
+            } else {
+                tracing::warn!(
+                    agent = %agent_id,
+                    mcp_config = %path.display(),
+                    "claude per-agent MCP config missing on disk; falling back to ~/.claude.json"
+                );
+            }
+        }
+    }
+
     // Env: pass through HOME so the CLI finds its OAuth credentials
     // (~/.claude or ~/.codex). Drop everything else from the parent
     // process — the CLI shouldn't inherit ad-hoc shell vars.

@@ -578,6 +578,18 @@ fn run_claude_patches(
         ) {
             tracing::warn!(?err, "claude: mcp-inject patch failed");
         }
+        // 2b. Per-agent MCP config file under ~/.flockmux/mcp/. spawn.rs
+        //     passes this to claude as `--mcp-config <file> --strict-mcp-
+        //     config` so claude never sees the (potentially stale, in
+        //     shared_workspace spells) ~/.claude.json mcpServers section.
+        //     See `write_claude_per_agent_mcp_config` for the why.
+        if let Err(err) = write_claude_per_agent_mcp_config(
+            &ctx.agent_id,
+            &ctx.mcp_bin,
+            &ctx.server_url,
+        ) {
+            tracing::warn!(?err, "claude: per-agent mcp file write failed");
+        }
     }
     // 3. Install <workspace>/.claude/settings.local.json Stop hook (M5b
     //    wake-check). Timeout is in MILLISECONDS for claude.
@@ -635,6 +647,55 @@ fn run_codex_patches(
             tracing::warn!(?err, "codex: stop-hook install failed");
         }
     }
+}
+
+/// Per-agent claude MCP config file. Written under `~/.flockmux/mcp/` keyed
+/// by `agent_id`, intended to be passed to `claude --mcp-config <path>
+/// --strict-mcp-config` so claude completely ignores the shared
+/// `~/.claude.json` config and uses ONLY this file.
+///
+/// Why this exists: `~/.claude.json` keys MCP servers by project (cwd) path.
+/// In shared_workspace spells (M6a fullstack-feature) all 3 agents have the
+/// same cwd, so each `mark_claude_mcp_local()` overwrites the previous
+/// agent's entry — when claude lazy-launches its MCP server the file now
+/// holds the LAST spawn's identity, leaving the other agents impersonating
+/// each other. Confirmed in M6b run #4: FE's MCP server reported its id
+/// as the test agent's id, FE concluded "there's a separate FE agent" and
+/// stopped to ask for clarification, never wrote code. This per-agent
+/// override sidesteps the collision entirely.
+pub fn write_claude_per_agent_mcp_config(
+    agent_id: &str,
+    mcp_bin: &Path,
+    server_url: &str,
+) -> Result<PathBuf> {
+    let path = claude_per_agent_mcp_config_path(agent_id)
+        .context("home not found; cannot write per-agent claude MCP config")?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let body = json!({
+        "mcpServers": {
+            "flockmux-swarm": {
+                "type": "stdio",
+                "command": mcp_bin.to_string_lossy(),
+                "args": ["--agent-id", agent_id],
+                "env": {
+                    "FLOCKMUX_AGENT_ID": agent_id,
+                    "FLOCKMUX_SERVER_URL": server_url,
+                }
+            }
+        }
+    });
+    write_json_atomic(&path, &body)?;
+    Ok(path)
+}
+
+/// Computes the path `write_claude_per_agent_mcp_config()` writes to without
+/// touching disk. `spawn.rs` uses this to find the `--mcp-config` value at
+/// launch time. Returns `None` if `$HOME` is not set (then claude has no
+/// home anyway and would have failed earlier).
+pub fn claude_per_agent_mcp_config_path(agent_id: &str) -> Option<PathBuf> {
+    home_path().map(|h| h.join(".flockmux").join("mcp").join(format!("{agent_id}.json")))
 }
 
 /// Per-spawn context that the host computes once and threads into pre-spawn
