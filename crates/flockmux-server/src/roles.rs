@@ -60,6 +60,13 @@ pub struct RoleManifest {
     /// statically reason about role handoffs.
     #[serde(default)]
     pub handoff_signal: String,
+    /// Blackboard keys this role is waiting on before it can do real
+    /// work. Consumed by the M6b WakeCoordinator: when one of these keys
+    /// is written, any agent playing this role gets a mailbox note + a
+    /// PTY kick to start a fresh turn. Defaults to empty for roles with
+    /// no upstream (frontend, backend).
+    #[serde(default)]
+    pub depends_on: Vec<String>,
     /// Template string used as the agent's system_prompt unless the
     /// spell explicitly overrides it. Supports the same `{task}` and
     /// `{<role>_id}` placeholders as a spell's inline system_prompt
@@ -227,6 +234,22 @@ system_prompt_template = "You are FE. Task: {task}."
         assert_eq!(r.manifest.default_cli, "claude");
         assert!(r.manifest.system_prompt_template.contains("{task}"));
         assert!(r.markdown_body.contains("# docs body"));
+        assert!(r.manifest.depends_on.is_empty(), "default empty");
+    }
+
+    #[test]
+    fn parse_role_with_depends_on() {
+        let src = r#"+++
+id = "test"
+default_cli = "claude"
+depends_on = ["frontend.done", "backend.done"]
+system_prompt_template = "you are test"
++++"#;
+        let r = parse_role(src, Path::new("/tmp/test.md")).unwrap();
+        assert_eq!(
+            r.manifest.depends_on,
+            vec!["frontend.done".to_string(), "backend.done".to_string()]
+        );
     }
 
     #[test]

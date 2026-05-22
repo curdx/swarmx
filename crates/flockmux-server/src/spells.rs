@@ -96,6 +96,12 @@ pub struct SpellAgentManifest {
     /// `role_ref` lines).
     #[serde(default)]
     pub role_ref: Option<String>,
+    /// Override the role's `depends_on` declaration. `None` means "use
+    /// whatever the referenced role declares (or empty if no role_ref)".
+    /// `Some(vec![])` means "explicitly clear deps". `Some(["x"])` means
+    /// "replace whatever the role had".
+    #[serde(default)]
+    pub depends_on: Option<Vec<String>>,
 }
 
 impl SpellAgentManifest {
@@ -115,6 +121,10 @@ pub struct ResolvedAgent {
     pub role: String,
     pub cli: String,
     pub system_prompt: String,
+    /// Effective list of blackboard keys this agent waits on (spell
+    /// override > role default > empty). Drives the M6b WakeCoordinator
+    /// subscription table. De-duplicated, order-preserved.
+    pub depends_on: Vec<String>,
 }
 
 /// Merge a [`SpellAgentManifest`] with its referenced [`Role`] (if any)
@@ -160,11 +170,37 @@ pub fn resolve_agent(
         String::new()
     };
 
+    // depends_on resolution: spell's explicit override wins (even if
+    // empty, which is the "I want to clear what the role declared" signal).
+    // Otherwise fall through to role's depends_on, or empty.
+    let depends_on_raw = match agent.depends_on.as_ref() {
+        Some(spell_deps) => spell_deps.clone(),
+        None => role_template
+            .map(|rt| rt.manifest.depends_on.clone())
+            .unwrap_or_default(),
+    };
+    let depends_on = dedup_preserve_order(depends_on_raw);
+
     Ok(ResolvedAgent {
         role,
         cli,
         system_prompt,
+        depends_on,
     })
+}
+
+/// Stable de-dup preserving first occurrence order. Used for depends_on
+/// so that listing `["a", "b", "a"]` collapses to `["a", "b"]` without
+/// silently reordering.
+fn dedup_preserve_order(input: Vec<String>) -> Vec<String> {
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut out = Vec::with_capacity(input.len());
+    for v in input {
+        if seen.insert(v.clone()) {
+            out.push(v);
+        }
+    }
+    out
 }
 
 /// A loaded spell: parsed manifest + path it came from (for diagnostics)
@@ -496,11 +532,13 @@ cli = "claude"
             cli: None,
             system_prompt: String::new(),
             role_ref: Some("frontend".to_string()),
+            depends_on: None,
         };
         let resolved = resolve_agent(&agent, &roles).unwrap();
         assert_eq!(resolved.role, "frontend");
         assert_eq!(resolved.cli, "claude");
         assert!(resolved.system_prompt.contains("You are FE"));
+        assert!(resolved.depends_on.is_empty());
     }
 
     #[test]
@@ -519,6 +557,7 @@ cli = "claude"
             cli: Some("claude".to_string()),
             system_prompt: "spell override".to_string(),
             role_ref: Some("backend".to_string()),
+            depends_on: None,
         };
         let resolved = resolve_agent(&agent, &roles).unwrap();
         assert_eq!(resolved.cli, "claude"); // spell wins
@@ -533,6 +572,7 @@ cli = "claude"
             cli: None,
             system_prompt: String::new(),
             role_ref: Some("nonexistent".to_string()),
+            depends_on: None,
         };
         let err = resolve_agent(&agent, &roles).unwrap_err();
         assert!(format!("{err:#}").contains("nonexistent"));
@@ -547,11 +587,90 @@ cli = "claude"
             cli: Some("claude".to_string()),
             system_prompt: "hello".to_string(),
             role_ref: None,
+            depends_on: None,
         };
         let resolved = resolve_agent(&agent, &roles).unwrap();
         assert_eq!(resolved.role, "writer");
         assert_eq!(resolved.cli, "claude");
         assert_eq!(resolved.system_prompt, "hello");
+        assert!(resolved.depends_on.is_empty());
+    }
+
+    #[test]
+    fn resolve_agent_inherits_depends_on_from_role() {
+        let dir = tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("test.md"),
+            "+++\nid=\"test\"\ndefault_cli=\"claude\"\ndepends_on=[\"frontend.done\",\"backend.done\"]\nsystem_prompt_template=\"x\"\n+++",
+        )
+        .unwrap();
+        let roles = RoleRegistry::load_dir(dir.path()).unwrap();
+        let agent = SpellAgentManifest {
+            role: None,
+            cli: None,
+            system_prompt: String::new(),
+            role_ref: Some("test".to_string()),
+            depends_on: None,
+        };
+        let resolved = resolve_agent(&agent, &roles).unwrap();
+        assert_eq!(
+            resolved.depends_on,
+            vec!["frontend.done".to_string(), "backend.done".to_string()]
+        );
+    }
+
+    #[test]
+    fn resolve_agent_spell_overrides_depends_on() {
+        let dir = tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("test.md"),
+            "+++\nid=\"test\"\ndefault_cli=\"claude\"\ndepends_on=[\"a\"]\nsystem_prompt_template=\"x\"\n+++",
+        )
+        .unwrap();
+        let roles = RoleRegistry::load_dir(dir.path()).unwrap();
+        let agent = SpellAgentManifest {
+            role: None,
+            cli: None,
+            system_prompt: String::new(),
+            role_ref: Some("test".to_string()),
+            depends_on: Some(vec!["b".to_string(), "c".to_string()]),
+        };
+        let resolved = resolve_agent(&agent, &roles).unwrap();
+        assert_eq!(resolved.depends_on, vec!["b".to_string(), "c".to_string()]);
+    }
+
+    #[test]
+    fn resolve_agent_spell_explicit_empty_clears_role_depends_on() {
+        let dir = tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("test.md"),
+            "+++\nid=\"test\"\ndefault_cli=\"claude\"\ndepends_on=[\"a\"]\nsystem_prompt_template=\"x\"\n+++",
+        )
+        .unwrap();
+        let roles = RoleRegistry::load_dir(dir.path()).unwrap();
+        let agent = SpellAgentManifest {
+            role: None,
+            cli: None,
+            system_prompt: String::new(),
+            role_ref: Some("test".to_string()),
+            depends_on: Some(vec![]),
+        };
+        let resolved = resolve_agent(&agent, &roles).unwrap();
+        assert!(resolved.depends_on.is_empty());
+    }
+
+    #[test]
+    fn resolve_agent_dedups_depends_on() {
+        let roles = RoleRegistry::default();
+        let agent = SpellAgentManifest {
+            role: Some("r".into()),
+            cli: Some("claude".into()),
+            system_prompt: "x".into(),
+            role_ref: None,
+            depends_on: Some(vec!["a".into(), "b".into(), "a".into()]),
+        };
+        let resolved = resolve_agent(&agent, &roles).unwrap();
+        assert_eq!(resolved.depends_on, vec!["a".to_string(), "b".to_string()]);
     }
 
     #[test]

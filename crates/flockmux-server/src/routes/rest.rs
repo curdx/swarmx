@@ -340,6 +340,9 @@ pub async fn kill(
             // in-flight send_message sees "no inbox" rather than racing
             // against a half-torn-down agent.
             state.swarm.unregister_agent(&agent_id);
+            // M6b: tear down the wake subscription too so we don't try
+            // to inject into a registry slot that's about to be dropped.
+            crate::wake::unregister_wake_subs(&state.wake_subs, &agent_id).await;
             if let Err(e) = state
                 .store
                 .record_agent_kill(agent_id.clone(), now_ms())
@@ -441,6 +444,32 @@ pub async fn run_spell(
             )
         })?;
 
+    // M6b: detect depends_on cycles before any spawn happens. We build
+    // the cycle-detection inputs from the resolved agents themselves
+    // (role → depends_on) joined with each role's `handoff_signal` (role
+    // → key it produces). Roles without a handoff_signal are treated as
+    // terminal — they can't be cycled back to.
+    {
+        let mut role_handoff: HashMap<String, String> = HashMap::new();
+        let mut role_deps: HashMap<String, Vec<String>> = HashMap::new();
+        for resolved in &resolved_agents {
+            role_deps.insert(resolved.role.clone(), resolved.depends_on.clone());
+            // The role-registry holds the canonical handoff_signal; for
+            // inline-only agents (no role_ref) we leave it blank.
+            if let Some(r) = state.roles.get(&resolved.role) {
+                role_handoff.insert(resolved.role.clone(), r.manifest.handoff_signal.clone());
+            }
+        }
+        if let Err(err) = crate::wake::detect_depends_on_cycles(&role_handoff, &role_deps) {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "error": format!("spell `{}` has depends_on cycle: {err:#}", req.name)
+                })),
+            ));
+        }
+    }
+
     // Pick the workspace layout. For shared_workspace spells we use the
     // explicit `workspace_dir` if the client sent one (M6a UX: the
     // SpellsLauncher exposes a text input); otherwise we mint a fresh
@@ -486,6 +515,17 @@ pub async fn run_spell(
                 })),
             )
         })?;
+        // M6b: register the wake subscription IMMEDIATELY after spawn,
+        // before Phase 2 kicks off the deferred bootstrap-inject task.
+        // This guards against the race where a producer agent (e.g. BE)
+        // is unbelievably fast and writes its handoff key before we get
+        // around to subscribing this agent's deps.
+        crate::wake::register_wake_subs(
+            &state.wake_subs,
+            out.agent_id.clone(),
+            resolved.depends_on.clone(),
+        )
+        .await;
         outcomes.push((out, resolved.system_prompt.clone()));
     }
 

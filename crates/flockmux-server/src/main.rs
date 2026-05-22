@@ -16,6 +16,7 @@ mod roles;
 mod routes;
 mod spawn;
 mod spells;
+mod wake;
 
 use anyhow::{Context, Result};
 use axum::{
@@ -60,6 +61,12 @@ pub struct AppState {
     /// Keeps the notify-debouncer alive for the program's lifetime. Wrapped
     /// in `Arc` so `AppState` stays `Clone`. Drop terminates the watcher.
     pub _watcher: Arc<WatcherHandle>,
+    /// M6b: per-agent `depends_on` table. `agent_id → blackboard keys this
+    /// agent is waiting on`. Populated at spell launch, cleaned up at
+    /// agent kill. The `WakeCoordinator` background task consults this on
+    /// every `SwarmEvent::BlackboardChanged` and proactively wakes
+    /// matching subscribers.
+    pub wake_subs: wake::WakeSubs,
 }
 
 #[tokio::main]
@@ -138,6 +145,9 @@ async fn main() -> Result<()> {
     let server_url = std::env::var("FLOCKMUX_SERVER_URL")
         .unwrap_or_else(|_| "http://127.0.0.1:7777".into());
 
+    let wake_subs: wake::WakeSubs =
+        std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new()));
+
     let state = AppState {
         plugins: Arc::new(plugin_registry),
         spells: Arc::new(spell_registry),
@@ -152,7 +162,18 @@ async fn main() -> Result<()> {
         blackboard_root,
         recordings_root,
         _watcher: watcher,
+        wake_subs: wake_subs.clone(),
     };
+
+    // M6b: launch the wake coordinator. Lives for the whole process; the
+    // returned JoinHandle is intentionally dropped because the task exits
+    // only when `state.swarm`'s broadcast closes (program shutdown).
+    let _wake_handle = wake::WakeCoordinator::spawn(
+        state.swarm.clone(),
+        state.registry.clone(),
+        wake_subs,
+    );
+    info!("wake coordinator started");
 
     let app = Router::new()
         .route("/api/plugins", get(routes::rest::list_plugins))

@@ -37,19 +37,27 @@ recoverable — read the latest version via `swarm_read_blackboard`.
 
 Messages drive **wake-check**: receiving an unread message turns the
 recipient's next Stop hook into a `block` decision, giving them a
-fresh turn. Blackboard writes alone do NOT wake anyone — they're for
-data, messages are for coordination.
+fresh turn.
+
+**M6b update — blackboard writes also wake subscribers.** A role that
+declares `depends_on = ["X"]` in its TOML front-matter is subscribed
+to key `X` automatically at spell-launch. When anyone writes that key,
+the server (a) drops a system note `kind="wake"` into the role's
+mailbox AND (b) injects `\x15…\r` directly into its PTY input, so the
+agent does NOT have to be currently mid-Stop to get reactivated. Roles
+that don't declare `depends_on` still work the M6a way (other agents
+explicitly notify them via swarm messages).
 
 ## Why both blackboard AND messages?
 
 | Mechanism   | What it carries          | Wake semantics                          |
 | ----------- | ------------------------ | --------------------------------------- |
-| blackboard  | Structured artifacts    | None (data store, polled on demand)     |
+| blackboard  | Structured artifacts    | Wakes any subscriber declared via `depends_on` (M6b) |
 | messages    | "Something happened" signals | Triggers wake-check → fresh turn       |
 
 The pattern is: **write the artifact to the blackboard, then send a
-notification message**. Recipients wake on the message, read the
-artifact from the blackboard.
+notification message**. Subscribers wake on the blackboard event;
+unsubscribed recipients wake on the message.
 
 This is the same pattern git+CI uses: the artifact (commit) goes to a
 repo, the notification (webhook) wakes the consumer.
