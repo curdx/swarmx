@@ -137,6 +137,29 @@ pub fn tool_descriptors() -> Vec<Value> {
                 "additionalProperties": false
             }
         }),
+        json!({
+            "name": "swarm_list_spells",
+            "description": "List every spell flockmux knows about (loaded from spells/ at server startup). Each spell entry includes its name, a short description, and the list of roles it will spawn (role/cli pairs). Use this BEFORE swarm_run_spell to discover what's available — names are case-sensitive.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }
+        }),
+        json!({
+            "name": "swarm_run_spell",
+            "description": "Launch a spell by name. Returns the freshly-spawned agent ids and roles. Use this to programmatically chain workflows — e.g. a planner agent that picks the right spell for a natural-language task, or a tree-executor that decomposes a problem and dispatches sub-spells. The spell's bootstrap prompt is auto-injected into each spawned PTY; you don't need to message the new agents yourself.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string", "description": "Spell name as returned by swarm_list_spells (e.g. 'fullstack-feature')." },
+                    "task": { "type": "string", "description": "The task description that gets substituted into each agent's {task} placeholder. Be specific — this is the only context the spawned agents see beyond their role SOP." },
+                    "workspace_dir": { "type": "string", "description": "Optional absolute path for shared_workspace spells (e.g. '/tmp/my-project'). Ignored by per-agent spells. Omit to let the server mint a fresh dir under ~/.flockmux/workspaces/." }
+                },
+                "required": ["name", "task"],
+                "additionalProperties": false
+            }
+        }),
     ]
 }
 
@@ -151,6 +174,8 @@ pub async fn call_tool(ctx: &ToolContext, name: &str, args: &Value) -> Value {
         "swarm_list_blackboard" => list_blackboard(ctx).await,
         "swarm_read_blackboard" => read_blackboard(ctx, args).await,
         "swarm_write_blackboard" => write_blackboard(ctx, args).await,
+        "swarm_list_spells" => list_spells(ctx).await,
+        "swarm_run_spell" => run_spell(ctx, args).await,
         other => Err(format!("unknown tool '{other}'")),
     };
     match result {
@@ -490,6 +515,119 @@ async fn write_blackboard(ctx: &ToolContext, args: &Value) -> Result<String, Str
     ))
 }
 
+// ── spell discovery / dispatch ───────────────────────────────────────────
+
+/// `swarm_list_spells` — GET /api/spells, formatted for LLM consumption.
+/// Includes the resolved (role, cli) pair per agent so the LLM can reason
+/// about which CLI a spell will spawn for each slot. Empty registry returns
+/// "No spells registered." rather than an error so a planner agent can still
+/// surface that fact to the user.
+async fn list_spells(ctx: &ToolContext) -> Result<String, String> {
+    let url = format!("{}/api/spells", ctx.server_url);
+    let resp = ctx
+        .http
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("flockmux-server unreachable at {url}: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(http_err_text(resp).await);
+    }
+    let rows: Vec<Value> = resp
+        .json()
+        .await
+        .map_err(|e| format!("malformed response from {url}: {e}"))?;
+    if rows.is_empty() {
+        return Ok("No spells registered.".into());
+    }
+    let mut out = format!("{} spell(s) available:\n", rows.len());
+    for s in &rows {
+        let name = s.get("name").and_then(|v| v.as_str()).unwrap_or("?");
+        let desc = s
+            .get("description")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim();
+        let agents = s
+            .get("agents")
+            .and_then(|v| v.as_array())
+            .map(|a| {
+                a.iter()
+                    .map(|x| {
+                        let role = x.get("role").and_then(|v| v.as_str()).unwrap_or("?");
+                        let cli = x.get("cli").and_then(|v| v.as_str()).unwrap_or("?");
+                        format!("{role}:{cli}")
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" → ")
+            })
+            .unwrap_or_default();
+        out.push_str(&format!("\n• {name}\n  agents: {agents}\n"));
+        if !desc.is_empty() {
+            out.push_str(&format!("  {desc}\n"));
+        }
+    }
+    Ok(out)
+}
+
+/// `swarm_run_spell` — POST /api/spell/run. Mirrors the HTTP route's
+/// RunSpellRequest shape: required `name` + `task`, optional `workspace_dir`
+/// for shared-workspace spells. Returns the spawned agents so the caller can
+/// reference them in subsequent messages or status checks. Errors from the
+/// server (unknown spell name, depends_on cycle, role_ref resolution
+/// failure, …) are surfaced verbatim so the LLM can decide whether to retry
+/// with a different name / task / workspace.
+async fn run_spell(ctx: &ToolContext, args: &Value) -> Result<String, String> {
+    let name = arg_str(args, "name")?;
+    let task = arg_str(args, "task")?;
+    let workspace_dir = args.get("workspace_dir").and_then(|v| v.as_str());
+
+    let mut payload = json!({ "name": name, "task": task });
+    if let Some(wd) = workspace_dir.filter(|s| !s.is_empty()) {
+        payload
+            .as_object_mut()
+            .expect("constructed as object")
+            .insert("workspace_dir".into(), Value::String(wd.into()));
+    }
+
+    let url = format!("{}/api/spell/run", ctx.server_url);
+    let resp = ctx
+        .http
+        .post(&url)
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| format!("flockmux-server unreachable at {url}: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(http_err_text(resp).await);
+    }
+    let body: Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("malformed response from {url}: {e}"))?;
+
+    let spell_name = body.get("spell").and_then(|v| v.as_str()).unwrap_or(name);
+    let agents = body
+        .get("agents")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    if agents.is_empty() {
+        return Ok(format!("Spell `{spell_name}` accepted but no agents reported."));
+    }
+    let mut out = format!(
+        "Launched spell `{spell_name}` with {} agent(s):\n",
+        agents.len()
+    );
+    for a in &agents {
+        let role = a.get("role").and_then(|v| v.as_str()).unwrap_or("?");
+        let cli = a.get("cli").and_then(|v| v.as_str()).unwrap_or("?");
+        let id = a.get("agent_id").and_then(|v| v.as_str()).unwrap_or("?");
+        out.push_str(&format!("  {role:>10} ({cli})  {id}\n"));
+    }
+    Ok(out)
+}
+
 // ── formatting helpers ───────────────────────────────────────────────────
 
 /// Format with awareness of which ids are newly-read this call.
@@ -663,6 +801,48 @@ mod tests {
                     }))
                 }
             }))
+            .route("/api/spells", get(|| async {
+                Json(json!([
+                    { "name": "critic-loop",
+                      "description": "writer → critic → editor",
+                      "agents": [
+                          { "role": "writer", "cli": "claude" },
+                          { "role": "critic", "cli": "codex"  },
+                          { "role": "editor", "cli": "claude" }
+                      ] },
+                    { "name": "fullstack-feature",
+                      "description": "FE + BE parallel → test",
+                      "agents": [
+                          { "role": "frontend", "cli": "claude" },
+                          { "role": "backend",  "cli": "codex"  },
+                          { "role": "test",     "cli": "claude" }
+                      ] }
+                ]))
+            }))
+            .route("/api/spell/run", post({
+                |Json(body): Json<Value>| async move {
+                    let name = body.get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("?")
+                        .to_string();
+                    if name == "unknown-spell" {
+                        return (
+                            axum::http::StatusCode::NOT_FOUND,
+                            Json(json!({"error": "spell `unknown-spell` not found"})),
+                        );
+                    }
+                    (
+                        axum::http::StatusCode::OK,
+                        Json(json!({
+                            "spell": name,
+                            "agents": [
+                                { "role": "writer", "cli": "claude", "agent_id": "claude-xxx" },
+                                { "role": "critic", "cli": "codex",  "agent_id": "codex-yyy"  },
+                            ]
+                        })),
+                    )
+                }
+            }))
     }
 
     async fn start_stub() -> (SocketAddr, Arc<Mutex<StubState>>) {
@@ -752,6 +932,62 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn list_spells_renders_registry() {
+        let (addr, _) = start_stub().await;
+        let ctx = ctx_for(addr, "claude-aaa");
+        let out = call_tool(&ctx, "swarm_list_spells", &json!({})).await;
+        assert_eq!(out["isError"], json!(false));
+        let text = out["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("2 spell(s) available"), "header missing: {text}");
+        assert!(text.contains("critic-loop"));
+        assert!(text.contains("fullstack-feature"));
+        // Agent triples should be rendered as "role:cli → role:cli ..."
+        assert!(text.contains("writer:claude → critic:codex → editor:claude"));
+    }
+
+    #[tokio::test]
+    async fn run_spell_returns_spawned_agents() {
+        let (addr, _) = start_stub().await;
+        let ctx = ctx_for(addr, "claude-aaa");
+        let out = call_tool(&ctx, "swarm_run_spell", &json!({
+            "name": "critic-loop",
+            "task": "haiku about Rust async cancellation"
+        })).await;
+        assert_eq!(out["isError"], json!(false));
+        let text = out["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("Launched spell `critic-loop`"), "got: {text}");
+        assert!(text.contains("claude-xxx"));
+        assert!(text.contains("codex-yyy"));
+    }
+
+    #[tokio::test]
+    async fn run_spell_surfaces_unknown_spell_error() {
+        let (addr, _) = start_stub().await;
+        let ctx = ctx_for(addr, "claude-aaa");
+        let out = call_tool(&ctx, "swarm_run_spell", &json!({
+            "name": "unknown-spell",
+            "task": "anything"
+        })).await;
+        assert_eq!(out["isError"], json!(true));
+        let text = out["content"][0]["text"].as_str().unwrap();
+        // The stub returns a 404 with a descriptive body; we should surface it.
+        assert!(text.to_lowercase().contains("unknown-spell"), "got: {text}");
+    }
+
+    #[tokio::test]
+    async fn run_spell_missing_task_arg_returns_error() {
+        let (addr, _) = start_stub().await;
+        let ctx = ctx_for(addr, "claude-aaa");
+        let out = call_tool(&ctx, "swarm_run_spell", &json!({
+            "name": "critic-loop"
+            // missing required `task`
+        })).await;
+        assert_eq!(out["isError"], json!(true));
+        let text = out["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("missing required string field 'task'"), "got: {text}");
+    }
+
+    #[tokio::test]
     async fn unknown_tool_returns_error() {
         let (addr, _) = start_stub().await;
         let ctx = ctx_for(addr, "claude-aaa");
@@ -788,12 +1024,20 @@ mod tests {
     #[test]
     fn tool_descriptors_have_required_fields() {
         let tools = tool_descriptors();
-        assert_eq!(tools.len(), 7);
+        // 7 original + 2 spells (M6c) = 9. Bump this when adding tools.
+        assert_eq!(tools.len(), 9);
         for t in &tools {
             assert!(t["name"].is_string());
             assert!(t["description"].is_string());
             assert!(t["inputSchema"]["type"] == "object");
         }
+        // Sanity: the two new M6c tools are wired into the descriptor list.
+        let names: Vec<&str> = tools
+            .iter()
+            .filter_map(|t| t["name"].as_str())
+            .collect();
+        assert!(names.contains(&"swarm_list_spells"));
+        assert!(names.contains(&"swarm_run_spell"));
     }
 
     fn make_row(id: i64, from: &str, to: &str, body: &str, read_at: Option<i64>, in_reply_to: Option<i64>) -> Value {

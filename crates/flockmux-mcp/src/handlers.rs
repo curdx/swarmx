@@ -92,12 +92,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tools_list_returns_seven_tools() {
+    async fn tools_list_returns_full_tool_surface() {
         let ctx = dummy_ctx();
         let resp = dispatch(&ctx, json!(2), "tools/list", None).await;
         let result = resp.result.unwrap();
         let arr = result["tools"].as_array().unwrap();
-        assert_eq!(arr.len(), 7);
+        // 7 original (3 messages + 4 blackboard/agents) + 2 M6c (spells
+        // discovery + dispatch). Bump this when adding tools.
+        assert_eq!(arr.len(), 9);
     }
 
     #[tokio::test]
