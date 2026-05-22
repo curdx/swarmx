@@ -43,6 +43,7 @@
 //!
 //! Bad spells are skipped at load time with a `warn!` log — never panic.
 
+use crate::roles::{Role, RoleRegistry};
 use anyhow::{anyhow, Context, Result};
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -54,24 +55,116 @@ pub struct SpellManifest {
     pub name: String,
     #[serde(default)]
     pub description: String,
+    /// When true, every agent in this spell runs in the same workspace
+    /// directory (a monorepo-style layout). When false (default), each
+    /// agent gets its own `<workspaces_root>/<agent_id>/` directory.
+    /// Drives the M6a fullstack-feature pattern where FE/BE/Test share
+    /// `apps/frontend`, `apps/backend`, `tests/` under one cwd.
+    #[serde(default)]
+    pub shared_workspace: bool,
     #[serde(default)]
     pub agents: Vec<SpellAgentManifest>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct SpellAgentManifest {
-    /// Symbolic role name. Used (a) as a key for `{<role>_id}` substitution
-    /// in other agents' prompts, and (b) passed to spawn_agent so the UI
-    /// shows e.g. "writer" instead of "claude" in the pane header.
-    pub role: String,
+    /// Symbolic role name within the spell. Used (a) as a key for
+    /// `{<role>_id}` substitution in other agents' prompts, and (b)
+    /// passed to spawn_agent so the UI pane header shows e.g. "writer".
+    ///
+    /// Optional ONLY because `role_ref` provides a natural default — if
+    /// `role_ref = "frontend"` is given and `role` is omitted, role
+    /// implicitly becomes `"frontend"`. Validation ensures every agent
+    /// ends up with a role one way or another.
+    #[serde(default)]
+    pub role: Option<String>,
     /// Which CLI plugin to spawn (must match a `cli-plugins/<id>.toml`).
-    pub cli: String,
-    /// Free-form prompt injected into the agent's PTY immediately after
-    /// shim_ready. `{task}` and `{<role>_id}` are substituted before
-    /// injection. Empty string = no auto-bootstrap (the spell just spawns
-    /// the agent and leaves it to the user).
+    /// Optional when `role_ref` is given — the runner falls back to the
+    /// referenced role's `default_cli`. Required otherwise.
+    #[serde(default)]
+    pub cli: Option<String>,
+    /// Inline prompt template. Optional when `role_ref` is given (the
+    /// runner falls back to the role's `system_prompt_template`); when
+    /// both are given, this inline value wins (spell-side override).
+    /// `{task}` and `{<role>_id}` are substituted at run time.
     #[serde(default)]
     pub system_prompt: String,
+    /// If set, look up this id in the [`RoleRegistry`] at spell-launch
+    /// time and use the role's `default_cli` / `system_prompt_template`
+    /// to fill in any field not explicitly set here. Lets spells stay
+    /// terse (fullstack-feature.md is ~3 `[[agents]]` blocks with just
+    /// `role_ref` lines).
+    #[serde(default)]
+    pub role_ref: Option<String>,
+}
+
+impl SpellAgentManifest {
+    /// The role name an agent ends up with after `role_ref` fallback.
+    /// Returns `None` only if neither `role` nor `role_ref` was set,
+    /// which `validate_manifest` already rejects.
+    pub fn effective_role(&self) -> Option<&str> {
+        self.role.as_deref().or(self.role_ref.as_deref())
+    }
+}
+
+/// A fully-resolved spell agent: every field is a concrete `String`,
+/// ready for spawn. Produced by [`resolve_agent`] which merges the
+/// spell's inline values with the referenced [`Role`]'s defaults.
+#[derive(Debug, Clone)]
+pub struct ResolvedAgent {
+    pub role: String,
+    pub cli: String,
+    pub system_prompt: String,
+}
+
+/// Merge a [`SpellAgentManifest`] with its referenced [`Role`] (if any)
+/// from the registry. Spell-side values win over role defaults — this
+/// matches the principle "the more specific layer overrides the more
+/// general one" (spell knows the concrete topology; role only the
+/// generic SOP).
+///
+/// Returns an error if `role_ref` is set but the registry doesn't know
+/// it — better to fail loudly at spell-launch than to spawn an agent
+/// with an empty prompt and let the user wonder why nothing happened.
+pub fn resolve_agent(
+    agent: &SpellAgentManifest,
+    roles: &RoleRegistry,
+) -> Result<ResolvedAgent> {
+    let role_template: Option<&Role> = match agent.role_ref.as_deref() {
+        Some(id) => {
+            let r = roles.get(id).ok_or_else(|| {
+                anyhow!("role_ref = \"{id}\" not found in role registry (roles/)")
+            })?;
+            Some(r)
+        }
+        None => None,
+    };
+
+    let role = agent
+        .role
+        .clone()
+        .or_else(|| agent.role_ref.clone())
+        .ok_or_else(|| anyhow!("agent has neither `role` nor `role_ref`"))?;
+
+    let cli = match (&agent.cli, role_template) {
+        (Some(c), _) if !c.is_empty() => c.clone(),
+        (_, Some(rt)) => rt.manifest.default_cli.clone(),
+        _ => return Err(anyhow!("agent `{role}` has no cli and no role_ref to default from")),
+    };
+
+    let system_prompt = if !agent.system_prompt.is_empty() {
+        agent.system_prompt.clone()
+    } else if let Some(rt) = role_template {
+        rt.manifest.system_prompt_template.clone()
+    } else {
+        String::new()
+    };
+
+    Ok(ResolvedAgent {
+        role,
+        cli,
+        system_prompt,
+    })
 }
 
 /// A loaded spell: parsed manifest + path it came from (for diagnostics)
@@ -216,19 +309,35 @@ fn validate_manifest(m: &SpellManifest) -> Result<()> {
         return Err(anyhow!("manifest must declare at least one [[agents]]"));
     }
     for a in &m.agents {
-        if a.role.is_empty() {
-            return Err(anyhow!("every [[agents]] needs a non-empty `role`"));
+        // Either an explicit role or a role_ref to default from. Without
+        // one of these we have no name for the agent and no key for the
+        // `{<role>_id}` substitution.
+        if a.effective_role().is_none() {
+            return Err(anyhow!(
+                "every [[agents]] needs a `role` or a `role_ref`"
+            ));
         }
-        if a.cli.is_empty() {
-            return Err(anyhow!("every [[agents]] needs a non-empty `cli`"));
+        // If there's no role_ref, the spell must inline cli + a non-
+        // empty system_prompt — nothing can fall back from. With a
+        // role_ref, both are optional (the role provides defaults).
+        if a.role_ref.is_none() {
+            let cli_empty = a.cli.as_deref().map(|c| c.is_empty()).unwrap_or(true);
+            if cli_empty {
+                return Err(anyhow!(
+                    "agent `{}` has no `cli` and no `role_ref` to default from",
+                    a.effective_role().unwrap_or("?")
+                ));
+            }
         }
     }
     // Roles must be unique within a spell — the {<role>_id} substitution
     // would otherwise be ambiguous.
     let mut seen = std::collections::HashSet::new();
     for a in &m.agents {
-        if !seen.insert(a.role.as_str()) {
-            return Err(anyhow!("duplicate role `{}` in spell", a.role));
+        // Safe: we just validated effective_role().is_some() above.
+        let role = a.effective_role().unwrap();
+        if !seen.insert(role.to_string()) {
+            return Err(anyhow!("duplicate role `{role}` in spell"));
         }
     }
     Ok(())
@@ -294,8 +403,155 @@ system_prompt = "hello"
         let s = parse_spell(src, Path::new("/tmp/demo.md")).unwrap();
         assert_eq!(s.manifest.name, "demo");
         assert_eq!(s.manifest.agents.len(), 1);
-        assert_eq!(s.manifest.agents[0].role, "writer");
+        assert_eq!(s.manifest.agents[0].effective_role(), Some("writer"));
         assert!(s.markdown_body.contains("# notes here"));
+    }
+
+    #[test]
+    fn parse_spell_with_role_ref_inferred_role() {
+        let src = r#"+++
+name = "fullstack"
+[[agents]]
+role_ref = "frontend"
+[[agents]]
+role_ref = "backend"
++++
+"#;
+        let s = parse_spell(src, Path::new("/tmp/fullstack.md")).unwrap();
+        assert_eq!(s.manifest.agents.len(), 2);
+        // role omitted → role_ref provides the implicit name
+        assert_eq!(s.manifest.agents[0].effective_role(), Some("frontend"));
+        assert_eq!(s.manifest.agents[1].effective_role(), Some("backend"));
+        assert!(s.manifest.agents[0].cli.is_none());
+        assert!(s.manifest.agents[0].system_prompt.is_empty());
+    }
+
+    #[test]
+    fn parse_spell_rejects_agent_without_role_or_role_ref() {
+        let src = r#"+++
+name = "broken"
+[[agents]]
+cli = "claude"
++++"#;
+        let err = parse_spell(src, Path::new("/tmp/x.md")).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("`role` or a `role_ref`"),
+            "got: {err:#}"
+        );
+    }
+
+    #[test]
+    fn parse_spell_rejects_agent_without_cli_or_role_ref() {
+        let src = r#"+++
+name = "broken"
+[[agents]]
+role = "writer"
++++"#;
+        let err = parse_spell(src, Path::new("/tmp/x.md")).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("no `cli`"),
+            "got: {err:#}"
+        );
+    }
+
+    #[test]
+    fn shared_workspace_defaults_false() {
+        let src = r#"+++
+name = "x"
+[[agents]]
+role = "r"
+cli = "claude"
++++"#;
+        let s = parse_spell(src, Path::new("/tmp/x.md")).unwrap();
+        assert!(!s.manifest.shared_workspace);
+    }
+
+    #[test]
+    fn shared_workspace_set_true_parses() {
+        let src = r#"+++
+name = "x"
+shared_workspace = true
+[[agents]]
+role = "r"
+cli = "claude"
++++"#;
+        let s = parse_spell(src, Path::new("/tmp/x.md")).unwrap();
+        assert!(s.manifest.shared_workspace);
+    }
+
+    #[test]
+    fn resolve_agent_fills_cli_and_prompt_from_role() {
+        // Set up a registry with one role.
+        let dir = tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("frontend.md"),
+            "+++\nid=\"frontend\"\ndefault_cli=\"claude\"\nsystem_prompt_template=\"You are FE: {task}.\"\n+++",
+        )
+        .unwrap();
+        let roles = RoleRegistry::load_dir(dir.path()).unwrap();
+
+        // Spell agent with only role_ref — should fill cli + prompt from role.
+        let agent = SpellAgentManifest {
+            role: None,
+            cli: None,
+            system_prompt: String::new(),
+            role_ref: Some("frontend".to_string()),
+        };
+        let resolved = resolve_agent(&agent, &roles).unwrap();
+        assert_eq!(resolved.role, "frontend");
+        assert_eq!(resolved.cli, "claude");
+        assert!(resolved.system_prompt.contains("You are FE"));
+    }
+
+    #[test]
+    fn resolve_agent_inline_overrides_role_defaults() {
+        let dir = tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("backend.md"),
+            "+++\nid=\"backend\"\ndefault_cli=\"codex\"\nsystem_prompt_template=\"role default\"\n+++",
+        )
+        .unwrap();
+        let roles = RoleRegistry::load_dir(dir.path()).unwrap();
+
+        // Spell agent override: spell says use claude + custom prompt.
+        let agent = SpellAgentManifest {
+            role: None,
+            cli: Some("claude".to_string()),
+            system_prompt: "spell override".to_string(),
+            role_ref: Some("backend".to_string()),
+        };
+        let resolved = resolve_agent(&agent, &roles).unwrap();
+        assert_eq!(resolved.cli, "claude"); // spell wins
+        assert_eq!(resolved.system_prompt, "spell override"); // spell wins
+    }
+
+    #[test]
+    fn resolve_agent_errors_on_unknown_role_ref() {
+        let roles = RoleRegistry::default();
+        let agent = SpellAgentManifest {
+            role: None,
+            cli: None,
+            system_prompt: String::new(),
+            role_ref: Some("nonexistent".to_string()),
+        };
+        let err = resolve_agent(&agent, &roles).unwrap_err();
+        assert!(format!("{err:#}").contains("nonexistent"));
+    }
+
+    #[test]
+    fn resolve_agent_works_without_role_ref() {
+        // Old-style spell (e.g. critic-loop) with everything inline.
+        let roles = RoleRegistry::default();
+        let agent = SpellAgentManifest {
+            role: Some("writer".to_string()),
+            cli: Some("claude".to_string()),
+            system_prompt: "hello".to_string(),
+            role_ref: None,
+        };
+        let resolved = resolve_agent(&agent, &roles).unwrap();
+        assert_eq!(resolved.role, "writer");
+        assert_eq!(resolved.cli, "claude");
+        assert_eq!(resolved.system_prompt, "hello");
     }
 
     #[test]

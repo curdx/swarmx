@@ -105,23 +105,35 @@ pub async fn run(args: WakeCheckArgs) -> Result<()> {
         return Ok(());
     }
 
-    // agent_id: prefer the CLI flag (legacy + tests), otherwise derive from
-    // the stdin `cwd` field (claude + codex both feed `{"cwd":"<workspace>"}`
-    // and our workspaces are `<root>/<agent_id>`, so the path basename IS
-    // the agent_id). Falling through to neither = silent noop — we can't
-    // sensibly probe unread mail without knowing who we're acting for.
+    // agent_id resolution order:
+    //   1. --agent-id CLI flag (legacy + tests)
+    //   2. FLOCKMUX_AGENT_ID env var — set by spawn.rs at CLI process launch;
+    //      Stop hook runs as a child of the CLI and inherits it. This is the
+    //      only path that works for shared_workspace spells where every
+    //      agent's cwd is the same monorepo root (M6a fullstack-feature).
+    //   3. stdin `cwd` basename — legacy per-agent workspace layout
+    //      (`<root>/<agent_id>`), kept as a fallback for older spawns that
+    //      somehow lack the env var.
+    // Falling through all three = silent noop; we can't sensibly probe
+    // unread mail without knowing who we're acting for.
     let agent_id = match args.agent_id.as_deref() {
         Some(s) if !s.is_empty() => s.to_string(),
-        _ => match agent_id_from_stdin_cwd(stdin_json.as_ref()) {
+        _ => match std::env::var("FLOCKMUX_AGENT_ID")
+            .ok()
+            .filter(|s| !s.is_empty())
+        {
             Some(id) => id,
-            None => {
-                eprintln!(
-                    "wake-check: no --agent-id flag and stdin lacks usable cwd; \
-                     skipping wake"
-                );
-                emit_noop();
-                return Ok(());
-            }
+            None => match agent_id_from_stdin_cwd(stdin_json.as_ref()) {
+                Some(id) => id,
+                None => {
+                    eprintln!(
+                        "wake-check: no --agent-id flag, no FLOCKMUX_AGENT_ID env, \
+                         and stdin lacks usable cwd; skipping wake"
+                    );
+                    emit_noop();
+                    return Ok(());
+                }
+            },
         },
     };
 

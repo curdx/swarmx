@@ -25,6 +25,27 @@ pub struct AgentSpawn {
     pub slot: AgentSlot,
 }
 
+/// How [`spawn_agent`] resolves the workspace directory for a fresh
+/// agent. Two strategies cover every current call site:
+///
+/// - [`WorkspaceLayout::PerAgent`] — the historical default: each agent
+///   gets its own `<root>/<agent_id>/` subdirectory. Used by
+///   `POST /api/agent` and by spells that don't set
+///   `shared_workspace`.
+/// - [`WorkspaceLayout::Shared`] — every caller agent runs in the same
+///   absolute directory. M6a fullstack-feature spells use this so FE /
+///   BE / Test peer agents see the same monorepo (`apps/frontend`,
+///   `apps/backend`, `tests/`).
+///
+/// Kept as an enum (not a `bool` parameter) so future strategies — e.g.
+/// `Worktree(git_repo, branch)` for M6b — slot in without touching
+/// every call site again.
+#[derive(Debug, Clone)]
+pub enum WorkspaceLayout {
+    PerAgent { root: PathBuf },
+    Shared { dir: PathBuf },
+}
+
 /// `shim_path` is the absolute path to `flockmux-shim`. Caller normally
 /// derives it from `std::env::current_exe()` parent + "flockmux-shim".
 ///
@@ -41,14 +62,17 @@ pub struct AgentSpawn {
 pub fn spawn_agent(
     plugin: &CliPlugin,
     role: Option<String>,
-    workspace_root: &Path,
+    workspace: &WorkspaceLayout,
     shim_path: &Path,
     mcp_bin: &Path,
     server_url: &str,
     recorder: Option<RecorderHandle>,
 ) -> Result<AgentSpawn> {
     let agent_id = format!("{}-{}", plugin.id, &Uuid::new_v4().to_string()[..8]);
-    let workspace = ensure_workspace(workspace_root, &agent_id)?;
+    let workspace = match workspace {
+        WorkspaceLayout::PerAgent { root } => ensure_workspace(root, &agent_id)?,
+        WorkspaceLayout::Shared { dir } => ensure_shared_workspace(dir)?,
+    };
 
     // Suppress per-CLI interactive prompts that would block a headless PTY
     // (claude's "trust folder", codex's "update available"). Each patch is a
@@ -289,6 +313,18 @@ fn ensure_workspace(root: &Path, agent_id: &str) -> Result<PathBuf> {
     // resurfaces.
     let canonical = std::fs::canonicalize(&dir)
         .with_context(|| format!("canonicalize workspace {}", dir.display()))?;
+    Ok(canonical)
+}
+
+/// Shared-workspace variant: the caller supplies the final directory
+/// (typically `<workspaces_root>/spell-<uuid>/` or a user-supplied
+/// monorepo path). We `create_dir_all` + canonicalize for the same
+/// trust-by-canonical-path reason as `ensure_workspace`.
+fn ensure_shared_workspace(dir: &Path) -> Result<PathBuf> {
+    std::fs::create_dir_all(dir)
+        .with_context(|| format!("create shared workspace {}", dir.display()))?;
+    let canonical = std::fs::canonicalize(dir)
+        .with_context(|| format!("canonicalize shared workspace {}", dir.display()))?;
     Ok(canonical)
 }
 

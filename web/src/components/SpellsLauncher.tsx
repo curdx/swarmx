@@ -29,6 +29,13 @@ export function SpellsLauncher({ onSpellLaunched }: Props) {
   const [spells, setSpells] = useState<SpellInfo[]>([]);
   const [selected, setSelected] = useState<string>("");
   const [task, setTask] = useState("");
+  // Optional shared workspace directory. Only meaningful for spells
+  // whose manifest sets `shared_workspace = true` (M6a fullstack-feature
+  // is the only one that does today). For per-agent spells like
+  // critic-loop the server ignores this field. Showing it for every
+  // spell keeps the launcher uniform — populating it for a spell that
+  // doesn't need it has no side effects.
+  const [workspaceDir, setWorkspaceDir] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastRun, setLastRun] = useState<string | null>(null);
@@ -63,7 +70,12 @@ export function SpellsLauncher({ onSpellLaunched }: Props) {
     setError(null);
     setLastRun(null);
     try {
-      const resp = await api.runSpell({ name: selected, task: task.trim() });
+      const wd = workspaceDir.trim();
+      const resp = await api.runSpell({
+        name: selected,
+        task: task.trim(),
+        ...(wd ? { workspace_dir: wd } : {}),
+      });
       setLastRun(
         `spawned ${resp.agents.length} agent(s): ${resp.agents
           .map((a) => `${a.role}=${a.agent_id}`)
@@ -106,6 +118,18 @@ export function SpellsLauncher({ onSpellLaunched }: Props) {
         style={input}
         disabled={busy}
       />
+      <input
+        type="text"
+        value={workspaceDir}
+        onChange={(e) => setWorkspaceDir(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") run();
+        }}
+        placeholder="workspace dir (shared spells)"
+        style={workspaceInput}
+        disabled={busy}
+        title="Absolute path. Only used by spells with shared_workspace=true (e.g. fullstack-feature). Leave blank to let the server pick one."
+      />
       <button onClick={run} disabled={busy || !task.trim()} title="run spell">
         {busy ? "running…" : "run"}
       </button>
@@ -140,6 +164,17 @@ const input: React.CSSProperties = {
   fontSize: 12,
   fontFamily: "inherit",
   minWidth: 200,
+};
+
+const workspaceInput: React.CSSProperties = {
+  background: "#0b1220",
+  color: "#cbd5e1",
+  border: "1px solid #374151",
+  borderRadius: 4,
+  padding: "2px 6px",
+  fontSize: 11,
+  fontFamily: "inherit",
+  minWidth: 160,
 };
 
 const errStyle: React.CSSProperties = {

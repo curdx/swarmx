@@ -196,6 +196,15 @@ pub struct RunSpellRequest {
     /// Free-form task description; substituted into each agent's
     /// `system_prompt` wherever `{task}` appears.
     pub task: String,
+    /// Optional workspace directory (absolute path). When the spell
+    /// has `shared_workspace = true` (M6a fullstack-feature), every
+    /// agent runs with cwd set to this path. When omitted, the server
+    /// generates a fresh `<workspaces_root>/spell-<uuid>/` shared dir
+    /// so a launch never silently no-ops. Ignored for spells that
+    /// don't set `shared_workspace` (each agent gets its own subdir
+    /// under workspaces_root as before).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_dir: Option<String>,
 }
 
 /// `POST /api/spell/run` response. Lists the agents the runner actually

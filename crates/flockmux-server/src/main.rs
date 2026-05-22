@@ -12,6 +12,7 @@ mod plugins;
 mod pre_spawn;
 mod pty_stream;
 mod registry;
+mod roles;
 mod routes;
 mod spawn;
 mod spells;
@@ -38,6 +39,10 @@ pub struct AppState {
     /// once at startup; no hot-reload (each spell run is a fresh read of
     /// in-memory state).
     pub spells: Arc<spells::SpellRegistry>,
+    /// Loaded role manifests from `roles/`. Same load-once-no-hot-reload
+    /// semantics as spells. Empty registry is fine; spells without
+    /// `role_ref` work without any roles loaded.
+    pub roles: Arc<roles::RoleRegistry>,
     pub registry: registry::Registry,
     pub shim_path: PathBuf,
     /// Absolute path to the `flockmux-mcp` binary. Baked into per-spawn
@@ -77,6 +82,12 @@ async fn main() -> Result<()> {
     let spell_registry = spells::SpellRegistry::load_dir(&spells_dir)
         .with_context(|| format!("load spells from {}", spells_dir.display()))?;
     info!(count = spell_registry.list().len(), "spells loaded");
+
+    let roles_dir = roles::default_roles_dir();
+    info!(dir = %roles_dir.display(), "loading roles");
+    let role_registry = roles::RoleRegistry::load_dir(&roles_dir)
+        .with_context(|| format!("load roles from {}", roles_dir.display()))?;
+    info!(count = role_registry.list().len(), "roles loaded");
 
     let shim_path = spawn::locate_shim().context("locate flockmux-shim")?;
     info!(shim = %shim_path.display(), "shim located");
@@ -130,6 +141,7 @@ async fn main() -> Result<()> {
     let state = AppState {
         plugins: Arc::new(plugin_registry),
         spells: Arc::new(spell_registry),
+        roles: Arc::new(role_registry),
         registry: registry::Registry::new(),
         shim_path,
         mcp_bin,

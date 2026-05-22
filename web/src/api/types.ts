@@ -134,6 +134,12 @@ export interface SpellInfo {
 export interface RunSpellRequest {
   name: string;
   task: string;
+  /** Absolute path to a shared workspace directory. Honoured by spells
+   *  whose manifest declares `shared_workspace = true` (e.g. the M6a
+   *  fullstack-feature spell where FE/BE/Test work in one monorepo).
+   *  Ignored by per-agent spells. Server mints a fresh dir under
+   *  workspaces_root if omitted. */
+  workspace_dir?: string;
 }
 
 export interface RunSpellAgent {

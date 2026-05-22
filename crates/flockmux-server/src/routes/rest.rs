@@ -2,7 +2,7 @@
 
 use crate::plugins::CliPlugin;
 use crate::registry::LifecycleEvent;
-use crate::spawn::spawn_agent;
+use crate::spawn::{spawn_agent, WorkspaceLayout};
 use crate::spells;
 use crate::AppState;
 use axum::{
@@ -54,7 +54,12 @@ pub async fn spawn(
         .as_deref()
         .map(PathBuf::from)
         .unwrap_or_else(|| state.workspaces_root.clone());
-    let outcome = spawn_with_bookkeeping(&state, &req.cli, req.role, workspace_root)
+    // Single-agent spawn always uses per-agent subdir layout. Spells
+    // are the only path that can ask for a shared workspace.
+    let layout = WorkspaceLayout::PerAgent {
+        root: workspace_root,
+    };
+    let outcome = spawn_with_bookkeeping(&state, &req.cli, req.role, layout)
         .await
         .map_err(|(status, msg)| (status, Json(json!({"error": msg}))))?;
     Ok(Json(SpawnAgentResponse {
@@ -81,6 +86,13 @@ pub(crate) struct SpawnOutcome {
 /// POST /api/agent and the spell runner. Identical end state to the
 /// previous monolithic handler — only the return path differs.
 ///
+/// `layout` decides where on disk the agent's cwd lands:
+/// - `PerAgent { root }` — historic default, agent gets its own
+///   `<root>/<agent_id>/` subdir.
+/// - `Shared { dir }` — every caller routed through this layout shares
+///   the same cwd; used by M6a fullstack-feature spells so FE / BE /
+///   Test peers see each other's commits in a single monorepo.
+///
 /// On success the agent is fully live: PTY pumping, registry insert
 /// done, swarm inbox registered, SQLite + ws/swarm fan-out task spawned,
 /// recording file open and finalize-watcher scheduled.
@@ -88,7 +100,7 @@ pub(crate) async fn spawn_with_bookkeeping(
     state: &AppState,
     cli: &str,
     role: Option<String>,
-    workspace_root: PathBuf,
+    layout: WorkspaceLayout,
 ) -> Result<SpawnOutcome, (StatusCode, String)> {
     let plugin: CliPlugin = state
         .plugins
@@ -125,7 +137,7 @@ pub(crate) async fn spawn_with_bookkeeping(
     let result = spawn_agent(
         &plugin,
         role,
-        &workspace_root,
+        &layout,
         &state.shim_path,
         &state.mcp_bin,
         &state.server_url,
@@ -353,6 +365,13 @@ pub async fn kill(
 // ────────────────────────────────────────────────────────────────────────
 
 pub async fn list_spells(State(state): State<AppState>) -> impl IntoResponse {
+    // Each [[agents]] entry might be inline (role+cli given) or use
+    // role_ref to defer to the RoleRegistry. We resolve here so the UI
+    // dropdown shows the actually-effective role/cli rather than the
+    // raw "role_ref=frontend / cli=None" the manifest carries.
+    // Unresolvable refs (typo, missing role file) are returned as
+    // "<role_ref>:?" so the user notices in the dropdown rather than
+    // hitting a 500 at run time.
     let items: Vec<SpellInfo> = state
         .spells
         .list()
@@ -364,9 +383,15 @@ pub async fn list_spells(State(state): State<AppState>) -> impl IntoResponse {
                 .manifest
                 .agents
                 .iter()
-                .map(|a| SpellAgentInfo {
-                    role: a.role.clone(),
-                    cli: a.cli.clone(),
+                .map(|a| match spells::resolve_agent(a, &state.roles) {
+                    Ok(r) => SpellAgentInfo {
+                        role: r.role,
+                        cli: r.cli,
+                    },
+                    Err(_) => SpellAgentInfo {
+                        role: a.effective_role().unwrap_or("?").to_string(),
+                        cli: a.cli.clone().unwrap_or_else(|| "?".to_string()),
+                    },
                 })
                 .collect(),
         })
@@ -397,27 +422,71 @@ pub async fn run_spell(
             )
         })?;
 
+    // Resolve every `[[agents]]` entry against the role registry up-
+    // front. Failing here is much friendlier than half-spawning agents
+    // and then erroring out — partial spawns are visible PTYs the user
+    // would have to kill manually.
+    let resolved_agents: Vec<spells::ResolvedAgent> = spell
+        .manifest
+        .agents
+        .iter()
+        .map(|a| spells::resolve_agent(a, &state.roles))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|err| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "error": format!("spell `{}` resolve failed: {err:#}", req.name)
+                })),
+            )
+        })?;
+
+    // Pick the workspace layout. For shared_workspace spells we use the
+    // explicit `workspace_dir` if the client sent one (M6a UX: the
+    // SpellsLauncher exposes a text input); otherwise we mint a fresh
+    // `<workspaces_root>/spell-<uuid>/` so the launch never silently
+    // falls back to per-agent isolation (which would defeat the spell's
+    // entire premise — see fullstack-feature.md, FE/BE need to see each
+    // other's commits).
+    let layout: WorkspaceLayout = if spell.manifest.shared_workspace {
+        let dir = req
+            .workspace_dir
+            .as_deref()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                state
+                    .workspaces_root
+                    .join(format!("spell-{}", &Uuid::new_v4().to_string()[..8]))
+            });
+        WorkspaceLayout::Shared { dir }
+    } else {
+        WorkspaceLayout::PerAgent {
+            root: state.workspaces_root.clone(),
+        }
+    };
+
     // Phase 1: spawn all agents up-front (no PTY input yet) so each one's
     // agent_id is known before we render any prompt. Otherwise the writer's
     // prompt couldn't reference critic's id.
-    let mut outcomes: Vec<(SpawnOutcome, String)> = Vec::with_capacity(spell.manifest.agents.len());
-    for agent_def in &spell.manifest.agents {
+    let mut outcomes: Vec<(SpawnOutcome, String)> =
+        Vec::with_capacity(resolved_agents.len());
+    for resolved in &resolved_agents {
         let out = spawn_with_bookkeeping(
             &state,
-            &agent_def.cli,
-            Some(agent_def.role.clone()),
-            state.workspaces_root.clone(),
+            &resolved.cli,
+            Some(resolved.role.clone()),
+            layout.clone(),
         )
         .await
         .map_err(|(status, msg)| {
             (
                 status,
                 Json(json!({
-                    "error": format!("spell `{}` failed at agent `{}`: {}", req.name, agent_def.role, msg)
+                    "error": format!("spell `{}` failed at agent `{}`: {}", req.name, resolved.role, msg)
                 })),
             )
         })?;
-        outcomes.push((out, agent_def.system_prompt.clone()));
+        outcomes.push((out, resolved.system_prompt.clone()));
     }
 
     // Build role → agent_id map for {<role>_id} substitution.
@@ -440,6 +509,7 @@ pub async fn run_spell(
         let mut rx = out.lifecycle_rx.resubscribe();
         let registry = state.registry.clone();
         let spell_name_for_task = spell_name.clone();
+        let role_to_id_for_task = role_to_id.clone();
         tokio::spawn(async move {
             // Check first whether ShimReady already fired in the gap
             // between spawn_agent returning and our subscribe — the PTY
@@ -523,10 +593,13 @@ pub async fn run_spell(
             let body = prompt.into_bytes();
             let body_len = body.len();
             let lossy = String::from_utf8_lossy(&body);
+            // Diagnostic: log when a `{task}` or `{<role>_id}` slot
+            // survived rendering. Dynamic over the spell's declared
+            // roles so this fires for any spell, not just critic-loop.
             let has_unsubst = lossy.contains("{task}")
-                || lossy.contains("{writer_id}")
-                || lossy.contains("{critic_id}")
-                || lossy.contains("{editor_id}");
+                || role_to_id_for_task
+                    .keys()
+                    .any(|r| lossy.contains(&format!("{{{r}_id}}")));
             if let Err(err) = input_tx.send(bytes::Bytes::from(body)).await {
                 tracing::warn!(spell = %spell_name_for_task, agent = %agent_id, ?err, "PTY paste send failed during spell bootstrap");
                 return;
