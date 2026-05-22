@@ -49,6 +49,22 @@ pub struct AgentInfo {
     /// happen in practice since spawn always writes to SQLite first).
     #[serde(default)]
     pub spawned_at: Option<i64>,
+    /// Blackboard keys this agent is waiting on. Populated from the
+    /// `wake_subs` runtime map (whatever was registered at spell launch
+    /// from the agent's role.depends_on or the spell-level override).
+    /// Empty for agents that don't subscribe to anything — including
+    /// historical SQLite-only rows where the subscription has been torn
+    /// down. Frontend uses this to draw the depends_on DAG.
+    #[serde(default)]
+    pub depends_on: Vec<String>,
+    /// Blackboard key this agent will write when its phase completes —
+    /// the inverse of `depends_on`. Read from the agent's role manifest
+    /// at list time. Empty if the agent has no `role_ref` (inline-only
+    /// agents like critic-loop's writer) or its role has no
+    /// `handoff_signal`. Frontend uses this to wire DAG edges from
+    /// dependents back to their producers.
+    #[serde(default)]
+    pub handoff_signal: String,
 }
 
 // ── swarm REST DTOs (M3 #18) ─────────────────────────────────────────────

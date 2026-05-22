@@ -267,6 +267,32 @@ pub(crate) async fn spawn_with_bookkeeping(
 }
 
 pub async fn list_agents(State(state): State<AppState>) -> impl IntoResponse {
+    // Snapshot the wake-sub map ONCE before iterating agents so a churn
+    // of register/unregister calls mid-listing doesn't make some agents
+    // show their deps while others don't. The read lock is released
+    // before we await on the store.
+    let depends_snapshot: std::collections::HashMap<String, Vec<String>> = {
+        let map = state.wake_subs.read().await;
+        map.clone()
+    };
+    // Same idea for the role registry: clone the (role → handoff_signal)
+    // mapping locally so we don't keep the registry borrow open through
+    // async boundaries. Empty handoff_signal means the role doesn't
+    // produce a key (planner, writer/critic/editor in critic-loop).
+    let role_handoff: std::collections::HashMap<String, String> = state
+        .roles
+        .list()
+        .into_iter()
+        .map(|r| (r.manifest.id.clone(), r.manifest.handoff_signal.clone()))
+        .collect();
+
+    let handoff_for = |role: &str| -> String {
+        role_handoff.get(role).cloned().unwrap_or_default()
+    };
+    let depends_for = |agent_id: &str| -> Vec<String> {
+        depends_snapshot.get(agent_id).cloned().unwrap_or_default()
+    };
+
     // Build a snapshot of the live in-memory registry first — for live
     // agents the in-memory `Lifecycle` is the source of truth (it tracks
     // OSC markers that may not yet be persisted to SQLite).
@@ -275,6 +301,8 @@ pub async fn list_agents(State(state): State<AppState>) -> impl IntoResponse {
     for (id, slot) in state.registry.list() {
         let slot = slot.lock();
         let lc = *slot.lifecycle.lock();
+        let depends_on = depends_for(&id);
+        let handoff_signal = handoff_for(&slot.role);
         live.insert(
             id.clone(),
             AgentInfo {
@@ -286,6 +314,8 @@ pub async fn list_agents(State(state): State<AppState>) -> impl IntoResponse {
                 shim_exit: lc.shim_exit,
                 killed_at: None,
                 spawned_at: None,
+                depends_on,
+                handoff_signal,
             },
         );
     }
@@ -303,6 +333,11 @@ pub async fn list_agents(State(state): State<AppState>) -> impl IntoResponse {
                     info.spawned_at = Some(row.spawned_at);
                     items.push(info);
                 } else {
+                    // Historical row: depends_on is empty (subscription
+                    // was unregistered at kill); handoff_signal still
+                    // computed from the saved role so the graph can
+                    // place the node even when its wake-state is gone.
+                    let handoff_signal = handoff_for(&row.role);
                     items.push(AgentInfo {
                         agent_id: row.id,
                         cli: row.cli,
@@ -312,6 +347,8 @@ pub async fn list_agents(State(state): State<AppState>) -> impl IntoResponse {
                         shim_exit: row.shim_exit_code,
                         killed_at: row.killed_at,
                         spawned_at: Some(row.spawned_at),
+                        depends_on: Vec::new(),
+                        handoff_signal,
                     });
                 }
             }

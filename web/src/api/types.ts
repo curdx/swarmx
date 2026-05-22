@@ -50,6 +50,12 @@ export interface AgentInfo {
   shim_exit: number | null;
   killed_at?: number | null;
   spawned_at?: number | null;
+  /** Blackboard keys this agent is subscribed to (M6b wake-coordinator).
+   *  Empty for historical / inline-only agents. */
+  depends_on?: string[];
+  /** Blackboard key this agent will write when its phase completes.
+   *  Empty for roles with no handoff_signal (e.g. planner). */
+  handoff_signal?: string;
 }
 
 // ── M3 swarm DTOs ────────────────────────────────────────────────────────

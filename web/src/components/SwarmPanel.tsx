@@ -17,8 +17,9 @@ import type { MessageRecord, SwarmEvent } from "../api/types";
 import { MessagesPanel } from "./MessagesPanel";
 import { BlackboardPanel } from "./BlackboardPanel";
 import { RecordingsPanel } from "./RecordingsPanel";
+import { GraphPanel } from "./GraphPanel";
 
-type Tab = "messages" | "blackboard" | "recordings";
+type Tab = "messages" | "blackboard" | "graph" | "recordings";
 
 export function SwarmPanel() {
   const [tab, setTab] = useState<Tab>("messages");
@@ -34,6 +35,10 @@ export function SwarmPanel() {
     op: string;
   } | null>(null);
   const [recordingsTick, setRecordingsTick] = useState(0);
+  // Bumped on every agent_state event (any state, not just exited) so the
+  // GraphPanel can refresh `GET /api/agent` and pick up new spawns AND
+  // exits. Recordings panel only cares about exits — keep that separate.
+  const [agentTick, setAgentTick] = useState(0);
   const [unreadByFrom, setUnreadByFrom] = useState<Record<string, number>>({});
 
   // Reverse lookup: id → from_agent. Lets `message_read` events decrement
@@ -111,6 +116,9 @@ export function SwarmPanel() {
           });
           break;
         case "agent_state":
+          // Any state change triggers a graph refresh (new spawns,
+          // shim_ready transitions, exits all change what we draw).
+          setAgentTick((t) => t + 1);
           if (ev.state === "exited") {
             setRecordingsTick((t) => t + 1);
           }
@@ -119,6 +127,7 @@ export function SwarmPanel() {
     },
     onReconnect: () => {
       setRecordingsTick((t) => t + 1);
+      setAgentTick((t) => t + 1);
       recomputeUnread();
     },
   });
@@ -128,7 +137,7 @@ export function SwarmPanel() {
   return (
     <aside style={container}>
       <div style={tabBar}>
-        {(["messages", "blackboard", "recordings"] as Tab[]).map((t) => (
+        {(["messages", "blackboard", "graph", "recordings"] as Tab[]).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -170,6 +179,9 @@ export function SwarmPanel() {
           />
         )}
         {tab === "blackboard" && <BlackboardPanel liveChange={liveChange} />}
+        {tab === "graph" && (
+          <GraphPanel liveChange={liveChange} agentTick={agentTick} />
+        )}
         {tab === "recordings" && <RecordingsPanel refreshTick={recordingsTick} />}
       </div>
     </aside>
