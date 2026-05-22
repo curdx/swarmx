@@ -8,27 +8,33 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="MIT License"></a>
   <img src="https://img.shields.io/badge/Rust-1.83%2B-orange.svg" alt="Rust 1.83+">
   <img src="https://img.shields.io/badge/Node-22%2B-brightgreen.svg" alt="Node 22+">
-  <img src="https://img.shields.io/badge/status-MVP%20done%20(M1–M5)-success" alt="status">
+  <img src="https://img.shields.io/badge/status-M1–M6b%20shipped-success" alt="status">
   <a href="README.zh-CN.md"><img src="https://img.shields.io/badge/Lang-中文-red" alt="中文"></a>
 </p>
 
 flockmux runs **real subscription-mode CLIs** — the same `claude` and `codex`
 binaries you have on disk — inside a single browser tab. Each agent gets its
 own PTY-backed terminal pane (xterm.js, WebGL-accelerated). A coordination
-layer on top gives the agents three new capabilities they don't have
+layer on top gives the agents four new capabilities they don't have
 standalone:
 
 1. **A shared inbox.** Any agent can call `swarm_send_message` to address
    another agent by id; the recipient sees the message at its next turn
-   boundary via a Stop-hook driven wake-check (no polling, no PTY injection).
+   boundary via a Stop-hook driven wake-check.
 2. **A shared blackboard.** A markdown KV store with FTS5 full-text search,
    versioned history, and live `/ws/swarm` notifications when any agent
    edits it.
-3. **Spells.** One-file declarative orchestration templates that spawn N
-   agents with role-specific system prompts and a topology. The bundled
-   `critic-loop` runs writer → critic → editor in three CLI invocations,
-   the editor reading both the original draft and the critique notes via
-   the swarm bus before publishing the final version to `system`.
+3. **Spells + role library.** One-file declarative orchestration templates
+   compose `[[agents]]` from a reusable role library (`roles/<id>.md`). The
+   bundled `critic-loop` runs writer → critic → editor sequentially;
+   `fullstack-feature` spawns frontend / backend / test in **one shared
+   monorepo workspace** so they can `git commit` and read each other's code
+   directly.
+4. **Push-style wakeup (M6b).** Roles declare `depends_on = ["<key>"]` on
+   blackboard signals. When that key is written the server pushes a mailbox
+   note AND injects `\x15…\r` into the subscriber's PTY — so an agent that
+   already stopped with an empty mailbox can still be revived the moment
+   its upstream lands. No polling. No deadlocks.
 
 The dashboard also records every session as an asciicast v2 `.cast` file and
 plays it back in-browser using the official `asciinema-player` (WASM-backed,
@@ -49,6 +55,7 @@ session credentials — see [Security &amp; Credentials](#security--credentials)
 - [Quick Start](#quick-start)
 - [Concepts](#concepts)
 - [Walkthrough: critic-loop in 60 seconds](#walkthrough-critic-loop-in-60-seconds)
+- [Walkthrough: fullstack-feature in ~9 minutes (M6)](#walkthrough-fullstack-feature-in-9-minutes-m6)
 - [Architecture](#architecture)
 - [Configuration reference](#configuration-reference)
 - [REST &amp; WebSocket API](#rest--websocket-api)
@@ -91,10 +98,12 @@ these three pieces and adds zero new requirements on the CLI side.
 | **Multi-agent grid** | Spawn arbitrary numbers of agents; each gets its own pane with WebGL-accelerated xterm.js. A cooldown pool keeps the browser under its WebGL context cap and silently falls back to DOM for overflow. |
 | **Swarm messaging** | `POST /api/message` or the in-CLI `swarm_send_message` tool delivers messages with `from`, `to`, `kind`, `body`, and an optional `in_reply_to` thread parent. All persisted to SQLite with FTS5. |
 | **Shared blackboard** | Markdown files under `~/.flockmux/blackboard/` with FTS5 search, versioned history (each write is a row), and `/ws/swarm` push events on change. |
-| **Turn-boundary wake-check** | Both claude and codex Stop hooks invoke `flockmux-mcp wake-check`; if the agent has unread mail, the hook emits a `decision:block` continuation so the agent reads its inbox on the next turn — zero polling, zero PTY injection. |
+| **Turn-boundary wake-check** | Both claude and codex Stop hooks invoke `flockmux-mcp wake-check`; if the agent has unread mail, the hook emits a `decision:block` continuation so the agent reads its inbox on the next turn — zero polling. |
+| **Push-style wake on blackboard write (M6b)** | The `WakeCoordinator` subscribes to `SwarmEvent::BlackboardChanged`. When a blackboard key is written, every agent whose role declares `depends_on=["<key>"]` is woken in the same tick: a `kind="wake"` mailbox note lands AND `\x15<msg>\r` is injected into the subscriber's PTY — restarts agents that already stopped idle. Closes the M5b gap where wake-check (a single-shot Stop hook) couldn't restart a stopped agent. |
 | **Codex first-run dialog auto-confirm** | codex 0.130+ pops a "Hooks need review" trust dialog the first time it sees a new hook path. flockmux's server watches PTY output and synthesizes the `2 + Enter` keystrokes, so spawn is one click for the user. |
 | **Asciicast v2 record + browser replay** | Every session writes a `.cast` file; the recordings drawer plays them inline with the official `asciinema-player` (WASM renderer, fullscreen + scrubbing). |
-| **Spells** | TOML front-matter + markdown body declares a multi-agent topology (`[[agents]] role / cli / system_prompt`). `POST /api/spell/run` spawns all of them, substitutes `{task}` and `{<role>_id}` placeholders, and injects each agent's bootstrap prompt. Bundled: `critic-loop`. |
+| **Spells + role library** | TOML front-matter + markdown body declares a multi-agent topology (`[[agents]]`). Each agent line either inlines `role/cli/system_prompt` (old style, `critic-loop`) or sets `role_ref="<id>"` to inherit from a shared `roles/<id>.md` SOP template (new style, `fullstack-feature`). `POST /api/spell/run` resolves the merge, substitutes `{task}` and `{<role>_id}` placeholders, and injects each agent's bootstrap prompt. |
+| **Shared monorepo workspace** | Spells with `shared_workspace = true` give every spawned agent the SAME cwd, so they can read each other's files and `git commit` to a shared tree — the only sane setup for fullstack flows where FE consumes BE's API and the test agent runs e2e against both. Per-agent claude identity is preserved via a per-agent `--mcp-config` file (sidesteps the `~/.claude.json` cwd-keyed collision). |
 | **Local-first** | Binds `127.0.0.1:7777` only. No authentication (single-user). No network egress beyond what the CLIs themselves make to their providers. |
 
 ## Screenshots
@@ -182,10 +191,12 @@ critic's notes.
 | **Workspace** | Per-agent scratch directory at `~/.flockmux/workspaces/<agent_id>/` containing the CLI's `.claude/` or `.codex/` config overrides. Pre-spawn patches make this look like a trusted, pre-configured project to the CLI. | `flockmux-server::pre_spawn` |
 | **Swarm message** | A row in `messages` (SQLite) addressed `from_agent → to_agent`, with optional `in_reply_to`. Sent via `POST /api/message` or `swarm_send_message` MCP tool; broadcast on `/ws/swarm`. | `flockmux-swarm`, `flockmux-storage` |
 | **Blackboard** | Markdown KV at `<root>/<path>.md` with full history. Read via `swarm_read_blackboard` / `GET /api/blackboard/...`; write via the inverse. notify-debouncer watches the FS for direct edits. | `flockmux-swarm::watcher`, `flockmux-storage` |
-| **Wake-check** | `flockmux-mcp wake-check` subcommand. Reads stdin JSON from Stop hook, derives `agent_id` from the `cwd` field, queries `/api/message/unread_count`, emits `{decision:"block", reason:"..."}` when there's mail. Throttle file at `~/.flockmux/wake/<id>.json` caps wakes per window. | `flockmux-mcp::wake_check` |
-| **Spell** | `spells/<name>.md` with TOML front-matter declaring `[[agents]]` (role + cli + system_prompt). Run via `POST /api/spell/run {name, task}`; placeholders `{task}` and `{<role>_id}` are substituted before each prompt is PTY-injected. | `spells/`, `flockmux-server::spells` |
+| **Wake-check** | `flockmux-mcp wake-check` subcommand. Reads stdin JSON from Stop hook, resolves `agent_id` (preferring the `FLOCKMUX_AGENT_ID` env passed by spawn, falling back to cwd basename), queries `/api/message/unread_count`, emits `{decision:"block", reason:"..."}` when there's mail. Single-shot per Stop event — does NOT restart already-stopped agents (that's WakeCoordinator's job). Throttle file at `~/.flockmux/wake/<id>.json` caps wakes per window. | `flockmux-mcp::wake_check` |
+| **Spell** | `spells/<name>.md` with TOML front-matter declaring `[[agents]]`. Each agent block either inlines `role/cli/system_prompt` or sets `role_ref="<id>"` to inherit from a `roles/<id>.md` template. `shared_workspace = true` flips spawn from per-agent dirs to one shared cwd. Run via `POST /api/spell/run {name, task, workspace_dir?}`. | `spells/`, `flockmux-server::spells` |
+| **Role** | `roles/<id>.md` — reusable SOP template referenced by spells. Carries `default_cli`, `artifact_paths`, `handoff_signal`, `depends_on`, and a `system_prompt_template` with `{task}` / `{<role>_id}` placeholders. Lets multiple spells share the same FE/BE/test prompts without copy-paste. | `roles/`, `flockmux-server::roles` |
+| **`depends_on` + WakeCoordinator (M6b)** | Roles declare blackboard keys to subscribe to. At spell launch, `register_wake_subs` builds `Map<agent_id, Vec<key>>` on `AppState`. The `WakeCoordinator` task subscribes to `Swarm::events_tx`, and on `BlackboardChanged{key}` writes a `kind="wake"` mailbox note to every subscriber (excluding the writer) AND injects `\x15<msg>\r` into their PTY. Cycle detection runs before any spawn. | `flockmux-server::wake` |
 | **Shim** | `flockmux-shim` — ~70-line binary that `execvp`s the real CLI and emits OSC `ready` / `exit` sequences so flockmux can detect lifecycle without polling. | `flockmux-shim` |
-| **MCP** | `flockmux-mcp` — stdio JSON-RPC server exposing `swarm_send_message`, `swarm_list_messages`, blackboard tools. Auto-installed in each agent's CLI config so the LLM can call them as native tools. | `flockmux-mcp` |
+| **MCP** | `flockmux-mcp` — stdio JSON-RPC server exposing `swarm_send_message`, `swarm_list_messages`, blackboard tools. Auto-installed in each agent's CLI config so the LLM can call them as native tools. Claude gets a per-agent `--mcp-config` file under `~/.flockmux/mcp/<agent_id>.json` so shared-workspace agents don't clobber each other's identity in `~/.claude.json`. | `flockmux-mcp` |
 
 ## Walkthrough: critic-loop in 60 seconds
 
@@ -225,6 +236,69 @@ hand-off is the agent's Stop hook firing `wake-check`, seeing the unread
 message from upstream, and continuing into a `swarm_list_messages` →
 `swarm_send_message` pair. No polling, no PTY injection beyond the
 initial system-prompt bootstrap.
+
+## Walkthrough: fullstack-feature in ~9 minutes (M6)
+
+`fullstack-feature` is the spell that pushed the architecture into its M6
+shape: three agents sharing one monorepo, fork-joining on blackboard
+contracts.
+
+```bash
+# 1. Start the stack (same as critic-loop)
+cargo run -p flockmux-server &
+cd web && npm run dev &
+
+# 2. Prepare a fresh shared workspace
+mkdir -p /tmp/m6-todo && cd /tmp/m6-todo && git init -q
+
+# 3. Fire the spell (UI does the same call from the dropdown)
+curl -sX POST http://127.0.0.1:7777/api/spell/run \
+  -H 'content-type: application/json' \
+  -d '{
+        "name": "fullstack-feature",
+        "task": "做一个 todo app: React 前端 (apps/frontend) + FastAPI 后端 (apps/backend) + SQLite, 支持添加 / 标完成 / 删除",
+        "workspace_dir": "/tmp/m6-todo"
+      }' | jq .
+
+# Response shape:
+# {
+#   "spell": "fullstack-feature",
+#   "agents": [
+#     { "role": "frontend", "cli": "claude", "agent_id": "claude-XXXXXXXX" },
+#     { "role": "backend",  "cli": "codex",  "agent_id": "codex-YYYYYYYY"  },
+#     { "role": "test",     "cli": "claude", "agent_id": "claude-ZZZZZZZZ" }
+#   ]
+# }
+```
+
+What you'll see in the server log over the next ~9 minutes (real numbers
+from the demo run committed in `228c260`):
+
+```
+00:00  3 agents spawn, each with its own --mcp-config file under
+       ~/.flockmux/mcp/<agent_id>.json (sidesteps ~/.claude.json
+       cwd-keyed identity collision)
+00:40  BE writes api.spec to ~/.flockmux/blackboard/
+       → WakeCoordinator: "wake delivered target=FE-id key=api.spec"
+04:07  FE writes apps/frontend/ + commits + writes frontend.done
+       → WakeCoordinator: "wake delivered target=test-id key=frontend.done"
+05:22  BE writes apps/backend/ + commits + writes backend.done
+       → WakeCoordinator: "wake delivered target=test-id key=backend.done"
+08:44  test installs Playwright, writes tests/, runs 14 tests, all green,
+       commits tests/ + writes test.passed
+```
+
+End state in `/tmp/m6-todo`:
+- `apps/frontend/` — React 18 + TS + Vite + Tailwind, runnable with `npm run dev`
+- `apps/backend/` — FastAPI + SQLite + uvicorn, runnable with `uvicorn main:app`
+- `tests/` — Playwright suite covering all 4 endpoints + UI smoke
+- 4 git commits, one per agent (FE 2: main + .gitignore tweak; BE 1; test 1)
+- 4 blackboard keys: `api.spec`, `frontend.done`, `backend.done`, `test.passed`
+
+The handoffs are 100% architecturally driven — no role looks at a clock,
+no role polls, no human pokes a PTY. Each `wake delivered` line is the
+`WakeCoordinator` task firing as a side effect of someone else's
+`swarm_write_blackboard` call.
 
 ## Architecture
 
@@ -276,14 +350,16 @@ initial system-prompt bootstrap.
 | `flockmux-protocol` | ~250 | WebSocket frame schema, REST DTOs. Shared by server + clients. |
 | `flockmux-shim` | ~70 | The OSC-emitting wrapper that `execvp`s the real CLI. |
 | `flockmux-pty` | ~300 | `portable-pty` wrapper + 2-thread bridge + monotonic seq ring buffer. |
-| `flockmux-server` | ~2500 | axum HTTP/WS gateway. Routes, lifecycle, pre-spawn patches, dialog auto-answer, spell executor. |
+| `flockmux-server` | ~5700 | axum HTTP/WS gateway. Routes, lifecycle, pre-spawn patches, dialog auto-answer, spell executor, role registry, **`WakeCoordinator`** (M6b). |
 | `flockmux-swarm` | ~600 | Per-agent inbox, blackboard CRUD, notify-debouncer watcher. |
-| `flockmux-mcp` | ~700 | Stdio JSON-RPC MCP server. Also hosts the `wake-check` subcommand invoked by Stop hooks. |
+| `flockmux-mcp` | ~2000 | Stdio JSON-RPC MCP server. Also hosts the `wake-check` subcommand invoked by Stop hooks. |
 | `flockmux-storage` | ~800 | SQLite + FTS5. Migrations, agents/messages/recordings/blackboard tables. |
 | `flockmux-recorder` | ~250 | asciicast v2 writer, finalize-on-EOF. |
 | `flockmux-cli` | ~50 | Thin entry point (`flockmux up` launches server + opens dashboard). |
 | `cli-plugins/` | — | Per-CLI `.toml`: `claude.toml`, `codex.toml`. |
-| `spells/` | — | Per-spell `.md`: `critic-loop.md`. |
+| `roles/` | — | Per-role `.md` SOP templates: `frontend.md`, `backend.md`, `test.md` (M6a). |
+| `spells/` | — | Per-spell `.md`: `critic-loop.md`, `fullstack-feature.md`. |
+| `docs/handoff-protocol.md` | — | Blackboard-key convention used by `fullstack-feature` and any spell that wants explicit FE/BE/test contracts. |
 | `web/` | — | Vite + React + xterm.js + asciinema-player frontend. |
 
 ### Data flow at a glance
@@ -484,7 +560,7 @@ This is informational, not an error of flockmux itself.
 
 ## Roadmap
 
-### Done (M1 – M5)
+### Done (M1 – M6b)
 
 - ✅ **M1** Single-agent PTY + OAuth + WebSocket bridge + WebGL pool
 - ✅ **M2** Multi-CLI (claude + codex) + GridView + WebGL cooldown
@@ -494,18 +570,32 @@ This is informational, not an error of flockmux itself.
 - ✅ **M5a** Observability: `read_at`, `in_reply_to`, blackboard history
 - ✅ **M5b** Turn-boundary wake-check (claude + codex 0.132)
 - ✅ **M5c** Spells (`critic-loop`) + in-browser asciicast playback
+- ✅ **M6a** Role library (`roles/<id>.md`) + `shared_workspace = true`
+            spells + `fullstack-feature` (`frontend` / `backend` / `test`
+            in one monorepo) + `docs/handoff-protocol.md`
+- ✅ **M6b** `WakeCoordinator`: blackboard writes auto-wake any agent
+            whose role declared `depends_on = ["<key>"]`. Mailbox note
+            (source of truth) + PTY injection (belt-and-suspenders).
+            Cycle detection at spell launch. Per-agent claude
+            `--mcp-config` file to break the shared-workspace identity
+            collision in `~/.claude.json`.
 
-### Backlog (post-MVP, all from plan §13)
+### Backlog
 
 | Priority | Item | Effort |
 |---|---|---|
+| P1 | M6c — Planner agent: natural-language task → spell+args dispatch | New role + spell loader exposes metadata |
+| P1 | M6c — Critic-loop embedding: critic role after each handoff | One new role + spell wiring |
 | P1 | `cli-plugins/gemini.toml` (Google Gemini CLI) | One toml file + manual auth verification |
 | P1 | `cli-plugins/qwen.toml` (Alibaba Qwen CLI) | Same as gemini; `ready_detect = "prompt_pattern"` |
 | P1 | `spells/tree-executor.md` (recursive task decomposition) | One md file |
 | P1 | `spells/map-reduce.md` (parallel workers + reducer) | One md file |
+| P2 | M6c — HITL gate after architect / before test phase | Spell-manifest flag + UI approval button |
+| P2 | M6c — `<key>.failed` TTL fallback (auto-fail stuck dependencies) | ~40 lines in wake.rs |
+| P2 | M6c — Visual DAG of `depends_on` in the swarm drawer | Frontend SVG + read from `/api/spells` |
+| P2 | M6c — `agent_state == Thinking` gate skips PTY injection | Track per-PTY state from OSC + stop hook |
 | P2 | `cli-plugins/opencode.toml`, `cli-plugins/aider.toml` | Per-CLI auth research |
 | P2 | `spells/werewolf.md`, `spells/red-team.md` | One md per spell |
-| P2 | Push-style wake (PTY-inject on message arrival for idle agents) | ~80 lines |
 | P3 | Session-token auth + CORS for remote access | Borrow hermes-agent's `_SESSION_TOKEN` design |
 | P3 | Tauri desktop packaging | Borrow golutra's `src-tauri/` |
 | P3 | Agent sandboxing (Docker / SSH isolation) | Borrow openclaw's `agents/sandbox/` |
