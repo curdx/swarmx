@@ -67,6 +67,13 @@ pub struct AppState {
     /// every `SwarmEvent::BlackboardChanged` and proactively wakes
     /// matching subscribers.
     pub wake_subs: wake::WakeSubs,
+    /// M6c step 5: per-agent expected handoff signal. `agent_id → key
+    /// this agent is *supposed* to write before it exits`. The
+    /// `WakeCoordinator` watches `SwarmEvent::AgentState{Exited}` and,
+    /// when the agent dies without producing this key, synthesizes a
+    /// `<key>.error` write so downstream dependents can branch into
+    /// their upstream-failed path instead of waiting forever.
+    pub exit_keys: wake::ExitKeys,
 }
 
 #[tokio::main]
@@ -147,6 +154,8 @@ async fn main() -> Result<()> {
 
     let wake_subs: wake::WakeSubs =
         std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new()));
+    let exit_keys: wake::ExitKeys =
+        std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new()));
 
     let state = AppState {
         plugins: Arc::new(plugin_registry),
@@ -163,6 +172,7 @@ async fn main() -> Result<()> {
         recordings_root,
         _watcher: watcher,
         wake_subs: wake_subs.clone(),
+        exit_keys: exit_keys.clone(),
     };
 
     // M6b: launch the wake coordinator. Lives for the whole process; the
@@ -172,6 +182,7 @@ async fn main() -> Result<()> {
         state.swarm.clone(),
         state.registry.clone(),
         wake_subs,
+        exit_keys,
     );
     info!("wake coordinator started");
 

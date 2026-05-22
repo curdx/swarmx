@@ -563,6 +563,27 @@ pub async fn run_spell(
             resolved.depends_on.clone(),
         )
         .await;
+        // M6c step 5: also remember which signal THIS agent is supposed
+        // to produce + the moment we registered it. If the agent exits
+        // without writing the signal, the wake coordinator turns that
+        // exit into a `<signal>.error` so the downstream dependents
+        // stop hanging. The spawn time is used to disambiguate "fresh
+        // write from this run's agent" vs "stale leftover from a
+        // previous run on the same blackboard". Empty signal (inline
+        // role, planner) → register_exit_key is a no-op.
+        let handoff_signal = state
+            .roles
+            .get(&resolved.role)
+            .map(|r| r.manifest.handoff_signal.clone())
+            .unwrap_or_default();
+        crate::wake::register_exit_key(
+            &state.exit_keys,
+            out.agent_id.clone(),
+            resolved.role.clone(),
+            handoff_signal,
+            now_ms(),
+        )
+        .await;
         outcomes.push((out, resolved.system_prompt.clone()));
     }
 

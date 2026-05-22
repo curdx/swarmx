@@ -50,6 +50,57 @@ use crate::registry::Registry;
 /// event is a linear scan over ≤ ~10 entries per spell, which is fine.
 pub type WakeSubs = Arc<RwLock<HashMap<String, Vec<String>>>>;
 
+/// M6c step 5: per-agent expected handoff-signal + spawn time. When
+/// the agent exits without writing its handoff_signal we synthesize a
+/// `<signal>.error` so downstream dependents can fail loudly instead
+/// of hanging. The spawn timestamp lets us distinguish a fresh write
+/// (this run's agent succeeded) from a stale leftover on disk (a
+/// previous run's `<signal>` row still in the blackboard) so we don't
+/// silently skip writing `.error` because yesterday's run happened to
+/// produce the same key name.
+///
+/// Only agents whose role declares a non-empty `handoff_signal` are
+/// registered — inline-only roles (critic-loop's writer / critic /
+/// editor) don't get exit-fallback because there's no canonical signal
+/// to mark as failed.
+#[derive(Debug, Clone)]
+pub struct ExitKey {
+    /// Role name — used to name the synthesized failure key as
+    /// `<role>.error` (matches the convention agents already use when
+    /// they self-write a failure, e.g. `frontend.error`, so test agent
+    /// prompts only need to check ONE key name regardless of whether
+    /// FE crashed or self-aborted).
+    pub role: String,
+    /// Blackboard key the role was supposed to produce. Used (a) for
+    /// the freshness check ("did the agent actually write this before
+    /// dying?") and (b) to identify which agents to wake when we
+    /// synthesize the error — we wake subscribers of THIS key, not of
+    /// `<role>.error`, because that's what `depends_on` actually lists.
+    pub handoff_signal: String,
+    /// When the registration was made. A blackboard write to
+    /// `handoff_signal` older than this is a leftover from a previous
+    /// run on the same workspace and must NOT short-circuit the
+    /// .error synthesis.
+    pub spawned_at_ms: i64,
+}
+pub type ExitKeys = Arc<RwLock<HashMap<String, ExitKey>>>;
+
+/// Recognises blackboard keys that should fan-out to wake the base
+/// key's subscribers in addition to their literal name. Today only
+/// `.error` and `.failed` suffixes get this treatment — both indicate
+/// "the producer for the base key isn't coming". An empty Vec means
+/// "no fan-out, treat as a regular key".
+fn base_key_aliases(path: &str) -> Vec<String> {
+    for suffix in [".error", ".failed"] {
+        if let Some(base) = path.strip_suffix(suffix) {
+            if !base.is_empty() {
+                return vec![base.to_string()];
+            }
+        }
+    }
+    Vec::new()
+}
+
 /// Inserts `agent_id → keys` into the subscription table. No-op when
 /// `keys` is empty (we don't bother storing zero-dep agents).
 pub async fn register_wake_subs(subs: &WakeSubs, agent_id: String, keys: Vec<String>) {
@@ -65,6 +116,38 @@ pub async fn register_wake_subs(subs: &WakeSubs, agent_id: String, keys: Vec<Str
 /// a registry slot that has been dropped.
 pub async fn unregister_wake_subs(subs: &WakeSubs, agent_id: &str) {
     let mut w = subs.write().await;
+    w.remove(agent_id);
+}
+
+/// Insert this agent's expected handoff_signal + spawn time. No-op when
+/// the signal is empty (inline-only roles, planner, etc.). Called from
+/// `run_spell` alongside `register_wake_subs`.
+pub async fn register_exit_key(
+    keys: &ExitKeys,
+    agent_id: String,
+    role: String,
+    handoff_signal: String,
+    spawned_at_ms: i64,
+) {
+    if handoff_signal.is_empty() {
+        return;
+    }
+    let mut w = keys.write().await;
+    w.insert(
+        agent_id,
+        ExitKey {
+            role,
+            handoff_signal,
+            spawned_at_ms,
+        },
+    );
+}
+
+/// Remove this agent's exit-key registration. Called from the kill
+/// handler before the registry slot is dropped — symmetric with
+/// `unregister_wake_subs`.
+pub async fn unregister_exit_key(keys: &ExitKeys, agent_id: &str) {
+    let mut w = keys.write().await;
     w.remove(agent_id);
 }
 
@@ -114,6 +197,7 @@ pub struct WakeCoordinator {
     swarm: Arc<Swarm>,
     registry: Registry,
     subs: WakeSubs,
+    exit_keys: ExitKeys,
 }
 
 impl WakeCoordinator {
@@ -121,11 +205,17 @@ impl WakeCoordinator {
     /// dropped immediately by `main.rs` since the task runs for the
     /// lifetime of the process (it exits only when the broadcast channel
     /// closes, which happens at server shutdown).
-    pub fn spawn(swarm: Arc<Swarm>, registry: Registry, subs: WakeSubs) -> JoinHandle<()> {
+    pub fn spawn(
+        swarm: Arc<Swarm>,
+        registry: Registry,
+        subs: WakeSubs,
+        exit_keys: ExitKeys,
+    ) -> JoinHandle<()> {
         let me = Self {
             swarm,
             registry,
             subs,
+            exit_keys,
         };
         tokio::spawn(me.run())
     }
@@ -140,15 +230,35 @@ impl WakeCoordinator {
                     path,
                     ..
                 }) => {
-                    let targets = {
-                        let map = self.subs.read().await;
-                        select_targets(&map, &path, writer.as_deref())
-                    };
-                    for target in targets {
-                        self.deliver_wake(&target, &path).await;
+                    // Build the set of keys this write should fan out to.
+                    // For a `<X>.error` or `<X>.failed` write, base key
+                    // subscribers (agents that depend_on `<X>`) also get
+                    // woken — that's the M6c step 5 "producer died, give
+                    // up" path. Their role prompts already check for
+                    // .error/.failed and branch accordingly.
+                    let mut keys_to_fan: Vec<String> = vec![path.clone()];
+                    keys_to_fan.extend(base_key_aliases(&path));
+
+                    // Snapshot subs once; iterate fan-out keys against it.
+                    let map = self.subs.read().await.clone();
+                    // De-dup targets across fan-out keys so an agent
+                    // doesn't get N redundant kicks if it happens to
+                    // subscribe to both `<X>` and `<X>.error`.
+                    let mut delivered: std::collections::HashSet<String> = Default::default();
+                    for key in &keys_to_fan {
+                        for t in select_targets(&map, key, writer.as_deref()) {
+                            if delivered.insert(t.clone()) {
+                                self.deliver_wake(&t, &path).await;
+                            }
+                        }
                     }
                 }
-                Ok(_) => {} // ignore non-blackboard events
+                Ok(SwarmEvent::AgentState { agent_id, state }) => {
+                    if matches!(state, flockmux_protocol::ws_swarm::AgentState::Exited) {
+                        self.handle_agent_exit(&agent_id).await;
+                    }
+                }
+                Ok(_) => {} // ignore the rest (message, message_read)
                 Err(RecvError::Lagged(n)) => {
                     // Broadcast buffer overflow — should never happen in
                     // practice (we'd have to lag by hundreds of events).
@@ -162,6 +272,115 @@ impl WakeCoordinator {
                     break;
                 }
             }
+        }
+    }
+
+    /// Producer-died fallback. When an agent transitions to Exited we
+    /// look up the `handoff_signal` it was supposed to produce; if that
+    /// key isn't on the blackboard yet, write `<signal>.error` so
+    /// downstream dependents (test agent waiting on `frontend.done`,
+    /// etc.) can detect the upstream failure and branch instead of
+    /// hanging forever.
+    ///
+    /// Best-effort: every failure path is logged and swallowed. We
+    /// always clean up the exit_keys entry so a duplicate Exited event
+    /// (kill-then-natural-exit race) doesn't try to write again.
+    async fn handle_agent_exit(&self, agent_id: &str) {
+        let ek = {
+            let map = self.exit_keys.read().await;
+            match map.get(agent_id) {
+                Some(k) if !k.handoff_signal.is_empty() => k.clone(),
+                _ => return, // no registered handoff or already cleaned up
+            }
+        };
+        unregister_exit_key(&self.exit_keys, agent_id).await;
+        let signal = ek.handoff_signal.clone();
+
+        // Did THIS run's agent write the signal? Query the
+        // blackboard_ops history for the path; if the latest write's
+        // `at` is newer than our spawn time, we're done — that's our
+        // agent's commit. Older `at` means the row is left over from a
+        // previous run on the same workspace, and the current agent
+        // crashed before producing its own; that's the case we owe an
+        // `.error` for.
+        let store = self.swarm.store();
+        let fresh = match store
+            .list_blackboard_ops(Some(signal.clone()))
+            .await
+        {
+            Ok(rows) => rows
+                .first()
+                .map(|r| r.at >= ek.spawned_at_ms)
+                .unwrap_or(false),
+            Err(err) => {
+                tracing::warn!(
+                    ?err,
+                    agent_id,
+                    signal,
+                    "list_blackboard_ops failed; assuming agent didn't write the signal"
+                );
+                false
+            }
+        };
+        if fresh {
+            tracing::debug!(
+                agent_id,
+                signal,
+                "agent exited with handoff signal already written; no .error needed"
+            );
+            return;
+        }
+
+        // Naming: `<role>.error` matches the convention agents already
+        // self-write when they detect their own failure (see
+        // `roles/frontend.md` Upstream-failed branch). Using the same
+        // key for the auto-synthesised failure means downstream role
+        // prompts only need to check ONE key — they get the same value
+        // whether the producer aborted gracefully or crashed.
+        let error_key = format!("{}.error", ek.role);
+        let body = serde_json::json!({
+            "agent_id": agent_id,
+            "role": ek.role,
+            "signal": signal,
+            "reason": "agent exited without writing its handoff signal",
+            "at": now_ms(),
+        });
+        let body_str = serde_json::to_string_pretty(&body).unwrap_or_else(|_| body.to_string());
+        match self.swarm.write_blackboard(Some("system".into()), &error_key, &body_str).await {
+            Ok(_) => {
+                tracing::info!(
+                    agent_id,
+                    signal,
+                    error_key,
+                    "agent exited without producing signal; wrote .error fallback"
+                );
+            }
+            Err(err) => {
+                tracing::warn!(
+                    ?err,
+                    agent_id,
+                    error_key,
+                    "failed to write .error fallback"
+                );
+                // Don't bail — still try to wake subscribers below so
+                // they at least get a mailbox note describing the
+                // upstream failure, even if the .error file is missing.
+            }
+        }
+
+        // Critical: explicitly wake subscribers of the ORIGINAL signal,
+        // not of the .error key. depends_on lists keys like
+        // "frontend.done", not "frontend.error" — without this direct
+        // dispatch, the .error write alone would not unblock anyone
+        // (the BlackboardChanged broadcast for `<role>.error` matches
+        // nobody's subscription).
+        let writer = Some(agent_id.to_string());
+        let targets = {
+            let map = self.subs.read().await;
+            select_targets(&map, &signal, writer.as_deref())
+        };
+        for target in targets {
+            self.deliver_wake(&target, &error_key).await;
         }
     }
 
@@ -347,6 +566,85 @@ mod tests {
         let registry = Registry::new();
         let err = inject_wake_kick(&registry, "ghost", "k").await.unwrap_err();
         assert!(format!("{err:#}").contains("ghost"));
+    }
+
+    // ── M6c step 5: exit_keys + .error/.failed fan-out ──────────────────
+
+    #[tokio::test]
+    async fn exit_key_register_and_unregister() {
+        let keys: ExitKeys = Arc::new(RwLock::new(HashMap::new()));
+        register_exit_key(
+            &keys,
+            "a".into(),
+            "frontend".into(),
+            "frontend.done".into(),
+            1_700_000_000_000,
+        )
+        .await;
+        let stored = keys.read().await.get("a").cloned();
+        assert_eq!(stored.as_ref().map(|k| k.role.as_str()), Some("frontend"));
+        assert_eq!(stored.as_ref().map(|k| k.handoff_signal.as_str()), Some("frontend.done"));
+        assert_eq!(stored.map(|k| k.spawned_at_ms), Some(1_700_000_000_000));
+        unregister_exit_key(&keys, "a").await;
+        assert!(keys.read().await.get("a").is_none());
+    }
+
+    #[tokio::test]
+    async fn exit_key_register_ignores_empty_signal() {
+        // planner has no handoff_signal; we shouldn't pollute the map.
+        let keys: ExitKeys = Arc::new(RwLock::new(HashMap::new()));
+        register_exit_key(
+            &keys,
+            "planner-a".into(),
+            "planner".into(),
+            "".into(),
+            1_700_000_000_000,
+        )
+        .await;
+        assert!(
+            keys.read().await.get("planner-a").is_none(),
+            "empty handoff_signal shouldn't pollute exit_keys"
+        );
+    }
+
+    #[test]
+    fn base_key_aliases_strips_error_suffix() {
+        assert_eq!(base_key_aliases("frontend.done.error"), vec!["frontend.done"]);
+    }
+
+    #[test]
+    fn base_key_aliases_strips_failed_suffix() {
+        assert_eq!(base_key_aliases("backend.done.failed"), vec!["backend.done"]);
+    }
+
+    #[test]
+    fn base_key_aliases_passes_through_plain_key() {
+        // Regular key (no suffix) → no fan-out, the wake loop wakes only
+        // the literal-key subscribers as before.
+        assert!(base_key_aliases("frontend.done").is_empty());
+        assert!(base_key_aliases("api.spec").is_empty());
+    }
+
+    #[test]
+    fn base_key_aliases_handles_bare_suffix() {
+        // ".error" with empty base — definitely not a real handoff key
+        // anyone subscribed to. Empty Vec → no fan-out.
+        assert!(base_key_aliases(".error").is_empty());
+        assert!(base_key_aliases(".failed").is_empty());
+    }
+
+    #[test]
+    fn fanout_wakes_base_key_subscribers_on_error() {
+        // dependent subscribes to "frontend.done"; .error write should
+        // reach them via base_key_aliases → select_targets("frontend.done").
+        let map = build_subs(&[("test-a", &["frontend.done"])]);
+        // Direct hit on the .error key — no subscribers.
+        assert!(select_targets(&map, "frontend.done.error", None).is_empty());
+        // But the aliased base key picks up the dependent.
+        let aliases = base_key_aliases("frontend.done.error");
+        assert_eq!(aliases, vec!["frontend.done"]);
+        let woken = select_targets(&map, &aliases[0], None);
+        assert_eq!(woken, vec!["test-a".to_string()]);
     }
 
     // ── cycle detection ─────────────────────────────────────────────────
