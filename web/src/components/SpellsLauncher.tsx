@@ -12,6 +12,16 @@
  *     stable for the session's lifetime.
  *   - Failure modes are user-facing: a /api/spells 500 is logged inline
  *     so people don't think the dropdown is just empty.
+ *
+ * Two run paths:
+ *   - "✨ Auto" — primary CTA. Hardcodes `name: "auto-dispatch"`; the
+ *     planner agent reads the task, picks a downstream spell, and
+ *     launches it. Workspace input is ignored (planner picks one).
+ *     Hidden if the auto-dispatch spell isn't loaded server-side.
+ *   - "run" — manual. Uses whatever the user picked in the dropdown
+ *     + the explicit workspace dir. Always available; useful when
+ *     the user already knows which spell they want or wants to feed
+ *     a specific workspace path.
  */
 
 import { useEffect, useState } from "react";
@@ -64,20 +74,24 @@ export function SpellsLauncher({ onSpellLaunched }: Props) {
     return null;
   }
 
-  const run = async () => {
-    if (!selected || !task.trim()) return;
+  // Shared launch path: PUT-and-forget the spell run, render the spawn
+  // summary, clear the task input on success. `name` is the only thing
+  // that differs between the manual and auto buttons — auto hardcodes
+  // "auto-dispatch", manual uses whatever the dropdown selected.
+  const launch = async (name: string, includeWorkspace: boolean) => {
+    if (!name || !task.trim()) return;
     setBusy(true);
     setError(null);
     setLastRun(null);
     try {
-      const wd = workspaceDir.trim();
+      const wd = includeWorkspace ? workspaceDir.trim() : "";
       const resp = await api.runSpell({
-        name: selected,
+        name,
         task: task.trim(),
         ...(wd ? { workspace_dir: wd } : {}),
       });
       setLastRun(
-        `spawned ${resp.agents.length} agent(s): ${resp.agents
+        `spawned ${resp.agents.length} agent(s) via ${name}: ${resp.agents
           .map((a) => `${a.role}=${a.agent_id}`)
           .join(", ")}`,
       );
@@ -90,10 +104,43 @@ export function SpellsLauncher({ onSpellLaunched }: Props) {
     }
   };
 
+  const run = () => launch(selected, true);
+  const runAuto = () => launch("auto-dispatch", false);
+
+  const hasAutoDispatch = spells.some((s) => s.name === "auto-dispatch");
   const current = spells.find((s) => s.name === selected);
 
   return (
     <div style={wrap}>
+      <input
+        type="text"
+        value={task}
+        onChange={(e) => setTask(e.target.value)}
+        onKeyDown={(e) => {
+          // Enter on the task input triggers the PRIMARY action: Auto if
+          // available, otherwise manual. Power users who want manual with
+          // Enter can press it while focused in the dropdown or workspace
+          // input (those forward to `run()` below).
+          if (e.key === "Enter") {
+            if (hasAutoDispatch) runAuto();
+            else run();
+          }
+        }}
+        placeholder="任务描述 / what do you want to build?"
+        style={input}
+        disabled={busy}
+      />
+      {hasAutoDispatch && (
+        <button
+          onClick={runAuto}
+          disabled={busy || !task.trim()}
+          style={autoButton}
+          title="Auto: planner picks the right spell for your task. Workspace dir below is ignored — the planner picks one."
+        >
+          {busy ? "thinking…" : "✨ Auto"}
+        </button>
+      )}
+      <span style={divider}>or</span>
       <select
         value={selected}
         onChange={(e) => setSelected(e.target.value)}
@@ -103,21 +150,10 @@ export function SpellsLauncher({ onSpellLaunched }: Props) {
       >
         {spells.map((s) => (
           <option key={s.name} value={s.name}>
-            ✨ {s.name} ({s.agents.map((a) => `${a.role}:${a.cli}`).join(" → ")})
+            {s.name} ({s.agents.map((a) => `${a.role}:${a.cli}`).join(" → ")})
           </option>
         ))}
       </select>
-      <input
-        type="text"
-        value={task}
-        onChange={(e) => setTask(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") run();
-        }}
-        placeholder="task description…"
-        style={input}
-        disabled={busy}
-      />
       <input
         type="text"
         value={workspaceDir}
@@ -130,8 +166,8 @@ export function SpellsLauncher({ onSpellLaunched }: Props) {
         disabled={busy}
         title="Absolute path. Only used by spells with shared_workspace=true (e.g. fullstack-feature). Leave blank to let the server pick one."
       />
-      <button onClick={run} disabled={busy || !task.trim()} title="run spell">
-        {busy ? "running…" : "run"}
+      <button onClick={run} disabled={busy || !task.trim()} title="run the spell selected in the dropdown">
+        run
       </button>
       {error && <span style={errStyle}>{error}</span>}
       {lastRun && <span style={okStyle}>{lastRun}</span>}
@@ -175,6 +211,27 @@ const workspaceInput: React.CSSProperties = {
   fontSize: 11,
   fontFamily: "inherit",
   minWidth: 160,
+};
+
+// Primary CTA — visually louder than the manual "run" button so a new
+// user's eye lands on it first. Purple gradient picks up the ✨ vibe.
+const autoButton: React.CSSProperties = {
+  background: "linear-gradient(135deg, #7c3aed 0%, #c026d3 100%)",
+  color: "#fff",
+  border: "1px solid #9333ea",
+  borderRadius: 4,
+  padding: "3px 12px",
+  fontSize: 12,
+  fontWeight: 600,
+  cursor: "pointer",
+  fontFamily: "inherit",
+};
+
+const divider: React.CSSProperties = {
+  color: "#6b7280",
+  fontSize: 11,
+  padding: "0 4px",
+  fontStyle: "italic",
 };
 
 const errStyle: React.CSSProperties = {
