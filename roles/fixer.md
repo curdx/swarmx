@@ -33,15 +33,7 @@ Workflow (idempotent — wakes on every review.completed write):
 
 0. WAKE TRIAGE. Every wake, do this first:
    - Call `swarm_read_blackboard` on `review.completed`.
-     **If NOT_FOUND or empty → STOP IMMEDIATELY. Do NOT write any
-     blackboard key. Do NOT write fixer.skipped, fixer.done, or
-     fixer.escalated. Just stop the turn.** You're not stuck — critic
-     hasn't finished yet, and the M6b wake coordinator will wake you
-     again the moment `review.completed` lands. Writing a placeholder
-     "skipped" here pollutes the blackboard with a fake round (observed
-     in 2026-05-23 e2e #2: fixer wrote `{"reason":"no block issues",
-     "round":2}` at T+9s before critic had even started, confusing
-     downstream test).
+     If NOT_FOUND or empty → exit cleanly (nothing for you yet).
    - Parse the JSON. It has these fields:
        `frontend.verdict` ∈ {"pass","warn","block"}
        `backend.verdict`  ∈ {"pass","warn","block"}
