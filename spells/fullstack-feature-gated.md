@@ -90,9 +90,12 @@ gate** between the architect's design and FE / BE starting to code.
      the new-path input, enter any non-empty body (e.g. `"ok"`),
      click write. The WakeCoordinator wakes FE + BE in the same
      tick. They proceed exactly like in `fullstack-feature`.
-   - **Reject**: kill the spell (× on each pane) and re-run with a
-     sharpened task description. v1 doesn't have an in-spell
-     revision loop; the architect's prompt explicitly says so.
+   - **Reject (M6d-2)**: type `design.rejected` into the same
+     new-path input + write `{"reason": "..."}` as the body. The
+     architect is subscribed to that key; it'll wake within a
+     second, read your reason, rewrite `design.md` addressing
+     it, send another "ready for review" message. Loop as many
+     times as needed; approve when you're happy.
 5. FE writes UI; BE writes api.spec + implementation; test runs
    Playwright. Same flow as `fullstack-feature` from this point on.
 
@@ -115,12 +118,14 @@ End state on the blackboard:
 Stick with `fullstack-feature` for demos / quick prototyping where
 fast turnaround matters more than direction-checking.
 
-## v1 limitations (M6d)
+## Known limitations (M6e+ work)
 
-- No in-spell revision loop. Kill + re-run on rejection.
 - If architect crashes, FE/BE silently keep waiting on
   `design.approved` (architect's `*.error` fan-out goes to nobody
   because nothing subscribes to `design.md`). Operator must notice
   and kill the spell.
 - No approval timeout — architect (and FE / BE / test) sit forever
   if the operator forgets.
+- No dedicated "Approve" / "Reject" buttons in the UI yet — the
+  operator writes the key by hand via the blackboard editor's
+  new-path input. M6d backlog item.

@@ -20,8 +20,9 @@ but flockmux-core does not enforce it.
 | `frontend.review`| critic    | test, system     | `{ role: "frontend", commit, verdict: "pass"\|"warn"\|"block", issues: [{ severity, where, summary }], reviewed_at }` (M6c step 6) |
 | `backend.review` | critic    | test, system     | Same shape as `frontend.review` with `role: "backend"` (M6c step 6) |
 | `review.completed`| critic   | test             | `{ frontend: { verdict, commit, issues }, backend: { verdict, commit, issues }, reviewed_at }`. Test waits on this in `fullstack-feature-reviewed` (spell-level `depends_on` override) so test never starts until critic has weighed in. (M6c step 6) |
-| `design.md`      | architect | human operator   | Short markdown: what we're building, tech stack, data model, API surface, UX sketch, open questions. Written ONCE at start of `fullstack-feature-gated`. The operator reads this and decides whether to approve. (M6c step 7) |
+| `design.md`      | architect | human operator   | Short markdown: what we're building, tech stack, data model, API surface, UX sketch, open questions. Written ONCE at start of `fullstack-feature-gated`, or REWRITTEN on each rejection round (M6d-2). The operator reads this and decides whether to approve or reject. |
 | `design.approved`| human operator | frontend, backend | Any non-empty value (operator writes via the blackboard panel). Its presence is what unblocks FE+BE in `fullstack-feature-gated` — they `depends_on = ["design.approved"]` and the M6b WakeCoordinator wakes them in the same tick. (M6c step 7) |
+| `design.rejected`| human operator | architect        | `{ "reason": "<short feedback>" }`. Architect subscribes via `depends_on = ["design.rejected"]`; on each write, it re-reads the reason, rewrites `design.md`, asks for re-review. Loop until `design.approved`. (M6d-2) |
 
 All `*_at` timestamps are ISO 8601 UTC.
 
