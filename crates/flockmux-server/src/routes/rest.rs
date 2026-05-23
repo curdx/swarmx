@@ -380,12 +380,12 @@ pub async fn kill(
             // M6b: tear down the wake subscription too so we don't try
             // to inject into a registry slot that's about to be dropped.
             crate::wake::unregister_wake_subs(&state.wake_subs, &agent_id).await;
-            // M6d-5: matching TTL row cleanup — the waiter is gone, no
-            // point ageing a subscription against a dead agent. The
-            // run-loop also handles this on AgentState::Exited, but
-            // doing it here means the kill route's response is fully
-            // consistent before the broadcast fans out.
-            crate::wake::unregister_wake_started_at(&state.wake_started_at, &agent_id).await;
+            // M6d-5b: drop any nudge-rate-limit rows owned by this
+            // waiter. The run-loop also handles this on
+            // AgentState::Exited, but doing it here means the kill
+            // route's response is fully consistent before the
+            // broadcast fans out.
+            crate::wake::unregister_wake_nudged(&state.wake_nudged, &agent_id).await;
             if let Err(e) = state
                 .store
                 .record_agent_kill(agent_id.clone(), now_ms())
@@ -583,19 +583,14 @@ pub async fn run_spell(
             resolved.depends_on.clone(),
         )
         .await;
-        // M6d-5: matching TTL bookkeeping. Stamps each (waiter, key)
-        // pair with the moment of registration so the WakeCoordinator's
-        // periodic scanner can age them out and nudge stuck producers.
-        // Single now_ms() snapshot so all keys in one registration share
-        // a deadline — keeps the eventual alert messages consistent.
-        let registered_at = now_ms();
-        crate::wake::register_wake_started_at(
-            &state.wake_started_at,
-            &out.agent_id,
-            &resolved.depends_on,
-            registered_at,
-        )
-        .await;
+        // M6d-5b: no extra TTL bookkeeping at registration time. The
+        // scanner derives "is this producer stuck?" from per-producer
+        // PTY quiet time (PtyStream::last_append_ms) rather than from
+        // a per-subscription wall-clock — chained spells regularly
+        // have subscriptions that legitimately wait past 5 minutes
+        // for upstream work to finish, and the old design fired
+        // false-positive nudges on those. The nudge-rate-limit table
+        // is populated lazily, only when a nudge actually fires.
         // M6c step 5: also remember which signal THIS agent is supposed
         // to produce + the moment we registered it. If the agent exits
         // without writing the signal, the wake coordinator turns that

@@ -85,21 +85,34 @@ pub struct ExitKey {
 }
 pub type ExitKeys = Arc<RwLock<HashMap<String, ExitKey>>>;
 
-/// M6d-5: TTL bookkeeping for subscribers waiting on blackboard keys.
-/// Keyed by `(waiter_agent_id, key)` → unix-ms when the subscription
-/// was registered. A periodic task in `WakeCoordinator` scans this and,
-/// for entries older than the TTL threshold whose key STILL hasn't
-/// landed, sends a swarm message to the role that's supposed to
-/// produce it ("hey, you're holding up <waiter> on <key>").
+/// M6d-5 (rev. M6d-5b): rate-limit table for TTL nudges. Keyed by
+/// `(waiter_agent_id, key)` → unix-ms when we LAST fired a nudge for
+/// this pair. Initially empty; entries only appear after a nudge has
+/// actually been sent.
+///
+/// The earlier M6d-5 design stored "subscription registration time"
+/// here and aged it out at a fixed threshold. That gave false
+/// positives in chained spells: e.g. `fullstack-feature-strict`'s
+/// critic subscribes to `fixer.done` at spell launch, but the
+/// strict pipeline (FE/BE work → critic round 1 → fixer round 1)
+/// can easily run past 5 minutes before fixer even starts — so the
+/// 5-minute wall-clock TTL would fire while fixer was perfectly
+/// healthy, just waiting its turn.
+///
+/// The new design measures *producer* quiet time instead: the
+/// scanner reads each producer's `PtyStream::last_append_ms` and
+/// only nudges when the producer itself has been silent for ≥ the
+/// threshold. This map exists solely to prevent re-nudging the same
+/// (waiter, key) pair every tick once it's eligible — it's a
+/// debounce, not a state machine.
 ///
 /// Entries are dropped:
 ///   - lazily when the relevant key actually lands on the blackboard
 ///     (BlackboardChanged handler prunes matching rows)
-///   - eagerly when the waiter is killed (the same path that drops
-///     wake_subs / exit_keys)
-///   - one-shot after a TTL alert fires (we nudge once, then stop —
-///     don't spam the producer turn after turn)
-pub type WakeStartedAt = Arc<RwLock<HashMap<(String, String), i64>>>;
+///   - eagerly when the waiter is killed
+///   - on the next eligibility check that's older than the threshold
+///     (`should_nudge_again` returns true again — same as a fresh entry)
+pub type WakeNudged = Arc<RwLock<HashMap<(String, String), i64>>>;
 
 /// How long a subscription can sit pending before TTL fires a nudge.
 /// 5 minutes was picked as "longer than a healthy agent's full turn,
@@ -168,41 +181,109 @@ pub async fn unregister_wake_subs(subs: &WakeSubs, agent_id: &str) {
     w.remove(agent_id);
 }
 
-/// M6d-5: bookkeeping companion to `register_wake_subs`. Records the
-/// moment each (waiter, key) pair was subscribed so the TTL scanner
-/// can age them out. Called in `run_spell` alongside the existing
-/// wake registration.
-pub async fn register_wake_started_at(
-    started: &WakeStartedAt,
-    agent_id: &str,
-    keys: &[String],
-    now_ms: i64,
-) {
-    if keys.is_empty() {
-        return;
-    }
-    let mut w = started.write().await;
-    for key in keys {
-        w.insert((agent_id.to_string(), key.clone()), now_ms);
-    }
-}
-
-/// M6d-5: drop every started-at row for a single waiter. Called on
-/// kill (the waiter is gone; any pending TTL alert against it is
-/// moot).
-pub async fn unregister_wake_started_at(started: &WakeStartedAt, agent_id: &str) {
-    let mut w = started.write().await;
+/// M6d-5b: drop every nudge-rate-limit row for a single waiter.
+/// Called when the waiter is killed: any future nudges that would
+/// have referenced this waiter would point at a dead agent anyway,
+/// so the rate-limit row is moot.
+pub async fn unregister_wake_nudged(nudged: &WakeNudged, agent_id: &str) {
+    let mut w = nudged.write().await;
     w.retain(|(aid, _), _| aid != agent_id);
 }
 
-/// M6d-5: drop every started-at row for a key the moment it lands on
-/// the blackboard. Called from WakeCoordinator's BlackboardChanged
-/// handler so the TTL scanner doesn't keep ageing entries that have
-/// already been resolved. Matches across all waiters because the key
-/// landing means EVERYONE waiting on it is unblocked.
-pub async fn prune_wake_started_at(started: &WakeStartedAt, key: &str) {
-    let mut w = started.write().await;
+/// M6d-5b: drop every nudge-rate-limit row for a key the moment it
+/// lands on the blackboard. The waiter is unblocked, so there's no
+/// reason to keep a row that could prevent a future *unrelated*
+/// nudge (if the same role somehow re-subscribed). Matches across
+/// all waiters of the key — they're all unblocked by the same write.
+pub async fn prune_wake_nudged_by_key(nudged: &WakeNudged, key: &str) {
+    let mut w = nudged.write().await;
     w.retain(|(_, k), _| k != key);
+}
+
+/// M6d-5b: pure decision helper for the TTL scanner. Returns the
+/// list of (waiter, key, producer_aid, producer_role) triples that
+/// should fire a nudge right now.
+///
+/// Selection rules:
+///   - waiter is subscribed to `key` (key appears in `subs[waiter]`)
+///   - some in-spell agent declares `key` as its `handoff_signal`
+///     (the "producer"); external-input keys are skipped
+///   - producer ≠ waiter (no self-loop, defence-in-depth)
+///   - producer's PTY has been quiet ≥ `threshold_ms`
+///   - producer's PTY has appended *at least once* (`last_append_ms > 0`);
+///     a never-started producer might just be slow to bootstrap, not
+///     stuck, so we don't nudge it
+///   - either we've never nudged this (waiter, key) pair, OR the
+///     last nudge was ≥ `threshold_ms` ago (rate limit)
+///
+/// All inputs are owned snapshots so this can be unit-tested without
+/// touching the registry or the runtime.
+pub fn select_ttl_targets(
+    subs: &HashMap<String, Vec<String>>,
+    exit_keys: &HashMap<String, ExitKey>,
+    producer_last_append: &HashMap<String, i64>,
+    wake_nudged: &HashMap<(String, String), i64>,
+    now_ms: i64,
+    threshold_ms: i64,
+) -> Vec<TtlNudgeTarget> {
+    // Invert exit_keys: handoff_signal → (producer_aid, producer_role).
+    // Empty handoff signals are filtered out — those roles (planner,
+    // inline-only critics) never produce a blackboard key in the
+    // first place. If two agents somehow claim the same signal, the
+    // last one wins; that's an invariant violation worth panicking
+    // on in tests, but in production we just pick one.
+    let mut key_to_producer: HashMap<&str, (&str, &str)> = HashMap::new();
+    for (aid, ek) in exit_keys {
+        if !ek.handoff_signal.is_empty() {
+            key_to_producer.insert(ek.handoff_signal.as_str(), (aid.as_str(), ek.role.as_str()));
+        }
+    }
+
+    let mut targets = Vec::new();
+    for (waiter, keys) in subs {
+        for key in keys {
+            let Some(&(producer_aid, producer_role)) = key_to_producer.get(key.as_str()) else {
+                continue; // external input
+            };
+            if producer_aid == waiter.as_str() {
+                continue; // shouldn't happen — self-loop guard
+            }
+            let last_append = producer_last_append.get(producer_aid).copied().unwrap_or(0);
+            if last_append == 0 {
+                continue; // producer hasn't started yet — give it time
+            }
+            if now_ms.saturating_sub(last_append) < threshold_ms {
+                continue; // producer is actively streaming
+            }
+            // Rate limit: if we nudged this pair recently, skip.
+            let key_pair = (waiter.clone(), key.clone());
+            if let Some(&last_nudge) = wake_nudged.get(&key_pair) {
+                if now_ms.saturating_sub(last_nudge) < threshold_ms {
+                    continue;
+                }
+            }
+            targets.push(TtlNudgeTarget {
+                waiter: waiter.clone(),
+                key: key.clone(),
+                producer_aid: producer_aid.to_string(),
+                producer_role: producer_role.to_string(),
+                producer_last_append_ms: last_append,
+            });
+        }
+    }
+    targets
+}
+
+/// Output of `select_ttl_targets`. Holds enough to build the nudge
+/// message (role names, elapsed quiet time) without re-locking the
+/// state maps in the caller.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TtlNudgeTarget {
+    pub waiter: String,
+    pub key: String,
+    pub producer_aid: String,
+    pub producer_role: String,
+    pub producer_last_append_ms: i64,
 }
 
 /// Insert this agent's expected handoff_signal + spawn time. No-op when
@@ -268,6 +349,28 @@ pub async fn inject_wake_kick(
     agent_id: &str,
     key: &str,
 ) -> Result<()> {
+    // Standard "key updated, please check" text. For TTL nudges where
+    // the agent is the *producer* of the overdue key (not a subscriber),
+    // the caller should use `inject_with_kick_text` directly so the
+    // message reads as "you're blocking <waiter>" instead.
+    let kick_text = format!("blackboard `{key}` updated; please check");
+    inject_with_kick_text(registry, agent_id, &kick_text, key).await
+}
+
+/// Body of the PTY-kick. Split out so the TTL nudge path can pass a
+/// message that reflects "you're stuck producing X" instead of the
+/// regular "X updated; please check" — the latter is misleading when
+/// X is the recipient's OWN handoff signal.
+///
+/// `key_for_log` is the blackboard key this kick is about, used only
+/// for the structured log fields so downstream tail / grep / dashboard
+/// pipelines stay searchable by key name regardless of the message body.
+pub async fn inject_with_kick_text(
+    registry: &Registry,
+    agent_id: &str,
+    kick_text: &str,
+    key_for_log: &str,
+) -> Result<()> {
     let slot = registry
         .get(agent_id)
         .ok_or_else(|| anyhow!("no registry slot for `{agent_id}` — agent may have exited"))?;
@@ -291,7 +394,7 @@ pub async fn inject_wake_kick(
     if !pty_quiet_enough_to_inject(last, now) {
         tracing::info!(
             agent_id,
-            key,
+            key = key_for_log,
             last_output_ms_ago = now.saturating_sub(last),
             "skipping wake PTY-inject; agent appears mid-stream (mailbox already delivered)"
         );
@@ -316,7 +419,7 @@ pub async fn inject_wake_kick(
     //   `rest.rs` spell-bootstrap inject already does (see the
     //   "PTY paste send" path), which is why bootstrap injection has
     //   always worked for codex but wake injection did not.
-    let body = format!("\x15blackboard `{key}` updated; please check");
+    let body = format!("\x15{kick_text}");
     input_tx
         .send(Bytes::from(body))
         .await
@@ -333,10 +436,12 @@ pub struct WakeCoordinator {
     registry: Registry,
     subs: WakeSubs,
     exit_keys: ExitKeys,
-    /// M6d-5: TTL bookkeeping. Populated by `run_spell` via
-    /// `register_wake_started_at`; pruned here when the awaited key
-    /// lands; aged out by the periodic scanner below.
-    started_at: WakeStartedAt,
+    /// M6d-5b: per-pair rate-limit for TTL nudges. Populated lazily —
+    /// only after a nudge actually fires — so the scanner doesn't
+    /// re-nudge the same (waiter, key) every minute while the
+    /// producer stays quiet. Pruned on BlackboardChanged (key landed)
+    /// and on AgentState::Exited (waiter died).
+    wake_nudged: WakeNudged,
 }
 
 impl WakeCoordinator {
@@ -349,14 +454,14 @@ impl WakeCoordinator {
         registry: Registry,
         subs: WakeSubs,
         exit_keys: ExitKeys,
-        started_at: WakeStartedAt,
+        wake_nudged: WakeNudged,
     ) -> JoinHandle<()> {
         let me = Self {
             swarm,
             registry,
             subs,
             exit_keys,
-            started_at,
+            wake_nudged,
         };
         tokio::spawn(me.run())
     }
@@ -393,14 +498,15 @@ impl WakeCoordinator {
                         let mut keys_to_fan: Vec<String> = vec![path.clone()];
                         keys_to_fan.extend(base_key_aliases(&path));
 
-                        // M6d-5: prune started-at rows for any key that
-                        // just landed so the TTL scanner doesn't keep
-                        // ageing resolved subscriptions. We prune for
+                        // M6d-5b: prune nudge-rate-limit rows for any
+                        // key that just landed so a future re-subscription
+                        // on the same key doesn't get spuriously rate-
+                        // limited by yesterday's nudge. We prune for
                         // every fan-out key (including aliases) because
                         // a `frontend.done.error` resolves
                         // `frontend.done`-subscribers in the same tick.
                         for key in &keys_to_fan {
-                            prune_wake_started_at(&self.started_at, key).await;
+                            prune_wake_nudged_by_key(&self.wake_nudged, key).await;
                         }
 
                         // Snapshot subs once; iterate fan-out keys against it.
@@ -420,13 +526,13 @@ impl WakeCoordinator {
                     Ok(SwarmEvent::AgentState { agent_id, state }) => {
                         if matches!(state, flockmux_protocol::ws_swarm::AgentState::Exited) {
                             self.handle_agent_exit(&agent_id).await;
-                            // M6d-5: agent gone — drop any TTL rows it
-                            // owned as waiter. Producer-side cleanup is
-                            // handled by handle_agent_exit's existing
-                            // exit_keys path (it writes .error which
-                            // prunes started_at via the BlackboardChanged
-                            // arm above).
-                            unregister_wake_started_at(&self.started_at, &agent_id).await;
+                            // M6d-5b: agent gone — drop any nudge-rate-
+                            // limit rows it owned as waiter. Producer-
+                            // side cleanup is handled by handle_agent_exit's
+                            // existing exit_keys path (it writes .error
+                            // which prunes wake_nudged via the
+                            // BlackboardChanged arm above).
+                            unregister_wake_nudged(&self.wake_nudged, &agent_id).await;
                         }
                     }
                     Ok(_) => {} // ignore the rest (message, message_read)
@@ -450,69 +556,80 @@ impl WakeCoordinator {
         }
     }
 
-    /// M6d-5: walk the started_at table and, for each (waiter, key)
-    /// pair past the TTL threshold, send a one-shot nudge to the role
-    /// that's supposed to produce the key. Removes the row after
-    /// firing so we don't spam the producer every tick.
+    /// M6d-5b: walk the subscription table, check each producer's PTY
+    /// quiet time, and fire a nudge for every (waiter, key) whose
+    /// producer has been silent ≥ `TTL_THRESHOLD_MS`. Selection logic
+    /// lives in the pure `select_ttl_targets`; this function only
+    /// gathers snapshots and dispatches messages.
     ///
-    /// What this catches: a producer that's still alive but has gone
-    /// quiet (e.g. waiting for user input, stuck in a long thought
-    /// stream, looping on a tool error). What it doesn't catch:
-    /// producer already dead — that's `handle_agent_exit`'s job, and
-    /// the .error write there prunes the started_at row before we
-    /// ever see it overdue.
+    /// What this catches: a producer agent that's alive (registry
+    /// slot exists) but whose PTY hasn't emitted a chunk in 5+
+    /// minutes — i.e. genuinely stuck (waiting for user input,
+    /// looping on a confirm prompt, mid-network-failure). What it
+    /// doesn't catch: producer dead — that's `handle_agent_exit`'s
+    /// `.error` fallback. What it correctly *doesn't* false-trigger
+    /// on (regression from the v1 design): healthy chained spells
+    /// where the producer simply hasn't reached its turn yet — those
+    /// producers either don't exist in the registry yet or have a
+    /// `last_append_ms` of 0 (never streamed) and the helper skips
+    /// them on purpose.
     async fn scan_ttl(&self) {
         let now = now_ms();
-        let overdue: Vec<((String, String), i64)> = {
-            let map = self.started_at.read().await;
-            map.iter()
-                .filter(|(_, &t)| now - t >= TTL_THRESHOLD_MS)
-                .map(|(k, &t)| (k.clone(), t))
-                .collect()
-        };
-        if overdue.is_empty() {
+        let subs_snap = self.subs.read().await.clone();
+        if subs_snap.is_empty() {
             return;
         }
-        // Snapshot exit_keys once so the producer lookup is consistent
-        // across all overdue entries this tick.
         let exit_keys_snap = self.exit_keys.read().await.clone();
-        for ((waiter, key), started_at) in overdue {
-            let elapsed_min = ((now - started_at).max(0) / 60_000) as i64;
-            // Invert exit_keys: which still-living agent declares this
-            // key as its handoff_signal? If none, the producer is dead
-            // (M6c-5 already handled this with .error) OR the key has
-            // no in-spell producer (external input) — either way,
-            // nobody to nudge. Drop the row and move on.
-            let producer = exit_keys_snap
-                .iter()
-                .find(|(_, ek)| ek.handoff_signal == key)
-                .map(|(aid, ek)| (aid.clone(), ek.role.clone()));
-            let Some((producer_aid, producer_role)) = producer else {
-                tracing::debug!(
-                    waiter, key, elapsed_min,
-                    "TTL: no producer in exit_keys; dropping row (likely already finished or external input)"
-                );
-                let mut w = self.started_at.write().await;
-                w.remove(&(waiter, key));
-                continue;
-            };
-            // Find a friendly name for the waiter for the nudge body.
-            // Falls back to the agent_id if the registry slot is gone
-            // (shouldn't normally happen — waiter unregister is via
-            // AgentState::Exited which prunes started_at first).
+        if exit_keys_snap.is_empty() {
+            return;
+        }
+        let nudged_snap = self.wake_nudged.read().await.clone();
+        // Collect last_append_ms for every producer we might nudge.
+        // The lookup is cheap (Arc + atomic) so we capture all
+        // candidate producers — not all of them will be selected
+        // by the helper, but the upper bound is tiny (≤ N agents
+        // per spell).
+        let mut producer_streams: HashMap<String, i64> = HashMap::new();
+        for aid in exit_keys_snap.keys() {
+            if let Some(slot) = self.registry.get(aid) {
+                let stream = slot.lock().stream.clone();
+                producer_streams.insert(aid.clone(), stream.last_append_ms());
+            }
+        }
+        let targets = select_ttl_targets(
+            &subs_snap,
+            &exit_keys_snap,
+            &producer_streams,
+            &nudged_snap,
+            now,
+            TTL_THRESHOLD_MS,
+        );
+        if targets.is_empty() {
+            return;
+        }
+
+        for target in targets {
+            let quiet_for_min =
+                (now.saturating_sub(target.producer_last_append_ms) / 60_000) as i64;
+            // Friendly waiter name for the message body. Falls back
+            // to the agent_id if the waiter isn't in exit_keys
+            // (planner / inline-only roles); the agent_id is still
+            // human-actionable through the swarm panel.
             let waiter_label = exit_keys_snap
-                .get(&waiter)
+                .get(&target.waiter)
                 .map(|ek| ek.role.clone())
-                .unwrap_or_else(|| waiter.clone());
+                .unwrap_or_else(|| target.waiter.clone());
             let body = format!(
-                "TTL nudge: your handoff signal `{key}` is {elapsed_min} min overdue. \
-                 `{waiter_label}` is blocked waiting for it. \
-                 If you're stuck or done, please write `{key}` (success) \
-                 or `{producer_role}.error` (failure) to the blackboard so the spell can advance."
+                "TTL nudge: your PTY has been quiet for {quiet_for_min} min while \
+                 `{waiter_label}` waits for your handoff signal `{}`. \
+                 If you're stuck, please progress; if you're done, please write \
+                 `{}` (success) or `{}.error` (failure) to the blackboard so the \
+                 spell can advance.",
+                target.key, target.key, target.producer_role,
             );
             let msg = NewMessage {
                 from_agent: "system".into(),
-                to_agent: producer_aid.clone(),
+                to_agent: target.producer_aid.clone(),
                 kind: "wake".into(),
                 body,
                 sent_at: now,
@@ -521,38 +638,53 @@ impl WakeCoordinator {
             match self.swarm.send_message(msg).await {
                 Ok(_) => {
                     tracing::info!(
-                        producer_aid, producer_role, waiter_label, key, elapsed_min,
+                        producer_aid = target.producer_aid,
+                        producer_role = target.producer_role,
+                        waiter_label,
+                        key = target.key,
+                        quiet_for_min,
                         "TTL nudge sent"
                     );
-                    // PTY kick so a sleeping producer wakes immediately,
-                    // not just on its next Stop hook.
-                    if let Err(err) =
-                        inject_wake_kick(&self.registry, &producer_aid, &key).await
+                    // Custom PTY-kick text — the standard "blackboard
+                    // <K> updated; please check" wording is wrong here
+                    // because <K> is the recipient's own handoff
+                    // signal, not something they should read. Tell
+                    // them what they actually need to do.
+                    let kick_text = format!(
+                        "you are blocking `{}` on `{}`; please progress (or write `{}.error`)",
+                        waiter_label, target.key, target.producer_role,
+                    );
+                    if let Err(err) = inject_with_kick_text(
+                        &self.registry,
+                        &target.producer_aid,
+                        &kick_text,
+                        &target.key,
+                    )
+                    .await
                     {
                         tracing::debug!(
                             ?err,
-                            producer_aid,
+                            producer_aid = target.producer_aid,
                             "TTL nudge PTY inject failed (mailbox delivered, will catch on next Stop)"
                         );
                     }
+                    // Mark this pair as nudged so we don't re-fire
+                    // every tick. Will be cleared by BlackboardChanged
+                    // (key landed) or waiter Exited (cleanup), or by
+                    // the rate-limit window elapsing naturally.
+                    let mut w = self.wake_nudged.write().await;
+                    w.insert((target.waiter, target.key), now);
                 }
                 Err(err) => {
                     tracing::warn!(
-                        ?err, producer_aid, key,
+                        ?err,
+                        producer_aid = target.producer_aid,
+                        key = target.key,
                         "TTL nudge send_message failed; will retry next tick"
                     );
-                    // Don't remove the started_at row — we want to retry
-                    // next tick. Skip the rest of this iteration so the
-                    // remove below doesn't fire.
-                    continue;
+                    // Don't record this as nudged — we want to retry.
                 }
             }
-            // One-shot semantics: drop the row so we don't re-nudge.
-            // If the producer's still wedged 5 min from now, the
-            // waiter is also dead in the water and the operator will
-            // notice via the panel — better than tick-tick-tick spam.
-            let mut w = self.started_at.write().await;
-            w.remove(&(waiter, key));
         }
     }
 
@@ -982,78 +1114,196 @@ mod tests {
         assert!(detect_depends_on_cycles(&handoff, &deps).is_ok());
     }
 
-    // ── M6d-5: TTL bookkeeping ──────────────────────────────────────────
+    // ── M6d-5b: TTL based on producer PTY quiet time ────────────────────
 
-    #[tokio::test]
-    async fn started_at_register_records_each_key() {
-        let started: WakeStartedAt = Arc::new(RwLock::new(HashMap::new()));
-        register_wake_started_at(
-            &started,
-            "test-a",
-            &["frontend.done".into(), "backend.done".into()],
-            1_700_000_000_000,
-        )
-        .await;
-        let snap = started.read().await;
-        assert_eq!(snap.len(), 2);
-        assert_eq!(
-            snap.get(&("test-a".into(), "frontend.done".into())),
-            Some(&1_700_000_000_000)
+    fn mk_exit_keys(entries: &[(&str, &str, &str)]) -> HashMap<String, ExitKey> {
+        // (agent_id, role, handoff_signal) tuples.
+        entries
+            .iter()
+            .map(|(aid, role, sig)| {
+                (
+                    aid.to_string(),
+                    ExitKey {
+                        role: role.to_string(),
+                        handoff_signal: sig.to_string(),
+                        spawned_at_ms: 0,
+                    },
+                )
+            })
+            .collect()
+    }
+
+    fn mk_streams(entries: &[(&str, i64)]) -> HashMap<String, i64> {
+        entries
+            .iter()
+            .map(|(aid, t)| (aid.to_string(), *t))
+            .collect()
+    }
+
+    const TTL: i64 = 5 * 60 * 1000;
+    const NOW: i64 = 1_700_000_000_000;
+
+    #[test]
+    fn select_ttl_fires_when_producer_quiet_beyond_threshold() {
+        // critic waits on fixer.done; fixer's PTY last appended 10 min
+        // ago. select should fire one target.
+        let subs = build_subs(&[("critic-1", &["fixer.done"])]);
+        let ek = mk_exit_keys(&[("fixer-1", "fixer", "fixer.done")]);
+        let streams = mk_streams(&[("fixer-1", NOW - 10 * 60 * 1000)]);
+        let nudged = HashMap::new();
+        let out = select_ttl_targets(&subs, &ek, &streams, &nudged, NOW, TTL);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].waiter, "critic-1");
+        assert_eq!(out[0].key, "fixer.done");
+        assert_eq!(out[0].producer_aid, "fixer-1");
+        assert_eq!(out[0].producer_role, "fixer");
+    }
+
+    #[test]
+    fn select_ttl_skips_when_producer_active() {
+        // fixer just appended 1s ago — clearly working. No nudge.
+        let subs = build_subs(&[("critic-1", &["fixer.done"])]);
+        let ek = mk_exit_keys(&[("fixer-1", "fixer", "fixer.done")]);
+        let streams = mk_streams(&[("fixer-1", NOW - 1_000)]);
+        let nudged = HashMap::new();
+        let out = select_ttl_targets(&subs, &ek, &streams, &nudged, NOW, TTL);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn select_ttl_skips_when_producer_never_started() {
+        // last_append_ms == 0 means "stream has never appended". The
+        // producer might just be slow to bootstrap, or might genuinely
+        // be down — either way, the v1 design's "fire after wall-clock"
+        // was the wrong call. Do nothing.
+        let subs = build_subs(&[("critic-1", &["fixer.done"])]);
+        let ek = mk_exit_keys(&[("fixer-1", "fixer", "fixer.done")]);
+        let streams = mk_streams(&[("fixer-1", 0)]);
+        let nudged = HashMap::new();
+        let out = select_ttl_targets(&subs, &ek, &streams, &nudged, NOW, TTL);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn select_ttl_skips_external_keys() {
+        // Waiter subscribes to a key nobody in the spell produces (e.g.
+        // a human-written gate signal). No producer → no nudge target.
+        let subs = build_subs(&[("fe-1", &["design.approved"])]);
+        let ek = mk_exit_keys(&[("fe-1", "frontend", "frontend.done")]);
+        let streams = mk_streams(&[("fe-1", NOW - 10 * 60 * 1000)]);
+        let nudged = HashMap::new();
+        let out = select_ttl_targets(&subs, &ek, &streams, &nudged, NOW, TTL);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn select_ttl_rate_limits_repeat_nudges() {
+        // We nudged (critic-1, fixer.done) two minutes ago. Even
+        // though the producer is still quiet, we should NOT re-fire
+        // until the threshold elapses since the previous nudge.
+        let subs = build_subs(&[("critic-1", &["fixer.done"])]);
+        let ek = mk_exit_keys(&[("fixer-1", "fixer", "fixer.done")]);
+        let streams = mk_streams(&[("fixer-1", NOW - 10 * 60 * 1000)]);
+        let mut nudged = HashMap::new();
+        nudged.insert(
+            ("critic-1".to_string(), "fixer.done".to_string()),
+            NOW - 2 * 60 * 1000,
         );
-        assert_eq!(
-            snap.get(&("test-a".into(), "backend.done".into())),
-            Some(&1_700_000_000_000)
+        let out = select_ttl_targets(&subs, &ek, &streams, &nudged, NOW, TTL);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn select_ttl_re_fires_after_rate_limit_window() {
+        // Six minutes since last nudge → past the 5-min window, fire
+        // again. (Operationally rare; if the producer is still quiet
+        // after we nudged once, the user probably needs to know.)
+        let subs = build_subs(&[("critic-1", &["fixer.done"])]);
+        let ek = mk_exit_keys(&[("fixer-1", "fixer", "fixer.done")]);
+        let streams = mk_streams(&[("fixer-1", NOW - 10 * 60 * 1000)]);
+        let mut nudged = HashMap::new();
+        nudged.insert(
+            ("critic-1".to_string(), "fixer.done".to_string()),
+            NOW - 6 * 60 * 1000,
+        );
+        let out = select_ttl_targets(&subs, &ek, &streams, &nudged, NOW, TTL);
+        assert_eq!(out.len(), 1);
+    }
+
+    #[test]
+    fn select_ttl_excludes_self_subscribe_edge_case() {
+        // Pathological but cheap to guard: waiter == producer of the
+        // key it's subscribed to. Should never happen (writer-self
+        // exclusion in select_targets already prevents wake delivery
+        // for normal events), but defence-in-depth.
+        let subs = build_subs(&[("solo-1", &["solo.done"])]);
+        let ek = mk_exit_keys(&[("solo-1", "solo", "solo.done")]);
+        let streams = mk_streams(&[("solo-1", NOW - 10 * 60 * 1000)]);
+        let nudged = HashMap::new();
+        let out = select_ttl_targets(&subs, &ek, &streams, &nudged, NOW, TTL);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn select_ttl_strict_spell_no_false_positive() {
+        // Regression test for the bug fix that motivated M6d-5b:
+        // strict spell topology where critic subscribes to fixer.done
+        // at spell launch, but fixer hasn't started yet (last_append=0
+        // because it's still bootstrapping or waiting on its own
+        // upstream). The v1 wall-clock TTL would have fired here at
+        // the 5-min mark; the new design correctly waits.
+        let subs = build_subs(&[
+            ("test-1", &["review.completed"]),
+            ("fixer-1", &["review.completed"]),
+            ("critic-1", &["frontend.done", "backend.done", "fixer.done"]),
+        ]);
+        let ek = mk_exit_keys(&[
+            ("fe-1", "frontend", "frontend.done"),
+            ("be-1", "backend", "backend.done"),
+            ("critic-1", "critic", "review.completed"),
+            ("fixer-1", "fixer", "fixer.done"),
+            ("test-1", "test", "test.passed"),
+        ]);
+        // FE+BE producing chunks, critic just woken (no output yet),
+        // fixer never started (0). 5 minutes after spell launch.
+        let streams = mk_streams(&[
+            ("fe-1", NOW - 500),
+            ("be-1", NOW - 1_000),
+            ("critic-1", NOW - 200),
+            ("fixer-1", 0),
+            ("test-1", 0),
+        ]);
+        let nudged = HashMap::new();
+        let out = select_ttl_targets(&subs, &ek, &streams, &nudged, NOW, TTL);
+        assert!(
+            out.is_empty(),
+            "no producer in this healthy snapshot has been quiet ≥5min while alive; \
+             got false positives: {out:?}"
         );
     }
 
     #[tokio::test]
-    async fn started_at_register_ignores_empty_keys() {
-        // Symmetric with register_wake_subs — zero-dep agents leave no
-        // trace in the TTL table.
-        let started: WakeStartedAt = Arc::new(RwLock::new(HashMap::new()));
-        register_wake_started_at(&started, "planner-a", &[], 1_700_000_000_000).await;
-        assert!(started.read().await.is_empty());
-    }
-
-    #[tokio::test]
-    async fn started_at_unregister_drops_only_targeted_waiter() {
-        let started: WakeStartedAt = Arc::new(RwLock::new(HashMap::new()));
-        register_wake_started_at(&started, "test-a", &["x.done".into()], 1).await;
-        register_wake_started_at(&started, "test-b", &["x.done".into()], 1).await;
-        unregister_wake_started_at(&started, "test-a").await;
-        let snap = started.read().await;
+    async fn wake_nudged_unregister_drops_only_targeted_waiter() {
+        let nudged: WakeNudged = Arc::new(RwLock::new(HashMap::new()));
+        nudged.write().await.insert(("test-a".into(), "x.done".into()), 1);
+        nudged.write().await.insert(("test-b".into(), "x.done".into()), 1);
+        unregister_wake_nudged(&nudged, "test-a").await;
+        let snap = nudged.read().await;
         assert!(snap.get(&("test-a".into(), "x.done".into())).is_none());
         assert!(snap.get(&("test-b".into(), "x.done".into())).is_some());
     }
 
     #[tokio::test]
-    async fn started_at_prune_drops_all_waiters_for_key() {
-        // BlackboardChanged for "x.done" should clear every row keyed
-        // on x.done, no matter who was waiting — they're all unblocked
-        // by the same write.
-        let started: WakeStartedAt = Arc::new(RwLock::new(HashMap::new()));
-        register_wake_started_at(
-            &started,
-            "test-a",
-            &["x.done".into(), "y.done".into()],
-            1,
-        )
-        .await;
-        register_wake_started_at(&started, "test-b", &["x.done".into()], 1).await;
-        prune_wake_started_at(&started, "x.done").await;
-        let snap = started.read().await;
-        // x.done rows gone for both waiters; y.done preserved for test-a.
-        assert!(snap.get(&("test-a".into(), "x.done".into())).is_none());
-        assert!(snap.get(&("test-b".into(), "x.done".into())).is_none());
-        assert!(snap.get(&("test-a".into(), "y.done".into())).is_some());
-    }
-
-    #[tokio::test]
-    async fn started_at_prune_nonexistent_key_is_noop() {
-        let started: WakeStartedAt = Arc::new(RwLock::new(HashMap::new()));
-        register_wake_started_at(&started, "test-a", &["x.done".into()], 1).await;
-        prune_wake_started_at(&started, "never-existed.done").await;
-        assert_eq!(started.read().await.len(), 1);
+    async fn wake_nudged_prune_drops_all_waiters_for_key() {
+        let nudged: WakeNudged = Arc::new(RwLock::new(HashMap::new()));
+        nudged.write().await.insert(("a".into(), "x.done".into()), 1);
+        nudged.write().await.insert(("b".into(), "x.done".into()), 1);
+        nudged.write().await.insert(("a".into(), "y.done".into()), 1);
+        prune_wake_nudged_by_key(&nudged, "x.done").await;
+        let snap = nudged.read().await;
+        assert!(snap.get(&("a".into(), "x.done".into())).is_none());
+        assert!(snap.get(&("b".into(), "x.done".into())).is_none());
+        assert!(snap.get(&("a".into(), "y.done".into())).is_some());
     }
 
     // ── M6d-6: PTY activity-based inject gate ───────────────────────────
