@@ -65,6 +65,14 @@ pub struct PtyStream {
     /// `notify_waiters` so a burst of appends only delivers one wake-up
     /// per subscriber per drain cycle.
     notify: Notify,
+    /// M6d-6: wall-clock timestamp (unix-ms) of the most recent
+    /// `append`. The wake coordinator reads this in `inject_wake_kick`
+    /// to skip the PTY kick when the agent is mid-stream — if output
+    /// has flowed within the last ~2s, the mailbox delivery alone is
+    /// enough and a forced `\x15…\r` would pollute the in-flight turn.
+    /// Atomic so we can read without contending with `state`'s mutex
+    /// on the hot append path.
+    last_append_ms: std::sync::atomic::AtomicI64,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -103,7 +111,19 @@ impl PtyStream {
                 closed: false,
             }),
             notify: Notify::new(),
+            // Zero means "never appended" — a stream that's never seen
+            // output is treated as quiet (any age >= TTL), so the very
+            // first wake on a fresh agent will inject. That's correct:
+            // there's no in-flight turn to pollute.
+            last_append_ms: std::sync::atomic::AtomicI64::new(0),
         }
+    }
+
+    /// M6d-6: read the last-append timestamp without locking `state`.
+    /// Returns 0 if no chunk has ever been appended. Used by
+    /// `inject_wake_kick` to debounce PTY-injection during streaming.
+    pub fn last_append_ms(&self) -> i64 {
+        self.last_append_ms.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Append a chunk; assign it a fresh monotonic seq. Returns the seq
@@ -127,6 +147,16 @@ impl PtyStream {
             }
             seq
         };
+        // M6d-6: stamp the activity clock outside the state lock so a
+        // concurrent `last_append_ms()` read never blocks on append.
+        // Relaxed ordering is enough — the wake coordinator only needs
+        // approximate freshness, not happens-before with `next_seq`.
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        self.last_append_ms
+            .store(now_ms, std::sync::atomic::Ordering::Relaxed);
         self.notify.notify_waiters();
         seq
     }

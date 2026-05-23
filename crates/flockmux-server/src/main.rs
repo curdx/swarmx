@@ -74,6 +74,11 @@ pub struct AppState {
     /// `<key>.error` write so downstream dependents can branch into
     /// their upstream-failed path instead of waiting forever.
     pub exit_keys: wake::ExitKeys,
+    /// M6d-5: per-subscription timestamps used by the WakeCoordinator's
+    /// TTL scanner. `(agent_id, key) → unix-ms when subscription was
+    /// registered`. The scanner walks this table every minute and
+    /// nudges still-living producers whose handoff signal is overdue.
+    pub wake_started_at: wake::WakeStartedAt,
 }
 
 #[tokio::main]
@@ -156,6 +161,8 @@ async fn main() -> Result<()> {
         std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new()));
     let exit_keys: wake::ExitKeys =
         std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new()));
+    let wake_started_at: wake::WakeStartedAt =
+        std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new()));
 
     let state = AppState {
         plugins: Arc::new(plugin_registry),
@@ -173,6 +180,7 @@ async fn main() -> Result<()> {
         _watcher: watcher,
         wake_subs: wake_subs.clone(),
         exit_keys: exit_keys.clone(),
+        wake_started_at: wake_started_at.clone(),
     };
 
     // M6b: launch the wake coordinator. Lives for the whole process; the
@@ -183,6 +191,7 @@ async fn main() -> Result<()> {
         state.registry.clone(),
         wake_subs,
         exit_keys,
+        wake_started_at,
     );
     info!("wake coordinator started");
 

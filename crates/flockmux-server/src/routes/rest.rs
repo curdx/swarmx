@@ -380,6 +380,12 @@ pub async fn kill(
             // M6b: tear down the wake subscription too so we don't try
             // to inject into a registry slot that's about to be dropped.
             crate::wake::unregister_wake_subs(&state.wake_subs, &agent_id).await;
+            // M6d-5: matching TTL row cleanup — the waiter is gone, no
+            // point ageing a subscription against a dead agent. The
+            // run-loop also handles this on AgentState::Exited, but
+            // doing it here means the kill route's response is fully
+            // consistent before the broadcast fans out.
+            crate::wake::unregister_wake_started_at(&state.wake_started_at, &agent_id).await;
             if let Err(e) = state
                 .store
                 .record_agent_kill(agent_id.clone(), now_ms())
@@ -575,6 +581,19 @@ pub async fn run_spell(
             &state.wake_subs,
             out.agent_id.clone(),
             resolved.depends_on.clone(),
+        )
+        .await;
+        // M6d-5: matching TTL bookkeeping. Stamps each (waiter, key)
+        // pair with the moment of registration so the WakeCoordinator's
+        // periodic scanner can age them out and nudge stuck producers.
+        // Single now_ms() snapshot so all keys in one registration share
+        // a deadline — keeps the eventual alert messages consistent.
+        let registered_at = now_ms();
+        crate::wake::register_wake_started_at(
+            &state.wake_started_at,
+            &out.agent_id,
+            &resolved.depends_on,
+            registered_at,
         )
         .await;
         // M6c step 5: also remember which signal THIS agent is supposed
