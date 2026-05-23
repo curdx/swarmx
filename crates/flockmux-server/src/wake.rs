@@ -186,11 +186,35 @@ pub async fn inject_wake_kick(
         .get(agent_id)
         .ok_or_else(|| anyhow!("no registry slot for `{agent_id}` — agent may have exited"))?;
     let input_tx = slot.lock().input_tx.clone();
-    let body = format!("\x15blackboard `{key}` updated; please check\r");
+
+    // Why three separate writes with a delay before the final `\r`:
+    //   The naive `format!("\x15…\r")` blob worked on Claude Code's TUI
+    //   but failed on Codex CLI's Ratatui. Codex 0.130+ has bracketed-
+    //   paste detection: a single chunk containing both text AND a
+    //   terminating `\r` is treated as a paste with embedded newline
+    //   — codex inserts the line into the input buffer but does NOT
+    //   submit. The user (we) then had to send a SECOND `\r` to
+    //   actually fire the agent. Confirmed in M6c-7 clean-e2e run on
+    //   2026-05-23: BE codex sat at `>blackboard 'design.approved'
+    //   updated; please check` for 16 minutes after the wake until a
+    //   manual `\r` via websocat unstuck it.
+    //
+    //   Splitting the writes — body, sleep ~150ms, then `\r` alone —
+    //   exits paste mode between the two, so the `\r` is seen as a
+    //   typed keystroke and submits the buffer. This mirrors what
+    //   `rest.rs` spell-bootstrap inject already does (see the
+    //   "PTY paste send" path), which is why bootstrap injection has
+    //   always worked for codex but wake injection did not.
+    let body = format!("\x15blackboard `{key}` updated; please check");
     input_tx
         .send(Bytes::from(body))
         .await
-        .map_err(|e| anyhow!("PTY input_tx send failed: {e}"))
+        .map_err(|e| anyhow!("PTY input_tx send (body) failed: {e}"))?;
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    input_tx
+        .send(Bytes::from_static(b"\r"))
+        .await
+        .map_err(|e| anyhow!("PTY input_tx send (submit \\r) failed: {e}"))
 }
 
 pub struct WakeCoordinator {
