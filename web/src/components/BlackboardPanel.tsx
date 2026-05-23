@@ -29,6 +29,15 @@ export function BlackboardPanel({ liveChange }: Props) {
   const [history, setHistory] = useState<BlackboardHistoryEntry[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [versionPreview, setVersionPreview] = useState<BlackboardHistoryEntry | null>(null);
+  // M6d-4: HITL gate quick-actions. Only meaningful when the user has
+  // `design.md` selected (the architect's draft from a `fullstack-
+  // feature-gated` run). Approve writes `design.approved` with a
+  // sentinel body; Reject opens an inline reason input and writes
+  // `design.rejected` with `{"reason": ...}` (which architect is
+  // subscribed to — it wakes and revises).
+  const [rejectOpen, setRejectOpen] = useState(false);
+  const [rejectReason, setRejectReason] = useState("");
+  const [gateBusy, setGateBusy] = useState(false);
 
   const isDirty = useMemo(() => content !== originalContent, [content, originalContent]);
 
@@ -121,6 +130,50 @@ export function BlackboardPanel({ liveChange }: Props) {
     }
   };
 
+  // M6d-4: write the architect-approval companion to whatever the
+  // operator just read. Body is intentionally minimal — the gate
+  // mechanism only cares that the key exists with non-empty content;
+  // anything more is for human eyes.
+  const approveDesign = async () => {
+    setGateBusy(true);
+    try {
+      await api.writeBlackboard("design.approved", {
+        content: "approved via UI",
+      });
+      setInfo("✓ wrote design.approved — FE+BE will wake within seconds");
+      setError(null);
+      await refreshList();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setGateBusy(false);
+    }
+  };
+
+  // M6d-4: companion to approveDesign for the M6d-2 revision loop.
+  // The body MUST be the JSON shape the architect's prompt expects
+  // (`{"reason": "..."}`) — architect's wake handler reads it and
+  // rewrites design.md addressing the feedback.
+  const rejectDesign = async () => {
+    const reason = rejectReason.trim();
+    if (!reason) return;
+    setGateBusy(true);
+    try {
+      await api.writeBlackboard("design.rejected", {
+        content: JSON.stringify({ reason }, null, 2),
+      });
+      setInfo("✗ wrote design.rejected — architect will revise");
+      setError(null);
+      setRejectOpen(false);
+      setRejectReason("");
+      await refreshList();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setGateBusy(false);
+    }
+  };
+
   useEffect(() => {
     refreshList();
   }, []);
@@ -196,6 +249,26 @@ export function BlackboardPanel({ liveChange }: Props) {
               <span style={{ flex: 1, fontSize: 12, color: "#cbd5f5" }}>
                 {selected} {isDirty && <em style={{ color: "#fbbf24" }}>(unsaved)</em>}
               </span>
+              {selected === "design.md" && (
+                <>
+                  <button
+                    onClick={approveDesign}
+                    disabled={gateBusy}
+                    title="Approve this design — writes design.approved, wakes FE+BE"
+                    style={approveBtn}
+                  >
+                    ✓ Approve
+                  </button>
+                  <button
+                    onClick={() => setRejectOpen((v) => !v)}
+                    disabled={gateBusy}
+                    title="Request a revision — writes design.rejected with a reason; architect re-drafts"
+                    style={rejectBtn}
+                  >
+                    ✗ Reject
+                  </button>
+                </>
+              )}
               <button
                 onClick={() => setHistoryOpen((v) => !v)}
                 title="show write history"
@@ -208,6 +281,42 @@ export function BlackboardPanel({ liveChange }: Props) {
                 save
               </button>
             </div>
+            {selected === "design.md" && rejectOpen && (
+              <div style={rejectInlineRow}>
+                <input
+                  type="text"
+                  value={rejectReason}
+                  onChange={(e) => setRejectReason(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && rejectReason.trim()) {
+                      rejectDesign();
+                    } else if (e.key === "Escape") {
+                      setRejectOpen(false);
+                      setRejectReason("");
+                    }
+                  }}
+                  placeholder="why? (one sentence) — architect will read this and revise"
+                  style={rejectInput}
+                  autoFocus
+                />
+                <button
+                  onClick={rejectDesign}
+                  disabled={gateBusy || !rejectReason.trim()}
+                  style={rejectConfirmBtn}
+                >
+                  send rejection
+                </button>
+                <button
+                  onClick={() => {
+                    setRejectOpen(false);
+                    setRejectReason("");
+                  }}
+                  style={historyToggle}
+                >
+                  cancel
+                </button>
+              </div>
+            )}
             {historyOpen && (
               <div style={historyDrawer}>
                 {history.length === 0 && (
@@ -389,6 +498,64 @@ const historyToggle: React.CSSProperties = {
   borderRadius: 4,
   fontSize: 11,
   padding: "2px 6px",
+  cursor: "pointer",
+};
+
+// M6d-4: HITL gate quick-action buttons. Approve is green (the
+// loud-and-positive default action when the operator's read the
+// design and is happy). Reject is a quieter outline-only red — the
+// user is asking for a revision, not erroring out, so it shouldn't
+// look like a destructive action.
+const approveBtn: React.CSSProperties = {
+  background: "#16a34a",
+  color: "#fff",
+  border: "1px solid #15803d",
+  borderRadius: 4,
+  fontSize: 11,
+  fontWeight: 600,
+  padding: "2px 8px",
+  cursor: "pointer",
+};
+
+const rejectBtn: React.CSSProperties = {
+  background: "transparent",
+  color: "#f87171",
+  border: "1px solid #b91c1c",
+  borderRadius: 4,
+  fontSize: 11,
+  fontWeight: 600,
+  padding: "2px 8px",
+  cursor: "pointer",
+};
+
+const rejectInlineRow: React.CSSProperties = {
+  display: "flex",
+  gap: 6,
+  padding: "6px 8px",
+  borderBottom: "1px solid #374151",
+  background: "#1a0f0f",
+  alignItems: "center",
+};
+
+const rejectInput: React.CSSProperties = {
+  flex: 1,
+  background: "#0b1220",
+  color: "#e2e8f0",
+  border: "1px solid #b91c1c",
+  borderRadius: 4,
+  padding: "3px 6px",
+  fontSize: 12,
+  fontFamily: "inherit",
+};
+
+const rejectConfirmBtn: React.CSSProperties = {
+  background: "#b91c1c",
+  color: "#fff",
+  border: "1px solid #7f1d1d",
+  borderRadius: 4,
+  fontSize: 11,
+  fontWeight: 600,
+  padding: "2px 8px",
   cursor: "pointer",
 };
 
