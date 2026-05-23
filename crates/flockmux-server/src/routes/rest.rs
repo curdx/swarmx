@@ -380,12 +380,6 @@ pub async fn kill(
             // M6b: tear down the wake subscription too so we don't try
             // to inject into a registry slot that's about to be dropped.
             crate::wake::unregister_wake_subs(&state.wake_subs, &agent_id).await;
-            // M6d-5b: drop any nudge-rate-limit rows owned by this
-            // waiter. The run-loop also handles this on
-            // AgentState::Exited, but doing it here means the kill
-            // route's response is fully consistent before the
-            // broadcast fans out.
-            crate::wake::unregister_wake_nudged(&state.wake_nudged, &agent_id).await;
             if let Err(e) = state
                 .store
                 .record_agent_kill(agent_id.clone(), now_ms())
@@ -403,6 +397,34 @@ pub async fn kill(
             StatusCode::NOT_FOUND,
             Json(json!({"error": format!("agent {agent_id} not found")})),
         ),
+    }
+}
+
+/// M6e: operator-triggered manual wake. The UI's ⚡ button posts here
+/// when the operator believes an agent has missed its natural wake or
+/// is stuck. Delivery is the same mailbox + PTY-kick pair that the
+/// event-driven wake uses, with a body that says "manual wake from
+/// operator" so the recipient understands the context. Returns 404 if
+/// the agent isn't in the registry (already exited, never spawned).
+pub async fn wake_agent(
+    State(state): State<AppState>,
+    Path(agent_id): Path<String>,
+) -> impl IntoResponse {
+    if state.registry.get(&agent_id).is_none() {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": format!("agent {agent_id} not found")})),
+        );
+    }
+    match crate::wake::deliver_manual_wake(&state.swarm, &state.registry, &agent_id).await {
+        Ok(_) => (StatusCode::NO_CONTENT, Json(json!({"ok": true}))),
+        Err(e) => {
+            tracing::warn!(?e, agent = %agent_id, "manual wake failed");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": e.to_string()})),
+            )
+        }
     }
 }
 
@@ -583,14 +605,6 @@ pub async fn run_spell(
             resolved.depends_on.clone(),
         )
         .await;
-        // M6d-5b: no extra TTL bookkeeping at registration time. The
-        // scanner derives "is this producer stuck?" from per-producer
-        // PTY quiet time (PtyStream::last_append_ms) rather than from
-        // a per-subscription wall-clock — chained spells regularly
-        // have subscriptions that legitimately wait past 5 minutes
-        // for upstream work to finish, and the old design fired
-        // false-positive nudges on those. The nudge-rate-limit table
-        // is populated lazily, only when a nudge actually fires.
         // M6c step 5: also remember which signal THIS agent is supposed
         // to produce + the moment we registered it. If the agent exits
         // without writing the signal, the wake coordinator turns that

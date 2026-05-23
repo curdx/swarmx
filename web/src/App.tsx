@@ -116,6 +116,19 @@ export default function App() {
     setMaximized((cur) => (cur === agentId ? null : cur));
   };
 
+  // M6e: 手动唤醒。当操作者觉得某个 agent 错过自然 wake / 卡住时，
+  // 点这个按钮给它发一条 mailbox + PTY kick。同主路径 wake 的投递方式
+  // （M6d-6 quiet gate 在 agent 正在 stream 时会跳过 PTY 注入）。
+  // 失败只在控制台 warn，不打断用户。
+  const wakeAgent = async (agentId: string) => {
+    try {
+      await api.wakeAgent(agentId);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn("manual wake failed", err);
+    }
+  };
+
   const toggleMinimize = (agentId: string) => {
     setMinimized((prev) => {
       const next = new Set(prev);
@@ -286,6 +299,12 @@ export default function App() {
                   </span>
                 </span>
                 <span style={{ display: "flex", gap: 4 }}>
+                  <button
+                    onClick={() => wakeAgent(agent.agent_id)}
+                    title="手动唤醒（agent 卡住时点这个 — 给它发一条系统消息让它继续）"
+                  >
+                    ⚡
+                  </button>
                   <button
                     onClick={() => toggleMinimize(agent.agent_id)}
                     title="最小化"

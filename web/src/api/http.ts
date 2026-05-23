@@ -64,6 +64,10 @@ export const api = {
   spawnAgent: (req: SpawnAgentRequest) =>
     request<SpawnAgentResponse>("POST", "/api/agent", req),
   killAgent: (id: string) => request<void>("DELETE", `/api/agent/${id}`),
+  // M6e: 操作者手动 ⚡ 唤醒。后端走 mailbox + PTY-kick（同主路径），
+  // body 写"manual wake from operator"。挡在 M6d-6 quiet gate 后面，
+  // agent 正在 stream 时只投 mailbox 不戳 PTY。
+  wakeAgent: (id: string) => request<void>("POST", `/api/agent/${id}/wake`),
 
   // M3 swarm
   listMessages: (q: ListMessagesQuery = {}) =>

@@ -74,12 +74,6 @@ pub struct AppState {
     /// `<key>.error` write so downstream dependents can branch into
     /// their upstream-failed path instead of waiting forever.
     pub exit_keys: wake::ExitKeys,
-    /// M6d-5b: rate-limit table for the WakeCoordinator's TTL scanner.
-    /// `(waiter_agent_id, key) → unix-ms when we last nudged that
-    /// pair`. The scanner reads producer-side PTY quiet time to
-    /// decide who's actually stuck, and consults this table only to
-    /// avoid re-nudging the same pair every minute.
-    pub wake_nudged: wake::WakeNudged,
 }
 
 #[tokio::main]
@@ -162,8 +156,6 @@ async fn main() -> Result<()> {
         std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new()));
     let exit_keys: wake::ExitKeys =
         std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new()));
-    let wake_nudged: wake::WakeNudged =
-        std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new()));
 
     let state = AppState {
         plugins: Arc::new(plugin_registry),
@@ -181,7 +173,6 @@ async fn main() -> Result<()> {
         _watcher: watcher,
         wake_subs: wake_subs.clone(),
         exit_keys: exit_keys.clone(),
-        wake_nudged: wake_nudged.clone(),
     };
 
     // M6b: launch the wake coordinator. Lives for the whole process; the
@@ -192,7 +183,6 @@ async fn main() -> Result<()> {
         state.registry.clone(),
         wake_subs,
         exit_keys,
-        wake_nudged,
     );
     info!("wake coordinator started");
 
@@ -203,6 +193,7 @@ async fn main() -> Result<()> {
             get(routes::rest::list_agents).post(routes::rest::spawn),
         )
         .route("/api/agent/:id", delete(routes::rest::kill))
+        .route("/api/agent/:id/wake", post(routes::rest::wake_agent))
         .route(
             "/api/message",
             get(routes::swarm::list_messages).post(routes::swarm::send_message),
