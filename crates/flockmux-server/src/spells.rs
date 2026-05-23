@@ -102,6 +102,18 @@ pub struct SpellAgentManifest {
     /// "replace whatever the role had".
     #[serde(default)]
     pub depends_on: Option<Vec<String>>,
+    /// Text prepended to the resolved `system_prompt` (after role-template
+    /// vs spell-override resolution; before placeholder substitution). The
+    /// canonical use case is M6c-7 HITL gating: the spell prepends a short
+    /// "before doing anything else, idle until <key> exists" instruction
+    /// to the role's normal SOP, so the agent's FIRST turn (driven by the
+    /// initial bootstrap inject, NOT by wake-check) actually checks the
+    /// gate. Without this, `depends_on` only affects post-Stop wakes — it
+    /// does NOT suppress the initial bootstrap, so an agent would code
+    /// happily through an "approval gate" because nobody told it to wait.
+    /// Empty = no prefix.
+    #[serde(default)]
+    pub system_prompt_prefix: String,
 }
 
 impl SpellAgentManifest {
@@ -162,12 +174,22 @@ pub fn resolve_agent(
         _ => return Err(anyhow!("agent `{role}` has no cli and no role_ref to default from")),
     };
 
-    let system_prompt = if !agent.system_prompt.is_empty() {
+    let body = if !agent.system_prompt.is_empty() {
         agent.system_prompt.clone()
     } else if let Some(rt) = role_template {
         rt.manifest.system_prompt_template.clone()
     } else {
         String::new()
+    };
+    // Prepend the spell-level prefix (if any). Separated from the body
+    // by a blank line so it renders as its own paragraph at the top of
+    // the prompt. Empty prefix → just the body verbatim.
+    let system_prompt = if agent.system_prompt_prefix.is_empty() {
+        body
+    } else if body.is_empty() {
+        agent.system_prompt_prefix.clone()
+    } else {
+        format!("{}\n\n{}", agent.system_prompt_prefix, body)
     };
 
     // depends_on resolution: spell's explicit override wins (even if
@@ -533,6 +555,7 @@ cli = "claude"
             system_prompt: String::new(),
             role_ref: Some("frontend".to_string()),
             depends_on: None,
+            system_prompt_prefix: String::new(),
         };
         let resolved = resolve_agent(&agent, &roles).unwrap();
         assert_eq!(resolved.role, "frontend");
@@ -558,6 +581,7 @@ cli = "claude"
             system_prompt: "spell override".to_string(),
             role_ref: Some("backend".to_string()),
             depends_on: None,
+            system_prompt_prefix: String::new(),
         };
         let resolved = resolve_agent(&agent, &roles).unwrap();
         assert_eq!(resolved.cli, "claude"); // spell wins
@@ -573,6 +597,7 @@ cli = "claude"
             system_prompt: String::new(),
             role_ref: Some("nonexistent".to_string()),
             depends_on: None,
+            system_prompt_prefix: String::new(),
         };
         let err = resolve_agent(&agent, &roles).unwrap_err();
         assert!(format!("{err:#}").contains("nonexistent"));
@@ -588,6 +613,7 @@ cli = "claude"
             system_prompt: "hello".to_string(),
             role_ref: None,
             depends_on: None,
+            system_prompt_prefix: String::new(),
         };
         let resolved = resolve_agent(&agent, &roles).unwrap();
         assert_eq!(resolved.role, "writer");
@@ -611,6 +637,7 @@ cli = "claude"
             system_prompt: String::new(),
             role_ref: Some("test".to_string()),
             depends_on: None,
+            system_prompt_prefix: String::new(),
         };
         let resolved = resolve_agent(&agent, &roles).unwrap();
         assert_eq!(
@@ -634,6 +661,7 @@ cli = "claude"
             system_prompt: String::new(),
             role_ref: Some("test".to_string()),
             depends_on: Some(vec!["b".to_string(), "c".to_string()]),
+            system_prompt_prefix: String::new(),
         };
         let resolved = resolve_agent(&agent, &roles).unwrap();
         assert_eq!(resolved.depends_on, vec!["b".to_string(), "c".to_string()]);
@@ -654,6 +682,7 @@ cli = "claude"
             system_prompt: String::new(),
             role_ref: Some("test".to_string()),
             depends_on: Some(vec![]),
+            system_prompt_prefix: String::new(),
         };
         let resolved = resolve_agent(&agent, &roles).unwrap();
         assert!(resolved.depends_on.is_empty());
@@ -668,9 +697,63 @@ cli = "claude"
             system_prompt: "x".into(),
             role_ref: None,
             depends_on: Some(vec!["a".into(), "b".into(), "a".into()]),
+            system_prompt_prefix: String::new(),
         };
         let resolved = resolve_agent(&agent, &roles).unwrap();
         assert_eq!(resolved.depends_on, vec!["a".to_string(), "b".to_string()]);
+    }
+
+    #[test]
+    fn resolve_agent_prepends_system_prompt_prefix_to_role_template() {
+        // The HITL-gate use case: a spell wants to inject a "wait until X
+        // exists" gate in front of an UNCHANGED role prompt. The body
+        // comes from the role; the prefix comes from the spell.
+        let dir = tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("worker.md"),
+            "+++\nid=\"worker\"\ndefault_cli=\"claude\"\nsystem_prompt_template=\"YOU ARE WORKER\"\n+++",
+        )
+        .unwrap();
+        let roles = RoleRegistry::load_dir(dir.path()).unwrap();
+
+        let agent = SpellAgentManifest {
+            role: None,
+            cli: None,
+            system_prompt: String::new(),
+            role_ref: Some("worker".to_string()),
+            depends_on: None,
+            system_prompt_prefix: "[GATE] wait for X.".to_string(),
+        };
+        let resolved = resolve_agent(&agent, &roles).unwrap();
+        assert!(resolved.system_prompt.starts_with("[GATE] wait for X."),
+            "prefix must come first: {}", resolved.system_prompt);
+        assert!(resolved.system_prompt.contains("YOU ARE WORKER"),
+            "role body must still be present: {}", resolved.system_prompt);
+        // And they're separated by a blank line so they render as
+        // distinct paragraphs in the bootstrap prompt.
+        assert!(resolved.system_prompt.contains("\n\nYOU ARE WORKER"));
+    }
+
+    #[test]
+    fn resolve_agent_empty_prefix_leaves_prompt_unchanged() {
+        let dir = tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("worker.md"),
+            "+++\nid=\"worker\"\ndefault_cli=\"claude\"\nsystem_prompt_template=\"BODY\"\n+++",
+        )
+        .unwrap();
+        let roles = RoleRegistry::load_dir(dir.path()).unwrap();
+        let agent = SpellAgentManifest {
+            role: None,
+            cli: None,
+            system_prompt: String::new(),
+            role_ref: Some("worker".to_string()),
+            depends_on: None,
+            system_prompt_prefix: String::new(),
+        };
+        let resolved = resolve_agent(&agent, &roles).unwrap();
+        assert_eq!(resolved.system_prompt, "BODY",
+            "empty prefix should NOT add separator chars");
     }
 
     #[test]

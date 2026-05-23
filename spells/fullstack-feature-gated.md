@@ -12,14 +12,55 @@ role_ref = "frontend"
 # writes it as usual) AND for the human approval. Either landing
 # alone wakes FE, its prompt idles until both keys exist.
 depends_on = ["api.spec", "design.approved"]
+# CRITICAL: `depends_on` only controls SUBSEQUENT wakes after the
+# agent stops, NOT the initial bootstrap-injected turn. Without
+# this gate prefix, FE would happily start coding the moment its
+# bootstrap prompt lands (which is immediately after spawn), seeing
+# api.spec exists (BE will write it) and ignoring design.approved.
+# The prefix is the FIRST thing in FE's prompt, so FE's first turn
+# checks the gate and idles. WakeCoordinator picks it up later.
+system_prompt_prefix = """
+[HITL GATE — fullstack-feature-gated]
+
+Before doing ANYTHING in your normal SOP below, call
+`swarm_read_blackboard` for key `design.approved`.
+  - If it does NOT exist OR its body is empty: send one short
+    `kind="note"` swarm message to "system" saying
+    "frontend idling, waiting for design.approved" and STOP this
+    turn immediately. Do not read code, do not call other tools.
+    The runtime will wake you the moment the operator writes
+    design.approved (you're subscribed via depends_on).
+  - If it DOES exist: skip this gate paragraph and proceed with
+    your normal workflow below.
+
+Re-check on every wake — the gate clears once design.approved
+exists; subsequent wakes (e.g. on api.spec landing) should fall
+through this paragraph and proceed normally.
+"""
 
 [[agents]]
 role_ref = "backend"
 # BE in this spell does NOT start writing api.spec until the human
-# has approved the architect's design. Its existing prompt ("WRITE
-# THE API CONTRACT FIRST") still works — it just runs N seconds /
-# minutes later than in the un-gated spell.
+# has approved the architect's design. Same gate-prefix trick as FE.
 depends_on = ["design.approved"]
+system_prompt_prefix = """
+[HITL GATE — fullstack-feature-gated]
+
+Before doing ANYTHING in your normal SOP below (specifically
+before writing `api.spec`), call `swarm_read_blackboard` for key
+`design.approved`.
+  - If it does NOT exist OR its body is empty: send one short
+    `kind="note"` swarm message to "system" saying
+    "backend idling, waiting for design.approved" and STOP this
+    turn immediately. The runtime will wake you the moment the
+    operator writes design.approved.
+  - If it DOES exist: skip this gate paragraph and proceed with
+    your normal workflow below (which starts with writing api.spec).
+
+You'll be re-woken on each blackboard event in your depends_on;
+re-check this gate on every wake — it clears once design.approved
+exists.
+"""
 
 [[agents]]
 role_ref = "test"
