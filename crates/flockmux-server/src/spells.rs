@@ -62,6 +62,16 @@ pub struct SpellManifest {
     /// `apps/frontend`, `apps/backend`, `tests/` under one cwd.
     #[serde(default)]
     pub shared_workspace: bool,
+    /// M6d-3: opt-in escape hatch for intentional `depends_on` cycles.
+    /// The default-on cycle detector at `run_spell` blocks any role-to-
+    /// role dependency loop because in the typical fullstack-feature
+    /// shape a cycle means deadlock. But `fullstack-feature-strict`
+    /// needs critic↔fixer to depend on each other's outputs in
+    /// alternation, bounded by a round counter in the prompts. Setting
+    /// this flag tells the cycle detector "I know what I'm doing — the
+    /// loop is bounded elsewhere (prompt-level round cap)."
+    #[serde(default)]
+    pub allow_cycles: bool,
     #[serde(default)]
     pub agents: Vec<SpellAgentManifest>,
 }

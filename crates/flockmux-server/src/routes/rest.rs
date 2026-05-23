@@ -497,7 +497,21 @@ pub async fn run_spell(
                 role_handoff.insert(resolved.role.clone(), r.manifest.handoff_signal.clone());
             }
         }
-        if let Err(err) = crate::wake::detect_depends_on_cycles(&role_handoff, &role_deps) {
+        // M6d-3: a spell can opt out of cycle detection if its prompts
+        // explicitly bound the loop (e.g. critic↔fixer in
+        // fullstack-feature-strict, capped at 3 rounds by the fixer's
+        // round counter). Default behaviour stays: reject cycles.
+        let skip_cycle_check = spell.manifest.allow_cycles;
+        let cycle_result = if skip_cycle_check {
+            tracing::info!(
+                spell = %req.name,
+                "skipping depends_on cycle check; spell declared allow_cycles=true"
+            );
+            Ok(())
+        } else {
+            crate::wake::detect_depends_on_cycles(&role_handoff, &role_deps)
+        };
+        if let Err(err) = cycle_result {
             return Err((
                 StatusCode::BAD_REQUEST,
                 Json(json!({

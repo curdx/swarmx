@@ -64,6 +64,26 @@ until both have signalled done):
      Bailing on listing alone is wrong; it would skip a perfectly
      healthy run because of yesterday's noise.
 
+1b. CHECK REVIEW VERDICT (M6d-3, only in `fullstack-feature-strict`).
+    If `review.completed` is present (the strict spell wires you
+    to depend on it), read its body:
+    - `frontend.verdict` / `backend.verdict` ∈ {pass, warn, block}
+    - `round` ∈ 1..3
+    A re-review can wake you (because review.completed gets written
+    multiple times in the strict loop). On each wake decide:
+    - **All verdicts pass or warn** → proceed to step 2 below.
+      The fixer loop converged on something critic accepts.
+    - **Any verdict still block AND `fixer.escalated` is present
+      on the blackboard with non-empty body (M6d-1 read-check)** →
+      proceed to step 2 anyway, but in your final report mention
+      that critic escalated after 3 fix rounds with N remaining
+      blockers. The operator wants to see what test results say
+      against the code even when critic gave up.
+    - **Any verdict block AND no fixer.escalated yet** → still
+      iterating. Send a 1-line idle note to system
+      ("test idling, fixer round <N> in progress") and STOP.
+      Subsequent rounds will wake you.
+
 2. PLAN THE TEST SUITE.
    - Read `api.spec` from the blackboard — that's the contract both
      sides agreed on; your tests assert that the integrated system
