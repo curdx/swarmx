@@ -353,7 +353,7 @@ pub async fn inject_wake_kick(
     // the agent is the *producer* of the overdue key (not a subscriber),
     // the caller should use `inject_with_kick_text` directly so the
     // message reads as "you're blocking <waiter>" instead.
-    let kick_text = format!("黑板 `{key}` 有更新，请查看");
+    let kick_text = format!("blackboard `{key}` updated; please check");
     inject_with_kick_text(registry, agent_id, &kick_text, key).await
 }
 
@@ -620,9 +620,11 @@ impl WakeCoordinator {
                 .map(|ek| ek.role.clone())
                 .unwrap_or_else(|| target.waiter.clone());
             let body = format!(
-                "TTL 提醒：你的 PTY 已经 {quiet_for_min} 分钟没有输出，`{waiter_label}` \
-                 正在等待你的交接信号 `{}`。如果还在卡着，请继续推进；如果已经完成，\
-                 请把 `{}`（成功）或 `{}.error`（失败）写入黑板，让法术继续。",
+                "TTL nudge: your PTY has been quiet for {quiet_for_min} min while \
+                 `{waiter_label}` waits for your handoff signal `{}`. \
+                 If you're stuck, please progress; if you're done, please write \
+                 `{}` (success) or `{}.error` (failure) to the blackboard so the \
+                 spell can advance.",
                 target.key, target.key, target.producer_role,
             );
             let msg = NewMessage {
@@ -649,7 +651,7 @@ impl WakeCoordinator {
                     // signal, not something they should read. Tell
                     // them what they actually need to do.
                     let kick_text = format!(
-                        "你正在阻塞 `{}` 等待 `{}`，请继续推进（或写入 `{}.error`）",
+                        "you are blocking `{}` on `{}`; please progress (or write `{}.error`)",
                         waiter_label, target.key, target.producer_role,
                     );
                     if let Err(err) = inject_with_kick_text(
@@ -805,7 +807,7 @@ impl WakeCoordinator {
             from_agent: "system".into(),
             to_agent: target.into(),
             kind: "wake".into(),
-            body: format!("黑板 `{key}` 有更新，请查看"),
+            body: format!("blackboard `{key}` updated; please check"),
             sent_at: now,
             in_reply_to: None,
         };
