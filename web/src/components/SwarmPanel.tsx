@@ -21,6 +21,15 @@ import { GraphPanel } from "./GraphPanel";
 
 type Tab = "messages" | "blackboard" | "graph" | "recordings";
 
+// 中文显示名：tab 内部 key 仍用英文（避免改一堆 switch/比较），
+// 渲染时映射到中文。
+const TAB_LABELS: Record<Tab, string> = {
+  messages: "消息",
+  blackboard: "黑板",
+  graph: "图谱",
+  recordings: "录像",
+};
+
 export function SwarmPanel() {
   const [tab, setTab] = useState<Tab>("messages");
   const [liveMessage, setLiveMessage] = useState<MessageRecord | null>(null);
@@ -147,13 +156,13 @@ export function SwarmPanel() {
               color: tab === t ? "#e2e8f0" : "#94a3b8",
             }}
           >
-            {t}
+            {TAB_LABELS[t]}
             {t === "messages" && totalUnread > 0 && (
               <span style={tabBadge}>{totalUnread}</span>
             )}
           </button>
         ))}
-        <span style={statusDot} title={`ws/swarm: ${status}`}>
+        <span style={statusDot} title={`协作 WS：${status}`}>
           <span
             style={{
               display: "inline-block",

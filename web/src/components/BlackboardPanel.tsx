@@ -65,7 +65,7 @@ export function BlackboardPanel({ liveChange }: Props) {
 
   const openPath = async (path: string) => {
     if (isDirty && selected && selected !== path) {
-      const ok = confirm(`Discard unsaved changes to "${selected}"?`);
+      const ok = confirm(`放弃未保存的修改"${selected}"？`);
       if (!ok) return;
     }
     setSelected(path);
@@ -106,7 +106,7 @@ export function BlackboardPanel({ liveChange }: Props) {
     try {
       await api.writeBlackboard(selected, { content });
       setOriginalContent(content);
-      setInfo(`saved ${selected}`);
+      setInfo(`已保存 ${selected}`);
       await refreshList();
       setError(null);
     } catch (e) {
@@ -140,7 +140,7 @@ export function BlackboardPanel({ liveChange }: Props) {
       await api.writeBlackboard("design.approved", {
         content: "approved via UI",
       });
-      setInfo("✓ wrote design.approved — FE+BE will wake within seconds");
+      setInfo("✓ 已写入 design.approved — 前后端 agent 几秒内会醒");
       setError(null);
       await refreshList();
     } catch (e) {
@@ -162,7 +162,7 @@ export function BlackboardPanel({ liveChange }: Props) {
       await api.writeBlackboard("design.rejected", {
         content: JSON.stringify({ reason }, null, 2),
       });
-      setInfo("✗ wrote design.rejected — architect will revise");
+      setInfo("✗ 已写入 design.rejected — architect 会重新出方案");
       setError(null);
       setRejectOpen(false);
       setRejectReason("");
@@ -185,7 +185,7 @@ export function BlackboardPanel({ liveChange }: Props) {
       refreshHistory(selected);
       if (isDirty) {
         setInfo(
-          `⚠ ${liveChange.path} changed on disk (op=${liveChange.op}) — local edits unsaved`,
+          `⚠ ${liveChange.path} 在磁盘上发生变化 (op=${liveChange.op}) — 你有未保存的修改`,
         );
       } else {
         // Silently refresh the buffer.
@@ -194,7 +194,7 @@ export function BlackboardPanel({ liveChange }: Props) {
           .then((snap) => {
             setContent(snap.content);
             setOriginalContent(snap.content);
-            setInfo(`refreshed from ${liveChange.op}`);
+            setInfo(`已根据 ${liveChange.op} 刷新`);
           })
           .catch(() => {
             /* ignore */
@@ -211,21 +211,21 @@ export function BlackboardPanel({ liveChange }: Props) {
           <input
             value={newPath}
             onChange={(e) => setNewPath(e.target.value)}
-            placeholder="new path (e.g. tasks.md)"
+            placeholder="新文件路径（如 tasks.md）"
             style={{ ...input, flex: 1 }}
             onKeyDown={(e) => {
               if (e.key === "Enter") createNew();
             }}
           />
-          <button onClick={createNew} disabled={!newPath.trim()} title="create">
+          <button onClick={createNew} disabled={!newPath.trim()} title="创建">
             +
           </button>
-          <button onClick={refreshList} title="refresh">
+          <button onClick={refreshList} title="刷新">
             ↻
           </button>
         </div>
         <div style={pathList}>
-          {entries.length === 0 && <div style={emptyHint}>No paths yet.</div>}
+          {entries.length === 0 && <div style={emptyHint}>暂无文件</div>}
           {entries.map((e) => (
             <button
               key={e.path}
@@ -247,38 +247,38 @@ export function BlackboardPanel({ liveChange }: Props) {
           <>
             <div style={headerRow}>
               <span style={{ flex: 1, fontSize: 12, color: "#cbd5f5" }}>
-                {selected} {isDirty && <em style={{ color: "#fbbf24" }}>(unsaved)</em>}
+                {selected} {isDirty && <em style={{ color: "#fbbf24" }}>(未保存)</em>}
               </span>
               {selected === "design.md" && (
                 <>
                   <button
                     onClick={approveDesign}
                     disabled={gateBusy}
-                    title="Approve this design — writes design.approved, wakes FE+BE"
+                    title="批准该设计 — 写入 design.approved，唤醒前后端"
                     style={approveBtn}
                   >
-                    ✓ Approve
+                    ✓ 通过
                   </button>
                   <button
                     onClick={() => setRejectOpen((v) => !v)}
                     disabled={gateBusy}
-                    title="Request a revision — writes design.rejected with a reason; architect re-drafts"
+                    title="要求重做 — 写入 design.rejected 并附原因；architect 会重新起稿"
                     style={rejectBtn}
                   >
-                    ✗ Reject
+                    ✗ 驳回
                   </button>
                 </>
               )}
               <button
                 onClick={() => setHistoryOpen((v) => !v)}
-                title="show write history"
+                title="查看写入历史"
                 style={historyToggle}
               >
-                history ({history.length}
+                历史 ({history.length}
                 {historyLoading ? "…" : ""})
               </button>
               <button onClick={save} disabled={saving || !isDirty}>
-                save
+                保存
               </button>
             </div>
             {selected === "design.md" && rejectOpen && (
@@ -295,7 +295,7 @@ export function BlackboardPanel({ liveChange }: Props) {
                       setRejectReason("");
                     }
                   }}
-                  placeholder="why? (one sentence) — architect will read this and revise"
+                  placeholder="驳回原因（一句话）— architect 会读这条并改稿"
                   style={rejectInput}
                   autoFocus
                 />
@@ -304,7 +304,7 @@ export function BlackboardPanel({ liveChange }: Props) {
                   disabled={gateBusy || !rejectReason.trim()}
                   style={rejectConfirmBtn}
                 >
-                  send rejection
+                  发送驳回
                 </button>
                 <button
                   onClick={() => {
@@ -313,14 +313,14 @@ export function BlackboardPanel({ liveChange }: Props) {
                   }}
                   style={historyToggle}
                 >
-                  cancel
+                  取消
                 </button>
               </div>
             )}
             {historyOpen && (
               <div style={historyDrawer}>
                 {history.length === 0 && (
-                  <div style={{ ...emptyHint, marginTop: 4 }}>No history.</div>
+                  <div style={{ ...emptyHint, marginTop: 4 }}>暂无历史</div>
                 )}
                 {history.map((h) => {
                   const isPreview = versionPreview?.id === h.id;
@@ -338,7 +338,7 @@ export function BlackboardPanel({ liveChange }: Props) {
                         {h.sha256.slice(0, 12)}
                       </span>
                       <span style={{ color: "#94a3b8", marginLeft: 6 }}>
-                        {h.agent_id ?? "external"}
+                        {h.agent_id ?? "外部"}
                       </span>
                       <span style={{ color: "#64748b", marginLeft: 6 }}>
                         {h.op}
@@ -356,16 +356,16 @@ export function BlackboardPanel({ liveChange }: Props) {
               <>
                 <div style={versionHeader}>
                   <span style={{ flex: 1 }}>
-                    viewing version {versionPreview.sha256.slice(0, 12)}…
-                    ({versionPreview.agent_id ?? "external"},{" "}
-                    {new Date(versionPreview.at).toLocaleString()})
+                    正在查看版本 {versionPreview.sha256.slice(0, 12)}…
+                    （{versionPreview.agent_id ?? "外部"} · {" "}
+                    {new Date(versionPreview.at).toLocaleString()}）
                   </span>
                   <button onClick={() => setVersionPreview(null)}>
-                    close
+                    关闭
                   </button>
                 </div>
                 <textarea
-                  value={versionPreview.content ?? "(content not fetched)"}
+                  value={versionPreview.content ?? "(尚未加载内容)"}
                   readOnly
                   style={{ ...editor, background: "#101a2f" }}
                   spellCheck={false}
@@ -381,7 +381,7 @@ export function BlackboardPanel({ liveChange }: Props) {
             )}
           </>
         ) : (
-          <div style={emptyHint}>Select a path on the left.</div>
+          <div style={emptyHint}>请在左侧选择一个文件</div>
         )}
         {error && <div style={errorRow}>{error}</div>}
       </div>
@@ -391,10 +391,10 @@ export function BlackboardPanel({ liveChange }: Props) {
 
 function formatRelative(ms: number): string {
   const diff = Date.now() - ms;
-  if (diff < 60_000) return "just now";
-  if (diff < 3600_000) return `${Math.floor(diff / 60_000)}m ago`;
-  if (diff < 86400_000) return `${Math.floor(diff / 3600_000)}h ago`;
-  return `${Math.floor(diff / 86400_000)}d ago`;
+  if (diff < 60_000) return "刚刚";
+  if (diff < 3600_000) return `${Math.floor(diff / 60_000)} 分钟前`;
+  if (diff < 86400_000) return `${Math.floor(diff / 3600_000)} 小时前`;
+  return `${Math.floor(diff / 86400_000)} 天前`;
 }
 
 function formatTime(ms: number): string {

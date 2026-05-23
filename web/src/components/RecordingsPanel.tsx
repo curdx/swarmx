@@ -52,19 +52,19 @@ export function RecordingsPanel({ refreshTick }: Props) {
         <input
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
-          placeholder="filter by agent_id"
+          placeholder="按 agent_id 过滤"
           style={{ ...input, flex: 1 }}
           onKeyDown={(e) => {
             if (e.key === "Enter") refresh();
           }}
         />
-        <button onClick={refresh} title="refresh">
+        <button onClick={refresh} title="刷新">
           ↻
         </button>
       </div>
       {error && <div style={errorRow}>{error}</div>}
       <div style={listStyle}>
-        {items.length === 0 && <div style={emptyHint}>No recordings yet.</div>}
+        {items.length === 0 && <div style={emptyHint}>暂无录像</div>}
         {items.map((r) => {
           const live = r.finalized_at == null;
           return (
@@ -80,15 +80,15 @@ export function RecordingsPanel({ refreshTick }: Props) {
                     color: live ? "#fbbf24" : "#86efac",
                   }}
                 >
-                  {live ? "● live" : "○ finalized"}
+                  {live ? "● 实时" : "○ 已完结"}
                 </span>
               </div>
               <div style={{ fontSize: 10, color: "#94a3b8" }}>
-                started {formatTime(r.started_at)} · {r.cols}×{r.rows}
+                开始于 {formatTime(r.started_at)} · {r.cols}×{r.rows}
                 {r.duration_ms != null && (
                   <> · {formatDuration(r.duration_ms)}</>
                 )}
-                {r.last_seq != null && <> · {r.last_seq}B</>}
+                {r.last_seq != null && <> · {r.last_seq} B</>}
               </div>
               <div style={{ display: "flex", gap: 4, marginTop: 4 }}>
                 <button
@@ -96,11 +96,11 @@ export function RecordingsPanel({ refreshTick }: Props) {
                   style={linkButton}
                   title={
                     live
-                      ? "Live recordings can be played but won't advance past the bytes already written"
-                      : "Play this recording"
+                      ? "实时录像可以回放，但只能播到已写入的字节为止"
+                      : "回放这条录像"
                   }
                 >
-                  {openId === r.id ? "× close" : "▶ play"}
+                  {openId === r.id ? "× 关闭" : "▶ 播放"}
                 </button>
                 <a
                   href={api.recordingCastUrl(r.id)}
@@ -108,14 +108,14 @@ export function RecordingsPanel({ refreshTick }: Props) {
                   rel="noreferrer"
                   style={linkButton}
                 >
-                  raw .cast
+                  原始 .cast
                 </a>
                 <a
                   href={api.recordingCastUrl(r.id)}
                   download={`${r.id}.cast`}
                   style={linkButton}
                 >
-                  download
+                  下载
                 </a>
               </div>
               {openId === r.id && (

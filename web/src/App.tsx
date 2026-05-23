@@ -159,53 +159,63 @@ export default function App() {
     >
       <header
         style={{
-          padding: "8px 12px",
           background: "#111827",
           borderBottom: "1px solid #374151",
           display: "flex",
-          alignItems: "center",
-          gap: 12,
-          flexWrap: "wrap",
+          flexDirection: "column",
+          gap: 6,
+          padding: "8px 12px",
         }}
       >
-        <strong style={{ fontSize: 14 }}>flockmux M2</strong>
-        <span style={{ color: "#64748b", fontSize: 12 }}>
-          local single-user — loopback only
-        </span>
-        <span style={{ color: "#64748b", fontSize: 12 }}>
-          agents: {agents.length} · visible: {visibleAgents.length} · cols: {cols}
-        </span>
-        <div style={{ flex: 1 }} />
-        {pluginsError && (
-          <span style={{ color: "#ef4444", fontSize: 12 }}>
-            plugins error: {pluginsError}
-          </span>
-        )}
-        {plugins.map((p) => (
-          <button
-            key={p.id}
-            onClick={() => spawn(p.id)}
-            disabled={spawning}
-            title={`spawn ${p.binary}`}
-          >
-            + {p.display_name}
-          </button>
-        ))}
-        <SpellsLauncher onSpellLaunched={refreshAgents} />
-        <button
-          onClick={() => setSwarmOpen((v) => !v)}
-          title="toggle swarm panel"
+        {/* 第一行：品牌 + 简要状态 + spawn 按钮 + 面板开关 */}
+        <div
           style={{
-            background: swarmOpen ? "#1e3a8a" : "#1f2937",
-            color: "#e2e8f0",
-            border: "1px solid #374151",
-            borderRadius: 4,
-            padding: "2px 8px",
-            fontSize: 12,
+            display: "flex",
+            alignItems: "center",
+            gap: 12,
+            flexWrap: "wrap",
           }}
         >
-          {swarmOpen ? "hide swarm" : "show swarm"}
-        </button>
+          <strong style={{ fontSize: 14 }}>flockmux M2</strong>
+          <span style={{ color: "#64748b", fontSize: 12 }}>
+            本地单用户 · 仅回环
+          </span>
+          <span style={{ color: "#64748b", fontSize: 12 }}>
+            {agents.length} 个 agent · 显示 {visibleAgents.length}
+          </span>
+          <div style={{ flex: 1 }} />
+          {pluginsError && (
+            <span style={{ color: "#ef4444", fontSize: 12 }}>
+              插件加载失败：{pluginsError}
+            </span>
+          )}
+          {plugins.map((p) => (
+            <button
+              key={p.id}
+              onClick={() => spawn(p.id)}
+              disabled={spawning}
+              title={`启动 ${p.binary}`}
+            >
+              + {p.display_name}
+            </button>
+          ))}
+          <button
+            onClick={() => setSwarmOpen((v) => !v)}
+            title="切换协作面板"
+            style={{
+              background: swarmOpen ? "#1e3a8a" : "#1f2937",
+              color: "#e2e8f0",
+              border: "1px solid #374151",
+              borderRadius: 4,
+              padding: "2px 8px",
+              fontSize: 12,
+            }}
+          >
+            {swarmOpen ? "隐藏面板" : "显示面板"}
+          </button>
+        </div>
+        {/* 第二行：法术启动器单独一行，输入框可自适应宽度 */}
+        <SpellsLauncher onSpellLaunched={refreshAgents} />
       </header>
 
       <div
@@ -238,7 +248,7 @@ export default function App() {
               borderRadius: 6,
             }}
           >
-            No agents yet — pick a CLI above to spawn one.
+            还没有 agent — 在上方输入任务点 ✨ Auto，或单独启动一个 CLI
           </div>
         )}
         {agents.map((agent) => {
@@ -278,17 +288,17 @@ export default function App() {
                 <span style={{ display: "flex", gap: 4 }}>
                   <button
                     onClick={() => toggleMinimize(agent.agent_id)}
-                    title="minimize"
+                    title="最小化"
                   >
                     _
                   </button>
                   <button
                     onClick={() => toggleMaximize(agent.agent_id)}
-                    title={isMaximized ? "restore" : "maximize"}
+                    title={isMaximized ? "还原" : "最大化"}
                   >
                     {isMaximized ? "❐" : "□"}
                   </button>
-                  <button onClick={() => kill(agent.agent_id)} title="kill">
+                  <button onClick={() => kill(agent.agent_id)} title="终止">
                     ×
                   </button>
                 </span>
@@ -316,13 +326,13 @@ export default function App() {
           }}
         >
           <span style={{ color: "#64748b", alignSelf: "center" }}>
-            minimized:
+            已最小化：
           </span>
           {dockAgents.map((a) => (
             <button
               key={a.agent_id}
               onClick={() => toggleMinimize(a.agent_id)}
-              title={`restore ${a.agent_id}`}
+              title={`还原 ${a.agent_id}`}
               style={{
                 background: "#1f2937",
                 color: "#cbd5f5",

@@ -39,13 +39,12 @@ export function SpellsLauncher({ onSpellLaunched }: Props) {
   const [spells, setSpells] = useState<SpellInfo[]>([]);
   const [selected, setSelected] = useState<string>("");
   const [task, setTask] = useState("");
-  // Optional shared workspace directory. Only meaningful for spells
-  // whose manifest sets `shared_workspace = true` (M6a fullstack-feature
-  // is the only one that does today). For per-agent spells like
-  // critic-loop the server ignores this field. Showing it for every
-  // spell keeps the launcher uniform — populating it for a spell that
-  // doesn't need it has no side effects.
+  // 可选的共享 workspace 路径。仅当法术 manifest 声明 `shared_workspace = true`
+  // 时有用（目前是 fullstack-feature 系列）。其他法术（critic-loop 等）服务端
+  // 直接忽略此字段。默认折叠：99% 的运行不需要它，露出来只是噪音 + 把 task
+  // 输入框挤窄。
   const [workspaceDir, setWorkspaceDir] = useState("");
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastRun, setLastRun] = useState<string | null>(null);
@@ -61,7 +60,7 @@ export function SpellsLauncher({ onSpellLaunched }: Props) {
       })
       .catch((e) => {
         if (cancelled) return;
-        setError(`spell list failed: ${(e as Error).message}`);
+        setError(`法术列表加载失败：${(e as Error).message}`);
       });
     return () => {
       cancelled = true;
@@ -91,14 +90,14 @@ export function SpellsLauncher({ onSpellLaunched }: Props) {
         ...(wd ? { workspace_dir: wd } : {}),
       });
       setLastRun(
-        `spawned ${resp.agents.length} agent(s) via ${name}: ${resp.agents
+        `已通过 ${name} 启动 ${resp.agents.length} 个 agent：${resp.agents
           .map((a) => `${a.role}=${a.agent_id}`)
-          .join(", ")}`,
+          .join("、")}`,
       );
       setTask("");
       onSpellLaunched?.();
     } catch (e) {
-      setError(`run failed: ${(e as Error).message}`);
+      setError(`运行失败：${(e as Error).message}`);
     } finally {
       setBusy(false);
     }
@@ -117,16 +116,15 @@ export function SpellsLauncher({ onSpellLaunched }: Props) {
         value={task}
         onChange={(e) => setTask(e.target.value)}
         onKeyDown={(e) => {
-          // Enter on the task input triggers the PRIMARY action: Auto if
-          // available, otherwise manual. Power users who want manual with
-          // Enter can press it while focused in the dropdown or workspace
-          // input (those forward to `run()` below).
+          // task 输入框上按 Enter 触发主动作：有 auto-dispatch 就走 Auto，
+          // 否则走 run。想用快捷键执行手动模式的话，可以聚焦下拉框或
+          // workspace 输入框后按 Enter（那两个都转发到 run()）。
           if (e.key === "Enter") {
             if (hasAutoDispatch) runAuto();
             else run();
           }
         }}
-        placeholder="任务描述 / what do you want to build?"
+        placeholder="想做什么？例如：做个简单的密码强度检测"
         style={input}
         disabled={busy}
       />
@@ -135,12 +133,12 @@ export function SpellsLauncher({ onSpellLaunched }: Props) {
           onClick={runAuto}
           disabled={busy || !task.trim()}
           style={autoButton}
-          title="Auto: planner picks the right spell for your task. Workspace dir below is ignored — the planner picks one."
+          title="自动：planner 看你的任务自动挑法术。下方共享 workspace 配置会被忽略 — planner 自己挑一个。"
         >
-          {busy ? "thinking…" : "✨ Auto"}
+          {busy ? "思考中…" : "✨ Auto"}
         </button>
       )}
-      <span style={divider}>or</span>
+      <span style={divider}>或</span>
       <select
         value={selected}
         onChange={(e) => setSelected(e.target.value)}
@@ -154,21 +152,34 @@ export function SpellsLauncher({ onSpellLaunched }: Props) {
           </option>
         ))}
       </select>
-      <input
-        type="text"
-        value={workspaceDir}
-        onChange={(e) => setWorkspaceDir(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") run();
-        }}
-        placeholder="workspace dir (shared spells)"
-        style={workspaceInput}
-        disabled={busy}
-        title="Absolute path. Only used by spells with shared_workspace=true (e.g. fullstack-feature). Leave blank to let the server pick one."
-      />
-      <button onClick={run} disabled={busy || !task.trim()} title="run the spell selected in the dropdown">
-        run
+      <button
+        onClick={run}
+        disabled={busy || !task.trim()}
+        title="按下拉框里选中的法术运行"
+      >
+        运行
       </button>
+      <button
+        onClick={() => setShowAdvanced((v) => !v)}
+        title="展开/收起共享 workspace 配置（fullstack 类法术才需要）"
+        style={advancedToggle}
+      >
+        {showAdvanced ? "高级 ▾" : "高级 ▸"}
+      </button>
+      {showAdvanced && (
+        <input
+          type="text"
+          value={workspaceDir}
+          onChange={(e) => setWorkspaceDir(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") run();
+          }}
+          placeholder="共享 workspace 绝对路径（仅 fullstack 类法术）"
+          style={workspaceInput}
+          disabled={busy}
+          title="绝对路径。仅当法术 manifest 声明 shared_workspace=true 时才会生效。留空则由服务端自动分配。"
+        />
+      )}
       {error && <span style={errStyle}>{error}</span>}
       {lastRun && <span style={okStyle}>{lastRun}</span>}
     </div>
@@ -177,8 +188,9 @@ export function SpellsLauncher({ onSpellLaunched }: Props) {
 
 const wrap: React.CSSProperties = {
   display: "flex",
-  gap: 4,
+  gap: 6,
   alignItems: "center",
+  flexWrap: "wrap",
 };
 
 const select: React.CSSProperties = {
@@ -191,15 +203,18 @@ const select: React.CSSProperties = {
   fontFamily: "inherit",
 };
 
+// task 输入框抢占剩余空间 — header 第二行整行就剩它和按钮，所以
+// minWidth 给一个底线避免被法术下拉挤到没法读，flex:1 吃掉余量。
 const input: React.CSSProperties = {
   background: "#0b1220",
   color: "#e2e8f0",
   border: "1px solid #374151",
   borderRadius: 4,
-  padding: "2px 6px",
-  fontSize: 12,
+  padding: "4px 8px",
+  fontSize: 13,
   fontFamily: "inherit",
-  minWidth: 200,
+  minWidth: 240,
+  flex: 1,
 };
 
 const workspaceInput: React.CSSProperties = {
@@ -210,7 +225,19 @@ const workspaceInput: React.CSSProperties = {
   padding: "2px 6px",
   fontSize: 11,
   fontFamily: "inherit",
-  minWidth: 160,
+  minWidth: 200,
+  flex: 1,
+};
+
+const advancedToggle: React.CSSProperties = {
+  background: "transparent",
+  color: "#94a3b8",
+  border: "1px solid #374151",
+  borderRadius: 4,
+  padding: "2px 8px",
+  fontSize: 11,
+  fontFamily: "inherit",
+  cursor: "pointer",
 };
 
 // Primary CTA — visually louder than the manual "run" button so a new

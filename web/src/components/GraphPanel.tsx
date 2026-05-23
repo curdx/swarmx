@@ -80,7 +80,7 @@ export function GraphPanel({ liveChange, agentTick }: Props) {
     return (
       <div style={padded}>
         <p style={muted}>
-          No live agents. Launch a spell to see its dependency graph here.
+          当前没有存活的 agent。启动一个法术后，这里会显示依赖图谱。
         </p>
       </div>
     );
@@ -159,8 +159,8 @@ export function GraphPanel({ liveChange, agentTick }: Props) {
         <span style={{ ...legendDot, background: "#0ea5e9", marginLeft: 12 }} />
         codex
         <span style={legendSeparator}>•</span>
-        <span style={legendEdgeAmber}>—</span> waiting
-        <span style={legendEdgeGreen}>—</span> done
+        <span style={legendEdgeAmber}>—</span> 等待中
+        <span style={legendEdgeGreen}>—</span> 已完成
       </p>
       <svg
         width={width}
@@ -293,8 +293,8 @@ export function GraphPanel({ liveChange, agentTick }: Props) {
 
       {edges.length === 0 && (
         <p style={muted}>
-          These agents have no declared <code>depends_on</code> edges.
-          The graph shows just the node grid.
+          这些 agent 没有声明任何 <code>depends_on</code> 依赖边，
+          图谱里只显示节点网格。
         </p>
       )}
     </div>

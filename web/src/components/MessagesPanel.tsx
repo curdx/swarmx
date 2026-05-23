@@ -167,10 +167,10 @@ export function MessagesPanel({ liveMessage, liveRead, unreadByFrom }: Props) {
         <input
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
-          placeholder="filter (from / to / body)"
+          placeholder="过滤（发送方 / 接收方 / 正文）"
           style={input}
         />
-        <button onClick={refresh} title="refresh">
+        <button onClick={refresh} title="刷新">
           ↻
         </button>
       </div>
@@ -179,14 +179,14 @@ export function MessagesPanel({ liveMessage, liveRead, unreadByFrom }: Props) {
         <button
           onClick={() => setShowBySender((v) => !v)}
           style={bySenderToggle}
-          title="show unread by sender"
+          title="按发送方查看未读"
         >
-          {showBySender ? "▾" : "▸"} unread by sender ({senders.length})
+          {showBySender ? "▾" : "▸"} 按发送方未读 ({senders.length})
         </button>
         {showBySender && (
           <div style={bySenderList}>
             {senders.length === 0 && (
-              <span style={{ color: "#64748b", fontSize: 11 }}>none</span>
+              <span style={{ color: "#64748b", fontSize: 11 }}>无</span>
             )}
             {senders.map(([who, n]) => (
               <span key={who} style={bySenderRow}>
@@ -202,7 +202,7 @@ export function MessagesPanel({ liveMessage, liveRead, unreadByFrom }: Props) {
 
       <div ref={listRef} style={listStyle}>
         {visible.length === 0 && (
-          <div style={emptyHint}>No messages yet.</div>
+          <div style={emptyHint}>暂无消息</div>
         )}
         {visible.map((m) => {
           const unread = m.read_at === null;
@@ -222,7 +222,7 @@ export function MessagesPanel({ liveMessage, liveRead, unreadByFrom }: Props) {
               }}
             >
               <div style={messageMeta}>
-                <span title={unread ? "unread" : "read"}>
+                <span title={unread ? "未读" : "已读"}>
                   {unread ? "★" : "✓"}
                 </span>
                 <span style={{ marginLeft: 4, color: "#94a3b8" }}>
@@ -238,7 +238,7 @@ export function MessagesPanel({ liveMessage, liveRead, unreadByFrom }: Props) {
                   <button
                     onClick={() => jumpToParent(m.in_reply_to!)}
                     style={replyLink}
-                    title="jump to parent message"
+                    title="跳转到被回复的消息"
                   >
                     ↩ #{m.in_reply_to}
                   </button>
@@ -247,16 +247,16 @@ export function MessagesPanel({ liveMessage, liveRead, unreadByFrom }: Props) {
                 <button
                   onClick={() => startReply(m)}
                   style={rowAction}
-                  title="reply to this message"
+                  title="回复这条消息"
                 >
-                  reply
+                  回复
                 </button>
                 {unread && (
                   <button
                     onClick={() => markRead(m)}
                     style={rowAction}
                     disabled={marking === m.id}
-                    title="mark as read"
+                    title="标记为已读"
                   >
                     ✓
                   </button>
@@ -271,11 +271,11 @@ export function MessagesPanel({ liveMessage, liveRead, unreadByFrom }: Props) {
       <div style={composer}>
         {inReplyTo != null && (
           <div style={replyBanner}>
-            Replying to #{inReplyTo}
+            正在回复 #{inReplyTo}
             <button
               onClick={() => setInReplyTo(null)}
               style={replyClear}
-              title="cancel reply"
+              title="取消回复"
             >
               ✕
             </button>
@@ -285,26 +285,26 @@ export function MessagesPanel({ liveMessage, liveRead, unreadByFrom }: Props) {
           <input
             value={from}
             onChange={(e) => setFrom(e.target.value)}
-            placeholder="from (blank = system)"
+            placeholder="发送方（留空=system）"
             style={{ ...input, flex: 1 }}
           />
           <input
             value={to}
             onChange={(e) => setTo(e.target.value)}
-            placeholder="to (agent id)"
+            placeholder="接收方（agent id）"
             style={{ ...input, flex: 1 }}
           />
         </div>
         <textarea
           value={body}
           onChange={(e) => setBody(e.target.value)}
-          placeholder="message body"
+          placeholder="消息正文"
           rows={3}
           style={{ ...input, resize: "vertical" }}
         />
         <div style={{ display: "flex", justifyContent: "flex-end" }}>
           <button onClick={send} disabled={sending || !to.trim() || !body.trim()}>
-            send
+            发送
           </button>
         </div>
       </div>

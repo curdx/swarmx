@@ -35,3 +35,4 @@
 # per-user MCP / Claude Code state (different on every machine)
 /.mcp.json
 /.claude/
+.tmp-ui-audit/
