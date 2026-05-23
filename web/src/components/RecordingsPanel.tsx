@@ -24,10 +24,10 @@ export function RecordingsPanel({ refreshTick }: Props) {
   const [items, setItems] = useState<RecordingInfo[]>([]);
   const [filter, setFilter] = useState("");
   const [error, setError] = useState<string | null>(null);
-  // Which row's player is currently expanded. Single-open by design: each
-  // player instance owns a WASM context, so multiple simultaneous expansions
-  // would pile up resources for sessions the user isn't watching.
-  const [openId, setOpenId] = useState<string | null>(null);
+  // M6e: 录像现在弹全屏 modal 播放（而不是在 360px 侧栏里展开成
+  // 蚂蚁字大小）。playingId = 当前要全屏播放的录像 id；null = 关闭。
+  // 单实例：每个 player 拿一个 WASM context，开多个浪费资源。
+  const [playingId, setPlayingId] = useState<string | null>(null);
 
   const refresh = async () => {
     try {
@@ -45,6 +45,18 @@ export function RecordingsPanel({ refreshTick }: Props) {
     refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshTick]);
+
+  // M6e: Esc 关闭全屏播放器
+  useEffect(() => {
+    if (!playingId) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setPlayingId(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [playingId]);
+
+  const playing = playingId ? items.find((r) => r.id === playingId) : null;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
@@ -92,15 +104,15 @@ export function RecordingsPanel({ refreshTick }: Props) {
               </div>
               <div style={{ display: "flex", gap: 4, marginTop: 4 }}>
                 <button
-                  onClick={() => setOpenId(openId === r.id ? null : r.id)}
+                  onClick={() => setPlayingId(r.id)}
                   style={linkButton}
                   title={
                     live
                       ? "实时录像可以回放，但只能播到已写入的字节为止"
-                      : "回放这条录像"
+                      : "回放这条录像（全屏）"
                   }
                 >
-                  {openId === r.id ? "× 关闭" : "▶ 播放"}
+                  ▶ 播放
                 </button>
                 <a
                   href={api.recordingCastUrl(r.id)}
@@ -118,24 +130,49 @@ export function RecordingsPanel({ refreshTick }: Props) {
                   下载
                 </a>
               </div>
-              {openId === r.id && (
-                <div style={{ marginTop: 6 }}>
-                  <AsciicastPlayer
-                    src={api.recordingCastUrl(r.id)}
-                    cols={r.cols}
-                    rows={r.rows}
-                  />
-                  <div style={playerHint}>
-                    Tip: press <kbd>f</kbd> for fullscreen — at sidebar
-                    width the 120×32 terminal is fit to {r.cols} cols and
-                    text gets very small.
-                  </div>
-                </div>
-              )}
             </div>
           );
         })}
       </div>
+      {/* M6e: 全屏 modal 播放器。塞在 360px 侧栏里 120 列文字会变成蚂蚁，
+          点 ▶ 播放后改成铺满主区域的 overlay；按 Esc 或点右上 × 关掉。 */}
+      {playing && (
+        <div style={modalBackdrop} onClick={() => setPlayingId(null)}>
+          <div style={modalCard} onClick={(e) => e.stopPropagation()}>
+            <div style={modalHeader}>
+              <span style={{ flex: 1, color: "#cbd5f5", fontSize: 13 }}>
+                <strong>{playing.id}</strong>
+                <span style={{ color: "#64748b", marginLeft: 8 }}>
+                  · {playing.agent_id} · {playing.cols}×{playing.rows}
+                </span>
+                {playing.duration_ms != null && (
+                  <span style={{ color: "#64748b", marginLeft: 8 }}>
+                    · {formatDuration(playing.duration_ms)}
+                  </span>
+                )}
+              </span>
+              <button
+                onClick={() => setPlayingId(null)}
+                style={modalCloseBtn}
+                title="关闭（Esc）"
+              >
+                × 关闭
+              </button>
+            </div>
+            <div style={modalPlayerHost}>
+              <AsciicastPlayer
+                src={api.recordingCastUrl(playing.id)}
+                cols={playing.cols}
+                rows={playing.rows}
+                autoPlay
+              />
+            </div>
+            <div style={modalFooterHint}>
+              快捷键：<kbd>空格</kbd> 播放/暂停 · <kbd>f</kbd> 全屏 · <kbd>Esc</kbd> 关闭
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -202,16 +239,71 @@ const errorRow: React.CSSProperties = {
   background: "#1f2937",
 };
 
-const playerHint: React.CSSProperties = {
-  fontSize: 10,
-  color: "#64748b",
-  marginTop: 4,
-  lineHeight: 1.3,
-};
-
 const emptyHint: React.CSSProperties = {
   color: "#64748b",
   fontSize: 12,
   textAlign: "center",
   marginTop: 16,
+};
+
+// M6e: 全屏播放 modal 的 backdrop —— position: fixed 覆盖整个 viewport，
+// z-index 提到最高（pane 终端 + 各种侧栏都在下面），点击空白处关闭。
+const modalBackdrop: React.CSSProperties = {
+  position: "fixed",
+  inset: 0,
+  background: "rgba(0, 0, 0, 0.7)",
+  zIndex: 9999,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  padding: 24,
+};
+
+const modalCard: React.CSSProperties = {
+  background: "#0b1220",
+  border: "1px solid #374151",
+  borderRadius: 8,
+  width: "min(1200px, 95vw)",
+  maxHeight: "90vh",
+  display: "flex",
+  flexDirection: "column",
+  overflow: "hidden",
+};
+
+const modalHeader: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  padding: "10px 14px",
+  borderBottom: "1px solid #374151",
+  background: "#111827",
+};
+
+const modalCloseBtn: React.CSSProperties = {
+  background: "transparent",
+  color: "#cbd5f5",
+  border: "1px solid #374151",
+  borderRadius: 4,
+  padding: "4px 10px",
+  fontSize: 12,
+  cursor: "pointer",
+};
+
+const modalPlayerHost: React.CSSProperties = {
+  flex: 1,
+  minHeight: 0,
+  padding: 16,
+  background: "#0d0d0d",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  overflow: "auto",
+};
+
+const modalFooterHint: React.CSSProperties = {
+  fontSize: 11,
+  color: "#64748b",
+  padding: "8px 14px",
+  borderTop: "1px solid #374151",
+  background: "#111827",
 };
