@@ -17,6 +17,9 @@ but flockmux-core does not enforce it.
 | `test.passed`    | test      | system (user)    | `{ framework, passed, failed: 0, report, ran_at }`                                                                 |
 | `test.failed`    | test      | system (user)    | `{ framework, passed, failed, failures: [{ name, reason }], ran_at }`                                              |
 | `test.skipped`   | test      | system (user)    | `{ reason, upstream_error }` — emitted when FE or BE failed                                                        |
+| `frontend.review`| critic    | test, system     | `{ role: "frontend", commit, verdict: "pass"\|"warn"\|"block", issues: [{ severity, where, summary }], reviewed_at }` (M6c step 6) |
+| `backend.review` | critic    | test, system     | Same shape as `frontend.review` with `role: "backend"` (M6c step 6) |
+| `review.completed`| critic   | test             | `{ frontend: { verdict, commit, issues }, backend: { verdict, commit, issues }, reviewed_at }`. Test waits on this in `fullstack-feature-reviewed` (spell-level `depends_on` override) so test never starts until critic has weighed in. (M6c step 6) |
 
 All `*_at` timestamps are ISO 8601 UTC.
 
@@ -65,12 +68,22 @@ repo, the notification (webhook) wakes the consumer.
 ## Failure model
 
 - An agent fails → writes `<role>.error` to blackboard + notifies
-  downstream agents
-- Downstream agents observe the error, mark their phase skipped, and
-  STOP. They do NOT attempt repair (M6a). M6b will add a critic /
-  fixer loop.
-- The user observes the final state via the swarm panel and the
-  blackboard inspector.
+  downstream agents.
+- **M6c step 5 auto-fallback**: an agent that dies before writing its
+  `handoff_signal` triggers the server to write `<role>.error`
+  automatically AND directly wake the subscribers of the missed
+  signal. So downstream agents see `*.error` whether the producer
+  self-reported failure OR crashed silently.
+- Downstream agents do a generic check on every wake: any `*.error`
+  on the blackboard means upstream is dead — route to the
+  upstream-failed branch (`test.skipped` for test; for critic, write a
+  `review.completed` with `skipped:true` so test still gets the
+  expected signal).
+- Downstream agents do NOT attempt repair (M6c-6). A future critic /
+  fixer loop (M6d) could close that gap.
+- The user observes the final state via the swarm panel, the
+  blackboard inspector, and the `graph` tab in the swarm drawer
+  (edges turn red when an `*.error` is the latest write for a key).
 
 ## Why this layout
 

@@ -43,8 +43,13 @@ until both have signalled done):
          note + PTY kick). No polling needed.
    - When you wake up later, re-check the blackboard. Loop this until
      BOTH keys are present.
-   - Also check for `frontend.error` or `backend.error`. If either
-     exists, skip to the "Upstream failed" branch below.
+   - **Generic upstream-failed check** (M6c step 5): on every wake,
+     call `swarm_list_blackboard` and look for ANY key ending in
+     `.error` (e.g. `frontend.error`, `backend.error`, `critic.error`).
+     These are auto-written by the server when a producer agent dies
+     before completing its phase — OR manually written by an agent
+     that self-detected a failure. If any `*.error` exists, skip to
+     the "Upstream failed" branch below and name which one(s) you saw.
 
 2. PLAN THE TEST SUITE.
    - Read `api.spec` from the blackboard — that's the contract both
