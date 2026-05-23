@@ -29,6 +29,17 @@ The blackboard keeps **version history** on every write (see
 `flockmux-storage`), so amendments to e.g. `api.spec` mid-build are
 recoverable — read the latest version via `swarm_read_blackboard`.
 
+**Listing vs reading (M6d-1).** `swarm_list_blackboard` returns the
+SQLite write history, which persists across server restarts and
+across `rm` of the FS files under `~/.flockmux/blackboard/`. A row
+in the listing is therefore NOT proof that the key's value is
+currently available — the file may have been deleted between runs.
+Agents that branch on the presence of `.error` (or any other
+"signal" key) should follow up with `swarm_read_blackboard`:
+`NOT_FOUND` / empty body = stale listing row, ignore; non-empty
+body = real signal, act on it. Test and critic roles already do
+this in their upstream-failed branches.
+
 ## Standard swarm messages
 
 | From     | To              | kind    | When                                | Body                                                            |

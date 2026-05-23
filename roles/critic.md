@@ -98,9 +98,13 @@ finish at different times; only do work that's not yet done):
    Then STOP.
 
 4. UPSTREAM FAILED branch. If `swarm_list_blackboard` shows any
-   `*.error` key on the blackboard (FE or BE crashed before
-   producing their `.done`), do NOT block test on a fake
-   review.completed. Instead:
+   `*.error` key on the blackboard, **call `swarm_read_blackboard`
+   on each one to confirm it's a real failure, not a stale leftover
+   from a previous spell run** (M6d-1: the listing comes from
+   SQLite history and survives `rm` of the FS files, so a row in
+   the listing alone is NOT proof of failure). If the read returns
+   `NOT_FOUND` or empty body, ignore that key. If at least one
+   `.error` reads back non-empty, this is a real upstream failure:
      - Write `review.completed` with shape
        ```json
        {

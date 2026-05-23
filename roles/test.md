@@ -43,13 +43,26 @@ until both have signalled done):
          note + PTY kick). No polling needed.
    - When you wake up later, re-check the blackboard. Loop this until
      BOTH keys are present.
-   - **Generic upstream-failed check** (M6c step 5): on every wake,
-     call `swarm_list_blackboard` and look for ANY key ending in
-     `.error` (e.g. `frontend.error`, `backend.error`, `critic.error`).
-     These are auto-written by the server when a producer agent dies
-     before completing its phase — OR manually written by an agent
-     that self-detected a failure. If any `*.error` exists, skip to
-     the "Upstream failed" branch below and name which one(s) you saw.
+   - **Generic upstream-failed check** (M6c step 5 + M6d-1 fix): on
+     every wake, call `swarm_list_blackboard` and look for ANY key
+     ending in `.error` (e.g. `frontend.error`, `backend.error`,
+     `critic.error`). These are auto-written by the server when a
+     producer agent dies before completing its phase — OR manually
+     written by an agent that self-detected a failure.
+   - **CRITICAL — listings are not proof** (M6d-1): the
+     `swarm_list_blackboard` result reflects the SQLite write
+     history, which persists across server restarts and across
+     manual `rm` of the blackboard files. A `.error` row in the
+     listing may be a stale leftover from a previous spell run
+     whose FS file is gone. You MUST call `swarm_read_blackboard`
+     on each suspect `.error` key:
+       - If the read returns `NOT_FOUND` or an empty body → the
+         row is stale, IGNORE it (it's not this run's error).
+       - If the read returns a non-empty body → real failure, bail
+         to the "Upstream failed" branch below and quote the
+         reason from the JSON body.
+     Bailing on listing alone is wrong; it would skip a perfectly
+     healthy run because of yesterday's noise.
 
 2. PLAN THE TEST SUITE.
    - Read `api.spec` from the blackboard — that's the contract both
