@@ -8,7 +8,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="MIT License"></a>
   <img src="https://img.shields.io/badge/Rust-1.83%2B-orange.svg" alt="Rust 1.83+">
   <img src="https://img.shields.io/badge/Node-22%2B-brightgreen.svg" alt="Node 22+">
-  <img src="https://img.shields.io/badge/status-M1–M6b%20shipped-success" alt="status">
+  <img src="https://img.shields.io/badge/status-M1–M6c%20shipped-success" alt="status">
   <a href="README.zh-CN.md"><img src="https://img.shields.io/badge/Lang-中文-red" alt="中文"></a>
 </p>
 
@@ -35,6 +35,16 @@ standalone:
    note AND injects `\x15…\r` into the subscriber's PTY — so an agent that
    already stopped with an empty mailbox can still be revived the moment
    its upstream lands. No polling. No deadlocks.
+5. **Natural-language dispatch (M6c).** The `auto-dispatch` spell wraps a
+   `planner` agent that reads the user's task in plain language, calls
+   `swarm_list_spells` to discover what's available, picks the best match,
+   sharpens the task, and calls `swarm_run_spell` to launch it. The header
+   has a primary `✨ Auto` button that routes through this path with one
+   click. Producer agents that die mid-flight automatically write a
+   `<role>.error` key so dependents fail loudly instead of hanging. A
+   `graph` tab in the swarm drawer renders the live `depends_on` DAG with
+   amber-dashed / green-solid edges so you can see at a glance who's
+   blocked on whom.
 
 The dashboard also records every session as an asciicast v2 `.cast` file and
 plays it back in-browser using the official `asciinema-player` (WASM-backed,
@@ -100,6 +110,8 @@ these three pieces and adds zero new requirements on the CLI side.
 | **Shared blackboard** | Markdown files under `~/.flockmux/blackboard/` with FTS5 search, versioned history (each write is a row), and `/ws/swarm` push events on change. |
 | **Turn-boundary wake-check** | Both claude and codex Stop hooks invoke `flockmux-mcp wake-check`; if the agent has unread mail, the hook emits a `decision:block` continuation so the agent reads its inbox on the next turn — zero polling. |
 | **Push-style wake on blackboard write (M6b)** | The `WakeCoordinator` subscribes to `SwarmEvent::BlackboardChanged`. When a blackboard key is written, every agent whose role declares `depends_on=["<key>"]` is woken in the same tick: a `kind="wake"` mailbox note lands AND `\x15<msg>\r` is injected into the subscriber's PTY — restarts agents that already stopped idle. Closes the M5b gap where wake-check (a single-shot Stop hook) couldn't restart a stopped agent. |
+| **Producer-death auto-fallback (M6c)** | The same coordinator also listens for `SwarmEvent::AgentState{Exited}`. If an agent dies without freshening its `handoff_signal` on the blackboard, the server writes `<role>.error` (with JSON `{agent_id, role, signal, reason, at}`) AND directly wakes subscribers of the missing signal. Downstream prompts already check for `<role>.error` per the handoff protocol; they branch into the upstream-failed path instead of waiting forever. |
+| **Natural-language dispatch + DAG viz (M6c)** | `auto-dispatch` is a one-agent spell whose `planner` role reads natural language, calls `swarm_list_spells` + `swarm_run_spell` MCP tools, and launches the right downstream spell. The header has a primary `✨ Auto` button that defaults to this flow. A `graph` tab in the swarm drawer renders the live agent DAG via SVG with edges coloured by wake state. |
 | **Codex first-run dialog auto-confirm** | codex 0.130+ pops a "Hooks need review" trust dialog the first time it sees a new hook path. flockmux's server watches PTY output and synthesizes the `2 + Enter` keystrokes, so spawn is one click for the user. |
 | **Asciicast v2 record + browser replay** | Every session writes a `.cast` file; the recordings drawer plays them inline with the official `asciinema-player` (WASM renderer, fullscreen + scrubbing). |
 | **Spells + role library** | TOML front-matter + markdown body declares a multi-agent topology (`[[agents]]`). Each agent line either inlines `role/cli/system_prompt` (old style, `critic-loop`) or sets `role_ref="<id>"` to inherit from a shared `roles/<id>.md` SOP template (new style, `fullstack-feature`). `POST /api/spell/run` resolves the merge, substitutes `{task}` and `{<role>_id}` placeholders, and injects each agent's bootstrap prompt. |
@@ -560,7 +572,7 @@ This is informational, not an error of flockmux itself.
 
 ## Roadmap
 
-### Done (M1 – M6b)
+### Done (M1 – M6c)
 
 - ✅ **M1** Single-agent PTY + OAuth + WebSocket bridge + WebGL pool
 - ✅ **M2** Multi-CLI (claude + codex) + GridView + WebGL cooldown
@@ -579,12 +591,20 @@ This is informational, not an error of flockmux itself.
             Cycle detection at spell launch. Per-agent claude
             `--mcp-config` file to break the shared-workspace identity
             collision in `~/.claude.json`.
+- ✅ **M6c** (1) `swarm_list_spells` / `swarm_run_spell` MCP tools so any
+            agent can chain-call a fresh crew; (2) `planner` role +
+            `auto-dispatch` spell so natural language → automatic spell
+            selection + launch; (3) `✨ Auto` primary CTA in the
+            launcher; (4) live DAG visualization tab in the swarm
+            drawer; (5) producer-death auto-fallback — exit without
+            writing `handoff_signal` ⇒ server writes `<role>.error` and
+            directly wakes the signal's subscribers, so dependents
+            branch to the upstream-failed path instead of hanging.
 
 ### Backlog
 
 | Priority | Item | Effort |
 |---|---|---|
-| P1 | M6c — Planner agent: natural-language task → spell+args dispatch | New role + spell loader exposes metadata |
 | P1 | M6c — Critic-loop embedding: critic role after each handoff | One new role + spell wiring |
 | P1 | `cli-plugins/gemini.toml` (Google Gemini CLI) | One toml file + manual auth verification |
 | P1 | `cli-plugins/qwen.toml` (Alibaba Qwen CLI) | Same as gemini; `ready_detect = "prompt_pattern"` |
