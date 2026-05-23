@@ -200,29 +200,51 @@ pub async fn prune_wake_nudged_by_key(nudged: &WakeNudged, key: &str) {
     w.retain(|(_, k), _| k != key);
 }
 
-/// M6d-5b: pure decision helper for the TTL scanner. Returns the
+/// M6d-5c: pure decision helper for the TTL scanner. Returns the
 /// list of (waiter, key, producer_aid, producer_role) triples that
 /// should fire a nudge right now.
 ///
-/// Selection rules:
-///   - waiter is subscribed to `key` (key appears in `subs[waiter]`)
-///   - some in-spell agent declares `key` as its `handoff_signal`
-///     (the "producer"); external-input keys are skipped
-///   - producer ≠ waiter (no self-loop, defence-in-depth)
-///   - producer's PTY has been quiet ≥ `threshold_ms`
-///   - producer's PTY has appended *at least once* (`last_append_ms > 0`);
-///     a never-started producer might just be slow to bootstrap, not
-///     stuck, so we don't nudge it
-///   - either we've never nudged this (waiter, key) pair, OR the
-///     last nudge was ≥ `threshold_ms` ago (rate limit)
+/// Selection rules — ALL must hold for a target to fire:
+///   1. **subscription exists** — waiter is subscribed to `key`
+///      (key appears in `subs[waiter]`).
+///   2. **in-spell producer** — some agent declares `key` as its
+///      `handoff_signal`. External-input keys (human-gate signals
+///      like `design.approved`) are skipped.
+///   3. **not self-loop** — producer ≠ waiter (defence-in-depth).
+///   4. **key still missing** — `key` is NOT currently on the
+///      blackboard. Without this check the v1 design re-nudged
+///      finished producers every time they went quiet after writing
+///      their handoff — observed in 2026-05-23 e2e #2 where BE was
+///      told "you owe critic backend.done" 5 minutes after BE had
+///      already written it, and BE codex then *re-wrote* backend.done
+///      to placate the message, cascading into spurious wakes.
+///   5. **producer's own deps satisfied** — if producer subscribes
+///      to anything (`subs.get(producer) -> Some(deps)`), every key
+///      in `deps` must be on the blackboard. A producer that's
+///      idle BECAUSE its own inputs aren't ready is not stuck — it
+///      shouldn't be acting yet. Observed in 2026-05-23 e2e #2 where
+///      fixer (deps=[review.completed]) was nudged before critic
+///      finished round 1, and fixer fabricated a fake `fixer.done`
+///      to placate the message.
+///   6. **producer PTY actually started** — `last_append_ms > 0`.
+///      Zero means the stream has never seen output; producer is
+///      still booting, not stuck.
+///   7. **producer PTY quiet ≥ threshold** — `now - last_append ≥
+///      threshold_ms`. The original M6d-5b condition.
+///   8. **rate limit** — either we've never nudged this (waiter,
+///      key) pair, OR the last nudge was ≥ `threshold_ms` ago.
 ///
 /// All inputs are owned snapshots so this can be unit-tested without
-/// touching the registry or the runtime.
+/// touching the registry or the runtime. `subs` doubles as the
+/// producer-deps source — wake_subs is keyed by every live agent
+/// that declared any depends_on, including agents that are themselves
+/// producers of other keys.
 pub fn select_ttl_targets(
     subs: &HashMap<String, Vec<String>>,
     exit_keys: &HashMap<String, ExitKey>,
     producer_last_append: &HashMap<String, i64>,
     wake_nudged: &HashMap<(String, String), i64>,
+    keys_on_blackboard: &std::collections::HashSet<String>,
     now_ms: i64,
     threshold_ms: i64,
 ) -> Vec<TtlNudgeTarget> {
@@ -242,20 +264,37 @@ pub fn select_ttl_targets(
     let mut targets = Vec::new();
     for (waiter, keys) in subs {
         for key in keys {
+            // (4) Key already produced → consumer is no longer waiting.
+            // Cheap snapshot lookup — no need to descend into
+            // producer state at all.
+            if keys_on_blackboard.contains(key) {
+                continue;
+            }
             let Some(&(producer_aid, producer_role)) = key_to_producer.get(key.as_str()) else {
-                continue; // external input
+                continue; // (2) external input
             };
             if producer_aid == waiter.as_str() {
-                continue; // shouldn't happen — self-loop guard
+                continue; // (3) self-loop guard
+            }
+            // (5) Producer's own deps satisfied? wake_subs is the
+            // resolved-deps source: every live agent that subscribes
+            // to anything appears here. Absence = no deps = trivially
+            // satisfied (e.g. backend with depends_on=[]).
+            let producer_deps_ok = match subs.get(producer_aid) {
+                None => true,
+                Some(deps) => deps.iter().all(|k| keys_on_blackboard.contains(k)),
+            };
+            if !producer_deps_ok {
+                continue;
             }
             let last_append = producer_last_append.get(producer_aid).copied().unwrap_or(0);
             if last_append == 0 {
-                continue; // producer hasn't started yet — give it time
+                continue; // (6) producer hasn't started yet
             }
             if now_ms.saturating_sub(last_append) < threshold_ms {
-                continue; // producer is actively streaming
+                continue; // (7) producer is actively streaming
             }
-            // Rate limit: if we nudged this pair recently, skip.
+            // (8) Rate limit
             let key_pair = (waiter.clone(), key.clone());
             if let Some(&last_nudge) = wake_nudged.get(&key_pair) {
                 if now_ms.saturating_sub(last_nudge) < threshold_ms {
@@ -596,11 +635,37 @@ impl WakeCoordinator {
                 producer_streams.insert(aid.clone(), stream.last_append_ms());
             }
         }
+        // M6d-5c: snapshot the FS-present blackboard keys. Used by
+        // `select_ttl_targets` to enforce gates 4 (key still missing)
+        // and 5 (producer's own deps satisfied). One read_dir per
+        // tick keeps the lock-amortised cost bounded.
+        let bb_root = self.swarm.blackboard_root().to_path_buf();
+        let keys_on_blackboard: std::collections::HashSet<String> =
+            tokio::task::spawn_blocking(move || {
+                let mut out: std::collections::HashSet<String> = Default::default();
+                if let Ok(rd) = std::fs::read_dir(&bb_root) {
+                    for entry in rd.flatten() {
+                        if entry
+                            .file_type()
+                            .ok()
+                            .is_some_and(|t| t.is_file())
+                        {
+                            if let Ok(name) = entry.file_name().into_string() {
+                                out.insert(name);
+                            }
+                        }
+                    }
+                }
+                out
+            })
+            .await
+            .unwrap_or_default();
         let targets = select_ttl_targets(
             &subs_snap,
             &exit_keys_snap,
             &producer_streams,
             &nudged_snap,
+            &keys_on_blackboard,
             now,
             TTL_THRESHOLD_MS,
         );
@@ -1141,15 +1206,31 @@ mod tests {
     const TTL: i64 = 5 * 60 * 1000;
     const NOW: i64 = 1_700_000_000_000;
 
+    fn no_keys() -> std::collections::HashSet<String> {
+        Default::default()
+    }
+    fn keys(items: &[&str]) -> std::collections::HashSet<String> {
+        items.iter().map(|s| s.to_string()).collect()
+    }
+
     #[test]
     fn select_ttl_fires_when_producer_quiet_beyond_threshold() {
-        // critic waits on fixer.done; fixer's PTY last appended 10 min
-        // ago. select should fire one target.
-        let subs = build_subs(&[("critic-1", &["fixer.done"])]);
-        let ek = mk_exit_keys(&[("fixer-1", "fixer", "fixer.done")]);
+        // critic waits on fixer.done; fixer is registered with
+        // depends_on=[review.completed], and review.completed IS on
+        // the blackboard — so fixer is "able to act" but hasn't.
+        // fixer's PTY last appended 10 min ago. select should fire.
+        let subs = build_subs(&[
+            ("critic-1", &["fixer.done"]),
+            ("fixer-1", &["review.completed"]),
+        ]);
+        let ek = mk_exit_keys(&[
+            ("fixer-1", "fixer", "fixer.done"),
+            ("critic-1", "critic", "review.completed"),
+        ]);
         let streams = mk_streams(&[("fixer-1", NOW - 10 * 60 * 1000)]);
         let nudged = HashMap::new();
-        let out = select_ttl_targets(&subs, &ek, &streams, &nudged, NOW, TTL);
+        let bb = keys(&["review.completed"]); // fixer's input met; fixer.done absent
+        let out = select_ttl_targets(&subs, &ek, &streams, &nudged, &bb, NOW, TTL);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].waiter, "critic-1");
         assert_eq!(out[0].key, "fixer.done");
@@ -1159,46 +1240,36 @@ mod tests {
 
     #[test]
     fn select_ttl_skips_when_producer_active() {
-        // fixer just appended 1s ago — clearly working. No nudge.
         let subs = build_subs(&[("critic-1", &["fixer.done"])]);
         let ek = mk_exit_keys(&[("fixer-1", "fixer", "fixer.done")]);
         let streams = mk_streams(&[("fixer-1", NOW - 1_000)]);
         let nudged = HashMap::new();
-        let out = select_ttl_targets(&subs, &ek, &streams, &nudged, NOW, TTL);
+        let out = select_ttl_targets(&subs, &ek, &streams, &nudged, &no_keys(), NOW, TTL);
         assert!(out.is_empty());
     }
 
     #[test]
     fn select_ttl_skips_when_producer_never_started() {
-        // last_append_ms == 0 means "stream has never appended". The
-        // producer might just be slow to bootstrap, or might genuinely
-        // be down — either way, the v1 design's "fire after wall-clock"
-        // was the wrong call. Do nothing.
         let subs = build_subs(&[("critic-1", &["fixer.done"])]);
         let ek = mk_exit_keys(&[("fixer-1", "fixer", "fixer.done")]);
         let streams = mk_streams(&[("fixer-1", 0)]);
         let nudged = HashMap::new();
-        let out = select_ttl_targets(&subs, &ek, &streams, &nudged, NOW, TTL);
+        let out = select_ttl_targets(&subs, &ek, &streams, &nudged, &no_keys(), NOW, TTL);
         assert!(out.is_empty());
     }
 
     #[test]
     fn select_ttl_skips_external_keys() {
-        // Waiter subscribes to a key nobody in the spell produces (e.g.
-        // a human-written gate signal). No producer → no nudge target.
         let subs = build_subs(&[("fe-1", &["design.approved"])]);
         let ek = mk_exit_keys(&[("fe-1", "frontend", "frontend.done")]);
         let streams = mk_streams(&[("fe-1", NOW - 10 * 60 * 1000)]);
         let nudged = HashMap::new();
-        let out = select_ttl_targets(&subs, &ek, &streams, &nudged, NOW, TTL);
+        let out = select_ttl_targets(&subs, &ek, &streams, &nudged, &no_keys(), NOW, TTL);
         assert!(out.is_empty());
     }
 
     #[test]
     fn select_ttl_rate_limits_repeat_nudges() {
-        // We nudged (critic-1, fixer.done) two minutes ago. Even
-        // though the producer is still quiet, we should NOT re-fire
-        // until the threshold elapses since the previous nudge.
         let subs = build_subs(&[("critic-1", &["fixer.done"])]);
         let ek = mk_exit_keys(&[("fixer-1", "fixer", "fixer.done")]);
         let streams = mk_streams(&[("fixer-1", NOW - 10 * 60 * 1000)]);
@@ -1207,15 +1278,12 @@ mod tests {
             ("critic-1".to_string(), "fixer.done".to_string()),
             NOW - 2 * 60 * 1000,
         );
-        let out = select_ttl_targets(&subs, &ek, &streams, &nudged, NOW, TTL);
+        let out = select_ttl_targets(&subs, &ek, &streams, &nudged, &no_keys(), NOW, TTL);
         assert!(out.is_empty());
     }
 
     #[test]
     fn select_ttl_re_fires_after_rate_limit_window() {
-        // Six minutes since last nudge → past the 5-min window, fire
-        // again. (Operationally rare; if the producer is still quiet
-        // after we nudged once, the user probably needs to know.)
         let subs = build_subs(&[("critic-1", &["fixer.done"])]);
         let ek = mk_exit_keys(&[("fixer-1", "fixer", "fixer.done")]);
         let streams = mk_streams(&[("fixer-1", NOW - 10 * 60 * 1000)]);
@@ -1224,36 +1292,105 @@ mod tests {
             ("critic-1".to_string(), "fixer.done".to_string()),
             NOW - 6 * 60 * 1000,
         );
-        let out = select_ttl_targets(&subs, &ek, &streams, &nudged, NOW, TTL);
+        let out = select_ttl_targets(&subs, &ek, &streams, &nudged, &no_keys(), NOW, TTL);
         assert_eq!(out.len(), 1);
     }
 
     #[test]
     fn select_ttl_excludes_self_subscribe_edge_case() {
-        // Pathological but cheap to guard: waiter == producer of the
-        // key it's subscribed to. Should never happen (writer-self
-        // exclusion in select_targets already prevents wake delivery
-        // for normal events), but defence-in-depth.
         let subs = build_subs(&[("solo-1", &["solo.done"])]);
         let ek = mk_exit_keys(&[("solo-1", "solo", "solo.done")]);
         let streams = mk_streams(&[("solo-1", NOW - 10 * 60 * 1000)]);
         let nudged = HashMap::new();
-        let out = select_ttl_targets(&subs, &ek, &streams, &nudged, NOW, TTL);
+        let out = select_ttl_targets(&subs, &ek, &streams, &nudged, &no_keys(), NOW, TTL);
         assert!(out.is_empty());
     }
 
+    // ── M6d-5c: the two new gates ──────────────────────────────────────
+
     #[test]
-    fn select_ttl_strict_spell_no_false_positive() {
-        // Regression test for the bug fix that motivated M6d-5b:
-        // strict spell topology where critic subscribes to fixer.done
-        // at spell launch, but fixer hasn't started yet (last_append=0
-        // because it's still bootstrapping or waiting on its own
-        // upstream). The v1 wall-clock TTL would have fired here at
-        // the 5-min mark; the new design correctly waits.
+    fn select_ttl_skips_when_key_already_on_blackboard() {
+        // Regression test for 2026-05-23 e2e #2: FE wrote frontend.done
+        // 5+ minutes ago; the TTL scanner saw critic still subscribed
+        // (wake_subs doesn't shrink on key landing) and FE's PTY quiet
+        // (FE finished its job → no more output) — under M6d-5b that
+        // fired a nudge to FE saying "you owe critic frontend.done",
+        // and FE wasted a turn looking at the already-landed key.
+        // Now we check the blackboard up-front and skip.
+        let subs = build_subs(&[("critic-1", &["frontend.done"])]);
+        let ek = mk_exit_keys(&[("fe-1", "frontend", "frontend.done")]);
+        let streams = mk_streams(&[("fe-1", NOW - 10 * 60 * 1000)]);
+        let nudged = HashMap::new();
+        let bb = keys(&["frontend.done"]); // ← already on disk
+        let out = select_ttl_targets(&subs, &ek, &streams, &nudged, &bb, NOW, TTL);
+        assert!(
+            out.is_empty(),
+            "key already on blackboard → consumer not waiting, must not nudge"
+        );
+    }
+
+    #[test]
+    fn select_ttl_skips_when_producer_deps_not_satisfied() {
+        // Regression test for the OTHER 2026-05-23 e2e #2 failure:
+        // fixer subscribed to review.completed; review.completed
+        // hadn't landed yet (critic was still finishing round 1).
+        // Under M6d-5b, fixer's PTY was quiet since bootstrap →
+        // nudge fired → fixer fabricated a fake fixer.done to placate
+        // the message. New gate: producer's own deps must all be met
+        // before we count it as "stuck".
+        let subs = build_subs(&[
+            ("critic-1", &["fixer.done"]),
+            ("fixer-1", &["review.completed"]),
+        ]);
+        let ek = mk_exit_keys(&[
+            ("fixer-1", "fixer", "fixer.done"),
+            ("critic-1", "critic", "review.completed"),
+        ]);
+        let streams = mk_streams(&[("fixer-1", NOW - 10 * 60 * 1000)]);
+        let nudged = HashMap::new();
+        // review.completed NOT on blackboard → fixer can't act yet.
+        let bb = no_keys();
+        let out = select_ttl_targets(&subs, &ek, &streams, &nudged, &bb, NOW, TTL);
+        assert!(
+            out.is_empty(),
+            "fixer's own dep review.completed is missing → fixer is idle by design, must not nudge"
+        );
+    }
+
+    #[test]
+    fn select_ttl_fires_when_deps_met_and_key_missing() {
+        // Positive case for both new gates: critic waits on fixer.done,
+        // fixer's input review.completed IS on the blackboard, but
+        // fixer hasn't produced fixer.done and has been quiet 10 min.
+        // This is the case where the TTL nudge IS legitimate.
+        let subs = build_subs(&[
+            ("critic-1", &["fixer.done"]),
+            ("fixer-1", &["review.completed"]),
+        ]);
+        let ek = mk_exit_keys(&[
+            ("fixer-1", "fixer", "fixer.done"),
+            ("critic-1", "critic", "review.completed"),
+        ]);
+        let streams = mk_streams(&[("fixer-1", NOW - 10 * 60 * 1000)]);
+        let nudged = HashMap::new();
+        let bb = keys(&["review.completed"]); // fixer's dep met
+        let out = select_ttl_targets(&subs, &ek, &streams, &nudged, &bb, NOW, TTL);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].producer_role, "fixer");
+    }
+
+    #[test]
+    fn select_ttl_strict_spell_at_5min_no_false_positive() {
+        // Full snapshot of fullstack-feature-strict at T+5min, modeled
+        // on the actual 2026-05-23 e2e #2 trace. Every producer is
+        // either finished-and-quiet (FE/BE) or correctly waiting
+        // (critic, fixer, test). Expected: no nudges.
         let subs = build_subs(&[
             ("test-1", &["review.completed"]),
             ("fixer-1", &["review.completed"]),
             ("critic-1", &["frontend.done", "backend.done", "fixer.done"]),
+            // FE waits on api.spec; BE has no deps (depends_on=[])
+            ("fe-1", &["api.spec"]),
         ]);
         let ek = mk_exit_keys(&[
             ("fe-1", "frontend", "frontend.done"),
@@ -1262,21 +1399,30 @@ mod tests {
             ("fixer-1", "fixer", "fixer.done"),
             ("test-1", "test", "test.passed"),
         ]);
-        // FE+BE producing chunks, critic just woken (no output yet),
-        // fixer never started (0). 5 minutes after spell launch.
+        // FE and BE both finished long ago and went quiet.
+        // critic is mid-streaming. fixer hasn't started.
+        // test hasn't started.
         let streams = mk_streams(&[
-            ("fe-1", NOW - 500),
-            ("be-1", NOW - 1_000),
-            ("critic-1", NOW - 200),
+            ("fe-1", NOW - 8 * 60 * 1000),
+            ("be-1", NOW - 7 * 60 * 1000),
+            ("critic-1", NOW - 200), // mid-review
             ("fixer-1", 0),
             ("test-1", 0),
         ]);
         let nudged = HashMap::new();
-        let out = select_ttl_targets(&subs, &ek, &streams, &nudged, NOW, TTL);
+        // Blackboard has FE/BE's done + reviews but not review.completed yet.
+        let bb = keys(&[
+            "api.spec",
+            "frontend.done",
+            "backend.done",
+            "frontend.review",
+            // backend.review still being written by critic
+        ]);
+        let out = select_ttl_targets(&subs, &ek, &streams, &nudged, &bb, NOW, TTL);
         assert!(
             out.is_empty(),
-            "no producer in this healthy snapshot has been quiet ≥5min while alive; \
-             got false positives: {out:?}"
+            "every producer in this snapshot is either done (key on bb) or correctly idle \
+             (deps not met); got false positives: {out:?}"
         );
     }
 
