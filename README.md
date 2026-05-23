@@ -45,6 +45,15 @@ standalone:
    `graph` tab in the swarm drawer renders the live `depends_on` DAG with
    amber-dashed / green-solid edges so you can see at a glance who's
    blocked on whom.
+6. **Human-in-the-loop gate (M6c).** The `fullstack-feature-gated` spell
+   adds an `architect` role that writes a short `design.md` (tech stack,
+   data model, API surface, UX sketch, open questions) and stops. FE and
+   BE are spawned in parallel but **blocked** — their bootstrap prompts
+   carry a spell-level `system_prompt_prefix` that makes them check
+   `design.approved` first and idle until the human operator writes that
+   key via the blackboard editor. Approval wakes both producers in the
+   same tick. Verified end-to-end on a fresh DB in 9.5 minutes wall-clock,
+   zero manual intervention after the operator approves.
 
 The dashboard also records every session as an asciicast v2 `.cast` file and
 plays it back in-browser using the official `asciinema-player` (WASM-backed,
@@ -112,6 +121,8 @@ these three pieces and adds zero new requirements on the CLI side.
 | **Push-style wake on blackboard write (M6b)** | The `WakeCoordinator` subscribes to `SwarmEvent::BlackboardChanged`. When a blackboard key is written, every agent whose role declares `depends_on=["<key>"]` is woken in the same tick: a `kind="wake"` mailbox note lands AND `\x15<msg>\r` is injected into the subscriber's PTY — restarts agents that already stopped idle. Closes the M5b gap where wake-check (a single-shot Stop hook) couldn't restart a stopped agent. |
 | **Producer-death auto-fallback (M6c)** | The same coordinator also listens for `SwarmEvent::AgentState{Exited}`. If an agent dies without freshening its `handoff_signal` on the blackboard, the server writes `<role>.error` (with JSON `{agent_id, role, signal, reason, at}`) AND directly wakes subscribers of the missing signal. Downstream prompts already check for `<role>.error` per the handoff protocol; they branch into the upstream-failed path instead of waiting forever. |
 | **Natural-language dispatch + DAG viz (M6c)** | `auto-dispatch` is a one-agent spell whose `planner` role reads natural language, calls `swarm_list_spells` + `swarm_run_spell` MCP tools, and launches the right downstream spell. The header has a primary `✨ Auto` button that defaults to this flow. A `graph` tab in the swarm drawer renders the live agent DAG via SVG with edges coloured by wake state. |
+| **HITL gate via `system_prompt_prefix` (M6c)** | Spells can prepend a per-agent gate paragraph to the resolved system prompt without touching the role's SOP body. `fullstack-feature-gated` uses this to make FE+BE check `design.approved` on every wake (including the initial bootstrap turn, which `depends_on` alone doesn't catch). The operator writes the approval key via the blackboard editor — no new endpoint, no new UI button. |
+| **Codex bracketed-paste-safe wake injection (M6c)** | `WakeCoordinator` splits its PTY wake injection into `\x15<text>` → 150 ms gap → `\r`. Codex 0.130+'s Ratatui input loop treats a single chunk containing text + `\r` as a paste with embedded newline (inserts but doesn't submit). The gap forces codex to leave paste mode so the `\r` is processed as a typed Enter and submits the buffer. Claude is unaffected; matches the spell-bootstrap inject path that has always worked for codex. |
 | **Codex first-run dialog auto-confirm** | codex 0.130+ pops a "Hooks need review" trust dialog the first time it sees a new hook path. flockmux's server watches PTY output and synthesizes the `2 + Enter` keystrokes, so spawn is one click for the user. |
 | **Asciicast v2 record + browser replay** | Every session writes a `.cast` file; the recordings drawer plays them inline with the official `asciinema-player` (WASM renderer, fullscreen + scrubbing). |
 | **Spells + role library** | TOML front-matter + markdown body declares a multi-agent topology (`[[agents]]`). Each agent line either inlines `role/cli/system_prompt` (old style, `critic-loop`) or sets `role_ref="<id>"` to inherit from a shared `roles/<id>.md` SOP template (new style, `fullstack-feature`). `POST /api/spell/run` resolves the merge, substitutes `{task}` and `{<role>_id}` placeholders, and injects each agent's bootstrap prompt. |
@@ -369,8 +380,8 @@ no role polls, no human pokes a PTY. Each `wake delivered` line is the
 | `flockmux-recorder` | ~250 | asciicast v2 writer, finalize-on-EOF. |
 | `flockmux-cli` | ~50 | Thin entry point (`flockmux up` launches server + opens dashboard). |
 | `cli-plugins/` | — | Per-CLI `.toml`: `claude.toml`, `codex.toml`. |
-| `roles/` | — | Per-role `.md` SOP templates: `frontend.md`, `backend.md`, `test.md` (M6a). |
-| `spells/` | — | Per-spell `.md`: `critic-loop.md`, `fullstack-feature.md`. |
+| `roles/` | — | Per-role `.md` SOP templates: `frontend.md`, `backend.md`, `test.md` (M6a); `planner.md` (M6c-2), `critic.md` (M6c-6), `architect.md` (M6c-7). |
+| `spells/` | — | Per-spell `.md`: `critic-loop.md` (M5c), `fullstack-feature.md` (M6a), `auto-dispatch.md` (M6c-2), `fullstack-feature-reviewed.md` (M6c-6), `fullstack-feature-gated.md` (M6c-7). |
 | `docs/handoff-protocol.md` | — | Blackboard-key convention used by `fullstack-feature` and any spell that wants explicit FE/BE/test contracts. |
 | `web/` | — | Vite + React + xterm.js + asciinema-player frontend. |
 
@@ -599,21 +610,30 @@ This is informational, not an error of flockmux itself.
             drawer; (5) producer-death auto-fallback — exit without
             writing `handoff_signal` ⇒ server writes `<role>.error` and
             directly wakes the signal's subscribers, so dependents
-            branch to the upstream-failed path instead of hanging.
+            branch to the upstream-failed path instead of hanging;
+            (6) `critic` role + `fullstack-feature-reviewed` spell to
+            run an advisory code review between FE/BE and test;
+            (7) `architect` role + `fullstack-feature-gated` spell +
+            `system_prompt_prefix` field to introduce a human-in-the-
+            loop approval checkpoint before any code is written;
+            (8) codex bracketed-paste-safe wake injection (split
+            writes with a 150 ms gap so codex's Ratatui sees the
+            terminating `\r` as a typed Enter, not part of a paste).
 
 ### Backlog
 
 | Priority | Item | Effort |
 |---|---|---|
-| P1 | M6c — Critic-loop embedding: critic role after each handoff | One new role + spell wiring |
+| P1 | M6d — Critic gating + fixer loop: turn critic verdict=block into a real gate that fires a fixer agent | New role + spell branching on review.verdict |
 | P1 | `cli-plugins/gemini.toml` (Google Gemini CLI) | One toml file + manual auth verification |
 | P1 | `cli-plugins/qwen.toml` (Alibaba Qwen CLI) | Same as gemini; `ready_detect = "prompt_pattern"` |
 | P1 | `spells/tree-executor.md` (recursive task decomposition) | One md file |
 | P1 | `spells/map-reduce.md` (parallel workers + reducer) | One md file |
-| P2 | M6c — HITL gate after architect / before test phase | Spell-manifest flag + UI approval button |
-| P2 | M6c — `<key>.failed` TTL fallback (auto-fail stuck dependencies) | ~40 lines in wake.rs |
-| P2 | M6c — Visual DAG of `depends_on` in the swarm drawer | Frontend SVG + read from `/api/spells` |
-| P2 | M6c — `agent_state == Thinking` gate skips PTY injection | Track per-PTY state from OSC + stop hook |
+| P2 | M6d — Dedicated `Approve` / `Reject` UI buttons on the blackboard tab (today operator writes the key by hand) | Frontend only |
+| P2 | M6d — Architect rejection loop: rewake architect on `design.rejected`, no need to kill+respawn | Architect role `depends_on=["design.rejected"]` + prompt branch |
+| P2 | M6d — Test prompt: only treat `*.error` as upstream failure if the file is actually readable (don't bail on stale DB rows from previous runs) | Prompt change |
+| P2 | M6d — TTL fallback: if a `depends_on` key hasn't landed in N seconds and the producer is still alive, prod it via swarm message | ~40 lines in wake.rs |
+| P2 | M6d — `agent_state == Thinking` gate skips PTY injection so wake kicks don't collide with a live model stream | Track per-PTY state from OSC + stop hook |
 | P2 | `cli-plugins/opencode.toml`, `cli-plugins/aider.toml` | Per-CLI auth research |
 | P2 | `spells/werewolf.md`, `spells/red-team.md` | One md per spell |
 | P3 | Session-token auth + CORS for remote access | Borrow hermes-agent's `_SESSION_TOKEN` design |
