@@ -345,6 +345,39 @@ impl Store {
         .context("spawn_blocking count_unread")?
     }
 
+    /// M6f: atomically find all unread `kind="wake"` messages for `to_agent`,
+    /// mark them as read, and return their ids. This is `wake_check`'s
+    /// primary signal — it MUST be atomic (single transaction) so a wake
+    /// arriving between the SELECT and the UPDATE wouldn't get lost.
+    ///
+    /// Why this is separate from generic `mark_read`: wake messages are
+    /// system triggers, not human-readable mail. `swarm_list_messages`
+    /// deliberately skips marking them read (see tools.rs comment), so
+    /// nothing else touches them. This method is the ONLY thing that
+    /// closes the loop, ensuring each wake fires `wake_check` exactly
+    /// once.
+    pub async fn consume_wakes(&self, to_agent: String, at_ms: i64) -> Result<Vec<i64>> {
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || -> Result<Vec<i64>> {
+            let mut conn = pool.get()?;
+            let tx = conn.transaction()?;
+            let marked: Vec<i64> = {
+                let mut stmt = tx.prepare(
+                    "UPDATE messages SET read_at = ?1 \
+                     WHERE to_agent = ?2 AND kind = 'wake' AND read_at IS NULL \
+                     RETURNING id",
+                )?;
+                let rows = stmt
+                    .query_map(params![at_ms, to_agent], |row| row.get::<_, i64>(0))?;
+                rows.collect::<rusqlite::Result<Vec<i64>>>()?
+            };
+            tx.commit()?;
+            Ok(marked)
+        })
+        .await
+        .context("spawn_blocking consume_wakes")?
+    }
+
     // ── blackboard ───────────────────────────────────────────────────────
 
     pub async fn insert_blackboard_op(&self, op: NewBlackboardOp) -> Result<BlackboardOpRecord> {

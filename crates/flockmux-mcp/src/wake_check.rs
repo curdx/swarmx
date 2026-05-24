@@ -149,8 +149,27 @@ pub async fn run(args: WakeCheckArgs) -> Result<()> {
         return Ok(());
     }
 
-    // ── 3. HTTP: GET /api/message/unread_count?to=<agent_id> ─────────────
-    let count = match fetch_unread_count(&args.server, &agent_id).await {
+    // ── 3. HTTP: POST /api/message/consume_wakes?to=<agent_id> ──────────
+    //
+    // Why "consume" not "count": M6f bug fix. The old `unread_count`
+    // path counted ALL unread messages (including non-wake), but more
+    // importantly it relied on `swarm_list_messages` to mark messages
+    // read once the LLM handled them. That coupling broke when the LLM
+    // mid-turn-listed: a wake arriving during a long turn got swept
+    // into list_messages' auto-mark-read, becoming invisible to the
+    // NEXT wake_check that fired at the turn's actual Stop hook. The
+    // 2026-05-23 strict e2e #6 caught this: critic processed
+    // frontend.done in turn 1, the LLM list_messages'd one more time
+    // before stopping, picked up the just-arrived backend.done wake,
+    // marked it read → wake_check saw 0 unread → critic idled 46 min.
+    //
+    // The fix has two halves: tools.rs::list_messages now skips
+    // kind="wake" in its mark-read set (wakes don't get touched by
+    // LLM calls), and this hook calls the dedicated `consume_wakes`
+    // endpoint which atomically claims-and-marks-read all pending
+    // wakes in one transaction. The wakes are delivered to the LLM
+    // via the `block` reason below.
+    let count = match consume_wakes(&args.server, &agent_id).await {
         Ok(n) => n,
         Err(err) => {
             // Any transport / HTTP failure is a graceful degrade — never
@@ -190,22 +209,31 @@ pub async fn run(args: WakeCheckArgs) -> Result<()> {
         eprintln!("wake-check: throttle write failed: {err}");
     }
 
-    // Why this exact wording: codex 0.132's swarm_send_message tool calls
-    // observed in the wild often omit `in_reply_to`, which breaks the
-    // threading view in the UI. Naming the field explicitly + tying it
-    // to "the original `id`" turns it from a guessable optional into a
-    // step in the recipe. The "Do not respond ... outside the swarm" line
-    // stops the agent from acknowledging the wake in its own PTY output
-    // (which would otherwise leak the system prompt to the human user).
+    // M6f: wakes are ALREADY marked read by consume_wakes (atomic).
+    // The reason text below IS the delivery — it tells the LLM what
+    // changed and what to do. swarm_list_messages may surface other
+    // (non-wake) messages too, but the wakes themselves don't need
+    // re-fetching.
+    //
+    // Why this exact wording: codex 0.132's swarm_send_message tool
+    // calls observed in the wild often omit `in_reply_to`, which breaks
+    // the threading view in the UI. Naming the field explicitly + tying
+    // it to "the original `id`" turns it from a guessable optional into
+    // a step in the recipe. The "Do not respond ... outside the swarm"
+    // line stops the agent from acknowledging the wake in its own PTY
+    // output (which would otherwise leak the system prompt to the human
+    // user).
     let reason = format!(
-        "You have {count} unread swarm message(s). Steps:\n\
-         1. Call swarm_list_messages to read them — this also marks them \
-         delivered/read.\n\
-         2. For each message that warrants a response, call \
-         swarm_send_message with `kind: \"reply\"` AND \
-         `in_reply_to: <that message's id>` so the threading stays \
-         intact.\n\
-         Do not produce any user-facing output about these messages \
+        "You were woken up: {count} new wake event(s) just arrived. \
+         A blackboard key you depend_on was likely written. Steps:\n\
+         1. Call swarm_list_blackboard to see what's new, then \
+         swarm_read_blackboard on any key you depend on.\n\
+         2. If you also have pending non-wake messages, call \
+         swarm_list_messages.\n\
+         3. Continue with your role's workflow. If you decide to reply \
+         to any message, use swarm_send_message with `kind: \"reply\"` \
+         AND `in_reply_to: <that message's id>`.\n\
+         Do not produce any user-facing output about these wakes \
          outside the swarm tool calls."
     );
     emit_block(&reason);
@@ -281,18 +309,23 @@ fn agent_id_from_stdin_cwd(stdin: Option<&Value>) -> Option<String> {
 
 // ── HTTP ─────────────────────────────────────────────────────────────────
 
-async fn fetch_unread_count(server: &str, agent_id: &str) -> Result<i64, String> {
+/// M6f: atomically claim + mark-read all pending wake messages for this
+/// agent. Replaces the previous `GET unread_count` path. Returns the
+/// number of wakes that this call consumed — i.e., that the caller
+/// MUST now deliver to the LLM via emit_block (otherwise they'd be
+/// lost, since they're already marked read).
+async fn consume_wakes(server: &str, agent_id: &str) -> Result<i64, String> {
     let client = reqwest::Client::builder()
         .timeout(HTTP_TIMEOUT)
         .build()
         .map_err(|e| format!("build client: {e}"))?;
-    let url = format!("{server}/api/message/unread_count");
+    let url = format!("{server}/api/message/consume_wakes");
     let resp = client
-        .get(&url)
+        .post(&url)
         .query(&[("to", agent_id)])
         .send()
         .await
-        .map_err(|e| format!("GET {url}: {e}"))?;
+        .map_err(|e| format!("POST {url}: {e}"))?;
     let status = resp.status();
     if !status.is_success() {
         let body = resp.text().await.unwrap_or_default();
@@ -360,20 +393,28 @@ mod tests {
     use std::sync::Arc;
     use tempfile::tempdir;
 
-    /// Spin up a stub `flockmux-server` exposing only `/api/message/unread_count`.
-    /// Returns `(addr, counter)` — flip `counter` to control the returned count.
+    /// Spin up a stub `flockmux-server` exposing only the wake-check
+    /// endpoint (M6f: POST /api/message/consume_wakes). Returns
+    /// `(addr, counter)` — flip `counter` to control the returned count.
     async fn start_stub(initial: i64) -> (SocketAddr, Arc<AtomicI64>) {
         let counter = Arc::new(AtomicI64::new(initial));
         let counter_inner = counter.clone();
         let app = Router::new().route(
-            "/api/message/unread_count",
-            get(move |Query(q): Query<HashMap<String, String>>| {
-                let counter = counter_inner.clone();
-                async move {
-                    let to = q.get("to").cloned().unwrap_or_default();
-                    Json(json!({ "to": to, "count": counter.load(Ordering::SeqCst) }))
-                }
-            }),
+            "/api/message/consume_wakes",
+            axum::routing::post(
+                move |Query(q): Query<HashMap<String, String>>| {
+                    let counter = counter_inner.clone();
+                    async move {
+                        let to = q.get("to").cloned().unwrap_or_default();
+                        let count = counter.load(Ordering::SeqCst);
+                        // ids array would be filled in real impl; tests only
+                        // check the count field so a single sentinel per
+                        // count keeps the stub honest about array length.
+                        let ids: Vec<i64> = (1..=count.max(0)).collect();
+                        Json(json!({ "to": to, "count": count, "ids": ids }))
+                    }
+                },
+            ),
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -387,12 +428,9 @@ mod tests {
     /// degrade-to-noop path.
     async fn start_error_stub() -> SocketAddr {
         let app = Router::new().route(
-            "/api/message/unread_count",
-            get(|| async {
-                (
-                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                    "boom",
-                )
+            "/api/message/consume_wakes",
+            axum::routing::post(|| async {
+                (axum::http::StatusCode::INTERNAL_SERVER_ERROR, "boom")
             }),
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

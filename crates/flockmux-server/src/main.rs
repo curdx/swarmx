@@ -207,6 +207,10 @@ async fn main() -> Result<()> {
             get(routes::swarm::unread_count),
         )
         .route(
+            "/api/message/consume_wakes",
+            post(routes::swarm::consume_wakes),
+        )
+        .route(
             "/api/blackboard",
             get(routes::swarm::list_blackboard_paths),
         )

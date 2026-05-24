@@ -128,6 +128,62 @@ pub async fn unread_count(
     Ok(Json(UnreadCountResponse { to: q.to, count }))
 }
 
+/// M6f: atomically claim all pending wakes for an agent.
+///
+/// Replaces `unread_count` as `wake_check`'s primary signal. Returns the
+/// ids of `kind="wake"` messages that were unread before this call AND
+/// have now been marked read. If the list is non-empty, `wake_check`
+/// should emit `block` with a reason that lists those wakes.
+///
+/// Why a dedicated endpoint vs reusing `unread_count` + `mark_read`:
+///   - **Atomicity**: this collapses "see if there are wakes" and "mark
+///     them read" into one SQL transaction. The two-call alternative
+///     opens a window where a wake arriving between SELECT and UPDATE
+///     would be marked-read without being delivered to `wake_check`.
+///   - **Semantic clarity**: wake messages aren't human mail. They're
+///     consumed by the Stop hook. Having a dedicated verb keeps that
+///     distinction visible in the routes table.
+///   - **Bug source for M6f**: the previous design relied on
+///     `swarm_list_messages` (called by the LLM) marking wakes read.
+///     During long turns the LLM would mid-turn-list and silently mark
+///     a freshly-arrived wake read before `wake_check` ever saw it,
+///     stranding the agent until manual ⚡ wake. Observed in 2026-05-23
+///     strict e2e #6.
+#[derive(Debug, serde::Serialize)]
+pub struct ConsumeWakesResponse {
+    pub to: String,
+    pub count: i64,
+    pub ids: Vec<i64>,
+}
+
+pub async fn consume_wakes(
+    State(state): State<AppState>,
+    Query(q): Query<UnreadCountQuery>,
+) -> Result<Json<ConsumeWakesResponse>, (StatusCode, Json<serde_json::Value>)> {
+    let at = now_ms();
+    let ids = state
+        .store
+        .consume_wakes(q.to.clone(), at)
+        .await
+        .map_err(internal_err)?;
+    // Broadcast message_read so the UI badge updates promptly. Match
+    // the shape that mark_messages_read emits — same event kind, same
+    // ids field — so the FE doesn't need a new handler.
+    if !ids.is_empty() {
+        use flockmux_protocol::ws_swarm::SwarmEvent;
+        state.swarm.publish_event(SwarmEvent::MessageRead {
+            ids: ids.clone(),
+            to_agent: q.to.clone(),
+            at,
+        });
+    }
+    Ok(Json(ConsumeWakesResponse {
+        to: q.to,
+        count: ids.len() as i64,
+        ids,
+    }))
+}
+
 #[derive(Debug, Deserialize, Default)]
 pub struct BlackboardHistoryQuery {
     #[serde(default)]

@@ -265,11 +265,28 @@ async fn list_messages(ctx: &ToolContext, args: &Value) -> Result<String, String
     // endpoint enforces the same restriction, but pre-filtering keeps the
     // request body tight when an agent passes only_undelivered or has been
     // CC'd via a future fan-out.
+    //
+    // M6f bug fix (2026-05-24): we deliberately EXCLUDE `kind="wake"` from
+    // the auto-mark-read set. Wake messages are system triggers consumed
+    // by `wake_check` (Stop-hook helper) — NOT human-readable mail. If
+    // the LLM calls swarm_list_messages mid-turn (e.g. to check for new
+    // input before stopping), any wake that landed during that turn would
+    // get marked read *before* wake_check has a chance to see it on the
+    // next Stop, silently dropping the wake. Observed in 2026-05-23
+    // strict e2e #6: critic ate frontend.done in turn 1, mid-turn called
+    // list_messages, picked up the just-arrived backend.done wake, marked
+    // it read, then stop-hook fired with unread=0 → noop → critic idled
+    // for 46 minutes until a manual ⚡ wake. The wake is still RETURNED
+    // in the response so the LLM can see it; it's just not auto-read.
+    // `wake_check` itself marks the wake read when it emits `block`,
+    // which is the moment the wake's reason is actually delivered to
+    // the LLM's next turn.
     let unread_ids: Vec<i64> = rows
         .iter()
         .filter(|m| {
             m.get("to_agent").and_then(|v| v.as_str()) == Some(ctx.agent_id.as_str())
                 && m.get("read_at").map(|v| v.is_null()).unwrap_or(true)
+                && m.get("kind").and_then(|v| v.as_str()) != Some("wake")
         })
         .filter_map(|m| m.get("id").and_then(|v| v.as_i64()))
         .collect();
@@ -1052,6 +1069,75 @@ mod tests {
             "read_at": read_at,
             "in_reply_to": in_reply_to,
         })
+    }
+
+    /// M6f variant of `make_row` that builds a wake message. Wake
+    /// messages must NOT be auto-marked-read by list_messages.
+    fn make_wake_row(id: i64, from: &str, to: &str, body: &str) -> Value {
+        json!({
+            "id": id,
+            "from_agent": from,
+            "to_agent": to,
+            "kind": "wake",
+            "body": body,
+            "sent_at": 1000 + id,
+            "delivered_at": null,
+            "read_at": null,
+            "in_reply_to": null,
+        })
+    }
+
+    #[tokio::test]
+    async fn list_messages_does_not_mark_wake_messages_read() {
+        // M6f regression: wake messages were getting auto-marked read by
+        // mid-turn list_messages calls, hiding them from the Stop-hook's
+        // wake_check. The fix: list_messages skips kind="wake" in its
+        // mark-read filter.
+        let (addr, state) = start_stub().await;
+        // Mix: one unread note (id=1), one unread wake (id=2). Only id=1
+        // should be in the mark_read POST body.
+        seed_messages(&state, vec![
+            make_row(1, "claude-aaa", "codex-bbb", "human note", None, None),
+            make_wake_row(2, "system", "codex-bbb", "blackboard `x` updated"),
+        ]).await;
+
+        let ctx = ctx_for(addr, "codex-bbb");
+        let out = call_tool(&ctx, "swarm_list_messages", &json!({})).await;
+        assert_eq!(out["isError"], json!(false));
+        let text = out["content"][0]["text"].as_str().unwrap();
+        // Both rows are returned (so LLM sees the wake context).
+        assert!(text.contains("2 message(s) for codex-bbb"), "got: {text}");
+        // Only the note got marked read.
+        assert!(text.contains("Marked 1 message(s) as read."), "got: {text}");
+
+        let s = state.lock().await;
+        assert_eq!(s.mark_read_calls.len(), 1);
+        let ids: Vec<i64> = s.mark_read_calls[0]
+            .get("ids").and_then(|v| v.as_array()).unwrap()
+            .iter().filter_map(|x| x.as_i64()).collect();
+        assert_eq!(ids, vec![1], "only note (id=1) marked read; wake (id=2) untouched");
+    }
+
+    #[tokio::test]
+    async fn list_messages_skips_mark_read_when_all_unread_are_wakes() {
+        // M6f: when the unread set is entirely wakes, no mark_read POST
+        // should fire at all.
+        let (addr, state) = start_stub().await;
+        seed_messages(&state, vec![
+            make_wake_row(1, "system", "codex-bbb", "blackboard `a` updated"),
+            make_wake_row(2, "system", "codex-bbb", "blackboard `b` updated"),
+        ]).await;
+
+        let ctx = ctx_for(addr, "codex-bbb");
+        let out = call_tool(&ctx, "swarm_list_messages", &json!({})).await;
+        let text = out["content"][0]["text"].as_str().unwrap();
+        // Both wakes returned to the LLM…
+        assert!(text.contains("2 message(s) for codex-bbb"), "got: {text}");
+        // …but nothing marked read (so wake_check still sees them next Stop).
+        assert!(!text.contains("Marked"), "must not mark any wakes: {text}");
+
+        let s = state.lock().await;
+        assert_eq!(s.mark_read_calls.len(), 0, "no POST when all unread are wakes");
     }
 
     #[tokio::test]

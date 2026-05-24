@@ -338,6 +338,64 @@ async fn count_unread_excludes_read() {
 }
 
 #[tokio::test]
+async fn consume_wakes_atomically_returns_wake_ids_and_marks_read() {
+    // M6f: consume_wakes is the wake_check primary signal. It must
+    // (a) only touch kind="wake", (b) only touch unread, (c) only
+    // touch this agent, (d) mark read in the same transaction as the
+    // SELECT, and (e) be idempotent (second call returns []).
+    let (_dir, store) = fresh_store().await;
+    let wake1 = store.insert_message(NewMessage {
+        from_agent: "system".into(),
+        to_agent: "critic".into(),
+        kind: "wake".into(),
+        body: "blackboard `frontend.done` updated".into(),
+        sent_at: ts(1),
+        in_reply_to: None,
+    }).await.unwrap();
+    let _note = store.insert_message(NewMessage {
+        from_agent: "frontend".into(),
+        to_agent: "critic".into(),
+        kind: "note".into(),
+        body: "fyi".into(),
+        sent_at: ts(2),
+        in_reply_to: None,
+    }).await.unwrap();
+    let wake2 = store.insert_message(NewMessage {
+        from_agent: "system".into(),
+        to_agent: "critic".into(),
+        kind: "wake".into(),
+        body: "blackboard `backend.done` updated".into(),
+        sent_at: ts(3),
+        in_reply_to: None,
+    }).await.unwrap();
+    // Different agent — must not be touched.
+    let other_wake = store.insert_message(NewMessage {
+        from_agent: "system".into(),
+        to_agent: "test".into(),
+        kind: "wake".into(),
+        body: "for test".into(),
+        sent_at: ts(4),
+        in_reply_to: None,
+    }).await.unwrap();
+
+    let ids = store.consume_wakes("critic".into(), ts(100)).await.unwrap();
+    assert_eq!(ids.len(), 2);
+    assert!(ids.contains(&wake1.id));
+    assert!(ids.contains(&wake2.id));
+
+    // Second call: nothing left to consume.
+    let ids_again = store.consume_wakes("critic".into(), ts(101)).await.unwrap();
+    assert!(ids_again.is_empty(), "consume_wakes must be idempotent");
+
+    // Other agent's wake is untouched.
+    let other_ids = store.consume_wakes("test".into(), ts(102)).await.unwrap();
+    assert_eq!(other_ids, vec![other_wake.id]);
+
+    // count_unread still sees the note (kind="note") for critic.
+    assert_eq!(store.count_unread("critic".into()).await.unwrap(), 1);
+}
+
+#[tokio::test]
 async fn insert_and_list_round_trip_in_reply_to() {
     let (_dir, store) = fresh_store().await;
     let parent = store
