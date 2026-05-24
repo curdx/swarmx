@@ -85,27 +85,6 @@ pub struct ExitKey {
 }
 pub type ExitKeys = Arc<RwLock<HashMap<String, ExitKey>>>;
 
-/// M6d-6: how recent the last PTY output chunk must be for the agent
-/// to be treated as "still streaming". 2 seconds is a comfortable
-/// upper bound on the gap between consecutive chunks of a generating
-/// LLM turn: claude/codex emit in tight bursts during text streaming,
-/// and during tool-call sequences the gap is small too. Anything
-/// longer is almost certainly an idle prompt, where injecting is the
-/// right move. Tune up if false-positives appear (rare); tune down if
-/// false-negatives (injection mid-stream) appear.
-const PTY_QUIET_MS_FOR_INJECT: i64 = 2_000;
-
-/// M6d-6: pure helper extracted for testing. Returns true when the
-/// PTY has been quiet long enough that a wake-inject is safe.
-/// `last_append_ms == 0` means the stream has never seen output —
-/// safe to inject (no in-flight turn exists yet).
-pub fn pty_quiet_enough_to_inject(last_append_ms: i64, now_ms: i64) -> bool {
-    if last_append_ms == 0 {
-        return true;
-    }
-    now_ms.saturating_sub(last_append_ms) >= PTY_QUIET_MS_FOR_INJECT
-}
-
 /// Recognises blackboard keys that should fan-out to wake the base
 /// key's subscribers in addition to their literal name. Today only
 /// `.error` and `.failed` suffixes get this treatment — both indicate
@@ -228,32 +207,29 @@ pub async fn inject_with_kick_text(
     let slot = registry
         .get(agent_id)
         .ok_or_else(|| anyhow!("no registry slot for `{agent_id}` — agent may have exited"))?;
-    // M6d-6: hold the lock only long enough to clone the input sender
-    // AND grab a stream handle for the activity check. Both fields are
-    // cheap to clone (Arc / mpsc::Sender). Avoids any await while
-    // holding the parking_lot mutex.
-    let (input_tx, stream) = {
+    let input_tx = {
         let guard = slot.lock();
-        (guard.input_tx.clone(), guard.stream.clone())
+        guard.input_tx.clone()
     };
 
-    // M6d-6: skip the destructive PTY kick when output has flowed
-    // recently — the agent is mid-turn and the mailbox alone will
-    // catch the wake on its next Stop hook. Mailbox is already
-    // delivered by the caller; this is the "don't pollute the buffer"
-    // gate. Return Ok so the caller doesn't reap the subscription as
-    // dead.
-    let now = now_ms();
-    let last = stream.last_append_ms();
-    if !pty_quiet_enough_to_inject(last, now) {
-        tracing::info!(
-            agent_id,
-            key = key_for_log,
-            last_output_ms_ago = now.saturating_sub(last),
-            "skipping wake PTY-inject; agent appears mid-stream (mailbox already delivered)"
-        );
-        return Ok(());
-    }
+    // M6g (2026-05-24): removed the "skip-if-mid-stream" PTY quiet
+    // gate that lived here previously. It was added in M6d-6 to avoid
+    // polluting an in-flight turn during the TTL-nudge era. With TTL
+    // gone (M6e), the only PTY injects are real BlackboardChanged
+    // wakes — those signal "an agent you depend_on wrote a key", and
+    // the agent receiving them should process them next turn regardless
+    // of when they arrive. Worse: the quiet gate had a fatal edge case
+    // (e2e #7, 2026-05-24): if PTY output just stopped within the
+    // 2-second window because the AGENT JUST FINISHED a turn (not
+    // because it's still streaming), the gate would skip the inject
+    // — but then there's no new turn to trigger wake-check, so the
+    // mailbox wake gets stranded indefinitely. The gate fundamentally
+    // couldn't distinguish "still streaming" from "just stopped".
+    // The simpler, correct behaviour is to always inject; claude/codex's
+    // input buffer handles concurrent writes correctly during turn
+    // boundaries (they were already designed for keyboard input racing
+    // turn transitions).
+    let _ = key_for_log; // kept in signature for log call sites if needed later
 
     // Why three separate writes with a delay before the final `\r`:
     //   The naive `format!("\x15…\r")` blob worked on Claude Code's TUI
@@ -859,48 +835,12 @@ mod tests {
         assert!(detect_depends_on_cycles(&handoff, &deps).is_ok());
     }
 
-    // ── M6d-6: PTY activity-based inject gate ───────────────────────────
-
-    #[test]
-    fn pty_quiet_enough_when_never_appended() {
-        // last_append_ms == 0 is the sentinel for "stream has never
-        // seen output". A wake-inject here cannot pollute anything.
-        assert!(pty_quiet_enough_to_inject(0, 1_700_000_000_000));
-    }
-
-    #[test]
-    fn pty_not_quiet_when_recent_output() {
-        // 500 ms ago — well inside the 2 s threshold; mid-stream.
-        let now = 1_700_000_000_000_i64;
-        let last = now - 500;
-        assert!(!pty_quiet_enough_to_inject(last, now));
-    }
-
-    #[test]
-    fn pty_quiet_enough_when_output_old_enough() {
-        // 3 s ago — past the 2 s quiet bar; safe to inject.
-        let now = 1_700_000_000_000_i64;
-        let last = now - 3_000;
-        assert!(pty_quiet_enough_to_inject(last, now));
-    }
-
-    #[test]
-    fn pty_quiet_at_exact_threshold_allows_inject() {
-        // Boundary case: gap == threshold counts as "quiet enough".
-        // Inclusive on the safe side because the threshold is already
-        // generous — being strict at the edge would just add flake.
-        let now = 1_700_000_000_000_i64;
-        let last = now - PTY_QUIET_MS_FOR_INJECT;
-        assert!(pty_quiet_enough_to_inject(last, now));
-    }
-
-    #[test]
-    fn pty_quiet_handles_clock_skew_gracefully() {
-        // `now < last_append_ms` should not panic and should NOT count
-        // as quiet — the safer default is to skip injection until time
-        // catches up. saturating_sub ensures no underflow.
-        let now = 1_700_000_000_000_i64;
-        let last = now + 1_000;
-        assert!(!pty_quiet_enough_to_inject(last, now));
-    }
+    // M6d-6 PTY activity-based inject gate tests were removed in M6g
+    // (2026-05-24). The gate fundamentally couldn't distinguish
+    // "agent still streaming" from "agent just finished a turn", and
+    // the latter case stranded wakes indefinitely (e2e #7). The gate
+    // existed to protect against TTL-nudge pollution during M6d-5;
+    // with TTL removed (M6e), the gate's protection has no use case
+    // left and its edge case caused real bugs. See M6g commit for
+    // details.
 }
