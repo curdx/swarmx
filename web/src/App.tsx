@@ -14,12 +14,13 @@
  *     1500px-wide window; beyond 6 the terminal grid becomes unreadable.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api/http";
-import type { CliPluginInfo, SpawnAgentResponse } from "./api/types";
+import type { CliPluginInfo, SpawnAgentResponse, SwarmEvent } from "./api/types";
 import { XtermPane } from "./components/XtermPane";
 import { SwarmPanel } from "./components/SwarmPanel";
 import { SpellsLauncher } from "./components/SpellsLauncher";
+import { useSwarmFeed } from "./hooks/useSwarmFeed";
 
 const MAX_COLS = 6;
 const SWARM_PANEL_KEY = "flockmux:swarmPanelOpen";
@@ -85,6 +86,35 @@ export default function App() {
     refreshAgents();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // M6h: 订阅 /ws/swarm 的 agent_state 事件。auto-dispatch 这种"planner
+  // 通过 MCP 起下游 spell"的链路，前端没办法从 SpellsLauncher 回调里
+  // 知道下游 agent 何时出现 —— 必须靠服务端事件。
+  //
+  // 防抖：debounce 200ms 把 spell 启动那一波同时 spawn 的 N 个 agent
+  // 合并成一次 listAgents 调用，避免每个 agent 一次 HTTP。
+  const refreshTimerRef = useRef<number | null>(null);
+  const scheduleRefresh = useCallback(() => {
+    if (refreshTimerRef.current != null) {
+      window.clearTimeout(refreshTimerRef.current);
+    }
+    refreshTimerRef.current = window.setTimeout(() => {
+      refreshTimerRef.current = null;
+      refreshAgents();
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, 200);
+  }, []);
+  useSwarmFeed({
+    onEvent: (ev: SwarmEvent) => {
+      if (ev.type === "agent_state") {
+        // Any state transition can change the live set: spawning adds,
+        // exited removes (after the server settles killed_at). The
+        // filter inside refreshAgents handles both.
+        scheduleRefresh();
+      }
+    },
+    onReconnect: scheduleRefresh,
+  });
 
   const spawn = async (cli: string) => {
     setSpawning(true);
