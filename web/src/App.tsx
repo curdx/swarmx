@@ -14,6 +14,7 @@ import ReplayPlayer from "./routes/replays/player";
 import ContextRoute from "./routes/context";
 import DagRoute from "./routes/dag";
 import SettingsRoute from "./routes/settings";
+import NotificationsRoute from "./routes/notifications";
 
 export default function App() {
   return (
@@ -27,7 +28,7 @@ export default function App() {
           <Route path="/replays" element={<ReplaysIndex />} />
           <Route path="/context" element={<ContextRoute />} />
           <Route path="/inbox" element={<RoutePlaceholder name="审批" pencilId="NUCBp" />} />
-          <Route path="/notifications" element={<RoutePlaceholder name="通知" pencilId="COJDW" />} />
+          <Route path="/notifications" element={<NotificationsRoute />} />
           <Route path="/settings" element={<SettingsRoute />} />
           <Route path="/settings/:section" element={<SettingsRoute />} />
         </Route>
