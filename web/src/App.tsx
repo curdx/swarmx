@@ -12,6 +12,7 @@ import ChatRoute from "./routes/chat";
 import ReplaysIndex from "./routes/replays/index";
 import ReplayPlayer from "./routes/replays/player";
 import ContextRoute from "./routes/context";
+import DagRoute from "./routes/dag";
 
 export default function App() {
   return (
@@ -21,8 +22,7 @@ export default function App() {
           <Route index element={<Navigate to="/chat" replace />} />
           <Route path="/chat" element={<ChatRoute />} />
           <Route path="/chat/:workspaceId" element={<ChatRoute />} />
-          <Route path="/dag" element={<RoutePlaceholder name="协作图" pencilId="Z23h6o" />} />
-          <Route path="/dag/:workspaceId" element={<RoutePlaceholder name="协作图" pencilId="Z23h6o" />} />
+          <Route path="/dag" element={<DagRoute />} />
           <Route path="/replays" element={<ReplaysIndex />} />
           <Route path="/context" element={<ContextRoute />} />
           <Route path="/inbox" element={<RoutePlaceholder name="审批" pencilId="NUCBp" />} />
