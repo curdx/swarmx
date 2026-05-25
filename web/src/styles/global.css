@@ -139,3 +139,73 @@ html, body, #root {
 .xterm .xterm-viewport {
   background-color: transparent !important;
 }
+
+/* Markdown prose for Context Board (react-markdown output). Tailwind
+ * Typography would do this but it's another dep; hand-rolled stays
+ * lighter and matches Pencil a3RrDG center column without surprises. */
+.prose-context { font-family: var(--font-body); line-height: 1.65; }
+.prose-context h1,
+.prose-context h2,
+.prose-context h3,
+.prose-context h4 {
+  font-family: var(--font-heading);
+  font-weight: 600;
+  color: var(--color-foreground-primary);
+  margin-top: 1.5em;
+  margin-bottom: 0.5em;
+}
+.prose-context h1 { font-size: 1.75em; }
+.prose-context h2 { font-size: 1.35em; }
+.prose-context h3 { font-size: 1.15em; }
+.prose-context h4 { font-size: 1em; }
+.prose-context p { margin: 0.6em 0; }
+.prose-context a { color: var(--color-accent-peach-deep); text-decoration: underline; }
+.prose-context strong { font-weight: 600; }
+.prose-context code {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  background: var(--color-surface-tertiary);
+  padding: 0.1em 0.35em;
+  border-radius: 3px;
+}
+.prose-context pre {
+  font-family: var(--font-mono);
+  background: var(--color-surface-tertiary);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 6px;
+  padding: 12px 14px;
+  overflow-x: auto;
+  font-size: 0.85em;
+  margin: 0.8em 0;
+}
+.prose-context pre code {
+  background: transparent;
+  padding: 0;
+}
+.prose-context ul,
+.prose-context ol { margin: 0.6em 0; padding-left: 1.4em; }
+.prose-context li { margin: 0.2em 0; }
+.prose-context blockquote {
+  border-left: 3px solid var(--color-accent-peach-soft);
+  padding-left: 0.8em;
+  color: var(--color-foreground-secondary);
+  margin: 0.8em 0;
+}
+.prose-context hr {
+  border: 0;
+  border-top: 1px solid var(--color-border-subtle);
+  margin: 1.5em 0;
+}
+.prose-context table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9em;
+  margin: 0.8em 0;
+}
+.prose-context th,
+.prose-context td {
+  border: 1px solid var(--color-border-subtle);
+  padding: 6px 10px;
+  text-align: left;
+}
+.prose-context th { background: var(--color-surface-tertiary); }

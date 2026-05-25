@@ -11,6 +11,7 @@ import DebugRoute from "./routes/debug";
 import ChatRoute from "./routes/chat";
 import ReplaysIndex from "./routes/replays/index";
 import ReplayPlayer from "./routes/replays/player";
+import ContextRoute from "./routes/context";
 
 export default function App() {
   return (
@@ -23,8 +24,7 @@ export default function App() {
           <Route path="/dag" element={<RoutePlaceholder name="协作图" pencilId="Z23h6o" />} />
           <Route path="/dag/:workspaceId" element={<RoutePlaceholder name="协作图" pencilId="Z23h6o" />} />
           <Route path="/replays" element={<ReplaysIndex />} />
-          <Route path="/context" element={<RoutePlaceholder name="上下文" pencilId="a3RrDG" />} />
-          <Route path="/context/:workspaceId" element={<RoutePlaceholder name="上下文" pencilId="a3RrDG" />} />
+          <Route path="/context" element={<ContextRoute />} />
           <Route path="/inbox" element={<RoutePlaceholder name="审批" pencilId="NUCBp" />} />
           <Route path="/notifications" element={<RoutePlaceholder name="通知" pencilId="COJDW" />} />
           <Route path="/settings" element={<RoutePlaceholder name="设置" pencilId="nJqkA" />} />
