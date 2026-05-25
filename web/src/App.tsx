@@ -6,7 +6,6 @@
 
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { AppShell } from "./layouts/AppShell";
-import { RoutePlaceholder } from "./components/RoutePlaceholder";
 import DebugRoute from "./routes/debug";
 import ChatRoute from "./routes/chat";
 import ReplaysIndex from "./routes/replays/index";
@@ -15,6 +14,7 @@ import ContextRoute from "./routes/context";
 import DagRoute from "./routes/dag";
 import SettingsRoute from "./routes/settings";
 import NotificationsRoute from "./routes/notifications";
+import InboxRoute from "./routes/inbox";
 
 export default function App() {
   return (
@@ -27,7 +27,7 @@ export default function App() {
           <Route path="/dag" element={<DagRoute />} />
           <Route path="/replays" element={<ReplaysIndex />} />
           <Route path="/context" element={<ContextRoute />} />
-          <Route path="/inbox" element={<RoutePlaceholder name="审批" pencilId="NUCBp" />} />
+          <Route path="/inbox" element={<InboxRoute />} />
           <Route path="/notifications" element={<NotificationsRoute />} />
           <Route path="/settings" element={<SettingsRoute />} />
           <Route path="/settings/:section" element={<SettingsRoute />} />
