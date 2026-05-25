@@ -123,7 +123,7 @@ function FileTree({
           className={cn(
             "flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-left text-xs transition-colors",
             active
-              ? "bg-accent-peach-soft text-foreground-primary"
+              ? "bg-accent-primary-soft text-foreground-primary"
               : "text-foreground-secondary hover:bg-surface-tertiary",
           )}
           style={{ paddingLeft: 6 + depth * 12 }}
@@ -184,7 +184,7 @@ function FileTree({
             className={cn(
               "flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-left text-xs",
               active
-                ? "bg-accent-peach-soft text-foreground-primary"
+                ? "bg-accent-primary-soft text-foreground-primary"
                 : "text-foreground-secondary hover:bg-surface-tertiary",
             )}
           >
@@ -292,8 +292,8 @@ export default function ContextRoute() {
     <div className="flex h-full flex-col bg-surface-primary">
       {/* Header */}
       <header className="flex h-14 shrink-0 items-center gap-3 border-b border-border-subtle bg-surface-elevated px-5">
-        <span className="flex size-8 items-center justify-center rounded-md bg-accent-peach-soft">
-          <FileText className="size-4 text-accent-peach-deep" />
+        <span className="flex size-8 items-center justify-center rounded-md bg-accent-primary-soft">
+          <FileText className="size-4 text-accent-primary-deep" />
         </span>
         <div className="flex flex-col">
           <h1 className="font-heading text-sm font-semibold text-foreground-primary">
@@ -358,7 +358,7 @@ export default function ContextRoute() {
                       className={cn(
                         "rounded px-2 py-0.5 text-xs",
                         view === v
-                          ? "bg-accent-peach text-foreground-on-accent"
+                          ? "bg-accent-primary text-foreground-on-accent"
                           : "text-foreground-secondary hover:bg-surface-tertiary",
                       )}
                     >

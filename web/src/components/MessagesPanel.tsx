@@ -1,25 +1,36 @@
 /**
  * MessagesPanel — list + composer for /api/message.
  *
+ * Tailwind-rewritten in UI/F.1 to match the new neutral surface theme;
+ * behaviour identical to the original M5a inline-styled version.
+ *
  * Live updates piggy-back on the parent's /ws/swarm subscription via three
  * props: `liveMessage` (a fresh inbound message), `liveRead` (someone marked
  * messages read — apply read_at locally), `unreadByFrom` (parent-maintained
  * tally rendered as per-sender badges).
  *
- * M5a additions:
+ * Functional contract preserved:
  *   - per-message ✓ / ★ marker (read vs. unread)
  *   - `↩ #<id>` lineage rendered on the meta row; click scrolls to parent
  *   - "Reply" action pre-fills composer with `to=from`, `in_reply_to=id`
  *   - "by sender" header lists unread counts as badges
- *
- * UI does NOT auto-mark-read — opening the panel is not the same as a human
- * having actually read a message. Marking is done explicitly (via the row
- * ✓ button) or implicitly via `swarm_list_messages` from the agent side.
+ *   - UI does NOT auto-mark-read — opening the panel is not the same as a
+ *     human having actually read a message.
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  ChevronDown,
+  ChevronRight,
+  CornerUpLeft,
+  RefreshCw,
+  Search,
+  Send,
+  X,
+} from "lucide-react";
 import { api } from "../api/http";
 import type { MessageRecord } from "../api/types";
+import { cn } from "@/lib/cn";
 
 interface Props {
   /** Latest swarm `message` event observed by the parent (or null). */
@@ -31,6 +42,10 @@ interface Props {
 }
 
 const KIND_DEFAULT = "note";
+
+function formatTime(ms: number): string {
+  return new Date(ms).toLocaleTimeString();
+}
 
 export function MessagesPanel({ liveMessage, liveRead, unreadByFrom }: Props) {
   const [items, setItems] = useState<MessageRecord[]>([]);
@@ -44,7 +59,7 @@ export function MessagesPanel({ liveMessage, liveRead, unreadByFrom }: Props) {
   const [marking, setMarking] = useState<number | null>(null);
   const [showBySender, setShowBySender] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
-  const rowRefs = useRef<Map<number, HTMLDivElement | null>>(new Map());
+  const rowRefs = useRef<Map<number, HTMLLIElement | null>>(new Map());
   const [highlightId, setHighlightId] = useState<number | null>(null);
 
   const refresh = async () => {
@@ -134,13 +149,9 @@ export function MessagesPanel({ liveMessage, liveRead, unreadByFrom }: Props) {
     setMarking(m.id);
     try {
       const res = await api.markMessagesRead(m.to_agent, [m.id]);
-      // Apply locally — the broadcast event will arrive in parallel and
-      // setItems' equality check makes the second update a no-op.
       if (res.marked.includes(m.id)) {
         setItems((prev) =>
-          prev.map((x) =>
-            x.id === m.id ? { ...x, read_at: res.at } : x,
-          ),
+          prev.map((x) => (x.id === m.id ? { ...x, read_at: res.at } : x)),
         );
       }
       setError(null);
@@ -156,143 +167,196 @@ export function MessagesPanel({ liveMessage, liveRead, unreadByFrom }: Props) {
     if (!el) return;
     el.scrollIntoView({ behavior: "smooth", block: "center" });
     setHighlightId(parentId);
-    window.setTimeout(() => setHighlightId((cur) => (cur === parentId ? null : cur)), 1200);
+    window.setTimeout(
+      () => setHighlightId((cur) => (cur === parentId ? null : cur)),
+      1200,
+    );
   };
 
   const senders = Object.entries(unreadByFrom).filter(([, n]) => n > 0);
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
-      <div style={headerRow}>
-        <input
-          value={filter}
-          onChange={(e) => setFilter(e.target.value)}
-          placeholder="过滤（发送方 / 接收方 / 正文）"
-          style={input}
-        />
-        <button onClick={refresh} title="刷新">
-          ↻
+    <div className="flex h-full flex-col bg-surface-primary">
+      {/* Filter row */}
+      <div className="flex shrink-0 items-center gap-2 border-b border-border-subtle px-4 py-2">
+        <div className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-md bg-surface-tertiary px-3">
+          <Search className="size-3.5 text-foreground-tertiary" />
+          <input
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            placeholder="过滤 发送方 / 接收方 / 正文"
+            className="min-w-0 flex-1 bg-transparent text-xs text-foreground-primary placeholder:text-foreground-tertiary focus:outline-none"
+          />
+        </div>
+        <button
+          onClick={refresh}
+          className="flex size-8 items-center justify-center rounded-md text-foreground-tertiary hover:bg-surface-tertiary"
+          title="刷新"
+        >
+          <RefreshCw className="size-3.5" />
         </button>
       </div>
 
-      <div style={bySenderHeader}>
+      {/* By-sender toggle */}
+      <div className="flex shrink-0 flex-col gap-1 border-b border-border-subtle px-4 py-2">
         <button
           onClick={() => setShowBySender((v) => !v)}
-          style={bySenderToggle}
+          className="flex items-center gap-1 self-start font-caption text-[11px] text-foreground-tertiary hover:text-foreground-secondary"
           title="按发送方查看未读"
         >
-          {showBySender ? "▾" : "▸"} 按发送方未读 ({senders.length})
+          {showBySender ? (
+            <ChevronDown className="size-3" />
+          ) : (
+            <ChevronRight className="size-3" />
+          )}
+          按发送方未读 ({senders.length})
         </button>
         {showBySender && (
-          <div style={bySenderList}>
+          <div className="flex flex-wrap gap-1.5 pt-1">
             {senders.length === 0 && (
-              <span style={{ color: "#64748b", fontSize: 11 }}>无</span>
+              <span className="font-caption text-[11px] text-foreground-tertiary">
+                无
+              </span>
             )}
             {senders.map(([who, n]) => (
-              <span key={who} style={bySenderRow}>
-                <span style={{ color: "#a5b4fc" }}>{who}</span>
-                <span style={badge}>{n}</span>
+              <span
+                key={who}
+                className="inline-flex items-center gap-1.5 rounded-md bg-surface-tertiary px-2 py-0.5 text-[11px]"
+              >
+                <span className="font-mono text-foreground-secondary">{who}</span>
+                <span className="rounded-full bg-state-danger px-1.5 text-[10px] font-semibold text-foreground-on-accent">
+                  {n}
+                </span>
               </span>
             ))}
           </div>
         )}
       </div>
 
-      {error && <div style={errorRow}>{error}</div>}
+      {error && (
+        <div className="shrink-0 border-b border-state-danger/30 bg-status-danger-soft px-4 py-1.5 font-caption text-[11px] text-state-danger">
+          {error}
+        </div>
+      )}
 
-      <div ref={listRef} style={listStyle}>
+      {/* Messages list */}
+      <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
         {visible.length === 0 && (
-          <div style={emptyHint}>暂无消息</div>
+          <p className="mt-6 text-center font-caption text-xs text-foreground-tertiary">
+            暂无消息
+          </p>
         )}
-        {visible.map((m) => {
-          const unread = m.read_at === null;
-          const highlighted = highlightId === m.id;
-          return (
-            <div
-              key={m.id}
-              ref={(el) => {
-                if (el) rowRefs.current.set(m.id, el);
-                else rowRefs.current.delete(m.id);
-              }}
-              style={{
-                ...messageRow,
-                borderLeftColor: unread ? "#fbbf24" : "#374151",
-                background: highlighted ? "#1e3a8a" : "transparent",
-                transition: "background 200ms",
-              }}
-            >
-              <div style={messageMeta}>
-                <span title={unread ? "未读" : "已读"}>
-                  {unread ? "★" : "✓"}
-                </span>
-                <span style={{ marginLeft: 4, color: "#94a3b8" }}>
-                  #{m.id}
-                </span>
-                <span style={{ color: "#a5b4fc", marginLeft: 6 }}>{m.from_agent}</span>
-                <span style={{ color: "#64748b" }}> → </span>
-                <span style={{ color: "#86efac" }}>{m.to_agent}</span>
-                <span style={{ color: "#64748b", marginLeft: 6 }}>
-                  {m.kind} · {formatTime(m.sent_at)}
-                </span>
-                {m.in_reply_to != null && (
-                  <button
-                    onClick={() => jumpToParent(m.in_reply_to!)}
-                    style={replyLink}
-                    title="跳转到被回复的消息"
-                  >
-                    ↩ #{m.in_reply_to}
-                  </button>
+        <ul className="flex flex-col gap-1.5">
+          {visible.map((m) => {
+            const unread = m.read_at === null;
+            const highlighted = highlightId === m.id;
+            return (
+              <li
+                key={m.id}
+                ref={(el) => {
+                  if (el) rowRefs.current.set(m.id, el);
+                  else rowRefs.current.delete(m.id);
+                }}
+                className={cn(
+                  "group rounded-md border px-3 py-2 transition-colors",
+                  highlighted
+                    ? "border-accent-primary bg-accent-primary-soft"
+                    : unread
+                      ? "border-state-busy/40 bg-surface-accent-tint"
+                      : "border-border-subtle bg-surface-elevated",
                 )}
-                <span style={{ flex: 1 }} />
-                <button
-                  onClick={() => startReply(m)}
-                  style={rowAction}
-                  title="回复这条消息"
+              >
+                <div className="flex flex-wrap items-center gap-1.5 font-caption text-[10px] text-foreground-tertiary">
+                  <span
+                    className={cn(
+                      "font-bold",
+                      unread ? "text-state-busy" : "text-state-success",
+                    )}
+                    title={unread ? "未读" : "已读"}
+                  >
+                    {unread ? "★" : "✓"}
+                  </span>
+                  <span className="font-mono">#{m.id}</span>
+                  <span className="font-mono text-accent-primary">
+                    {m.from_agent}
+                  </span>
+                  <span>→</span>
+                  <span className="font-mono text-state-success">
+                    {m.to_agent}
+                  </span>
+                  <span>·</span>
+                  <span>{m.kind}</span>
+                  <span>·</span>
+                  <span>{formatTime(m.sent_at)}</span>
+                  {m.in_reply_to != null && (
+                    <button
+                      onClick={() => jumpToParent(m.in_reply_to!)}
+                      className="ml-1 flex items-center gap-0.5 rounded px-1 text-state-busy hover:bg-status-busy-soft"
+                      title="跳转到被回复的消息"
+                    >
+                      <CornerUpLeft className="size-2.5" />#{m.in_reply_to}
+                    </button>
+                  )}
+                  <span className="flex-1" />
+                  <button
+                    onClick={() => startReply(m)}
+                    className="opacity-0 transition-opacity group-hover:opacity-100 rounded border border-border-subtle bg-surface-elevated px-1.5 text-foreground-secondary hover:bg-surface-tertiary"
+                    title="回复这条消息"
+                  >
+                    回复
+                  </button>
+                  {unread && (
+                    <button
+                      onClick={() => markRead(m)}
+                      disabled={marking === m.id}
+                      className="rounded border border-border-subtle bg-surface-elevated px-1.5 text-foreground-secondary hover:bg-surface-tertiary disabled:opacity-50"
+                      title="标记为已读"
+                    >
+                      ✓
+                    </button>
+                  )}
+                </div>
+                <p
+                  className={cn(
+                    "mt-1 whitespace-pre-wrap font-body text-xs leading-relaxed break-words text-foreground-primary",
+                    !unread && "opacity-70",
+                  )}
                 >
-                  回复
-                </button>
-                {unread && (
-                  <button
-                    onClick={() => markRead(m)}
-                    style={rowAction}
-                    disabled={marking === m.id}
-                    title="标记为已读"
-                  >
-                    ✓
-                  </button>
-                )}
-              </div>
-              <div style={{ ...messageBody, opacity: unread ? 1 : 0.7 }}>{m.body}</div>
-            </div>
-          );
-        })}
+                  {m.body}
+                </p>
+              </li>
+            );
+          })}
+        </ul>
       </div>
 
-      <div style={composer}>
+      {/* Composer */}
+      <div className="flex shrink-0 flex-col gap-2 border-t border-border-subtle bg-surface-secondary px-4 py-3">
         {inReplyTo != null && (
-          <div style={replyBanner}>
+          <div className="flex items-center gap-2 self-start rounded-md bg-accent-primary-soft px-2 py-1 text-[11px] text-accent-primary-deep">
+            <CornerUpLeft className="size-3" />
             正在回复 #{inReplyTo}
             <button
               onClick={() => setInReplyTo(null)}
-              style={replyClear}
+              className="ml-1 rounded hover:bg-surface-elevated"
               title="取消回复"
             >
-              ✕
+              <X className="size-3" />
             </button>
           </div>
         )}
-        <div style={{ display: "flex", gap: 4 }}>
+        <div className="flex gap-2">
           <input
             value={from}
             onChange={(e) => setFrom(e.target.value)}
-            placeholder="发送方（留空=system）"
-            style={{ ...input, flex: 1 }}
+            placeholder="发送方（留空 = system）"
+            className="min-w-0 flex-1 rounded-md border border-border-subtle bg-surface-elevated px-2.5 py-1.5 font-mono text-xs text-foreground-primary placeholder:text-foreground-tertiary focus:border-accent-primary focus:outline-none"
           />
           <input
             value={to}
             onChange={(e) => setTo(e.target.value)}
             placeholder="接收方（agent id）"
-            style={{ ...input, flex: 1 }}
+            className="min-w-0 flex-1 rounded-md border border-border-subtle bg-surface-elevated px-2.5 py-1.5 font-mono text-xs text-foreground-primary placeholder:text-foreground-tertiary focus:border-accent-primary focus:outline-none"
           />
         </div>
         <textarea
@@ -300,178 +364,19 @@ export function MessagesPanel({ liveMessage, liveRead, unreadByFrom }: Props) {
           onChange={(e) => setBody(e.target.value)}
           placeholder="消息正文"
           rows={3}
-          style={{ ...input, resize: "vertical" }}
+          className="resize-y rounded-md border border-border-subtle bg-surface-elevated px-2.5 py-1.5 font-body text-xs text-foreground-primary placeholder:text-foreground-tertiary focus:border-accent-primary focus:outline-none"
         />
-        <div style={{ display: "flex", justifyContent: "flex-end" }}>
-          <button onClick={send} disabled={sending || !to.trim() || !body.trim()}>
-            发送
+        <div className="flex justify-end">
+          <button
+            onClick={send}
+            disabled={sending || !to.trim() || !body.trim()}
+            className="flex items-center gap-1.5 rounded-md bg-accent-primary px-4 py-1.5 text-xs font-semibold text-foreground-on-accent hover:bg-accent-primary-deep disabled:opacity-50"
+          >
+            <Send className="size-3.5" />
+            {sending ? "发送中…" : "发送"}
           </button>
         </div>
       </div>
     </div>
   );
 }
-
-function formatTime(ms: number): string {
-  const d = new Date(ms);
-  return d.toLocaleTimeString();
-}
-
-const headerRow: React.CSSProperties = {
-  display: "flex",
-  gap: 4,
-  padding: "6px 8px",
-  borderBottom: "1px solid #374151",
-};
-
-const bySenderHeader: React.CSSProperties = {
-  borderBottom: "1px solid #374151",
-  padding: "4px 8px",
-  display: "flex",
-  flexDirection: "column",
-  gap: 4,
-};
-
-const bySenderToggle: React.CSSProperties = {
-  background: "transparent",
-  border: "none",
-  color: "#94a3b8",
-  fontSize: 11,
-  textAlign: "left",
-  cursor: "pointer",
-  padding: 0,
-};
-
-const bySenderList: React.CSSProperties = {
-  display: "flex",
-  flexWrap: "wrap",
-  gap: 6,
-  paddingTop: 2,
-};
-
-const bySenderRow: React.CSSProperties = {
-  display: "inline-flex",
-  alignItems: "center",
-  gap: 4,
-  fontSize: 11,
-  background: "#0b1220",
-  borderRadius: 4,
-  padding: "2px 6px",
-};
-
-const badge: React.CSSProperties = {
-  background: "#dc2626",
-  color: "#fff",
-  borderRadius: 8,
-  padding: "0 5px",
-  fontSize: 10,
-  fontWeight: 600,
-  lineHeight: "14px",
-};
-
-const input: React.CSSProperties = {
-  background: "#0b1220",
-  color: "#e2e8f0",
-  border: "1px solid #374151",
-  borderRadius: 4,
-  padding: "4px 6px",
-  fontSize: 12,
-  fontFamily: "inherit",
-};
-
-const errorRow: React.CSSProperties = {
-  color: "#fca5a5",
-  fontSize: 11,
-  padding: "4px 8px",
-  background: "#1f2937",
-};
-
-const listStyle: React.CSSProperties = {
-  flex: 1,
-  overflowY: "auto",
-  padding: "6px 8px",
-  display: "flex",
-  flexDirection: "column",
-  gap: 6,
-  minHeight: 0,
-};
-
-const emptyHint: React.CSSProperties = {
-  color: "#64748b",
-  fontSize: 12,
-  textAlign: "center",
-  marginTop: 16,
-};
-
-const messageRow: React.CSSProperties = {
-  borderLeft: "2px solid #374151",
-  paddingLeft: 6,
-  paddingRight: 4,
-  paddingTop: 2,
-  paddingBottom: 2,
-};
-
-const messageMeta: React.CSSProperties = {
-  fontSize: 10,
-  marginBottom: 2,
-  display: "flex",
-  alignItems: "center",
-  gap: 2,
-  flexWrap: "wrap",
-};
-
-const messageBody: React.CSSProperties = {
-  fontSize: 12,
-  whiteSpace: "pre-wrap",
-  wordBreak: "break-word",
-  color: "#e2e8f0",
-};
-
-const composer: React.CSSProperties = {
-  borderTop: "1px solid #374151",
-  padding: "6px 8px",
-  display: "flex",
-  flexDirection: "column",
-  gap: 4,
-};
-
-const replyBanner: React.CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: 8,
-  background: "#1e3a8a",
-  color: "#cbd5f5",
-  fontSize: 11,
-  padding: "3px 8px",
-  borderRadius: 4,
-};
-
-const replyClear: React.CSSProperties = {
-  background: "transparent",
-  border: "none",
-  color: "#cbd5f5",
-  cursor: "pointer",
-  fontSize: 12,
-  padding: 0,
-};
-
-const replyLink: React.CSSProperties = {
-  background: "transparent",
-  border: "none",
-  color: "#fbbf24",
-  cursor: "pointer",
-  fontSize: 10,
-  padding: 0,
-  marginLeft: 6,
-};
-
-const rowAction: React.CSSProperties = {
-  background: "transparent",
-  border: "1px solid #374151",
-  borderRadius: 3,
-  color: "#94a3b8",
-  cursor: "pointer",
-  fontSize: 10,
-  marginLeft: 4,
-  padding: "0 4px",
-};

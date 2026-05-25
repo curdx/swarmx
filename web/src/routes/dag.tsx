@@ -146,7 +146,7 @@ function AgentNode({ data }: NodeProps<Node<AgentNodeData>>) {
       className={cn(
         "flex w-[200px] flex-col gap-1 rounded-lg border-2 bg-surface-elevated px-3 py-2 shadow-sm",
         data.selected
-          ? "border-accent-peach shadow-lg"
+          ? "border-accent-primary shadow-lg"
           : "border-border-subtle",
       )}
     >
@@ -333,8 +333,8 @@ export default function DagRoute() {
     <div className="flex h-full flex-col bg-surface-primary">
       {/* Header */}
       <header className="flex h-14 shrink-0 items-center gap-3 border-b border-border-subtle bg-surface-elevated px-5">
-        <span className="flex size-8 items-center justify-center rounded-md bg-accent-peach-soft">
-          <GitBranch className="size-4 text-accent-peach-deep" />
+        <span className="flex size-8 items-center justify-center rounded-md bg-accent-primary-soft">
+          <GitBranch className="size-4 text-accent-primary-deep" />
         </span>
         <div className="flex flex-col">
           <h1 className="font-heading text-sm font-semibold text-foreground-primary">
@@ -397,7 +397,7 @@ export default function DagRoute() {
                   className={cn(
                     "flex items-center gap-2 rounded px-2 py-1 text-left text-xs",
                     roleFilter === r
-                      ? "bg-accent-peach-soft text-foreground-primary"
+                      ? "bg-accent-primary-soft text-foreground-primary"
                       : "text-foreground-secondary hover:bg-surface-tertiary",
                   )}
                 >
@@ -424,7 +424,7 @@ export default function DagRoute() {
                     className={cn(
                       "flex w-full items-center gap-2 rounded px-2 py-1 text-left",
                       selectedId === a.agent_id
-                        ? "bg-accent-peach-soft"
+                        ? "bg-accent-primary-soft"
                         : "hover:bg-surface-tertiary",
                     )}
                   >
@@ -535,7 +535,7 @@ export default function DagRoute() {
               <div className="mt-auto flex flex-col gap-2">
                 <Link
                   to={`/chat?agent=${encodeURIComponent(selected.agent_id)}`}
-                  className="flex h-9 items-center justify-center gap-1.5 rounded-md bg-accent-peach text-xs font-bold text-foreground-on-accent hover:bg-accent-peach-deep"
+                  className="flex h-9 items-center justify-center gap-1.5 rounded-md bg-accent-primary text-xs font-bold text-foreground-on-accent hover:bg-accent-primary-deep"
                 >
                   打开 Agent Drawer
                 </Link>

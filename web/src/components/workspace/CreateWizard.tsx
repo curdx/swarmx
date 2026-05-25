@@ -36,7 +36,7 @@ import type { SpellInfo } from "../../api/types";
 import { cn } from "@/lib/cn";
 
 const ACCENT_OPTIONS = [
-  { id: "peach", color: "var(--color-accent-peach)" },
+  { id: "peach", color: "var(--color-accent-primary)" },
   { id: "frontend", color: "var(--color-agent-frontend)" },
   { id: "backend", color: "var(--color-agent-backend)" },
   { id: "test", color: "var(--color-agent-test)" },
@@ -118,8 +118,8 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
       >
         {/* Head */}
         <header className="flex items-center gap-4 border-b border-border-subtle bg-surface-elevated px-6 py-5">
-          <span className="flex size-9 items-center justify-center rounded-md bg-accent-peach-soft">
-            <FolderPlus className="size-5 text-accent-peach-deep" />
+          <span className="flex size-9 items-center justify-center rounded-md bg-accent-primary-soft">
+            <FolderPlus className="size-5 text-accent-primary-deep" />
           </span>
           <div className="flex flex-col">
             <h2 className="font-heading text-base font-semibold text-foreground-primary">
@@ -152,7 +152,7 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
             <div className="flex items-center gap-3">
               <div
                 className="flex h-11 flex-1 items-center gap-3 rounded-md border-[1.5px] bg-surface-elevated px-3.5"
-                style={{ borderColor: "var(--color-accent-peach)" }}
+                style={{ borderColor: "var(--color-accent-primary)" }}
               >
                 <TypeIcon className="size-3.5 text-foreground-tertiary" />
                 <input
@@ -163,7 +163,7 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
                   className="min-w-0 flex-1 bg-transparent text-sm font-semibold text-foreground-primary placeholder:text-foreground-tertiary focus:outline-none"
                 />
                 {name && (
-                  <span className="rounded-sm bg-accent-peach-soft px-1.5 py-0.5 font-caption text-[10px] text-accent-peach-deep">
+                  <span className="rounded-sm bg-accent-primary-soft px-1.5 py-0.5 font-caption text-[10px] text-accent-primary-deep">
                     AI 命名
                   </span>
                 )}
@@ -249,7 +249,7 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
                 onClick={() => setDirs((prev) => [...prev, ""])}
                 className="flex items-center justify-center gap-2 rounded-lg border-[1.5px] border-dashed border-border-strong bg-transparent px-4 py-3 font-caption text-xs text-foreground-secondary hover:bg-surface-tertiary"
               >
-                <span className="flex size-7 items-center justify-center rounded-md bg-accent-peach-soft text-accent-peach-deep">
+                <span className="flex size-7 items-center justify-center rounded-md bg-accent-primary-soft text-accent-primary-deep">
                   <Plus className="size-4" />
                 </span>
                 添加项目目录
@@ -261,10 +261,10 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
           <section>
             <StepHeader n={3} label="配方" />
             <div
-              className="flex items-center gap-3.5 rounded-lg border-[1.5px] bg-surface-peach-tint px-4 py-3.5"
-              style={{ borderColor: "var(--color-accent-peach)" }}
+              className="flex items-center gap-3.5 rounded-lg border-[1.5px] bg-surface-accent-tint px-4 py-3.5"
+              style={{ borderColor: "var(--color-accent-primary)" }}
             >
-              <span className="flex size-9 items-center justify-center rounded-md bg-accent-peach text-foreground-on-accent">
+              <span className="flex size-9 items-center justify-center rounded-md bg-accent-primary text-foreground-on-accent">
                 <Sparkles className="size-4" />
               </span>
               <div className="flex min-w-0 flex-1 flex-col gap-1">
@@ -319,7 +319,7 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
           <button
             onClick={submit}
             disabled={!canSubmit || busy}
-            className="flex items-center gap-1.5 rounded-md bg-accent-peach px-4 py-2 text-xs font-bold text-foreground-on-accent hover:bg-accent-peach-deep disabled:opacity-50"
+            className="flex items-center gap-1.5 rounded-md bg-accent-primary px-4 py-2 text-xs font-bold text-foreground-on-accent hover:bg-accent-primary-deep disabled:opacity-50"
           >
             <Check className="size-3.5" />
             {busy ? "创建中…" : "创建工作空间"}
@@ -341,7 +341,7 @@ function StepHeader({
 }) {
   return (
     <div className="mb-3 flex items-center gap-2">
-      <span className="flex size-[18px] items-center justify-center rounded-full bg-accent-peach font-heading text-[10px] font-bold text-foreground-on-accent">
+      <span className="flex size-[18px] items-center justify-center rounded-full bg-accent-primary font-heading text-[10px] font-bold text-foreground-on-accent">
         {n}
       </span>
       <span className="font-heading text-[13px] font-bold text-foreground-primary">

@@ -100,8 +100,8 @@ export default function SettingsRoute() {
     <div className="flex h-full flex-col bg-surface-primary">
       {/* Header */}
       <header className="flex h-14 shrink-0 items-center gap-3 border-b border-border-subtle bg-surface-elevated px-5">
-        <span className="flex size-8 items-center justify-center rounded-md bg-accent-peach-soft">
-          <SettingsIcon className="size-4 text-accent-peach-deep" />
+        <span className="flex size-8 items-center justify-center rounded-md bg-accent-primary-soft">
+          <SettingsIcon className="size-4 text-accent-primary-deep" />
         </span>
         <div className="flex flex-col">
           <h1 className="font-heading text-sm font-semibold text-foreground-primary">
@@ -127,7 +127,7 @@ export default function SettingsRoute() {
                 className={cn(
                   "flex items-center gap-2.5 rounded-md px-3 py-2 text-left text-sm",
                   active
-                    ? "bg-accent-peach-soft text-foreground-primary"
+                    ? "bg-accent-primary-soft text-foreground-primary"
                     : "text-foreground-secondary hover:bg-surface-tertiary",
                 )}
               >
@@ -343,7 +343,7 @@ function ChoiceCard({
       className={cn(
         "flex items-center gap-3 rounded-lg border-[1.5px] bg-surface-elevated px-4 py-3 text-left transition-colors",
         active
-          ? "border-accent-peach bg-surface-peach-tint"
+          ? "border-accent-primary bg-surface-accent-tint"
           : "border-border-subtle hover:border-border-strong",
       )}
     >
@@ -351,7 +351,7 @@ function ChoiceCard({
         className={cn(
           "flex size-8 items-center justify-center rounded-md",
           active
-            ? "bg-accent-peach text-foreground-on-accent"
+            ? "bg-accent-primary text-foreground-on-accent"
             : "bg-surface-tertiary text-foreground-secondary",
         )}
       >
@@ -387,7 +387,7 @@ function ThemeCard({
       onClick={onClick}
       className={cn(
         "flex flex-col gap-2 overflow-hidden rounded-lg border-[1.5px] transition-colors",
-        active ? "border-accent-peach" : "border-border-subtle hover:border-border-strong",
+        active ? "border-accent-primary" : "border-border-subtle hover:border-border-strong",
       )}
     >
       <div
@@ -418,7 +418,7 @@ function ThemeCard({
           {label}
         </span>
         {active && (
-          <span className="ml-auto rounded-full bg-accent-peach px-2 py-0.5 font-caption text-[9px] text-foreground-on-accent">
+          <span className="ml-auto rounded-full bg-accent-primary px-2 py-0.5 font-caption text-[9px] text-foreground-on-accent">
             当前
           </span>
         )}
@@ -454,7 +454,7 @@ function ToggleRow({
         onClick={() => onChange(!value)}
         className={cn(
           "relative h-6 w-11 shrink-0 rounded-full transition-colors",
-          value ? "bg-accent-peach" : "bg-surface-tertiary",
+          value ? "bg-accent-primary" : "bg-surface-tertiary",
         )}
         aria-pressed={value}
       >

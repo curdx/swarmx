@@ -111,8 +111,8 @@ export default function InboxRoute() {
     <div className="flex h-full flex-col bg-surface-primary">
       {/* Head */}
       <header className="flex h-14 shrink-0 items-center gap-3 border-b border-border-subtle bg-surface-elevated px-5">
-        <span className="flex size-8 items-center justify-center rounded-md bg-accent-peach-soft">
-          <InboxIcon className="size-4 text-accent-peach-deep" />
+        <span className="flex size-8 items-center justify-center rounded-md bg-accent-primary-soft">
+          <InboxIcon className="size-4 text-accent-primary-deep" />
         </span>
         <div className="flex flex-col">
           <h1 className="font-heading text-sm font-semibold text-foreground-primary">
@@ -123,7 +123,7 @@ export default function InboxRoute() {
           </span>
         </div>
         <span className="flex-1" />
-        <span className="rounded-full bg-accent-peach px-2 py-0.5 font-caption text-[10px] font-bold text-foreground-on-accent">
+        <span className="rounded-full bg-accent-primary px-2 py-0.5 font-caption text-[10px] font-bold text-foreground-on-accent">
           {filtered.length}
         </span>
         <button
@@ -151,7 +151,7 @@ export default function InboxRoute() {
               className={cn(
                 "rounded-full px-3 py-1 text-xs",
                 active
-                  ? "bg-accent-peach text-foreground-on-accent"
+                  ? "bg-accent-primary text-foreground-on-accent"
                   : "border border-border-subtle bg-surface-elevated text-foreground-secondary hover:bg-surface-tertiary",
               )}
             >
@@ -255,7 +255,7 @@ export default function InboxRoute() {
               <button
                 disabled
                 title="后端未就绪（见顶部说明）"
-                className="flex h-7 items-center gap-1 rounded-md bg-accent-peach px-3 text-xs font-bold text-foreground-on-accent opacity-50"
+                className="flex h-7 items-center gap-1 rounded-md bg-accent-primary px-3 text-xs font-bold text-foreground-on-accent opacity-50"
               >
                 <Check className="size-3" />
                 批准

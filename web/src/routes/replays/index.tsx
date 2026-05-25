@@ -107,8 +107,8 @@ export default function ReplaysIndex() {
     <div className="flex h-full flex-col bg-surface-primary">
       {/* Header */}
       <header className="flex h-14 shrink-0 items-center gap-3 border-b border-border-subtle bg-surface-elevated px-5">
-        <span className="flex size-8 items-center justify-center rounded-md bg-accent-peach-soft">
-          <Play className="size-4 text-accent-peach-deep" />
+        <span className="flex size-8 items-center justify-center rounded-md bg-accent-primary-soft">
+          <Play className="size-4 text-accent-primary-deep" />
         </span>
         <div className="flex flex-col">
           <h1 className="font-heading text-sm font-semibold text-foreground-primary">
@@ -148,7 +148,7 @@ export default function ReplaysIndex() {
               className={cn(
                 "rounded-full px-3 py-1 text-xs transition-colors",
                 active
-                  ? "bg-accent-peach text-foreground-on-accent"
+                  ? "bg-accent-primary text-foreground-on-accent"
                   : "border border-border-subtle bg-surface-elevated text-foreground-secondary hover:bg-surface-tertiary",
               )}
             >
@@ -233,7 +233,7 @@ export default function ReplaysIndex() {
                     </div>
                     {/* hover overlay */}
                     <div className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 transition-opacity group-hover:opacity-100">
-                      <span className="flex items-center gap-1.5 rounded-full bg-accent-peach px-4 py-2 text-xs font-medium text-foreground-on-accent">
+                      <span className="flex items-center gap-1.5 rounded-full bg-accent-primary px-4 py-2 text-xs font-medium text-foreground-on-accent">
                         <Play className="size-3.5" />
                         播放
                       </span>
@@ -248,7 +248,7 @@ export default function ReplaysIndex() {
                     <span className="flex-1" />
                     <Link
                       to={`/replays/${encodeURIComponent(r.id)}`}
-                      className="flex h-7 items-center gap-1 rounded-md bg-accent-peach px-2.5 text-xs text-foreground-on-accent hover:bg-accent-peach-deep"
+                      className="flex h-7 items-center gap-1 rounded-md bg-accent-primary px-2.5 text-xs text-foreground-on-accent hover:bg-accent-primary-deep"
                     >
                       <Play className="size-3" />
                       播放

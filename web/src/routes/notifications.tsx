@@ -219,8 +219,8 @@ export default function NotificationsRoute() {
     <div className="flex h-full flex-col bg-surface-primary">
       {/* Head */}
       <header className="flex h-14 shrink-0 items-center gap-3 border-b border-border-subtle bg-surface-elevated px-5">
-        <span className="flex size-8 items-center justify-center rounded-md bg-accent-peach-soft">
-          <Bell className="size-4 text-accent-peach-deep" />
+        <span className="flex size-8 items-center justify-center rounded-md bg-accent-primary-soft">
+          <Bell className="size-4 text-accent-primary-deep" />
         </span>
         <div className="flex flex-col">
           <h1 className="font-heading text-sm font-semibold text-foreground-primary">
@@ -259,7 +259,7 @@ export default function NotificationsRoute() {
               className={cn(
                 "flex h-7 items-center gap-1.5 rounded-full px-3 text-xs transition-colors",
                 active
-                  ? "bg-accent-peach text-foreground-on-accent"
+                  ? "bg-accent-primary text-foreground-on-accent"
                   : "border border-border-subtle bg-surface-elevated text-foreground-secondary hover:bg-surface-tertiary",
               )}
             >
@@ -270,7 +270,7 @@ export default function NotificationsRoute() {
                   className={cn(
                     "rounded-full px-1.5 py-0.5 text-[9px] font-semibold",
                     active
-                      ? "bg-foreground-on-accent text-accent-peach"
+                      ? "bg-foreground-on-accent text-accent-primary"
                       : "bg-surface-tertiary text-foreground-tertiary",
                   )}
                 >
@@ -295,7 +295,7 @@ export default function NotificationsRoute() {
               const isRead = read.has(n.id);
               const kindBg: Record<NotifKind, string> = {
                 message: "bg-state-info/15 text-state-info",
-                blackboard: "bg-accent-peach-soft text-accent-peach-deep",
+                blackboard: "bg-accent-primary-soft text-accent-primary-deep",
                 state: "bg-state-wake/20 text-state-wake",
                 error: "bg-status-danger-soft text-status-danger",
                 completed: "bg-status-success-soft text-status-success",
@@ -315,7 +315,7 @@ export default function NotificationsRoute() {
                     "flex items-start gap-3 rounded-lg px-3 py-2.5",
                     isRead
                       ? "border border-border-subtle bg-surface-elevated"
-                      : "border border-accent-peach/20 bg-surface-peach-tint",
+                      : "border border-accent-primary/20 bg-surface-accent-tint",
                   )}
                 >
                   <span
@@ -343,7 +343,7 @@ export default function NotificationsRoute() {
                     <div className="mt-1 flex items-center gap-2 font-caption text-[10px] text-foreground-tertiary">
                       <span className="font-mono">{n.agent}</span>
                       {!isRead && (
-                        <span className="size-1.5 rounded-full bg-accent-peach" />
+                        <span className="size-1.5 rounded-full bg-accent-primary" />
                       )}
                     </div>
                   </div>

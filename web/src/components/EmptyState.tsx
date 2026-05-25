@@ -46,7 +46,7 @@ export function EmptyState({
               "flex size-16 items-center justify-center rounded-2xl",
               variant === "notfound"
                 ? "bg-status-warning-soft text-status-warning"
-                : "bg-accent-peach-soft text-accent-peach-deep",
+                : "bg-accent-primary-soft text-accent-primary-deep",
             )}
           >
             {icon}
@@ -84,14 +84,14 @@ export function EmptyState({
               (primaryAction.href ? (
                 <Link
                   to={primaryAction.href}
-                  className="rounded-md bg-accent-peach px-4 py-2 text-xs font-bold text-foreground-on-accent hover:bg-accent-peach-deep"
+                  className="rounded-md bg-accent-primary px-4 py-2 text-xs font-bold text-foreground-on-accent hover:bg-accent-primary-deep"
                 >
                   {primaryAction.label}
                 </Link>
               ) : (
                 <button
                   onClick={primaryAction.onClick}
-                  className="rounded-md bg-accent-peach px-4 py-2 text-xs font-bold text-foreground-on-accent hover:bg-accent-peach-deep"
+                  className="rounded-md bg-accent-primary px-4 py-2 text-xs font-bold text-foreground-on-accent hover:bg-accent-primary-deep"
                 >
                   {primaryAction.label}
                 </button>

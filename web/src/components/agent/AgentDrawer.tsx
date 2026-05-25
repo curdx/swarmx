@@ -248,7 +248,7 @@ function Header({
           </div>
           <div className="flex items-center gap-1.5 font-caption text-[11px] text-foreground-secondary">
             {live && (
-              <Loader2 className="size-3 animate-spin text-accent-peach" />
+              <Loader2 className="size-3 animate-spin text-accent-primary" />
             )}
             <span>
               {live ? (info?.shim_ready ? "READY" : "STARTING") : "EXITED"}
@@ -271,7 +271,7 @@ function Header({
       <div className="flex items-center gap-2 px-5 pt-1 pb-4">
         <button
           onClick={onFocusInjector}
-          className="flex h-7 items-center gap-1.5 rounded-md bg-accent-peach px-3 text-xs font-bold text-foreground-on-accent hover:bg-accent-peach-deep"
+          className="flex h-7 items-center gap-1.5 rounded-md bg-accent-primary px-3 text-xs font-bold text-foreground-on-accent hover:bg-accent-primary-deep"
         >
           <SendHorizonal className="size-3" />
           发送消息
@@ -319,7 +319,7 @@ function TabBar({ tab, onChange }: { tab: TabId; onChange: (t: TabId) => void })
             className={cn(
               "flex items-center gap-1.5 px-4 py-3 text-xs transition-colors",
               active
-                ? "border-b-2 border-accent-peach text-foreground-primary"
+                ? "border-b-2 border-accent-primary text-foreground-primary"
                 : "border-b-2 border-transparent text-foreground-secondary hover:text-foreground-primary",
             )}
           >
@@ -383,7 +383,7 @@ function RecordingsTab({ agentId }: { agentId: string }) {
           <Link
             key={r.id}
             to={`/replays/${encodeURIComponent(r.id)}`}
-            className="group flex items-center gap-3 rounded-md border border-border-subtle bg-surface-primary p-3 hover:border-accent-peach"
+            className="group flex items-center gap-3 rounded-md border border-border-subtle bg-surface-primary p-3 hover:border-accent-primary"
           >
             <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-term-bg text-term-green">
               <Play className="size-4" />
@@ -491,7 +491,7 @@ function MessagesTab({ agentId }: { agentId: string }) {
             className={cn(
               "rounded-md border p-3 text-xs",
               outgoing
-                ? "border-accent-peach-soft bg-surface-peach-tint"
+                ? "border-accent-primary-soft bg-surface-accent-tint"
                 : "border-border-subtle bg-surface-primary",
             )}
           >
@@ -662,7 +662,7 @@ function InjectBar({
       <button
         onClick={send}
         disabled={sending || !text.trim()}
-        className="flex h-8 shrink-0 items-center justify-center rounded-md bg-accent-peach px-3 text-xs font-bold text-foreground-on-accent hover:bg-accent-peach-deep disabled:opacity-50"
+        className="flex h-8 shrink-0 items-center justify-center rounded-md bg-accent-primary px-3 text-xs font-bold text-foreground-on-accent hover:bg-accent-primary-deep disabled:opacity-50"
       >
         {sending ? "…" : "发送"}
       </button>

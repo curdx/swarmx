@@ -213,7 +213,7 @@ export default function ChatRoute() {
         <nav className="flex flex-col gap-0.5 overflow-y-auto">
           {workspaces.length === 0 && (
             <span className="px-3 py-2 font-caption text-xs text-foreground-tertiary">
-              暂无活跃 agent · 去 <a className="text-accent-peach hover:underline" href="/debug">/debug</a> 启动一个
+              暂无活跃 agent · 去 <a className="text-accent-primary hover:underline" href="/debug">/debug</a> 启动一个
             </span>
           )}
           {workspaces.map((ws) => {
@@ -225,7 +225,7 @@ export default function ChatRoute() {
                 className={cn(
                   "group flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors",
                   active
-                    ? "bg-accent-peach-soft text-foreground-primary"
+                    ? "bg-accent-primary-soft text-foreground-primary"
                     : "text-foreground-secondary hover:bg-surface-tertiary",
                 )}
               >
@@ -243,7 +243,7 @@ export default function ChatRoute() {
         <div className="mt-auto px-2 pt-3">
           <button
             onClick={() => setWizardOpen(true)}
-            className="flex w-full items-center justify-center gap-2 rounded-md bg-accent-peach px-3 py-2 text-xs font-medium text-foreground-on-accent hover:bg-accent-peach-deep"
+            className="flex w-full items-center justify-center gap-2 rounded-md bg-accent-primary px-3 py-2 text-xs font-medium text-foreground-on-accent hover:bg-accent-primary-deep"
           >
             <Sparkles className="size-4" />
             运行配方
@@ -264,7 +264,7 @@ export default function ChatRoute() {
           </span>
           <span className="flex-1" />
           {totalUnread > 0 && (
-            <span className="rounded-full bg-accent-peach px-2 py-0.5 text-[10px] font-semibold text-foreground-on-accent">
+            <span className="rounded-full bg-accent-primary px-2 py-0.5 text-[10px] font-semibold text-foreground-on-accent">
               {totalUnread} 未读
             </span>
           )}
@@ -308,7 +308,7 @@ export default function ChatRoute() {
                 onClick={() => openDrawer(a.agent_id)}
                 className={cn(
                   "flex cursor-pointer items-center gap-3 rounded-md px-3 py-2 hover:bg-surface-tertiary",
-                  isOpen && "bg-accent-peach-soft hover:bg-accent-peach-soft",
+                  isOpen && "bg-accent-primary-soft hover:bg-accent-primary-soft",
                 )}
               >
                 <span

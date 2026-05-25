@@ -39,7 +39,7 @@ export function AppShell() {
       <header className="flex h-11 shrink-0 items-center gap-6 border-b border-border-subtle bg-surface-secondary px-4">
         <TrafficLights />
         <div className="flex items-center gap-2">
-          <span className="size-5 rounded-md bg-accent-peach" />
+          <span className="size-5 rounded-md bg-accent-primary" />
           <span className="font-heading text-sm font-semibold">flockmux</span>
         </div>
         <nav className="flex items-center gap-1">
@@ -51,7 +51,7 @@ export function AppShell() {
                 cn(
                   "rounded-md px-3 py-1.5 text-xs transition-colors",
                   isActive
-                    ? "bg-accent-peach text-foreground-on-accent"
+                    ? "bg-accent-primary text-foreground-on-accent"
                     : "text-foreground-secondary hover:bg-surface-tertiary",
                 )
               }
