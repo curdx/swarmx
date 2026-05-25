@@ -13,11 +13,12 @@
  */
 
 import { useEffect, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
-import { ArrowLeft, Download, Share2, X } from "lucide-react";
+import { useNavigate, useParams } from "react-router-dom";
+import { ArrowLeft, Download, FileSearch, Share2, X } from "lucide-react";
 import { api } from "../../api/http";
 import type { RecordingInfo } from "../../api/types";
 import { AsciicastPlayer } from "../../components/AsciicastPlayer";
+import { EmptyState } from "../../components/EmptyState";
 
 function formatTime(ms: number): string {
   return new Date(ms).toLocaleString();
@@ -84,14 +85,19 @@ export default function ReplayPlayer() {
 
   if (error || !recording) {
     return (
-      <div className="flex h-full flex-col items-center justify-center gap-4 bg-term-bg text-foreground-inverse">
-        <h2 className="font-heading text-xl">{error ?? "未找到录像"}</h2>
-        <Link
-          to="/replays"
-          className="rounded-md bg-accent-peach px-4 py-2 text-sm text-foreground-on-accent hover:bg-accent-peach-deep"
-        >
-          返回录像库
-        </Link>
+      <div className="h-full bg-surface-primary">
+        <EmptyState
+          variant="notfound"
+          icon={<FileSearch className="size-8" />}
+          title="录像不在了"
+          hint={
+            error
+              ? `请求失败：${error}`
+              : `找不到 id 为 ${id} 的录像。它可能被删了，或者 url 拼错了。`
+          }
+          primaryAction={{ label: "返回录像库", href: "/replays" }}
+          secondaryAction={{ label: "去 Debug", href: "/debug" }}
+        />
       </div>
     );
   }
