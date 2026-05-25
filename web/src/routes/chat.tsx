@@ -22,6 +22,7 @@ import type {
 } from "../api/types";
 import { MessagesPanel } from "../components/MessagesPanel";
 import { AgentDrawer } from "../components/agent/AgentDrawer";
+import { CreateWizard } from "../components/workspace/CreateWizard";
 import { useSwarmFeed } from "../hooks/useSwarmFeed";
 import { cn } from "@/lib/cn";
 
@@ -64,6 +65,7 @@ export default function ChatRoute() {
       return next;
     });
   };
+  const [wizardOpen, setWizardOpen] = useState(false);
 
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [liveMessage, setLiveMessage] = useState<MessageRecord | null>(null);
@@ -201,8 +203,9 @@ export default function ChatRoute() {
           </h2>
           <button
             type="button"
+            onClick={() => setWizardOpen(true)}
             className="rounded-md p-1 text-foreground-tertiary hover:bg-surface-tertiary hover:text-foreground-primary"
-            title="新建工作空间 (TODO: Wizard)"
+            title="新建工作空间"
           >
             <Plus className="size-4" />
           </button>
@@ -238,7 +241,10 @@ export default function ChatRoute() {
           })}
         </nav>
         <div className="mt-auto px-2 pt-3">
-          <button className="flex w-full items-center justify-center gap-2 rounded-md bg-accent-peach px-3 py-2 text-xs font-medium text-foreground-on-accent hover:bg-accent-peach-deep">
+          <button
+            onClick={() => setWizardOpen(true)}
+            className="flex w-full items-center justify-center gap-2 rounded-md bg-accent-peach px-3 py-2 text-xs font-medium text-foreground-on-accent hover:bg-accent-peach-deep"
+          >
             <Sparkles className="size-4" />
             运行配方
           </button>
@@ -352,6 +358,11 @@ export default function ChatRoute() {
       {drawerAgentId && (
         <AgentDrawer agentId={drawerAgentId} onClose={closeDrawer} />
       )}
+      <CreateWizard
+        open={wizardOpen}
+        onClose={() => setWizardOpen(false)}
+        onCreated={refreshAgents}
+      />
     </div>
   );
 }
