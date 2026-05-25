@@ -1,11 +1,18 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import tailwindcss from "@tailwindcss/vite";
+import path from "node:path";
 
 // During dev, the frontend runs on :5173 and the Rust server on :7777.
 // Both /api and /ws are proxied so the same code paths work in production
 // (where the server statically hosts the built bundle on :7777).
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), tailwindcss()],
+  resolve: {
+    alias: {
+      "@": path.resolve(__dirname, "./src"),
+    },
+  },
   server: {
     port: 5173,
     proxy: {

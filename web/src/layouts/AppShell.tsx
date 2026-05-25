@@ -1,0 +1,73 @@
+/**
+ * AppShell — top-level chrome shared by every product route.
+ *
+ * Mirrors the Pencil TitleBar (id NkrSV in untitled.pen → u6kF7Z): 44px
+ * row, surface-secondary fill, traffic lights left, brand + nav center,
+ * window actions right. Traffic lights are decorative in the browser; the
+ * Tauri shell can wire them to the OS window controls later.
+ *
+ * /debug uses its own dark legacy chrome and renders without AppShell.
+ */
+
+import { NavLink, Outlet } from "react-router-dom";
+import { cn } from "@/lib/cn";
+
+const NAV = [
+  { to: "/chat", label: "对话" },
+  { to: "/dag", label: "协作图" },
+  { to: "/replays", label: "录像库" },
+  { to: "/context", label: "上下文" },
+  { to: "/inbox", label: "审批" },
+  { to: "/notifications", label: "通知" },
+  { to: "/settings", label: "设置" },
+  { to: "/debug", label: "Debug" },
+];
+
+function TrafficLights() {
+  return (
+    <div className="flex items-center gap-2 pl-1">
+      <span className="size-3 rounded-full bg-[#FF5F57]" />
+      <span className="size-3 rounded-full bg-[#FEBC2E]" />
+      <span className="size-3 rounded-full bg-[#28C840]" />
+    </div>
+  );
+}
+
+export function AppShell() {
+  return (
+    <div className="flex h-full flex-col bg-surface-primary text-foreground-primary">
+      <header className="flex h-11 shrink-0 items-center gap-6 border-b border-border-subtle bg-surface-secondary px-4">
+        <TrafficLights />
+        <div className="flex items-center gap-2">
+          <span className="size-5 rounded-md bg-accent-peach" />
+          <span className="font-heading text-sm font-semibold">flockmux</span>
+        </div>
+        <nav className="flex items-center gap-1">
+          {NAV.map((item) => (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              className={({ isActive }) =>
+                cn(
+                  "rounded-md px-3 py-1.5 text-xs transition-colors",
+                  isActive
+                    ? "bg-accent-peach text-foreground-on-accent"
+                    : "text-foreground-secondary hover:bg-surface-tertiary",
+                )
+              }
+            >
+              {item.label}
+            </NavLink>
+          ))}
+        </nav>
+        <div className="flex-1" />
+        <span className="font-caption text-xs text-foreground-tertiary">
+          127.0.0.1:7777
+        </span>
+      </header>
+      <main className="min-h-0 flex-1 overflow-hidden">
+        <Outlet />
+      </main>
+    </div>
+  );
+}

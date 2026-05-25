@@ -1,13 +1,130 @@
+@import "tailwindcss";
+
+/* Tailwind v4 CSS-first theme — variables come from Pencil design tokens
+ * (untitled.pen → get_variables). Names mirror the Pencil keys so the
+ * design file remains the source of truth; renaming here without
+ * updating Pencil will drift. */
+@theme {
+  --color-surface-primary: #FAFAF7;
+  --color-surface-elevated: #FFFFFF;
+  --color-surface-secondary: #FFF5EB;
+  --color-surface-tertiary: #F1EFE9;
+  --color-surface-muted: #F7F7F5;
+  --color-surface-warm: #FAF6F2;
+  --color-surface-overlay: #FAFAF8;
+  --color-surface-inverse: #0F0F0F;
+  --color-surface-peach-tint: #FFEDDC;
+  --color-surface-peach-deep-tint: #FFE0C5;
+  --color-surface-cool: #F2F6FA;
+  --color-surface-cool-tint: #EBF1FA;
+  --color-surface-terminal: #0A0A0A;
+
+  --color-foreground-primary: #0F0F0F;
+  --color-foreground-secondary: #4A4A48;
+  --color-foreground-tertiary: #8E8B85;
+  --color-foreground-inverse: #FFFFFF;
+  --color-foreground-inverse-secondary: #A0A0A0;
+  --color-foreground-on-accent: #FFFFFF;
+
+  --color-border-subtle: #E8E5DD;
+  --color-border-strong: #D4D0C7;
+
+  --color-accent-peach: #D97757;
+  --color-accent-peach-soft: #FFE0C9;
+  --color-accent-peach-deep: #B85B3E;
+  --color-accent-primary: #A855F7;
+  --color-accent-purple: #7C3AED;
+  --color-accent-purple-soft: #A855F71F;
+  --color-accent-cyan-soft: #06B6D41F;
+  --color-accent-pink-soft: #EC48991F;
+
+  --color-state-busy: #D97757;
+  --color-state-wake: #C77A1F;
+  --color-state-success: #2E8B57;
+  --color-state-danger: #C73E3E;
+  --color-state-info: #3B6FB8;
+  --color-state-warning: #C77A1F;
+  --color-state-idle: #8E8B85;
+
+  --color-status-running: #10B981;
+  --color-status-running-soft: #D1FAE5;
+  --color-status-busy: #F59E0B;
+  --color-status-busy-soft: #F59E0B1F;
+  --color-status-waiting: #F59E0B;
+  --color-status-waiting-soft: #FEF3C7;
+  --color-status-success: #16A34A;
+  --color-status-success-soft: #DCFCE7;
+  --color-status-danger: #DC2626;
+  --color-status-danger-soft: #FEE2E2;
+  --color-status-error: #EF4444;
+  --color-status-error-soft: #EF44441F;
+  --color-status-warning: #F59E0B;
+  --color-status-warning-soft: #FEF3C7;
+  --color-status-info: #3B82F6;
+  --color-status-wake: #06B6D4;
+  --color-status-idle: #22C55E;
+  --color-status-idle-soft: #E5E5E5;
+  --color-status-exit: #71717A;
+
+  --color-agent-planner: #D97757;
+  --color-agent-backend: #7B5BB8;
+  --color-agent-frontend: #3B6FB8;
+  --color-agent-architect: #C73E3E;
+  --color-agent-critic: #C77A1F;
+  --color-agent-test: #2E8B57;
+
+  --color-term-bg: #0A0A0A;
+  --color-term-fg: #E5E5E5;
+  --color-term-dim: #8A8A8A;
+  --color-term-gray: #737373;
+  --color-term-green: #7CCB8B;
+  --color-term-yellow: #E8C46B;
+  --color-term-red: #F87171;
+  --color-term-blue: #60A5FA;
+  --color-term-cyan: #7EC8E3;
+  --color-term-magenta: #C490D1;
+  --color-term-purple: #B591F2;
+
+  --font-body: "Geist", system-ui, sans-serif;
+  --font-heading: "Inter", system-ui, sans-serif;
+  --font-mono: "Geist Mono", "JetBrains Mono", monospace;
+  --font-caption: "Funnel Sans", system-ui, sans-serif;
+
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+  --radius-full: 9999px;
+
+  --spacing-1: 4px;
+  --spacing-2: 8px;
+  --spacing-3: 12px;
+  --spacing-4: 16px;
+  --spacing-5: 20px;
+  --spacing-6: 24px;
+  --spacing-8: 32px;
+}
+
 html, body, #root {
   height: 100%;
   margin: 0;
   padding: 0;
+  background: var(--color-surface-primary);
+  color: var(--color-foreground-primary);
+  font-family: var(--font-body);
+}
+
+/* Legacy M2 dashboard (now /debug) was authored against this dark scheme.
+ * Scope the override so the new product surfaces stay on the Pencil palette. */
+.legacy-dashboard,
+.legacy-dashboard html,
+.legacy-dashboard body {
   background: #0d0d0d;
   color: #f0f0f0;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
-button {
+.legacy-dashboard button {
   font: inherit;
   color: inherit;
   background: #1f2937;
@@ -16,15 +133,8 @@ button {
   padding: 6px 12px;
   cursor: pointer;
 }
-
-button:hover {
-  background: #374151;
-}
-
-button:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
+.legacy-dashboard button:hover { background: #374151; }
+.legacy-dashboard button:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .xterm .xterm-viewport {
   background-color: transparent !important;
