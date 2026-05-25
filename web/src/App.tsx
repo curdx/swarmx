@@ -13,6 +13,7 @@ import ReplaysIndex from "./routes/replays/index";
 import ReplayPlayer from "./routes/replays/player";
 import ContextRoute from "./routes/context";
 import DagRoute from "./routes/dag";
+import SettingsRoute from "./routes/settings";
 
 export default function App() {
   return (
@@ -27,8 +28,8 @@ export default function App() {
           <Route path="/context" element={<ContextRoute />} />
           <Route path="/inbox" element={<RoutePlaceholder name="审批" pencilId="NUCBp" />} />
           <Route path="/notifications" element={<RoutePlaceholder name="通知" pencilId="COJDW" />} />
-          <Route path="/settings" element={<RoutePlaceholder name="设置" pencilId="nJqkA" />} />
-          <Route path="/settings/:section" element={<RoutePlaceholder name="设置" pencilId="nJqkA" />} />
+          <Route path="/settings" element={<SettingsRoute />} />
+          <Route path="/settings/:section" element={<SettingsRoute />} />
         </Route>
         <Route path="/debug" element={<DebugRoute />} />
         {/* Fullscreen surfaces escape AppShell — the bright TitleBar
