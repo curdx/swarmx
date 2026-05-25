@@ -12,7 +12,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { Plus, Sparkles, Users, Zap } from "lucide-react";
 import { api } from "../api/http";
 import type {
@@ -21,6 +21,7 @@ import type {
   SwarmEvent,
 } from "../api/types";
 import { MessagesPanel } from "../components/MessagesPanel";
+import { AgentDrawer } from "../components/agent/AgentDrawer";
 import { useSwarmFeed } from "../hooks/useSwarmFeed";
 import { cn } from "@/lib/cn";
 
@@ -47,6 +48,22 @@ function statusDot(a: AgentInfo) {
 export default function ChatRoute() {
   const { workspaceId } = useParams<{ workspaceId?: string }>();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const drawerAgentId = searchParams.get("agent");
+  const openDrawer = (id: string) => {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.set("agent", id);
+      return next;
+    });
+  };
+  const closeDrawer = () => {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.delete("agent");
+      return next;
+    });
+  };
 
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [liveMessage, setLiveMessage] = useState<MessageRecord | null>(null);
@@ -278,10 +295,15 @@ export default function ChatRoute() {
           {activeMembers.map((a) => {
             const dot = statusDot(a);
             const unread = unreadByFrom[a.agent_id] ?? 0;
+            const isOpen = drawerAgentId === a.agent_id;
             return (
               <div
                 key={a.agent_id}
-                className="flex items-center gap-3 rounded-md px-3 py-2 hover:bg-surface-tertiary"
+                onClick={() => openDrawer(a.agent_id)}
+                className={cn(
+                  "flex cursor-pointer items-center gap-3 rounded-md px-3 py-2 hover:bg-surface-tertiary",
+                  isOpen && "bg-accent-peach-soft hover:bg-accent-peach-soft",
+                )}
               >
                 <span
                   className={cn(
@@ -314,7 +336,10 @@ export default function ChatRoute() {
                 <button
                   className="rounded-md p-1.5 text-foreground-tertiary hover:bg-surface-secondary hover:text-state-wake"
                   title="手动唤醒"
-                  onClick={() => api.wakeAgent(a.agent_id).catch(() => {})}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    api.wakeAgent(a.agent_id).catch(() => {});
+                  }}
                 >
                   <Zap className="size-4" />
                 </button>
@@ -323,6 +348,10 @@ export default function ChatRoute() {
           })}
         </div>
       </aside>
+
+      {drawerAgentId && (
+        <AgentDrawer agentId={drawerAgentId} onClose={closeDrawer} />
+      )}
     </div>
   );
 }
