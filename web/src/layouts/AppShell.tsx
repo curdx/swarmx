@@ -32,6 +32,18 @@ import {
 import { cn } from "@/lib/cn";
 import { CommandPalette } from "@/components/CommandPalette";
 
+// Tauri uses titleBarStyle:"Overlay" so the OS draws real traffic lights
+// in the window's top-left ~(0,0)→(78,28) region. We hide our painted
+// decoration there and reserve that strip with padding so OS lights
+// don't cover the brand row. In a plain browser there are no OS lights
+// — show our painted ones so the chrome doesn't look bare.
+const IS_TAURI =
+  typeof window !== "undefined" &&
+  (window.location.protocol === "tauri:" ||
+    window.location.hostname === "tauri.localhost" ||
+    // Tauri 2 injects internals into every webview, dev included.
+    "__TAURI_INTERNALS__" in window);
+
 interface NavItem {
   to: string;
   key: string;
@@ -50,16 +62,6 @@ const NAV: readonly NavItem[] = [
 ] as const;
 
 const COLLAPSED_KEY = "flockmux:nav-collapsed";
-
-function TrafficLights() {
-  return (
-    <div className="flex items-center gap-2">
-      <span className="size-3 rounded-full bg-[#FF5F57]" />
-      <span className="size-3 rounded-full bg-[#FEBC2E]" />
-      <span className="size-3 rounded-full bg-[#28C840]" />
-    </div>
-  );
-}
 
 export function AppShell() {
   const { t } = useTranslation();
@@ -86,6 +88,10 @@ export function AppShell() {
           "flex shrink-0 flex-col border-r border-border-subtle bg-surface-secondary transition-[width] duration-150",
           collapsed ? "w-14" : "w-48",
         )}
+        // Reserve the OS traffic-lights overlay strip in Tauri so logo
+        // + label don't collide with the kernel-drawn buttons. Browser
+        // gets a small top padding too for visual symmetry.
+        style={IS_TAURI ? { paddingTop: 28 } : undefined}
       >
         {/* Brand row — logo dot + (when expanded) the app name. Sized to
             match the top header height so the divider lines up. */}
@@ -159,8 +165,14 @@ export function AppShell() {
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex h-11 shrink-0 items-center gap-3 border-b border-border-subtle bg-surface-secondary px-4">
-          <TrafficLights />
+        <header
+          className="flex h-11 shrink-0 items-center gap-3 border-b border-border-subtle bg-surface-secondary px-4"
+          // Tauri OS lights overlap the sidebar only; the header starts
+          // right of the sidebar so it's clear, but keep small top
+          // padding so the header content visually settles below the
+          // OS title strip when present.
+          style={IS_TAURI ? { paddingTop: 4 } : undefined}
+        >
           <div className="flex-1" />
           <kbd
             className="rounded border border-border-subtle bg-surface-elevated px-1.5 py-0.5 font-mono text-[10px] text-foreground-tertiary"
