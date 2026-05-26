@@ -1,6 +1,7 @@
 import ReactDOM from "react-dom/client";
 import App from "./App";
 import { applyInitialTheme, setTheme, getThemeMode } from "./lib/theme";
+import "./i18n"; // side-effect init i18next
 import "@xterm/xterm/css/xterm.css";
 import "./styles/global.css";
 

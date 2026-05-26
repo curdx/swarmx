@@ -1,0 +1,65 @@
+{
+  "nav": {
+    "chat": "Chat",
+    "dag": "Flow",
+    "replays": "Replays",
+    "context": "Context",
+    "inbox": "Inbox",
+    "notifications": "Notifications",
+    "settings": "Settings",
+    "debug": "Debug"
+  },
+  "shell": {
+    "cmdkHint": "Press ⌘K to open the command palette"
+  },
+  "settings": {
+    "title": "Settings",
+    "subtitle": "Local config · localStorage · takes effect immediately",
+    "sections": {
+      "general": "General",
+      "appearance": "Appearance",
+      "shortcuts": "Shortcuts",
+      "plugins": "Plugins",
+      "privacy": "Privacy & Security",
+      "about": "About"
+    },
+    "general": {
+      "title": "General",
+      "hint": "Global behaviour, mostly takes effect immediately",
+      "lang": "Interface language",
+      "langHint": "Change the interface language (applies immediately)",
+      "launch": "Launch behaviour",
+      "launchHint": "Manage flockmux startup / background behaviour",
+      "openMain": "Open main window on launch",
+      "openMainHint": "When on, the chat window expands automatically; off keeps it in the tray",
+      "desktopNotify": "Desktop notifications for new messages",
+      "desktopNotifyHint": "Fires a desktop notification on every agent → system reply",
+      "failure": "Failure handling",
+      "failureHint": "Cascading behaviour when one agent in a spell fails",
+      "killOthers": "Kill sibling agents on failure",
+      "killOthersHint": "When on, any agent shim_exit != 0 kills every other agent in the spell"
+    },
+    "appearance": {
+      "title": "Appearance",
+      "hint": "Switch light / dark / system instantly; preference persisted in localStorage",
+      "theme": "Theme",
+      "themeHint": "Choose light / dark / follow system",
+      "themes": {
+        "light": "Light",
+        "dark": "Dark",
+        "system": "System"
+      },
+      "current": "current",
+      "preview": "Preview"
+    }
+  },
+  "common": {
+    "save": "Save",
+    "cancel": "Cancel",
+    "delete": "Delete",
+    "edit": "Edit",
+    "search": "Search",
+    "refresh": "Refresh",
+    "close": "Close"
+  }
+}

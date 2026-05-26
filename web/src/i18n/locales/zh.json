@@ -1,0 +1,65 @@
+{
+  "nav": {
+    "chat": "对话",
+    "dag": "协作图",
+    "replays": "录像库",
+    "context": "上下文",
+    "inbox": "审批",
+    "notifications": "通知",
+    "settings": "设置",
+    "debug": "Debug"
+  },
+  "shell": {
+    "cmdkHint": "按 ⌘K 打开命令面板"
+  },
+  "settings": {
+    "title": "设置",
+    "subtitle": "本地配置 · localStorage · 一处即生效",
+    "sections": {
+      "general": "通用",
+      "appearance": "外观",
+      "shortcuts": "快捷键",
+      "plugins": "插件",
+      "privacy": "隐私 & 安全",
+      "about": "关于"
+    },
+    "general": {
+      "title": "通用",
+      "hint": "设置全局行为，绝大部分立即生效",
+      "lang": "界面语言",
+      "langHint": "切换界面文案的语言（即时生效）",
+      "launch": "启动行为",
+      "launchHint": "管理 flockmux 启动 / 后台行为",
+      "openMain": "启动时打开主面板",
+      "openMainHint": "开启后会自动展开聊天窗口；不开仅停在系统托盘",
+      "desktopNotify": "新消息桌面通知",
+      "desktopNotifyHint": "任何 agent → system reply 时弹一条桌面通知",
+      "failure": "失败处理",
+      "failureHint": "当 spell 中一个 agent 失败时的连带行为",
+      "killOthers": "失败时同时关闭其余 agent",
+      "killOthersHint": "开启后任一 agent shim_exit != 0 时，整个 spell 内的兄弟 agent 一起被 kill"
+    },
+    "appearance": {
+      "title": "外观",
+      "hint": "切换浅 / 深 / 跟随系统，立即生效；偏好持久化在 localStorage",
+      "theme": "主题",
+      "themeHint": "选择浅色 / 深色 / 跟随系统",
+      "themes": {
+        "light": "浅色",
+        "dark": "深色",
+        "system": "跟随系统"
+      },
+      "current": "当前",
+      "preview": "Preview"
+    }
+  },
+  "common": {
+    "save": "保存",
+    "cancel": "取消",
+    "delete": "删除",
+    "edit": "编辑",
+    "search": "搜索",
+    "refresh": "刷新",
+    "close": "关闭"
+  }
+}

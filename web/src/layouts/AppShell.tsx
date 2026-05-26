@@ -10,19 +10,20 @@
  */
 
 import { NavLink, Outlet } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/cn";
 import { CommandPalette } from "@/components/CommandPalette";
 
 const NAV = [
-  { to: "/chat", label: "对话" },
-  { to: "/dag", label: "协作图" },
-  { to: "/replays", label: "录像库" },
-  { to: "/context", label: "上下文" },
-  { to: "/inbox", label: "审批" },
-  { to: "/notifications", label: "通知" },
-  { to: "/settings", label: "设置" },
-  { to: "/debug", label: "Debug" },
-];
+  { to: "/chat", key: "nav.chat" },
+  { to: "/dag", key: "nav.dag" },
+  { to: "/replays", key: "nav.replays" },
+  { to: "/context", key: "nav.context" },
+  { to: "/inbox", key: "nav.inbox" },
+  { to: "/notifications", key: "nav.notifications" },
+  { to: "/settings", key: "nav.settings" },
+  { to: "/debug", key: "nav.debug" },
+] as const;
 
 function TrafficLights() {
   return (
@@ -35,6 +36,7 @@ function TrafficLights() {
 }
 
 export function AppShell() {
+  const { t } = useTranslation();
   return (
     <div className="flex h-full flex-col bg-surface-primary text-foreground-primary">
       <header className="flex h-11 shrink-0 items-center gap-6 border-b border-border-subtle bg-surface-secondary px-4">
@@ -57,14 +59,14 @@ export function AppShell() {
                 )
               }
             >
-              {item.label}
+              {t(item.key)}
             </NavLink>
           ))}
         </nav>
         <div className="flex-1" />
         <kbd
           className="rounded border border-border-subtle bg-surface-elevated px-1.5 py-0.5 font-mono text-[10px] text-foreground-tertiary"
-          title="按 ⌘K 打开命令面板"
+          title={t("shell.cmdkHint")}
         >
           ⌘K
         </kbd>

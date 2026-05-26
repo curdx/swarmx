@@ -14,6 +14,8 @@
 
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
+import { useTranslation } from "react-i18next";
+import i18n from "@/i18n";
 import { setTheme } from "@/lib/theme";
 import {
   Bell,
@@ -72,17 +74,18 @@ function saveSettings(s: SettingsState) {
 }
 
 const SECTIONS = [
-  { id: "general", label: "通用", icon: SettingsIcon },
-  { id: "appearance", label: "外观", icon: Palette },
-  { id: "shortcuts", label: "快捷键", icon: Keyboard },
-  { id: "plugins", label: "插件", icon: Plug },
-  { id: "privacy", label: "隐私 & 安全", icon: Shield },
-  { id: "about", label: "关于", icon: Info },
+  { id: "general", labelKey: "settings.sections.general", icon: SettingsIcon },
+  { id: "appearance", labelKey: "settings.sections.appearance", icon: Palette },
+  { id: "shortcuts", labelKey: "settings.sections.shortcuts", icon: Keyboard },
+  { id: "plugins", labelKey: "settings.sections.plugins", icon: Plug },
+  { id: "privacy", labelKey: "settings.sections.privacy", icon: Shield },
+  { id: "about", labelKey: "settings.sections.about", icon: Info },
 ] as const;
 
 type SectionId = (typeof SECTIONS)[number]["id"];
 
 export default function SettingsRoute() {
+  const { t } = useTranslation();
   const { section } = useParams<{ section?: string }>();
   const navigate = useNavigate();
   const [settings, setSettings] = useState<SettingsState>(loadSettings);
@@ -92,9 +95,12 @@ export default function SettingsRoute() {
 
   useEffect(() => {
     saveSettings(settings);
-    // Theme is the only setting with a runtime side-effect today —
-    // language is read-only (重启生效), the rest are passive flags.
+    // Runtime side-effects: theme flips data-theme; lang swaps i18n
+    // resources. Everything else is passive (read by other code paths).
     setTheme(settings.theme);
+    if (i18n.language !== settings.lang) {
+      i18n.changeLanguage(settings.lang);
+    }
   }, [settings]);
 
   const update = <K extends keyof SettingsState>(k: K, v: SettingsState[K]) =>
@@ -109,10 +115,10 @@ export default function SettingsRoute() {
         </span>
         <div className="flex flex-col">
           <h1 className="font-heading text-sm font-semibold text-foreground-primary">
-            设置
+            {t("settings.title")}
           </h1>
           <span className="font-caption text-[10px] text-foreground-tertiary">
-            本地配置 · localStorage · 一处即生效
+            {t("settings.subtitle")}
           </span>
         </div>
       </header>
@@ -136,7 +142,7 @@ export default function SettingsRoute() {
                 )}
               >
                 <Icon className="size-4" />
-                {s.label}
+                {t(s.labelKey)}
               </button>
             );
           })}
@@ -172,11 +178,18 @@ function GeneralPanel({
   settings: SettingsState;
   update: <K extends keyof SettingsState>(k: K, v: SettingsState[K]) => void;
 }) {
+  const { t } = useTranslation();
   return (
     <div className="mx-auto flex max-w-2xl flex-col gap-8 p-8">
-      <PanelTitle title="通用" hint="设置全局行为，绝大部分立即生效" />
+      <PanelTitle
+        title={t("settings.general.title")}
+        hint={t("settings.general.hint")}
+      />
 
-      <Field label="界面语言" hint="切换界面文案的语言（重启生效）">
+      <Field
+        label={t("settings.general.lang")}
+        hint={t("settings.general.langHint")}
+      >
         <div className="grid grid-cols-2 gap-3">
           <ChoiceCard
             active={settings.lang === "zh"}
@@ -195,27 +208,33 @@ function GeneralPanel({
         </div>
       </Field>
 
-      <Field label="启动行为" hint="管理 flockmux 启动 / 后台行为">
+      <Field
+        label={t("settings.general.launch")}
+        hint={t("settings.general.launchHint")}
+      >
         <div className="flex flex-col gap-3">
           <ToggleRow
-            label="启动时打开主面板"
-            hint="开启后会自动展开聊天窗口；不开仅停在系统托盘"
+            label={t("settings.general.openMain")}
+            hint={t("settings.general.openMainHint")}
             value={settings.openMainOnLaunch}
             onChange={(v) => update("openMainOnLaunch", v)}
           />
           <ToggleRow
-            label="新消息桌面通知"
-            hint="任何 agent → system reply 时弹一条桌面通知"
+            label={t("settings.general.desktopNotify")}
+            hint={t("settings.general.desktopNotifyHint")}
             value={settings.desktopNotify}
             onChange={(v) => update("desktopNotify", v)}
           />
         </div>
       </Field>
 
-      <Field label="失败处理" hint="当 spell 中一个 agent 失败时的连带行为">
+      <Field
+        label={t("settings.general.failure")}
+        hint={t("settings.general.failureHint")}
+      >
         <ToggleRow
-          label="失败时同时关闭其余 agent"
-          hint="开启后任一 agent shim_exit != 0 时，整个 spell 内的兄弟 agent 一起被 kill"
+          label={t("settings.general.killOthers")}
+          hint={t("settings.general.killOthersHint")}
           value={settings.killOthersOnFail}
           onChange={(v) => update("killOthersOnFail", v)}
         />
@@ -231,29 +250,36 @@ function AppearancePanel({
   settings: SettingsState;
   update: <K extends keyof SettingsState>(k: K, v: SettingsState[K]) => void;
 }) {
+  const { t } = useTranslation();
   return (
     <div className="mx-auto flex max-w-2xl flex-col gap-8 p-8">
-      <PanelTitle title="外观" hint="切换浅 / 深 / 跟随系统，立即生效；偏好持久化在 localStorage" />
-      <Field label="主题" hint="选择浅色 / 深色 / 跟随系统">
+      <PanelTitle
+        title={t("settings.appearance.title")}
+        hint={t("settings.appearance.hint")}
+      />
+      <Field
+        label={t("settings.appearance.theme")}
+        hint={t("settings.appearance.themeHint")}
+      >
         <div className="grid grid-cols-3 gap-3">
           <ThemeCard
             active={settings.theme === "light"}
             onClick={() => update("theme", "light")}
-            label="浅色"
+            label={t("settings.appearance.themes.light")}
             preview="light"
             icon={<Sun className="size-4" />}
           />
           <ThemeCard
             active={settings.theme === "dark"}
             onClick={() => update("theme", "dark")}
-            label="深色"
+            label={t("settings.appearance.themes.dark")}
             preview="dark"
             icon={<Moon className="size-4" />}
           />
           <ThemeCard
             active={settings.theme === "system"}
             onClick={() => update("theme", "system")}
-            label="跟随系统"
+            label={t("settings.appearance.themes.system")}
             preview="system"
             icon={<SunMoon className="size-4" />}
           />
@@ -264,6 +290,7 @@ function AppearancePanel({
 }
 
 function StubPanel({ id }: { id: SectionId }) {
+  const { t } = useTranslation();
   const meta = SECTIONS.find((s) => s.id === id)!;
   const Icon = meta.icon;
   return (
@@ -272,7 +299,7 @@ function StubPanel({ id }: { id: SectionId }) {
         <Icon className="size-7" />
       </span>
       <h2 className="font-heading text-lg font-semibold text-foreground-secondary">
-        {meta.label}
+        {t(meta.labelKey)}
       </h2>
       <p className="max-w-sm font-caption text-sm">
         本节占位。后续会在这里铺
