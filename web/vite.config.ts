@@ -42,9 +42,9 @@ export default defineConfig({
   preview: {
     port: 4173,
     proxy: {
-      "/api": "http://127.0.0.1:7778",
+      "/api": "http://127.0.0.1:7777",
       "/ws": {
-        target: "ws://127.0.0.1:7778",
+        target: "ws://127.0.0.1:7777",
         ws: true,
         changeOrigin: true,
       },

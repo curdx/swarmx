@@ -837,11 +837,12 @@ function ToggleRow({
         )}
         aria-pressed={value}
       >
+        {/* Inline `left` instead of Tailwind translate-x classes — v4 doesn't
+            always synthesize the transform stack on arbitrary values, which
+            wedged both states at the same x position. */}
         <span
-          className={cn(
-            "absolute top-0.5 size-5 rounded-full bg-surface-elevated shadow-sm transition-transform",
-            value ? "translate-x-[22px]" : "translate-x-0.5",
-          )}
+          className="absolute top-0.5 size-5 rounded-full bg-surface-elevated shadow-sm transition-[left] duration-150 ease-out border border-border-subtle"
+          style={{ left: value ? "22px" : "2px" }}
         />
       </button>
     </div>
