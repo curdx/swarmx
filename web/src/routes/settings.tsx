@@ -105,6 +105,21 @@ export default function SettingsRoute() {
     }
   }, [settings]);
 
+  // ⌘1..⌘6 (Ctrl+1..6 on non-mac) jumps to the nth section while
+  // /settings is mounted. Skips ⌘K (palette) and modifier-only combos.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const hasModifier = e.metaKey || e.ctrlKey;
+      if (!hasModifier || e.shiftKey || e.altKey) return;
+      const n = parseInt(e.key, 10);
+      if (!Number.isFinite(n) || n < 1 || n > SECTIONS.length) return;
+      e.preventDefault();
+      navigate(`/settings/${SECTIONS[n - 1].id}`);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [navigate]);
+
   const update = <K extends keyof SettingsState>(k: K, v: SettingsState[K]) =>
     setSettings((prev) => ({ ...prev, [k]: v }));
 
@@ -129,7 +144,7 @@ export default function SettingsRoute() {
       <div className="flex min-h-0 flex-1">
         {/* Nav */}
         <aside className="flex w-[200px] shrink-0 flex-col gap-1 border-r border-border-subtle bg-surface-secondary p-3">
-          {SECTIONS.map((s) => {
+          {SECTIONS.map((s, i) => {
             const Icon = s.icon;
             const active = s.id === activeId;
             return (
@@ -144,7 +159,17 @@ export default function SettingsRoute() {
                 )}
               >
                 <Icon className="size-4" />
-                {t(s.labelKey)}
+                <span className="flex-1">{t(s.labelKey)}</span>
+                <kbd
+                  className={cn(
+                    "rounded border border-border-subtle px-1 font-mono text-[9px]",
+                    active
+                      ? "bg-surface-elevated text-foreground-secondary"
+                      : "bg-surface-elevated text-foreground-tertiary",
+                  )}
+                >
+                  ⌘{i + 1}
+                </kbd>
               </button>
             );
           })}

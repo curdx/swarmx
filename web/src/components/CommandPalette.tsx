@@ -52,6 +52,17 @@ const NAV = [
   { labelKey: "nav.debug", href: "/debug", icon: Bug, hintKey: "cmdk.navHint.debug" },
 ] as const;
 
+// Keep in sync with SECTIONS in routes/settings.tsx; surfaced here so
+// ⌘K can jump to any settings tab without leaving the keyboard.
+const SETTINGS_SECTIONS = [
+  { id: "general", labelKey: "settings.sections.general" },
+  { id: "appearance", labelKey: "settings.sections.appearance" },
+  { id: "shortcuts", labelKey: "settings.sections.shortcuts" },
+  { id: "plugins", labelKey: "settings.sections.plugins" },
+  { id: "privacy", labelKey: "settings.sections.privacy" },
+  { id: "about", labelKey: "settings.sections.about" },
+] as const;
+
 export function CommandPalette() {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
@@ -239,6 +250,28 @@ export function CommandPalette() {
               label={t("cmdk.runSpell")}
               hint={t("cmdk.openWizard")}
             />
+          </Command.Group>
+
+          <Command.Group
+            heading={t("cmdk.groups.settings")}
+            className="mt-1 [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:font-caption [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-wider [&_[cmdk-group-heading]]:text-foreground-tertiary"
+          >
+            {SETTINGS_SECTIONS.map((s, i) => {
+              const label = t(s.labelKey);
+              // cmdk filter only sees `value`; include both the english id
+              // (typeable in any locale) and the translated label so e.g.
+              // searching "隐私" or "privacy" both surface the same item.
+              return (
+                <Item
+                  key={s.id}
+                  value={`settings ${s.id} ${label}`}
+                  onSelect={() => go(`/settings/${s.id}`)}
+                  icon={<SettingsIcon className="size-4" />}
+                  label={label}
+                  hint={`⌘${i + 1}`}
+                />
+              );
+            })}
           </Command.Group>
         </Command.List>
         <div className="flex items-center justify-between border-t border-border-subtle bg-surface-secondary px-3 py-2 font-caption text-[10px] text-foreground-tertiary">

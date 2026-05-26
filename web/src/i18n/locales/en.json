@@ -339,7 +339,8 @@
       "workspaces": "Workspaces",
       "wakeAgent": "Wake agent",
       "theme": "Theme",
-      "actions": "Actions"
+      "actions": "Actions",
+      "settings": "Settings sections"
     },
     "navHint": {
       "chat": "Chat 3-pane",

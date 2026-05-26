@@ -339,7 +339,8 @@
       "workspaces": "工作空间",
       "wakeAgent": "唤醒 agent",
       "theme": "主题",
-      "actions": "操作"
+      "actions": "操作",
+      "settings": "设置分区"
     },
     "navHint": {
       "chat": "Chat 三栏",
