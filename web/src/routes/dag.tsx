@@ -259,8 +259,17 @@ function Canvas({ agents, bbAt, selectedId, onSelect }: CanvasProps) {
       fitView
       proOptions={{ hideAttribution: true }}
     >
-      <Background gap={20} size={1} color="#E8E5DD" />
-      <MiniMap pannable zoomable />
+      <Background gap={20} size={1} className="!opacity-50" />
+      <MiniMap
+        pannable
+        zoomable
+        nodeColor={(n) => {
+          const info = (n.data as AgentNodeData).info;
+          return roleHex(info.role);
+        }}
+        maskColor="rgba(15,23,42,0.06)"
+        className="!bg-surface-tertiary"
+      />
       <Controls showInteractive={false} />
     </ReactFlow>
   );

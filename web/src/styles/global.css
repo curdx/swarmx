@@ -209,6 +209,33 @@ html, body, #root {
   background-color: transparent !important;
 }
 
+/* React Flow theme overrides so DAG canvas / minimap / controls / edge
+ * labels follow the active theme tokens instead of xyflow's white-only
+ * defaults. */
+.react-flow {
+  --xy-background-color: var(--color-surface-primary);
+  --xy-background-pattern-color: var(--color-border-subtle);
+  --xy-minimap-background-color: var(--color-surface-tertiary);
+  --xy-minimap-mask-background-color: rgba(15, 23, 42, 0.08);
+  --xy-controls-button-background-color: var(--color-surface-elevated);
+  --xy-controls-button-background-color-hover: var(--color-surface-tertiary);
+  --xy-controls-button-color: var(--color-foreground-secondary);
+  --xy-controls-button-color-hover: var(--color-foreground-primary);
+  --xy-controls-button-border-color: var(--color-border-subtle);
+  --xy-edge-label-background-color: var(--color-surface-elevated);
+  --xy-edge-label-color: var(--color-foreground-primary);
+}
+.react-flow__minimap {
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 6px;
+}
+.react-flow__controls {
+  box-shadow: none;
+}
+.react-flow__controls-button {
+  border-bottom: 1px solid var(--color-border-subtle) !important;
+}
+
 /* Markdown prose for Context Board (react-markdown output). Tailwind
  * Typography would do this but it's another dep; hand-rolled stays
  * lighter and matches Pencil a3RrDG center column without surprises. */
