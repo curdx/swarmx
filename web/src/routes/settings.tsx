@@ -14,6 +14,7 @@
 
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
+import { setTheme } from "@/lib/theme";
 import {
   Bell,
   CircleUser,
@@ -91,6 +92,9 @@ export default function SettingsRoute() {
 
   useEffect(() => {
     saveSettings(settings);
+    // Theme is the only setting with a runtime side-effect today —
+    // language is read-only (重启生效), the rest are passive flags.
+    setTheme(settings.theme);
   }, [settings]);
 
   const update = <K extends keyof SettingsState>(k: K, v: SettingsState[K]) =>
@@ -229,7 +233,7 @@ function AppearancePanel({
 }) {
   return (
     <div className="mx-auto flex max-w-2xl flex-col gap-8 p-8">
-      <PanelTitle title="外观" hint="主题色与字号；dark mode tokens 待补全" />
+      <PanelTitle title="外观" hint="切换浅 / 深 / 跟随系统，立即生效；偏好持久化在 localStorage" />
       <Field label="主题" hint="选择浅色 / 深色 / 跟随系统">
         <div className="grid grid-cols-3 gap-3">
           <ThemeCard

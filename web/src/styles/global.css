@@ -116,6 +116,64 @@
   --spacing-8: 32px;
 }
 
+/* Dark theme — toggle via document.documentElement.dataset.theme = 'dark'.
+ * Same token names → all Tailwind utilities flip automatically; zero
+ * component changes required. term-* and surface-terminal stay as-is
+ * (terminals are dark in both modes by convention). */
+[data-theme="dark"] {
+  --color-surface-primary: #0F172A;        /* slate-900 — page */
+  --color-surface-elevated: #1E293B;       /* slate-800 — cards */
+  --color-surface-secondary: #1E293B;      /* slate-800 — side rails / headers */
+  --color-surface-tertiary: #334155;       /* slate-700 — chips / hover */
+  --color-surface-muted: #1E293B;
+  --color-surface-warm: #0F172A;
+  --color-surface-overlay: #1E293B;
+  --color-surface-inverse: #F8FAFC;        /* invert: light on dark */
+  --color-surface-accent-tint: #1E3A8A;    /* blue-900 — selected row */
+  --color-surface-accent-soft: #1E40AF;    /* blue-800 — selected emphasized */
+  --color-surface-cool: #1E293B;
+  --color-surface-cool-tint: #334155;
+
+  --color-foreground-primary: #F8FAFC;         /* slate-50 */
+  --color-foreground-secondary: #CBD5E1;       /* slate-300 */
+  --color-foreground-tertiary: #94A3B8;        /* slate-400 */
+  --color-foreground-inverse: #0F172A;
+  --color-foreground-inverse-secondary: #64748B;
+  --color-foreground-on-accent: #F8FAFC;
+
+  --color-border-subtle: #334155;    /* slate-700 */
+  --color-border-strong: #475569;    /* slate-600 */
+
+  --color-accent-primary: #3B82F6;             /* blue-500 — slightly brighter on dark */
+  --color-accent-primary-soft: #1E3A8A;        /* blue-900 — soft bg becomes deep */
+  --color-accent-primary-deep: #60A5FA;        /* blue-400 — hover lighter */
+
+  --color-state-busy: #FB923C;
+  --color-state-wake: #22D3EE;
+  --color-state-success: #4ADE80;
+  --color-state-danger: #F87171;
+  --color-state-info: #60A5FA;
+  --color-state-warning: #FBBF24;
+  --color-state-idle: #64748B;
+
+  --color-status-running-soft: #052E16;
+  --color-status-busy-soft: #78350F;
+  --color-status-waiting-soft: #78350F;
+  --color-status-success-soft: #052E16;
+  --color-status-danger-soft: #450A0A;
+  --color-status-error-soft: #450A0A;
+  --color-status-warning-soft: #78350F;
+  --color-status-idle-soft: #1F2937;
+
+  /* Role colors keep their hue but bump value for visibility on dark bg. */
+  --color-agent-planner: #60A5FA;
+  --color-agent-backend: #A78BFA;
+  --color-agent-frontend: #22D3EE;
+  --color-agent-architect: #F87171;
+  --color-agent-critic: #FB923C;
+  --color-agent-test: #4ADE80;
+}
+
 html, body, #root {
   height: 100%;
   margin: 0;
