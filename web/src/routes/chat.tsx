@@ -66,6 +66,13 @@ export default function ChatRoute() {
     });
   };
   const [wizardOpen, setWizardOpen] = useState(false);
+  // CommandPalette (⌘K → 新建工作空间) opens the wizard via window event.
+  useEffect(() => {
+    const onOpen = () => setWizardOpen(true);
+    window.addEventListener("flockmux:open-wizard", onOpen as EventListener);
+    return () =>
+      window.removeEventListener("flockmux:open-wizard", onOpen as EventListener);
+  }, []);
 
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [liveMessage, setLiveMessage] = useState<MessageRecord | null>(null);

@@ -11,6 +11,7 @@
 
 import { NavLink, Outlet } from "react-router-dom";
 import { cn } from "@/lib/cn";
+import { CommandPalette } from "@/components/CommandPalette";
 
 const NAV = [
   { to: "/chat", label: "对话" },
@@ -61,6 +62,12 @@ export function AppShell() {
           ))}
         </nav>
         <div className="flex-1" />
+        <kbd
+          className="rounded border border-border-subtle bg-surface-elevated px-1.5 py-0.5 font-mono text-[10px] text-foreground-tertiary"
+          title="按 ⌘K 打开命令面板"
+        >
+          ⌘K
+        </kbd>
         <span className="font-caption text-xs text-foreground-tertiary">
           127.0.0.1:7777
         </span>
@@ -68,6 +75,7 @@ export function AppShell() {
       <main className="min-h-0 flex-1 overflow-hidden">
         <Outlet />
       </main>
+      <CommandPalette />
     </div>
   );
 }
