@@ -68,6 +68,58 @@
       },
       "current": "current",
       "preview": "Preview"
+    },
+    "shortcuts": {
+      "title": "Shortcuts",
+      "hint": "All hardcoded today; full custom binding waits for a global cmdk-driven table",
+      "scope": {
+        "global": "Global",
+        "player": "Replay player",
+        "modal": "Modal / drawer"
+      },
+      "k": {
+        "cmdk": "Open command palette",
+        "esc": "Close modal / back",
+        "playPause": "Play / pause",
+        "skip": "Skip 5s back / forward",
+        "frame": "Step single frame",
+        "back": "Back to library"
+      }
+    },
+    "plugins": {
+      "title": "CLI plugins",
+      "hint": "Loaded from cli-plugins/*.toml; enable / disable / path override waits for a backend plugin manager",
+      "binaryLabel": "binary",
+      "loadError": "Load failed: {{error}}",
+      "empty": "No plugins",
+      "managedTag": "managed by server"
+    },
+    "privacy": {
+      "title": "Privacy & Security",
+      "hint": "Local data export / clear, shim tool-call mode",
+      "approvalMode": "Tool-call approvals",
+      "approvalModeHint": "Currently shim launches CLIs with --dangerously-skip-permissions, so all tool calls pass through; toggling inbox mode is tracked in the Approvals route WIP banner",
+      "approvalCurrent": "bypass (default)",
+      "exportTitle": "Export local data",
+      "exportHint": "Serialise every flockmux:* localStorage key as a downloadable JSON",
+      "exportButton": "Export JSON",
+      "clearTitle": "Clear local data",
+      "clearHint": "Remove all flockmux:* localStorage keys (language / theme / notification read state / settings). Current window runtime is not affected; reload to fall back to defaults",
+      "clearButton": "Clear flockmux:*",
+      "clearConfirm": "Really clear? This can't be undone.",
+      "cleared": "Cleared {{count}} key(s)"
+    },
+    "about": {
+      "title": "About",
+      "hint": "Version / repo / deps",
+      "appName": "flockmux",
+      "version": "Version v0.1.0",
+      "repo": "Repository",
+      "repoUrl": "github.com/curdx/flockmux-core",
+      "cratesTitle": "Rust crates",
+      "cratesHint": "9 crates make up the backend; src-tauri is the desktop shell",
+      "depsTitle": "Frontend dependencies",
+      "credits": "Credits"
     }
   },
   "chat": {

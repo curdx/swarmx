@@ -68,6 +68,58 @@
       },
       "current": "当前",
       "preview": "Preview"
+    },
+    "shortcuts": {
+      "title": "快捷键",
+      "hint": "目前都是 hardcoded，自定义留待后续 cmdk 全局表",
+      "scope": {
+        "global": "全局",
+        "player": "录像播放器",
+        "modal": "弹层 / 抽屉"
+      },
+      "k": {
+        "cmdk": "打开命令面板",
+        "esc": "关闭弹层 / 返回",
+        "playPause": "播放 / 暂停",
+        "skip": "快进 / 快退 5s",
+        "frame": "单帧步进",
+        "back": "返回录像库"
+      }
+    },
+    "plugins": {
+      "title": "CLI 插件",
+      "hint": "从 cli-plugins/*.toml 加载；启用 / 禁用 / 路径覆盖等待 backend plugin manager",
+      "binaryLabel": "binary",
+      "loadError": "加载失败：{{error}}",
+      "empty": "没有插件",
+      "managedTag": "由 server 管理"
+    },
+    "privacy": {
+      "title": "隐私 & 安全",
+      "hint": "本地数据导出 / 清空，shim 工具调用模式",
+      "approvalMode": "工具调用审批",
+      "approvalModeHint": "当前 shim 用 --dangerously-skip-permissions 启动 CLI，所有工具调用直接放行；切换 inbox 模式见 Approval 路由的 WIP 说明",
+      "approvalCurrent": "bypass（默认）",
+      "exportTitle": "导出本地数据",
+      "exportHint": "把 localStorage 中 flockmux:* 开头的 key 序列化为 JSON 下载",
+      "exportButton": "导出 JSON",
+      "clearTitle": "清空本地数据",
+      "clearHint": "删 localStorage 中所有 flockmux:* key（语言 / 主题 / 通知已读 / settings）。当前窗口的运行时设置不变，刷新后回到默认",
+      "clearButton": "清空 flockmux:*",
+      "clearConfirm": "确定清空？此操作不可撤销。",
+      "cleared": "已清空 {{count}} 个 key"
+    },
+    "about": {
+      "title": "关于",
+      "hint": "版本 / 仓库 / 依赖",
+      "appName": "flockmux",
+      "version": "版本 v0.1.0",
+      "repo": "仓库",
+      "repoUrl": "github.com/curdx/flockmux-core",
+      "cratesTitle": "Rust crates",
+      "cratesHint": "9 个 crate 组成后端，src-tauri 是壳",
+      "depsTitle": "前端依赖",
+      "credits": "致谢"
     }
   },
   "chat": {
