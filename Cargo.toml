@@ -11,6 +11,7 @@ members = [
     "crates/flockmux-recorder",
     "crates/flockmux-cli",
 ]
+exclude = ["web/src-tauri"]
 
 [workspace.package]
 version = "0.1.0"
