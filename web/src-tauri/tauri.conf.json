@@ -35,7 +35,9 @@
     "active": true,
     "targets": "all",
     "externalBin": [
-      "binaries/flockmux-server"
+      "binaries/flockmux-server",
+      "binaries/flockmux-shim",
+      "binaries/flockmux-mcp"
     ],
     "icon": [
       "icons/32x32.png",

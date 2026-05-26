@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
-# Build flockmux-server and stage it as the Tauri sidecar binary.
+# Build the three binaries Tauri ships as sidecars and stage them under
+# binaries/<name>-<target-triple> so `tauri build` can pick them up via
+# the externalBin manifest entries.
 #
-# Tauri's externalBin manifest entry is `binaries/flockmux-server`; at bundle
-# time the CLI looks for `binaries/flockmux-server-${TARGET_TRIPLE}` and
-# embeds it into the resulting .app / .exe / .AppImage.
+# Why three: flockmux-server is the HTTP/WS entry point, but it spawns
+# flockmux-shim for every agent (which in turn loads flockmux-mcp via the
+# MCP config). All three resolve siblings off `current_exe()` parent, so
+# Tauri must drop them in the same Contents/MacOS dir or swarm runs die
+# with "flockmux-shim not found".
 #
 # Usage:
 #   ./scripts/build-sidecar.sh           # debug profile (fast iteration)
@@ -22,21 +26,29 @@ if [[ -z "$TARGET" ]]; then
 fi
 
 mkdir -p "$HERE/binaries"
-OUT="$HERE/binaries/flockmux-server-$TARGET"
 
-CARGO_ARGS=(build -p flockmux-server)
+CRATES=(flockmux-server flockmux-shim flockmux-mcp)
+
+CARGO_ARGS=(build)
+for c in "${CRATES[@]}"; do
+  CARGO_ARGS+=(-p "$c")
+done
 if [[ "$PROFILE" == "release" ]]; then
   CARGO_ARGS+=(--release)
-  SRC="$REPO_ROOT/target/release/flockmux-server"
+  TARGET_DIR="$REPO_ROOT/target/release"
 else
-  SRC="$REPO_ROOT/target/debug/flockmux-server"
+  TARGET_DIR="$REPO_ROOT/target/debug"
 fi
 
 echo "→ cargo ${CARGO_ARGS[*]}  (in $REPO_ROOT)"
 ( cd "$REPO_ROOT" && cargo "${CARGO_ARGS[@]}" )
 
-echo "→ cp $SRC → $OUT"
-cp "$SRC" "$OUT"
-chmod +x "$OUT"
+for c in "${CRATES[@]}"; do
+  SRC="$TARGET_DIR/$c"
+  OUT="$HERE/binaries/$c-$TARGET"
+  echo "→ cp $SRC → $OUT"
+  cp "$SRC" "$OUT"
+  chmod +x "$OUT"
+done
 
-echo "✓ sidecar ready: $OUT"
+echo "✓ sidecars ready in $HERE/binaries/"

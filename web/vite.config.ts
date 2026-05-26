@@ -36,4 +36,18 @@ export default defineConfig({
       },
     },
   },
+  // `vite preview` proxy — used by the M.5 test recipe to run the built
+  // dist/ against a parallel sidecar instance on :7778, so we don't have
+  // to kill the long-lived dev backend on :7777.
+  preview: {
+    port: 4173,
+    proxy: {
+      "/api": "http://127.0.0.1:7778",
+      "/ws": {
+        target: "ws://127.0.0.1:7778",
+        ws: true,
+        changeOrigin: true,
+      },
+    },
+  },
 });

@@ -235,7 +235,15 @@ async fn main() -> Result<()> {
         .layer(TraceLayer::new_for_http())
         .with_state(state);
 
-    let addr: SocketAddr = "127.0.0.1:7777".parse()?;
+    // FLOCKMUX_PORT env override — used to stand up a parallel test
+    // instance (e.g. the .app sidecar) without colliding with a dev
+    // backend already bound to 7777. Frontend defaults already assume
+    // 7777, so do NOT set this in production.
+    let port: u16 = std::env::var("FLOCKMUX_PORT")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(7777);
+    let addr: SocketAddr = ([127, 0, 0, 1], port).into();
     info!(%addr, "flockmux-server listening (loopback only, no auth)");
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app).await?;
