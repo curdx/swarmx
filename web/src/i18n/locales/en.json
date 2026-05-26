@@ -10,7 +10,9 @@
     "debug": "Debug"
   },
   "shell": {
-    "cmdkHint": "Press ⌘K to open the command palette"
+    "cmdkHint": "Press ⌘K to open the command palette",
+    "collapse": "Collapse",
+    "expand": "Expand"
   },
   "common": {
     "save": "Save",

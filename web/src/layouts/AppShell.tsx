@@ -1,16 +1,19 @@
 /**
  * AppShell — top-level chrome shared by every product route.
  *
- * Layout: 56px icon-only sidebar on the left + thin top bar + outlet.
- * Matches the convention of Linear / Cursor / Discord / VS Code — a
- * single column of route icons keeps horizontal space for chat's three
- * panes and DAG's legend, while still giving every route a one-click
- * jump to its siblings. Hover surfaces the localized label as a native
- * tooltip; cmdk (⌘K) is the keyboard alternative.
+ * Layout: collapsible left sidebar + thin top bar + outlet.
+ *
+ * Sidebar matches Linear / Cursor / Discord conventions — icon + label
+ * column on the left. Default width is 12rem (192px) so the Chinese
+ * labels read; users can collapse to 3.5rem (56px) icon-only when chat's
+ * "workspace + messages + members" three-pane layout needs the
+ * horizontal room. State persists to localStorage so the user's choice
+ * sticks across reloads.
  *
  * /debug renders without AppShell (it owns its own dark chrome).
  */
 
+import { useEffect, useState } from "react";
 import { NavLink, Outlet } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import {
@@ -20,6 +23,8 @@ import {
   GitBranch,
   Inbox,
   MessageSquare,
+  PanelLeftClose,
+  PanelLeftOpen,
   Play,
   Settings,
   type LucideIcon,
@@ -44,6 +49,8 @@ const NAV: readonly NavItem[] = [
   { to: "/debug", key: "nav.debug", icon: Bug },
 ] as const;
 
+const COLLAPSED_KEY = "flockmux:nav-collapsed";
+
 function TrafficLights() {
   return (
     <div className="flex items-center gap-2">
@@ -56,43 +63,104 @@ function TrafficLights() {
 
 export function AppShell() {
   const { t } = useTranslation();
+  const [collapsed, setCollapsed] = useState<boolean>(() => {
+    try {
+      return window.localStorage.getItem(COLLAPSED_KEY) === "1";
+    } catch {
+      return false;
+    }
+  });
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(COLLAPSED_KEY, collapsed ? "1" : "0");
+    } catch {
+      /* ignore quota errors */
+    }
+  }, [collapsed]);
+
   return (
     <div className="flex h-full bg-surface-primary text-foreground-primary">
-      {/* Left rail — 56px, icon-only nav. Active route gets the accent
-          tint; hover gives a subtle surface fill + opens the native title
-          tooltip for the label. */}
-      <aside className="flex w-14 shrink-0 flex-col items-center border-r border-border-subtle bg-surface-secondary py-2">
-        <div className="mb-2 flex h-9 w-9 items-center justify-center">
+      <aside
+        className={cn(
+          "flex shrink-0 flex-col border-r border-border-subtle bg-surface-secondary transition-[width] duration-150",
+          collapsed ? "w-14" : "w-48",
+        )}
+      >
+        {/* Brand row — logo dot + (when expanded) the app name. Sized to
+            match the top header height so the divider lines up. */}
+        <div
+          className={cn(
+            "flex h-11 shrink-0 items-center border-b border-border-subtle",
+            collapsed ? "justify-center" : "px-3",
+          )}
+        >
           <span className="size-6 rounded-md bg-accent-primary" />
+          {!collapsed && (
+            <span className="ml-2 font-heading text-sm font-semibold">
+              flockmux
+            </span>
+          )}
         </div>
-        <nav className="flex w-full flex-col items-center gap-1">
+
+        <nav
+          className={cn(
+            "flex flex-1 flex-col gap-0.5 py-2",
+            collapsed ? "items-center" : "px-2",
+          )}
+        >
           {NAV.map((item) => {
             const Icon = item.icon;
             return (
               <NavLink
                 key={item.to}
                 to={item.to}
-                title={t(item.key)}
+                title={collapsed ? t(item.key) : undefined}
                 aria-label={t(item.key)}
                 className={({ isActive }) =>
                   cn(
-                    "flex size-10 items-center justify-center rounded-lg transition-colors",
+                    "flex items-center rounded-lg transition-colors",
+                    collapsed
+                      ? "size-10 justify-center"
+                      : "gap-3 px-3 py-2 text-sm",
                     isActive
                       ? "bg-accent-primary-soft text-accent-primary"
                       : "text-foreground-tertiary hover:bg-surface-tertiary hover:text-foreground-primary",
                   )
                 }
               >
-                <Icon className="size-[18px]" />
+                <Icon className="size-[18px] shrink-0" />
+                {!collapsed && <span>{t(item.key)}</span>}
               </NavLink>
             );
           })}
         </nav>
+
+        {/* Collapse toggle — bottom of rail so it's out of the way but
+            findable. Icon flips based on state. */}
+        <button
+          onClick={() => setCollapsed((v) => !v)}
+          title={collapsed ? t("shell.expand") : t("shell.collapse")}
+          aria-label={collapsed ? t("shell.expand") : t("shell.collapse")}
+          className={cn(
+            "flex shrink-0 items-center gap-2 border-t border-border-subtle text-foreground-tertiary transition-colors hover:bg-surface-tertiary hover:text-foreground-primary",
+            collapsed ? "h-10 justify-center" : "h-10 px-4 text-xs",
+          )}
+        >
+          {collapsed ? (
+            <PanelLeftOpen className="size-[18px]" />
+          ) : (
+            <>
+              <PanelLeftClose className="size-[18px]" />
+              <span>{t("shell.collapse")}</span>
+            </>
+          )}
+        </button>
       </aside>
+
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex h-11 shrink-0 items-center gap-3 border-b border-border-subtle bg-surface-secondary pl-4 pr-4">
+        <header className="flex h-11 shrink-0 items-center gap-3 border-b border-border-subtle bg-surface-secondary px-4">
           <TrafficLights />
-          <span className="font-heading text-sm font-semibold">flockmux</span>
           <div className="flex-1" />
           <kbd
             className="rounded border border-border-subtle bg-surface-elevated px-1.5 py-0.5 font-mono text-[10px] text-foreground-tertiary"

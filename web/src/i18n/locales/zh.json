@@ -10,7 +10,9 @@
     "debug": "Debug"
   },
   "shell": {
-    "cmdkHint": "按 ⌘K 打开命令面板"
+    "cmdkHint": "按 ⌘K 打开命令面板",
+    "collapse": "收起",
+    "expand": "展开"
   },
   "common": {
     "save": "保存",
