@@ -32,6 +32,7 @@ flockmux-storage = { path = "../flockmux-storage" }
 flockmux-swarm = { path = "../flockmux-swarm" }
 flockmux-recorder = { path = "../flockmux-recorder" }
 sha2 = { workspace = true }
+fs2 = "0.4"
 
 [dev-dependencies]
 tempfile = "3"

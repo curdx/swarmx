@@ -117,6 +117,16 @@ async fn main() -> Result<()> {
     if let Some(parent) = db_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
+
+    // Single-instance gate. flockmux state is split across sqlite, the
+    // blackboard fs tree, and per-spawn workspaces, all under the same
+    // data dir. A second server racing the first's `mark_orphan_*` calls
+    // will silently flip the first's live agents to killed in the DB
+    // (in-memory state survives, but the next restart inherits the
+    // corruption). Take an exclusive flock on a lockfile next to the
+    // DB; the lock auto-releases when this process exits (fd close).
+    acquire_singleton_lock(&db_path)?;
+
     info!(db = %db_path.display(), "opening sqlite store");
     let store = Arc::new(Store::open(&db_path).await.context("open store")?);
     // Any agent / recording left "live" in the DB belongs to a previous
@@ -288,4 +298,68 @@ fn recordings_root_default() -> PathBuf {
         return PathBuf::from(home).join(".flockmux").join("recordings");
     }
     PathBuf::from(".flockmux/recordings")
+}
+
+/// Try to acquire an exclusive non-blocking flock on `<db_dir>/server.lock`.
+/// The fd is intentionally leaked so the lock outlives this function — it is
+/// released by the kernel when the process exits, which is exactly the
+/// "lock until shutdown" semantic we want. We also stamp the holding PID
+/// into the lockfile body so users running `cat ~/.flockmux/server.lock`
+/// can see who owns it.
+///
+/// On contention we exit(2) with a multi-line error pointing the user at
+/// the holding pid and a remediation command. We do this *before* opening
+/// the sqlite store so a refused boot leaves zero footprint.
+fn acquire_singleton_lock(db_path: &std::path::Path) -> Result<()> {
+    use fs2::FileExt;
+    use std::io::{Read, Write};
+
+    let lock_path = db_path
+        .parent()
+        .map(|p| p.join("server.lock"))
+        .unwrap_or_else(|| PathBuf::from(".flockmux-server.lock"));
+
+    let mut lock_file = std::fs::OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(&lock_path)
+        .with_context(|| format!("open lockfile {}", lock_path.display()))?;
+
+    if let Err(e) = lock_file.try_lock_exclusive() {
+        let mut holder_pid = String::new();
+        let _ = lock_file.read_to_string(&mut holder_pid);
+        let holder_pid = holder_pid.trim();
+        eprintln!();
+        eprintln!("✗ flockmux-server: another instance is already running.");
+        eprintln!();
+        eprintln!("  Lock file : {}", lock_path.display());
+        if !holder_pid.is_empty() {
+            eprintln!("  Holder PID: {holder_pid}");
+        }
+        eprintln!("  Reason    : {e}");
+        eprintln!();
+        eprintln!("  Two instances share ~/.flockmux (sqlite, blackboard, workspaces)");
+        eprintln!("  and would corrupt each other's state. Stop the existing process");
+        eprintln!("  first, e.g.:");
+        if !holder_pid.is_empty() {
+            eprintln!("    kill {holder_pid}");
+        } else {
+            eprintln!("    pkill -f flockmux-server");
+        }
+        eprintln!();
+        std::process::exit(2);
+    }
+
+    // Lock acquired — rewrite the body with our PID for the next contender.
+    let _ = lock_file.set_len(0);
+    let _ = lock_file.write_all(format!("{}\n", std::process::id()).as_bytes());
+
+    // Move ownership into a Box::leak so the fd stays open for the rest
+    // of the process. Dropping the File would release the lock prematurely
+    // if the function returned without this.
+    Box::leak(Box::new(lock_file));
+    info!(lock = %lock_path.display(), "acquired singleton lock");
+    Ok(())
 }
