@@ -34,6 +34,7 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import type { ServerControl, ClientControl } from "../api/types";
 import { acquireSlot, releaseSlot, reportContextLoss } from "../lib/webglPool";
 import { inputPolicyFor } from "../lib/cliInputPolicy";
+import { WS_HOST, WS_PROTO } from "../lib/apiBase";
 
 interface Props {
   agentId: string;
@@ -140,10 +141,9 @@ export function XtermPane({
     requestAnimationFrame(safeFit);
 
     // ---- WebSocket bridge ------------------------------------------------
-    const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
     const resumeFrom = readLastSeq(agentId);
     const qs = resumeFrom > 0 ? `?last_seq=${resumeFrom}` : "";
-    const wsUrl = `${proto}//${window.location.host}/ws/pty/${encodeURIComponent(agentId)}${qs}`;
+    const wsUrl = `${WS_PROTO}//${WS_HOST}/ws/pty/${encodeURIComponent(agentId)}${qs}`;
     const ws = new WebSocket(wsUrl);
     ws.binaryType = "arraybuffer";
 

@@ -9,6 +9,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { SwarmEvent } from "../api/types";
+import { WS_HOST, WS_PROTO } from "../lib/apiBase";
 
 export type SwarmFeedStatus = "connecting" | "open" | "closed";
 
@@ -42,8 +43,7 @@ export function useSwarmFeed({ onEvent, onReconnect }: Options): SwarmFeedStatus
     const connect = () => {
       if (cancelled) return;
       setStatus("connecting");
-      const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-      const url = `${proto}//${window.location.host}/ws/swarm`;
+      const url = `${WS_PROTO}//${WS_HOST}/ws/swarm`;
       const next = new WebSocket(url);
       ws = next;
 

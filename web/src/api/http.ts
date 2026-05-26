@@ -17,12 +17,14 @@ import type {
   WriteBlackboardRequest,
 } from "./types";
 
+import { HTTP_BASE } from "../lib/apiBase";
+
 async function request<T>(
   method: string,
   path: string,
   body?: unknown,
 ): Promise<T> {
-  const res = await fetch(path, {
+  const res = await fetch(HTTP_BASE + path, {
     method,
     headers: body ? { "content-type": "application/json" } : undefined,
     body: body ? JSON.stringify(body) : undefined,
@@ -100,7 +102,10 @@ export const api = {
       "GET",
       `/api/recording${qs({ agent_id: agentId })}`,
     ),
-  recordingCastUrl: (id: string) => `/api/recording/${encodeURIComponent(id)}`,
+  // Prefix HTTP_BASE so direct <a href> / fetch() outside the api.* layer
+  // (asciinema-player, castPreview, download link) still resolves in Tauri prod.
+  recordingCastUrl: (id: string) =>
+    `${HTTP_BASE}/api/recording/${encodeURIComponent(id)}`,
 
   // M5c spells
   listSpells: () => request<SpellInfo[]>("GET", "/api/spells"),
