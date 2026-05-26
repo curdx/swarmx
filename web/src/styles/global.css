@@ -214,7 +214,7 @@ html, body, #root {
  * defaults. */
 .react-flow {
   --xy-background-color: var(--color-surface-primary);
-  --xy-background-pattern-color: var(--color-border-subtle);
+  --xy-background-pattern-color: var(--color-border-strong);
   --xy-minimap-background-color: var(--color-surface-tertiary);
   --xy-minimap-mask-background-color: rgba(15, 23, 42, 0.08);
   --xy-controls-button-background-color: var(--color-surface-elevated);
@@ -225,15 +225,42 @@ html, body, #root {
   --xy-edge-label-background-color: var(--color-surface-elevated);
   --xy-edge-label-color: var(--color-foreground-primary);
 }
+/* Background dots — xyflow's default opacity is too low against
+ * surface-primary; bump so they read on both light slate-50 and
+ * dark slate-900. */
+.react-flow__background-pattern {
+  opacity: 0.45;
+}
 .react-flow__minimap {
   border: 1px solid var(--color-border-subtle);
-  border-radius: 6px;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.06);
+}
+[data-theme="dark"] .react-flow__minimap {
+  /* Brighter mask edge on dark so the viewport rectangle reads */
+  --xy-minimap-mask-background-color: rgba(248, 250, 252, 0.05);
 }
 .react-flow__controls {
-  box-shadow: none;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.06);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 8px;
+  overflow: hidden;
 }
 .react-flow__controls-button {
   border-bottom: 1px solid var(--color-border-subtle) !important;
+}
+.react-flow__controls-button:last-child {
+  border-bottom: none !important;
+}
+/* Edge labels — wrap them in a rounded chip so they read against the
+ * patterned background instead of floating naked. */
+.react-flow__edge-textbg {
+  fill: var(--xy-edge-label-background-color);
+  stroke: var(--color-border-subtle);
+  stroke-width: 0.75;
+}
+.react-flow__edge-text {
+  fill: var(--color-foreground-primary);
 }
 
 /* Markdown prose for Context Board (react-markdown output). Tailwind
