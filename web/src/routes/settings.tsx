@@ -150,7 +150,7 @@ export default function SettingsRoute() {
           })}
           <div className="mt-auto px-3 pt-4 font-caption text-[10px] text-foreground-tertiary">
             <p className="font-mono">flockmux</p>
-            <p>v0.1 (M6h · UI/C.3)</p>
+            <p>v{__APP_VERSION__}</p>
           </div>
         </aside>
 
@@ -587,7 +587,7 @@ function AboutPanel() {
             {t("settings.about.appName")}
           </span>
           <span className="font-caption text-xs text-foreground-tertiary">
-            {t("settings.about.version")}
+            {t("settings.about.version", { v: __APP_VERSION__ })}
           </span>
           <a
             href={`https://${t("settings.about.repoUrl")}`}

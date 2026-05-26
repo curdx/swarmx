@@ -113,7 +113,7 @@
       "title": "About",
       "hint": "Version / repo / deps",
       "appName": "flockmux",
-      "version": "Version v0.1.0",
+      "version": "Version v{{v}}",
       "repo": "Repository",
       "repoUrl": "github.com/curdx/flockmux-core",
       "cratesTitle": "Rust crates",
