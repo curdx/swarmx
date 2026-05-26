@@ -21,6 +21,7 @@ import { Download, Play, RefreshCw, Search } from "lucide-react";
 import { api } from "../../api/http";
 import type { RecordingInfo } from "../../api/types";
 import { useSwarmFeed } from "../../hooks/useSwarmFeed";
+import { loadCastPreview, getCachedCastPreview } from "@/lib/castPreview";
 import { cn } from "@/lib/cn";
 
 const ROLE_BG: Record<string, string> = {
@@ -213,26 +214,12 @@ export default function ReplaysIndex() {
                     </span>
                   </div>
 
-                  {/* Cast thumbnail (static plate) */}
+                  {/* Cast thumbnail */}
                   <Link
                     to={`/replays/${encodeURIComponent(r.id)}`}
-                    className="relative flex h-32 flex-col gap-1 overflow-hidden border-y border-[#1F1F1F] bg-term-bg px-4 py-3 font-mono text-[10px] leading-snug text-term-fg"
+                    className="relative block h-32 overflow-hidden border-y border-[#1F1F1F] bg-term-bg"
                   >
-                    <div className="text-term-green">
-                      ❯ <span className="text-term-fg">flockmux replay {r.id.slice(0, 8)}</span>
-                    </div>
-                    <div className="text-term-dim">
-                      # agent={r.agent_id}
-                    </div>
-                    <div className="text-term-dim">
-                      # geom={r.cols}×{r.rows}
-                      {r.duration_ms != null && (
-                        <> · dur={formatDuration(r.duration_ms)}</>
-                      )}
-                    </div>
-                    <div className="text-term-blue">
-                      {live ? t("replays.recording") : t("replays.ready")}
-                    </div>
+                    <CastThumb recording={r} live={live} t={t} />
                     {/* hover overlay */}
                     <div className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 transition-opacity group-hover:opacity-100">
                       <span className="flex items-center gap-1.5 rounded-full bg-accent-primary px-4 py-2 text-xs font-medium text-foreground-on-accent">
@@ -270,6 +257,78 @@ export default function ReplaysIndex() {
             })}
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Renders the dark plate inside each replay card. Tries to fetch the
+ * first ~16KB of the .cast file (then aborts), parses asciicast v2
+ * frames, strips ANSI, shows the first few visible output lines.
+ *
+ * If the fetch fails or the cast has no output yet (e.g. brand-new
+ * live recording), falls back to the synthetic header plate.
+ */
+function CastThumb({
+  recording: r,
+  live,
+  t,
+}: {
+  recording: RecordingInfo;
+  live: boolean;
+  t: (k: string, opts?: Record<string, unknown>) => string;
+}) {
+  const [lines, setLines] = useState<string[] | null>(
+    () => getCachedCastPreview(r.id) ?? null,
+  );
+
+  useEffect(() => {
+    if (lines !== null) return;
+    let cancelled = false;
+    loadCastPreview(api.recordingCastUrl(r.id), r.id)
+      .then((preview) => {
+        if (!cancelled) setLines(preview);
+      })
+      .catch(() => {
+        if (!cancelled) setLines([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // Only fetch once per id.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [r.id]);
+
+  const hasRealPreview = lines && lines.length > 0;
+
+  if (hasRealPreview) {
+    return (
+      <div className="flex h-full flex-col gap-0 overflow-hidden px-4 py-2 font-mono text-[10px] leading-tight text-term-fg">
+        {lines.map((line, i) => (
+          <div key={i} className="truncate">
+            {line}
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  // Fallback: synthetic plate (preview pending or unavailable).
+  return (
+    <div className="flex h-full flex-col gap-1 px-4 py-3 font-mono text-[10px] leading-snug text-term-fg">
+      <div className="text-term-green">
+        ❯ <span className="text-term-fg">flockmux replay {r.id.slice(0, 8)}</span>
+      </div>
+      <div className="text-term-dim"># agent={r.agent_id}</div>
+      <div className="text-term-dim">
+        # geom={r.cols}×{r.rows}
+        {r.duration_ms != null && (
+          <> · dur={formatDuration(r.duration_ms)}</>
+        )}
+      </div>
+      <div className="text-term-blue">
+        {live ? t("replays.recording") : t("replays.ready")}
       </div>
     </div>
   );
