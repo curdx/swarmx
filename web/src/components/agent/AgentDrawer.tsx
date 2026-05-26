@@ -51,6 +51,7 @@ import {
   X,
   Zap,
 } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { api } from "../../api/http";
 import type {
   AgentInfo,
@@ -65,12 +66,12 @@ import { cn } from "@/lib/cn";
 
 type TabId = "terminal" | "recordings" | "messages" | "tools" | "context";
 
-const TABS: { id: TabId; label: string; icon: typeof TerminalIcon }[] = [
-  { id: "terminal", label: "终端", icon: TerminalIcon },
-  { id: "recordings", label: "录像", icon: Play },
-  { id: "messages", label: "消息", icon: MessageSquare },
-  { id: "tools", label: "工具", icon: Wrench },
-  { id: "context", label: "上下文", icon: FileText },
+const TABS: { id: TabId; labelKey: string; icon: typeof TerminalIcon }[] = [
+  { id: "terminal", labelKey: "agent.tabs.terminal", icon: TerminalIcon },
+  { id: "recordings", labelKey: "agent.tabs.recordings", icon: Play },
+  { id: "messages", labelKey: "agent.tabs.messages", icon: MessageSquare },
+  { id: "tools", labelKey: "agent.tabs.tools", icon: Wrench },
+  { id: "context", labelKey: "agent.tabs.context", icon: FileText },
 ];
 
 const ROLE_BG: Record<string, string> = {
@@ -129,8 +130,8 @@ export function AgentDrawer({ agentId, onClose }: Props) {
   // Tick once a second so SPAWN ago + uptime feel alive without re-rendering
   // the children every event.
   useEffect(() => {
-    const t = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(t);
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
   }, []);
 
   // Esc closes — mirrors the player and modal behaviour elsewhere.
@@ -157,7 +158,7 @@ export function AgentDrawer({ agentId, onClose }: Props) {
     <div
       className="fixed inset-y-0 right-0 z-40 flex w-[540px] flex-col border-l border-border-subtle bg-surface-elevated shadow-2xl"
       role="dialog"
-      aria-label="Agent 详情"
+      aria-label="Agent drawer"
     >
       <Header
         info={info}
@@ -201,6 +202,7 @@ function Header({
   onFocusInjector: () => void;
   onWake: () => void;
 }) {
+  const { t } = useTranslation();
   const role = info?.role ?? "—";
   const cli = info?.cli ?? "—";
   const initial = role.slice(0, 1).toUpperCase();
@@ -251,9 +253,13 @@ function Header({
               <Loader2 className="size-3 animate-spin text-accent-primary" />
             )}
             <span>
-              {live ? (info?.shim_ready ? "READY" : "STARTING") : "EXITED"}
+              {live
+                ? info?.shim_ready
+                  ? t("agent.status.ready")
+                  : t("agent.status.starting")
+                : t("agent.status.exited")}
               {spawnedAt && (
-                <> · 已运行 {formatDelta(now - spawnedAt)}</>
+                <> · {t("agent.status.uptime", { delta: formatDelta(now - spawnedAt) })}</>
               )}
             </span>
           </div>
@@ -261,7 +267,7 @@ function Header({
         <button
           onClick={onClose}
           className="flex size-8 items-center justify-center rounded-md bg-surface-tertiary text-foreground-secondary hover:bg-surface-secondary"
-          title="关闭（Esc）"
+          title={t("agent.close")}
         >
           <X className="size-4" />
         </button>
@@ -274,30 +280,30 @@ function Header({
           className="flex h-7 items-center gap-1.5 rounded-md bg-accent-primary px-3 text-xs font-bold text-foreground-on-accent hover:bg-accent-primary-deep"
         >
           <SendHorizonal className="size-3" />
-          发送消息
+          {t("agent.sendMessage")}
         </button>
         <button
           onClick={onWake}
           className="flex h-7 items-center gap-1.5 rounded-md border border-border-subtle bg-surface-elevated px-2.5 text-xs text-foreground-secondary hover:bg-surface-tertiary"
         >
           <Zap className="size-3" />
-          唤醒
+          {t("agent.wake")}
         </button>
         <button
           disabled
           className="flex h-7 items-center gap-1.5 rounded-md border border-border-subtle bg-surface-elevated px-2.5 text-xs text-foreground-tertiary opacity-50"
-          title="暂未实现"
+          title={t("agent.notImplemented")}
         >
           <Pause className="size-3" />
-          暂停
+          {t("agent.pause")}
         </button>
         <button
           disabled
           className="flex h-7 items-center gap-1.5 rounded-md border border-border-subtle bg-surface-elevated px-2.5 text-xs text-foreground-tertiary opacity-50"
-          title="暂未实现"
+          title={t("agent.notImplemented")}
         >
           <RotateCcw className="size-3" />
-          重启
+          {t("agent.restart")}
         </button>
       </div>
     </header>
@@ -307,15 +313,16 @@ function Header({
 // ── TabBar ───────────────────────────────────────────────────────────────
 
 function TabBar({ tab, onChange }: { tab: TabId; onChange: (t: TabId) => void }) {
+  const { t: tr } = useTranslation();
   return (
     <nav className="flex shrink-0 items-center gap-1 border-b border-border-subtle px-5">
-      {TABS.map((t) => {
-        const active = t.id === tab;
-        const Icon = t.icon;
+      {TABS.map((item) => {
+        const active = item.id === tab;
+        const Icon = item.icon;
         return (
           <button
-            key={t.id}
-            onClick={() => onChange(t.id)}
+            key={item.id}
+            onClick={() => onChange(item.id)}
             className={cn(
               "flex items-center gap-1.5 px-4 py-3 text-xs transition-colors",
               active
@@ -324,7 +331,7 @@ function TabBar({ tab, onChange }: { tab: TabId; onChange: (t: TabId) => void })
             )}
           >
             <Icon className="size-3.5" />
-            {t.label}
+            {tr(item.labelKey)}
           </button>
         );
       })}
@@ -345,6 +352,7 @@ function TerminalTab({ agentId }: { agentId: string }) {
 // ── Tab: Recordings ──────────────────────────────────────────────────────
 
 function RecordingsTab({ agentId }: { agentId: string }) {
+  const { t } = useTranslation();
   const [items, setItems] = useState<RecordingInfo[]>([]);
   const [error, setError] = useState<string | null>(null);
 
@@ -371,7 +379,7 @@ function RecordingsTab({ agentId }: { agentId: string }) {
   if (items.length === 0) {
     return (
       <div className="flex h-full items-center justify-center text-foreground-tertiary">
-        <span className="font-caption text-sm">这个 agent 还没有录像</span>
+        <span className="font-caption text-sm">{t("agent.noRecordings")}</span>
       </div>
     );
   }
@@ -408,14 +416,14 @@ function RecordingsTab({ agentId }: { agentId: string }) {
                   : "bg-surface-tertiary text-foreground-tertiary",
               )}
             >
-              {live ? "● live" : "completed"}
+              {live ? t("replays.live") : t("replays.completed")}
             </span>
             <a
               href={api.recordingCastUrl(r.id)}
               download={`${r.id}.cast`}
               onClick={(e) => e.stopPropagation()}
               className="flex size-7 items-center justify-center rounded-md text-foreground-tertiary hover:bg-surface-tertiary"
-              title="下载 .cast"
+              title={t("agent.downloadCast")}
             >
               <Download className="size-3.5" />
             </a>
@@ -430,6 +438,7 @@ function RecordingsTab({ agentId }: { agentId: string }) {
 // ── Tab: Messages ────────────────────────────────────────────────────────
 
 function MessagesTab({ agentId }: { agentId: string }) {
+  const { t } = useTranslation();
   const [items, setItems] = useState<MessageRecord[]>([]);
   const [error, setError] = useState<string | null>(null);
 
@@ -477,7 +486,7 @@ function MessagesTab({ agentId }: { agentId: string }) {
   if (items.length === 0) {
     return (
       <div className="flex h-full items-center justify-center text-foreground-tertiary">
-        <span className="font-caption text-sm">该 agent 暂无收发消息</span>
+        <span className="font-caption text-sm">{t("agent.noMessages")}</span>
       </div>
     );
   }
@@ -515,18 +524,15 @@ function MessagesTab({ agentId }: { agentId: string }) {
 // ── Tab: Tools (placeholder) ─────────────────────────────────────────────
 
 function ToolsTab() {
+  const { t } = useTranslation();
   return (
     <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center text-foreground-tertiary">
       <Wrench className="size-10 opacity-40" />
       <div>
         <p className="font-heading text-sm font-semibold text-foreground-secondary">
-          工具调用流 WIP
+          {t("agent.toolsWip")}
         </p>
-        <p className="mt-1 max-w-xs font-caption text-xs">
-          需要 shim 层 emit <code className="font-mono">tool_call</code> 事件，
-          目前 SwarmEvent type 里只有 agent_state / message / blackboard_changed。
-          排进 Phase D。
-        </p>
+        <p className="mt-1 max-w-xs font-caption text-xs">{t("agent.toolsWipHint")}</p>
       </div>
     </div>
   );
@@ -535,6 +541,7 @@ function ToolsTab() {
 // ── Tab: Context ─────────────────────────────────────────────────────────
 
 function ContextTab({ agentId }: { agentId: string }) {
+  const { t } = useTranslation();
   const [history, setHistory] = useState<
     { path: string; at: number; op: string }[]
   >([]);
@@ -578,7 +585,7 @@ function ContextTab({ agentId }: { agentId: string }) {
   if (history.length === 0) {
     return (
       <div className="flex h-full items-center justify-center text-foreground-tertiary">
-        <span className="font-caption text-sm">该 agent 还没写过黑板</span>
+        <span className="font-caption text-sm">{t("agent.noBlackboard")}</span>
       </div>
     );
   }
@@ -612,6 +619,7 @@ function InjectBar({
   agentId: string;
   inputRef: React.RefObject<HTMLInputElement | null>;
 }) {
+  const { t } = useTranslation();
   // Cast away the null-union on render — useRef<HTMLInputElement>(null)
   // technically yields `RefObject<HTMLInputElement | null>` in @types/react@18,
   // but DOM ref props expect a non-null inner. Safe because React never reads
@@ -632,7 +640,7 @@ function InjectBar({
       setText("");
     } catch (e) {
       // eslint-disable-next-line no-alert
-      alert(`发送失败：${(e as Error).message}`);
+      alert(`${t("agent.send")}: ${(e as Error).message}`);
     } finally {
       setSending(false);
     }
@@ -641,7 +649,7 @@ function InjectBar({
   return (
     <div className="flex shrink-0 items-center gap-3 border-t border-border-subtle bg-surface-tertiary px-4 py-3">
       <span className="shrink-0 font-caption text-[11px] text-foreground-secondary">
-        注入 prompt:
+        {t("agent.injectLabel")}
       </span>
       <div className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-md border border-border-subtle bg-surface-elevated px-2.5">
         <input
@@ -654,7 +662,7 @@ function InjectBar({
               send();
             }
           }}
-          placeholder="给 agent 发一条 note，下回合 wake 后收到"
+          placeholder={t("agent.injectPlaceholder")}
           className="min-w-0 flex-1 bg-transparent font-mono text-xs text-foreground-primary placeholder:text-foreground-tertiary focus:outline-none"
         />
         <span className="shrink-0 font-mono text-[9px] text-foreground-tertiary">⏎</span>
@@ -664,7 +672,7 @@ function InjectBar({
         disabled={sending || !text.trim()}
         className="flex h-8 shrink-0 items-center justify-center rounded-md bg-accent-primary px-3 text-xs font-bold text-foreground-on-accent hover:bg-accent-primary-deep disabled:opacity-50"
       >
-        {sending ? "…" : "发送"}
+        {sending ? "…" : t("agent.send")}
       </button>
     </div>
   );
@@ -673,6 +681,7 @@ function InjectBar({
 // ── StatBar ──────────────────────────────────────────────────────────────
 
 function StatBar({ info, now }: { info: AgentInfo | null; now: number }) {
+  const { t } = useTranslation();
   const spawnedAt = info?.spawned_at ?? null;
   const live = info && info.killed_at == null && info.shim_exit == null;
 
@@ -680,30 +689,36 @@ function StatBar({ info, now }: { info: AgentInfo | null; now: number }) {
     () =>
       [
         {
-          label: "SPAWN",
-          value: spawnedAt ? `${formatDelta(now - spawnedAt)} 前` : "—",
+          label: t("agent.stat.spawn"),
+          value: spawnedAt
+            ? t("agent.stat.ago", { delta: formatDelta(now - spawnedAt) })
+            : "—",
         },
         // TURN / TOKEN / TOOLS are placeholders — the server doesn't expose
         // these yet. Pencil mock has them prominently so we keep slots
         // visible (— shows where real data will land) instead of dropping
         // them and re-flowing the bar later.
-        { label: "TURN", value: "—" },
-        { label: "TOKEN", value: "—" },
-        { label: "TOOLS", value: "—" },
+        { label: t("agent.stat.turn"), value: "—" },
+        { label: t("agent.stat.token"), value: "—" },
+        { label: t("agent.stat.tools"), value: "—" },
         {
-          label: "PTY",
-          value: live ? "live" : "off",
+          label: t("agent.stat.pty"),
+          value: live ? t("agent.stat.live") : t("agent.stat.off"),
           color: live ? "text-state-success" : "text-foreground-tertiary",
         },
         {
-          label: "HOOK",
-          value: info?.shim_ready ? "active" : info ? "wait" : "—",
+          label: t("agent.stat.hook"),
+          value: info?.shim_ready
+            ? t("agent.stat.active")
+            : info
+              ? t("agent.stat.wait")
+              : "—",
           color: info?.shim_ready
             ? "text-state-success"
             : "text-foreground-tertiary",
         },
       ] as const,
-    [info, live, spawnedAt, now],
+    [info, live, spawnedAt, now, t],
   );
 
   return (

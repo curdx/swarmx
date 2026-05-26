@@ -13,6 +13,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import { Plus, Sparkles, Users, Zap } from "lucide-react";
 import { api } from "../api/http";
 import type {
@@ -39,14 +40,15 @@ function roleColor(role: string) {
   return ROLE_COLOR[role.toLowerCase()] ?? "bg-state-idle";
 }
 
-function statusDot(a: AgentInfo) {
-  if (a.killed_at) return { className: "bg-state-idle", label: "已退出" };
-  if (a.shim_exit != null) return { className: "bg-state-idle", label: "shim 退出" };
-  if (!a.shim_ready) return { className: "bg-state-wake", label: "启动中" };
-  return { className: "bg-state-success", label: "在线" };
+function statusDot(a: AgentInfo, t: (k: string) => string) {
+  if (a.killed_at) return { className: "bg-state-idle", label: t("chat.exited") };
+  if (a.shim_exit != null) return { className: "bg-state-idle", label: t("chat.shimExit") };
+  if (!a.shim_ready) return { className: "bg-state-wake", label: t("chat.starting") };
+  return { className: "bg-state-success", label: t("chat.online") };
 }
 
 export default function ChatRoute() {
+  const { t } = useTranslation();
   const { workspaceId } = useParams<{ workspaceId?: string }>();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -206,13 +208,13 @@ export default function ChatRoute() {
       <aside className="flex w-[264px] shrink-0 flex-col gap-3 border-r border-border-subtle bg-surface-secondary px-2 py-3">
         <div className="flex items-center justify-between px-2">
           <h2 className="font-heading text-xs font-semibold uppercase tracking-wider text-foreground-tertiary">
-            工作空间
+            {t("chat.workspaces")}
           </h2>
           <button
             type="button"
             onClick={() => setWizardOpen(true)}
             className="rounded-md p-1 text-foreground-tertiary hover:bg-surface-tertiary hover:text-foreground-primary"
-            title="新建工作空间"
+            title={t("chat.newWorkspace")}
           >
             <Plus className="size-4" />
           </button>
@@ -220,7 +222,7 @@ export default function ChatRoute() {
         <nav className="flex flex-col gap-0.5 overflow-y-auto">
           {workspaces.length === 0 && (
             <span className="px-3 py-2 font-caption text-xs text-foreground-tertiary">
-              暂无活跃 agent · 去 <a className="text-accent-primary hover:underline" href="/debug">/debug</a> 启动一个
+              {t("chat.noActiveAgents")} <a className="text-accent-primary hover:underline" href="/debug">/debug</a>
             </span>
           )}
           {workspaces.map((ws) => {
@@ -253,7 +255,7 @@ export default function ChatRoute() {
             className="flex w-full items-center justify-center gap-2 rounded-md bg-accent-primary px-3 py-2 text-xs font-medium text-foreground-on-accent hover:bg-accent-primary-deep"
           >
             <Sparkles className="size-4" />
-            运行配方
+            {t("chat.runSpell")}
           </button>
         </div>
       </aside>
@@ -264,15 +266,15 @@ export default function ChatRoute() {
           <h1 className="font-heading text-sm font-semibold text-foreground-primary">
             {activeWs
               ? activeWs.path.split("/").slice(-2).join("/")
-              : "暂无对话"}
+              : t("chat.noConversation")}
           </h1>
           <span className="font-caption text-xs text-foreground-tertiary">
-            {activeMembers.length} 个 agent · WS {status}
+            {t("chat.agentCountWs", { count: activeMembers.length, status })}
           </span>
           <span className="flex-1" />
           {totalUnread > 0 && (
             <span className="rounded-full bg-accent-primary px-2 py-0.5 text-[10px] font-semibold text-foreground-on-accent">
-              {totalUnread} 未读
+              {t("chat.unread", { count: totalUnread })}
             </span>
           )}
         </div>
@@ -293,7 +295,7 @@ export default function ChatRoute() {
         <div className="flex h-12 shrink-0 items-center gap-2 border-b border-border-subtle px-4">
           <Users className="size-4 text-foreground-tertiary" />
           <h2 className="font-heading text-xs font-semibold uppercase tracking-wider text-foreground-tertiary">
-            成员
+            {t("chat.members")}
           </h2>
           <span className="ml-auto font-caption text-xs text-foreground-tertiary">
             {activeMembers.length}
@@ -302,11 +304,11 @@ export default function ChatRoute() {
         <div className="flex-1 overflow-y-auto px-2 py-2">
           {activeMembers.length === 0 && (
             <p className="px-3 py-2 font-caption text-xs text-foreground-tertiary">
-              选中一个工作空间查看成员
+              {t("chat.selectWorkspace")}
             </p>
           )}
           {activeMembers.map((a) => {
-            const dot = statusDot(a);
+            const dot = statusDot(a, t);
             const unread = unreadByFrom[a.agent_id] ?? 0;
             const isOpen = drawerAgentId === a.agent_id;
             return (
@@ -348,7 +350,7 @@ export default function ChatRoute() {
                 )}
                 <button
                   className="rounded-md p-1.5 text-foreground-tertiary hover:bg-surface-secondary hover:text-state-wake"
-                  title="手动唤醒"
+                  title={t("chat.wake")}
                   onClick={(e) => {
                     e.stopPropagation();
                     api.wakeAgent(a.agent_id).catch(() => {});

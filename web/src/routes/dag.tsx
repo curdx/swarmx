@@ -39,6 +39,7 @@ import {
   Zap,
 } from "lucide-react";
 import { Link } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import { api } from "../api/http";
 import type { AgentInfo, BlackboardEntry, SwarmEvent } from "../api/types";
 import { useSwarmFeed } from "../hooks/useSwarmFeed";
@@ -278,6 +279,7 @@ function Canvas({ agents, bbAt, selectedId, onSelect }: CanvasProps) {
 // ── Route ───────────────────────────────────────────────────────────────
 
 export default function DagRoute() {
+  const { t } = useTranslation();
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [bb, setBb] = useState<BlackboardEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -347,17 +349,17 @@ export default function DagRoute() {
         </span>
         <div className="flex flex-col">
           <h1 className="font-heading text-sm font-semibold text-foreground-primary">
-            协作图
+            {t("dag.title")}
           </h1>
           <span className="font-caption text-[10px] text-foreground-tertiary">
-            {liveAgents.length} 活跃 agent · 边 = handoff 依赖
+            {t("dag.subtitle", { count: liveAgents.length })}
           </span>
         </div>
         <span className="flex-1" />
         <button
           onClick={refresh}
           className="flex size-8 items-center justify-center rounded-md bg-surface-tertiary text-foreground-secondary hover:bg-surface-secondary"
-          title="刷新"
+          title={t("common.refresh")}
         >
           <RefreshCw className="size-4" />
         </button>
@@ -369,14 +371,14 @@ export default function DagRoute() {
         <aside className="flex w-[200px] shrink-0 flex-col gap-5 border-r border-border-subtle bg-surface-secondary p-4">
           <section>
             <h3 className="mb-2 font-heading text-[11px] font-semibold uppercase tracking-wider text-foreground-tertiary">
-              图例
+              {t("dag.legend")}
             </h3>
             <div className="flex flex-col gap-2 font-caption text-xs">
               <div className="flex items-center gap-2">
                 <svg width="36" height="10">
                   <line x1="0" y1="5" x2="36" y2="5" stroke="#2E8B57" strokeWidth="1.75" />
                 </svg>
-                <span className="text-foreground-secondary">已满足</span>
+                <span className="text-foreground-secondary">{t("dag.satisfied")}</span>
               </div>
               <div className="flex items-center gap-2">
                 <svg width="36" height="10">
@@ -390,13 +392,13 @@ export default function DagRoute() {
                     strokeDasharray="6 4"
                   />
                 </svg>
-                <span className="text-foreground-secondary">等待中</span>
+                <span className="text-foreground-secondary">{t("dag.waiting")}</span>
               </div>
             </div>
           </section>
           <section>
             <h3 className="mb-2 font-heading text-[11px] font-semibold uppercase tracking-wider text-foreground-tertiary">
-              过滤
+              {t("dag.filter")}
             </h3>
             <div className="flex flex-col gap-1">
               {roles.map((r) => (
@@ -416,14 +418,14 @@ export default function DagRoute() {
                       style={{ background: roleHex(r) }}
                     />
                   )}
-                  <span>{r === "all" ? "全部" : r}</span>
+                  <span>{r === "all" ? t("common.all") : r}</span>
                 </button>
               ))}
             </div>
           </section>
           <section>
             <h3 className="mb-2 font-heading text-[11px] font-semibold uppercase tracking-wider text-foreground-tertiary">
-              成员列表
+              {t("dag.members")}
             </h3>
             <ul className="flex flex-col gap-1">
               {filteredAgents.map((a) => (
@@ -461,9 +463,7 @@ export default function DagRoute() {
           {liveAgents.length === 0 ? (
             <div className="flex h-full flex-col items-center justify-center gap-3 text-foreground-tertiary">
               <Activity className="size-10 opacity-40" />
-              <p className="font-caption text-sm">
-                当前没有活跃 agent。启动一个 spell 后会出现节点。
-              </p>
+              <p className="font-caption text-sm">{t("dag.empty")}</p>
             </div>
           ) : (
             <ReactFlowProvider>
@@ -482,7 +482,7 @@ export default function DagRoute() {
           {!selected ? (
             <div className="flex h-full flex-col items-center justify-center gap-2 text-center text-foreground-tertiary">
               <Maximize2 className="size-8 opacity-40" />
-              <p className="font-caption text-sm">点节点查看详情</p>
+              <p className="font-caption text-sm">{t("dag.selectNode")}</p>
             </div>
           ) : (
             <>
@@ -511,21 +511,21 @@ export default function DagRoute() {
                 </button>
               </div>
               <dl className="grid grid-cols-[80px_1fr] gap-y-2 font-caption text-xs">
-                <dt className="text-foreground-tertiary">CLI</dt>
+                <dt className="text-foreground-tertiary">{t("dag.cli")}</dt>
                 <dd className="font-mono text-foreground-primary">{selected.cli}</dd>
-                <dt className="text-foreground-tertiary">状态</dt>
+                <dt className="text-foreground-tertiary">{t("dag.status")}</dt>
                 <dd className="text-foreground-primary">
                   {selected.shim_ready
-                    ? "READY"
+                    ? t("dag.ready")
                     : selected.killed_at
-                      ? "已杀"
-                      : "启动中"}
+                      ? t("dag.killed")
+                      : t("dag.startingShort")}
                 </dd>
-                <dt className="text-foreground-tertiary">handoff</dt>
+                <dt className="text-foreground-tertiary">{t("dag.handoff")}</dt>
                 <dd className="break-all font-mono text-state-success">
                   {selected.handoff_signal || "—"}
                 </dd>
-                <dt className="text-foreground-tertiary">depends_on</dt>
+                <dt className="text-foreground-tertiary">{t("dag.dependsOn")}</dt>
                 <dd className="flex flex-wrap gap-1">
                   {(selected.depends_on ?? []).length === 0 ? (
                     <span className="text-foreground-tertiary">—</span>
@@ -546,14 +546,14 @@ export default function DagRoute() {
                   to={`/chat?agent=${encodeURIComponent(selected.agent_id)}`}
                   className="flex h-9 items-center justify-center gap-1.5 rounded-md bg-accent-primary text-xs font-bold text-foreground-on-accent hover:bg-accent-primary-deep"
                 >
-                  打开 Agent Drawer
+                  {t("dag.openDrawer")}
                 </Link>
                 <button
                   onClick={() => api.wakeAgent(selected.agent_id).catch(() => {})}
                   className="flex h-9 items-center justify-center gap-1.5 rounded-md border border-border-subtle bg-surface-elevated text-xs text-foreground-secondary hover:bg-surface-tertiary"
                 >
                   <Zap className="size-3.5" />
-                  唤醒
+                  {t("agent.wake")}
                 </button>
               </div>
             </>

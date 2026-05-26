@@ -12,6 +12,23 @@
   "shell": {
     "cmdkHint": "Press ⌘K to open the command palette"
   },
+  "common": {
+    "save": "Save",
+    "cancel": "Cancel",
+    "delete": "Delete",
+    "edit": "Edit",
+    "search": "Search",
+    "refresh": "Refresh",
+    "close": "Close",
+    "send": "Send",
+    "sending": "Sending…",
+    "loading": "Loading…",
+    "noMatch": "No match",
+    "all": "All",
+    "system": "system",
+    "live": "live",
+    "off": "off"
+  },
   "settings": {
     "title": "Settings",
     "subtitle": "Local config · localStorage · takes effect immediately",
@@ -53,13 +70,248 @@
       "preview": "Preview"
     }
   },
-  "common": {
-    "save": "Save",
+  "chat": {
+    "workspaces": "Workspaces",
+    "newWorkspace": "New workspace",
+    "noActiveAgents": "No active agents · go to",
+    "runSpell": "Run spell",
+    "noConversation": "No conversation",
+    "agentCountWs": "{{count}} agent(s) · WS {{status}}",
+    "unread": "{{count}} unread",
+    "members": "Members",
+    "selectWorkspace": "Pick a workspace to see its members",
+    "wake": "Manual wake",
+    "online": "online",
+    "starting": "starting",
+    "shimExit": "shim exit",
+    "exited": "exited"
+  },
+  "dag": {
+    "title": "Flow",
+    "subtitle": "{{count}} live agent(s) · edges = handoff deps",
+    "legend": "Legend",
+    "satisfied": "satisfied",
+    "waiting": "waiting",
+    "filter": "Filter",
+    "members": "Members",
+    "selectNode": "Click a node for details",
+    "empty": "No live agents. A spell will populate this graph.",
+    "cli": "CLI",
+    "status": "status",
+    "handoff": "handoff",
+    "dependsOn": "depends_on",
+    "openDrawer": "Open Agent Drawer",
+    "ready": "READY",
+    "killed": "killed",
+    "startingShort": "starting"
+  },
+  "replays": {
+    "title": "Replays",
+    "count": "{{count}} recording(s)",
+    "search": "Search by agent / id",
+    "tagAll": "All",
+    "ratio": "{{shown}} / {{total}}",
+    "empty": "No matching recordings",
+    "live": "● live",
+    "completed": "○ completed",
+    "recording": "▶ recording…",
+    "ready": "✓ ready to replay",
+    "play": "Play",
+    "download": "Download"
+  },
+  "player": {
+    "loading": "Loading…",
+    "notFoundTitle": "Recording is gone",
+    "notFoundHint": "Could not find a recording with id {{id}}. It may have been deleted, or the URL is wrong.",
+    "requestFailed": "Request failed: {{error}}",
+    "backToLibrary": "Back to library",
+    "goDebug": "Open Debug",
+    "back": "Back",
+    "closeEsc": "Close (Esc)",
+    "downloadCast": "Download .cast",
+    "rawCast": "Raw cast",
+    "recording": "● Live recording",
+    "shortcuts": {
+      "playPause": "play/pause",
+      "skip": "skip 5s",
+      "frame": "frame",
+      "back": "back to library"
+    }
+  },
+  "context": {
+    "title": "Context board",
+    "subtitle": "{{count}} key(s) · read + history (edit in /debug)",
+    "search": "Search keys",
+    "empty": "Blackboard is empty",
+    "selectKey": "Pick a key on the left",
+    "rendered": "Rendered",
+    "raw": "Raw",
+    "noSelection": "Nothing selected",
+    "meta": "Metadata",
+    "size": "size",
+    "history": "History ({{count}})",
+    "noHistory": "No history yet",
+    "rightHint": "Pick a key to see metadata and history"
+  },
+  "inbox": {
+    "title": "Approvals",
+    "subtitle": "agents waiting on a human-in-the-loop decision",
+    "all": "All",
+    "high": "High risk",
+    "default": "Medium",
+    "rejectAll": "Reject all",
+    "wipTitle": "Backend not ready — showing mock data",
+    "wipBody": "Today shim launches CLIs with --dangerously-skip-permissions, so every tool call goes straight through. Wiring this surface requires shim --approval-mode=inbox + /api/approvals endpoint + approval_pending / approval_resolved SwarmEvent. Once the backend lands this UI doesn't change; just swap MOCKS for api.listApprovals().",
+    "highRiskChip": "High risk",
+    "view": "View",
+    "reject": "Reject",
+    "approve": "Approve",
+    "empty": "Inbox is empty",
+    "footerHint": "Agents are waiting; the rest of the swarm is unaffected",
+    "autoRefresh": "Auto-refresh 30s",
+    "viewTooltip": "View full tool_use payload",
+    "disabledTooltip": "Backend not ready (see banner above)"
+  },
+  "notifications": {
+    "title": "Notifications",
+    "subtitle": "from /ws/swarm · {{count}} unread",
+    "markAllRead": "Mark all read",
+    "tabs": {
+      "all": "All",
+      "message": "Messages",
+      "blackboard": "Blackboard",
+      "state": "State",
+      "error": "Errors",
+      "completed": "Done"
+    },
+    "empty": "Nothing here yet",
+    "markRead": "Mark read",
+    "kinds": {
+      "errorTitle": "Error reported",
+      "completedTitle": "Phase completed",
+      "wakeTitle": "{{from}} woke {{to}}"
+    },
+    "time": {
+      "now": "now",
+      "minAgo": "{{n}}m ago",
+      "hourAgo": "{{n}}h ago"
+    }
+  },
+  "agent": {
+    "close": "Close (Esc)",
+    "sendMessage": "Send message",
+    "wake": "Wake",
+    "pause": "Pause",
+    "restart": "Restart",
+    "notImplemented": "Not implemented yet",
+    "tabs": {
+      "terminal": "Terminal",
+      "recordings": "Recordings",
+      "messages": "Messages",
+      "tools": "Tools",
+      "context": "Context"
+    },
+    "noRecordings": "This agent has no recordings yet",
+    "noMessages": "No messages to or from this agent",
+    "toolsWip": "Tool-call stream WIP",
+    "toolsWipHint": "Needs shim-level tool_call SwarmEvent; today only agent_state / message / blackboard_changed exist. Tracked in Phase D.",
+    "noBlackboard": "This agent hasn't written to the blackboard",
+    "injectLabel": "Inject prompt:",
+    "injectPlaceholder": "Send the agent a note; it'll be delivered on the next wake",
+    "send": "Send",
+    "downloadCast": "Download .cast",
+    "stat": {
+      "spawn": "SPAWN",
+      "turn": "TURN",
+      "token": "TOKEN",
+      "tools": "TOOLS",
+      "pty": "PTY",
+      "hook": "HOOK",
+      "live": "live",
+      "off": "off",
+      "active": "active",
+      "wait": "wait",
+      "ago": "{{delta}} ago"
+    },
+    "status": {
+      "ready": "READY",
+      "starting": "STARTING",
+      "exited": "EXITED",
+      "uptime": "up {{delta}}"
+    }
+  },
+  "wizard": {
+    "title": "Create workspace",
+    "subtitle": "Name a flock, mount its directories, pick a recipe",
+    "step1": "Name & accent",
+    "namePlaceholder": "my-project",
+    "aiNamed": "AI suggested",
+    "step2": "Mount project directories",
+    "step2Hint": "AI auto-detects the stack, no config needed",
+    "dirPlaceholder1": "/Users/you/code/myapp",
+    "dirPlaceholderMore": "Add another directory (optional)",
+    "dirHint": "Passed as workspace_dir to the spell",
+    "removeDir": "Remove",
+    "addDir": "Add directory",
+    "step3": "Recipe",
+    "pickSpell": "Pick a recipe",
+    "agentCountInfo": "Will launch {{count}} agent(s)",
+    "defaultInfo": "AI picked 1 directory · suggested 1 recipe",
     "cancel": "Cancel",
-    "delete": "Delete",
-    "edit": "Edit",
-    "search": "Search",
+    "create": "Create workspace",
+    "creating": "Creating…"
+  },
+  "messages": {
+    "filter": "Filter by sender / receiver / body",
     "refresh": "Refresh",
-    "close": "Close"
+    "bySender": "Unread by sender ({{count}})",
+    "bySenderNone": "none",
+    "empty": "No messages yet",
+    "unread": "unread",
+    "read": "read",
+    "jumpParent": "Jump to parent",
+    "reply": "Reply",
+    "markRead": "Mark read",
+    "replying": "Replying to #{{id}}",
+    "cancelReply": "Cancel reply",
+    "fromPlaceholder": "From (blank = system)",
+    "toPlaceholder": "To (agent id)",
+    "bodyPlaceholder": "Message body",
+    "send": "Send",
+    "sending": "Sending…"
+  },
+  "cmdk": {
+    "placeholder": "Search commands, jumps, wake agents…",
+    "groups": {
+      "nav": "Navigate",
+      "workspaces": "Workspaces",
+      "wakeAgent": "Wake agent",
+      "theme": "Theme",
+      "actions": "Actions"
+    },
+    "navHint": {
+      "chat": "Chat 3-pane",
+      "dag": "DAG",
+      "replays": "Replays",
+      "context": "Blackboard",
+      "inbox": "Approval Inbox",
+      "notifications": "Notification Center",
+      "settings": "Preferences",
+      "debug": "Legacy M2 grid"
+    },
+    "switchWs": "Switch to this workspace",
+    "wake": "Wake {{role}}",
+    "switchToLight": "Switch to light",
+    "switchToDark": "Switch to dark",
+    "followSystem": "Follow system",
+    "newWorkspace": "New workspace…",
+    "runSpell": "Run spell…",
+    "openWizard": "Open Wizard",
+    "kbd": {
+      "navigate": "navigate",
+      "confirm": "confirm",
+      "close": "close",
+      "openHint": "⌘K to reopen"
+    }
   }
 }

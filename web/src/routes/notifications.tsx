@@ -14,6 +14,8 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import {
   AlertTriangle,
   Bell,
@@ -65,38 +67,56 @@ function saveRead(s: Set<string>) {
 
 function fmtTime(ms: number): string {
   const delta = Date.now() - ms;
-  if (delta < 60_000) return "刚刚";
-  if (delta < 3_600_000) return `${Math.floor(delta / 60_000)}m 前`;
-  if (delta < 86_400_000) return `${Math.floor(delta / 3_600_000)}h 前`;
+  if (delta < 60_000) return "_now_";
+  if (delta < 3_600_000) return `_min_${Math.floor(delta / 60_000)}`;
+  if (delta < 86_400_000) return `_hour_${Math.floor(delta / 3_600_000)}`;
   return new Date(ms).toLocaleString();
 }
 
+// Resolve the sentinel strings returned by fmtTime against the active locale.
+function resolveTime(s: string, t: TFunction): string {
+  if (s === "_now_") return t("notifications.time.now");
+  if (s.startsWith("_min_")) return t("notifications.time.minAgo", { n: s.slice(5) });
+  if (s.startsWith("_hour_")) return t("notifications.time.hourAgo", { n: s.slice(6) });
+  return s;
+}
+
 const TABS = [
-  { id: "all", label: "全部", icon: Bell },
-  { id: "message", label: "消息", icon: MessageSquare },
-  { id: "blackboard", label: "黑板", icon: Inbox },
-  { id: "state", label: "状态", icon: SettingsIcon },
-  { id: "error", label: "异常", icon: AlertTriangle },
-  { id: "completed", label: "完成", icon: CheckCircle2 },
+  { id: "all", labelKey: "notifications.tabs.all", icon: Bell },
+  { id: "message", labelKey: "notifications.tabs.message", icon: MessageSquare },
+  { id: "blackboard", labelKey: "notifications.tabs.blackboard", icon: Inbox },
+  { id: "state", labelKey: "notifications.tabs.state", icon: SettingsIcon },
+  { id: "error", labelKey: "notifications.tabs.error", icon: AlertTriangle },
+  { id: "completed", labelKey: "notifications.tabs.completed", icon: CheckCircle2 },
 ] as const;
 
 type TabId = (typeof TABS)[number]["id"];
 
-function classifyMessage(m: MessageRecord): { kind: NotifKind; title: string } {
+function classifyMessage(
+  m: MessageRecord,
+  t: TFunction,
+): { kind: NotifKind; title: string } {
   const body = m.body.toLowerCase();
   if (body.includes("error") || body.includes("failed") || body.includes("✗")) {
-    return { kind: "error", title: "异常上报" };
+    return { kind: "error", title: t("notifications.kinds.errorTitle") };
   }
   if (body.includes("✅") || body.includes("passed") || body.includes("done")) {
-    return { kind: "completed", title: "阶段完成" };
+    return { kind: "completed", title: t("notifications.kinds.completedTitle") };
   }
   if (m.kind === "wake") {
-    return { kind: "state", title: `${m.from_agent} 唤醒 ${m.to_agent}` };
+    return {
+      kind: "state",
+      title: t("notifications.kinds.wakeTitle", {
+        from: m.from_agent,
+        to: m.to_agent,
+      }),
+    };
   }
   return { kind: "message", title: `${m.from_agent} → ${m.to_agent}` };
 }
 
 export default function NotificationsRoute() {
+  const { t } = useTranslation();
   const [items, setItems] = useState<Notif[]>([]);
   const [read, setRead] = useState<Set<string>>(loadRead);
   const [tab, setTab] = useState<TabId>("all");
@@ -108,7 +128,7 @@ export default function NotificationsRoute() {
         api.listBlackboard(),
       ]);
       const fromMsg: Notif[] = (msgs as MessageRecord[]).map((m) => {
-        const c = classifyMessage(m);
+        const c = classifyMessage(m, t);
         return {
           id: `msg-${m.id}`,
           kind: c.kind,
@@ -153,7 +173,7 @@ export default function NotificationsRoute() {
             read_at: null,
             in_reply_to: ev.in_reply_to ?? null,
           };
-          const c = classifyMessage(rec);
+          const c = classifyMessage(rec, t);
           next = {
             id: `msg-${ev.id}`,
             kind: c.kind,
@@ -224,10 +244,10 @@ export default function NotificationsRoute() {
         </span>
         <div className="flex flex-col">
           <h1 className="font-heading text-sm font-semibold text-foreground-primary">
-            通知
+            {t("notifications.title")}
           </h1>
           <span className="font-caption text-[10px] text-foreground-tertiary">
-            来自 /ws/swarm · {totalUnread} 条未读
+            {t("notifications.subtitle", { count: totalUnread })}
           </span>
         </div>
         <span className="flex-1" />
@@ -235,12 +255,12 @@ export default function NotificationsRoute() {
           onClick={markAllRead}
           className="rounded-md border border-border-subtle bg-surface-elevated px-3 py-1.5 text-xs text-foreground-secondary hover:bg-surface-tertiary"
         >
-          全部标为已读
+          {t("notifications.markAllRead")}
         </button>
         <button
           onClick={seed}
           className="flex size-8 items-center justify-center rounded-md bg-surface-tertiary text-foreground-secondary hover:bg-surface-secondary"
-          title="刷新"
+          title={t("common.refresh")}
         >
           <RefreshCw className="size-4" />
         </button>
@@ -248,14 +268,14 @@ export default function NotificationsRoute() {
 
       {/* Tab bar */}
       <div className="flex h-11 shrink-0 items-center gap-1.5 border-b border-border-subtle bg-surface-secondary px-5">
-        {TABS.map((t) => {
-          const Icon = t.icon;
-          const active = t.id === tab;
-          const c = countBy(t.id);
+        {TABS.map((tabItem) => {
+          const Icon = tabItem.icon;
+          const active = tabItem.id === tab;
+          const c = countBy(tabItem.id);
           return (
             <button
-              key={t.id}
-              onClick={() => setTab(t.id)}
+              key={tabItem.id}
+              onClick={() => setTab(tabItem.id)}
               className={cn(
                 "flex h-7 items-center gap-1.5 rounded-full px-3 text-xs transition-colors",
                 active
@@ -264,7 +284,7 @@ export default function NotificationsRoute() {
               )}
             >
               <Icon className="size-3" />
-              {t.label}
+              {t(tabItem.labelKey)}
               {c > 0 && (
                 <span
                   className={cn(
@@ -287,7 +307,7 @@ export default function NotificationsRoute() {
         {filtered.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center gap-3 text-foreground-tertiary">
             <Bell className="size-10 opacity-40" />
-            <p className="font-caption text-sm">该分类暂无通知</p>
+            <p className="font-caption text-sm">{t("notifications.empty")}</p>
           </div>
         ) : (
           <ul className="flex flex-col gap-1.5">
@@ -332,7 +352,7 @@ export default function NotificationsRoute() {
                         {n.title}
                       </span>
                       <span className="ml-auto font-caption text-[10px] text-foreground-tertiary">
-                        {fmtTime(n.at)}
+                        {resolveTime(fmtTime(n.at), t)}
                       </span>
                     </div>
                     {n.body && (
@@ -351,7 +371,7 @@ export default function NotificationsRoute() {
                     <button
                       onClick={() => markRead(n.id)}
                       className="flex size-6 shrink-0 items-center justify-center rounded text-foreground-tertiary hover:bg-surface-tertiary hover:text-foreground-primary"
-                      title="标为已读"
+                      title={t("notifications.markRead")}
                     >
                       <X className="size-3" />
                     </button>

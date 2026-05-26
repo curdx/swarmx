@@ -12,6 +12,23 @@
   "shell": {
     "cmdkHint": "按 ⌘K 打开命令面板"
   },
+  "common": {
+    "save": "保存",
+    "cancel": "取消",
+    "delete": "删除",
+    "edit": "编辑",
+    "search": "搜索",
+    "refresh": "刷新",
+    "close": "关闭",
+    "send": "发送",
+    "sending": "发送中…",
+    "loading": "加载中…",
+    "noMatch": "没有匹配",
+    "all": "全部",
+    "system": "system",
+    "live": "live",
+    "off": "off"
+  },
   "settings": {
     "title": "设置",
     "subtitle": "本地配置 · localStorage · 一处即生效",
@@ -53,13 +70,248 @@
       "preview": "Preview"
     }
   },
-  "common": {
-    "save": "保存",
+  "chat": {
+    "workspaces": "工作空间",
+    "newWorkspace": "新建工作空间",
+    "noActiveAgents": "暂无活跃 agent · 去",
+    "runSpell": "运行配方",
+    "noConversation": "暂无对话",
+    "agentCountWs": "{{count}} 个 agent · WS {{status}}",
+    "unread": "{{count}} 未读",
+    "members": "成员",
+    "selectWorkspace": "选中一个工作空间查看成员",
+    "wake": "手动唤醒",
+    "online": "在线",
+    "starting": "启动中",
+    "shimExit": "shim 退出",
+    "exited": "已退出"
+  },
+  "dag": {
+    "title": "协作图",
+    "subtitle": "{{count}} 活跃 agent · 边 = handoff 依赖",
+    "legend": "图例",
+    "satisfied": "已满足",
+    "waiting": "等待中",
+    "filter": "过滤",
+    "members": "成员列表",
+    "selectNode": "点节点查看详情",
+    "empty": "当前没有活跃 agent。启动一个 spell 后会出现节点。",
+    "cli": "CLI",
+    "status": "状态",
+    "handoff": "handoff",
+    "dependsOn": "depends_on",
+    "openDrawer": "打开 Agent Drawer",
+    "ready": "READY",
+    "killed": "已杀",
+    "startingShort": "启动中"
+  },
+  "replays": {
+    "title": "录像库",
+    "count": "{{count}} 个录像",
+    "search": "按 agent / id 搜索",
+    "tagAll": "全部",
+    "ratio": "{{shown}} / {{total}} 条",
+    "empty": "没有匹配的录像",
+    "live": "● live",
+    "completed": "○ completed",
+    "recording": "▶ recording…",
+    "ready": "✓ ready to replay",
+    "play": "播放",
+    "download": "下载"
+  },
+  "player": {
+    "loading": "加载中…",
+    "notFoundTitle": "录像不在了",
+    "notFoundHint": "找不到 id 为 {{id}} 的录像。它可能被删了，或者 url 拼错了。",
+    "requestFailed": "请求失败：{{error}}",
+    "backToLibrary": "返回录像库",
+    "goDebug": "去 Debug",
+    "back": "返回",
+    "closeEsc": "关闭（Esc）",
+    "downloadCast": "下载 .cast",
+    "rawCast": "原始 cast",
+    "recording": "● 实时录制",
+    "shortcuts": {
+      "playPause": "播放/暂停",
+      "skip": "快进/快退 5s",
+      "frame": "单帧",
+      "back": "返回库"
+    }
+  },
+  "context": {
+    "title": "上下文看板",
+    "subtitle": "{{count}} 个 key · 浏览 + 历史（编辑去 /debug）",
+    "search": "按 key 搜索",
+    "empty": "暂无 blackboard 内容",
+    "selectKey": "左侧选一个 key 查看",
+    "rendered": "渲染",
+    "raw": "Raw",
+    "noSelection": "没有选中任何 key",
+    "meta": "元数据",
+    "size": "size",
+    "history": "历史 ({{count}})",
+    "noHistory": "暂无历史",
+    "rightHint": "选中 key 查看元数据与历史"
+  },
+  "inbox": {
+    "title": "待批准",
+    "subtitle": "agent 请求进入人在回路决定",
+    "all": "全部",
+    "high": "高风险",
+    "default": "中",
+    "rejectAll": "全部拒绝",
+    "wipTitle": "后端未就绪 — 以下为 mock 数据",
+    "wipBody": "目前 shim 用 --dangerously-skip-permissions 起 CLI，所有工具调用直接放行。要做 Approval Inbox 需要给 shim 加 --approval-mode=inbox 模式 + /api/approvals 端点 + approval_pending / approval_resolved 两个 SwarmEvent。等 backend 落地后这页 UI 不动，只把 MOCKS 换成 api.listApprovals()。",
+    "highRiskChip": "高风险",
+    "view": "查看",
+    "reject": "拒绝",
+    "approve": "批准",
+    "empty": "收件箱空了",
+    "footerHint": "Agent 在等你决定，其余工作不受影响",
+    "autoRefresh": "自动刷新 30s",
+    "viewTooltip": "查看完整 tool_use payload",
+    "disabledTooltip": "后端未就绪（见顶部说明）"
+  },
+  "notifications": {
+    "title": "通知",
+    "subtitle": "来自 /ws/swarm · {{count}} 条未读",
+    "markAllRead": "全部标为已读",
+    "tabs": {
+      "all": "全部",
+      "message": "消息",
+      "blackboard": "黑板",
+      "state": "状态",
+      "error": "异常",
+      "completed": "完成"
+    },
+    "empty": "该分类暂无通知",
+    "markRead": "标为已读",
+    "kinds": {
+      "errorTitle": "异常上报",
+      "completedTitle": "阶段完成",
+      "wakeTitle": "{{from}} 唤醒 {{to}}"
+    },
+    "time": {
+      "now": "刚刚",
+      "minAgo": "{{n}}m 前",
+      "hourAgo": "{{n}}h 前"
+    }
+  },
+  "agent": {
+    "close": "关闭（Esc）",
+    "sendMessage": "发送消息",
+    "wake": "唤醒",
+    "pause": "暂停",
+    "restart": "重启",
+    "notImplemented": "暂未实现",
+    "tabs": {
+      "terminal": "终端",
+      "recordings": "录像",
+      "messages": "消息",
+      "tools": "工具",
+      "context": "上下文"
+    },
+    "noRecordings": "这个 agent 还没有录像",
+    "noMessages": "该 agent 暂无收发消息",
+    "toolsWip": "工具调用流 WIP",
+    "toolsWipHint": "需要 shim 层 emit tool_call 事件，目前 SwarmEvent type 里只有 agent_state / message / blackboard_changed。排进 Phase D。",
+    "noBlackboard": "该 agent 还没写过黑板",
+    "injectLabel": "注入 prompt:",
+    "injectPlaceholder": "给 agent 发一条 note，下回合 wake 后收到",
+    "send": "发送",
+    "downloadCast": "下载 .cast",
+    "stat": {
+      "spawn": "SPAWN",
+      "turn": "TURN",
+      "token": "TOKEN",
+      "tools": "TOOLS",
+      "pty": "PTY",
+      "hook": "HOOK",
+      "live": "live",
+      "off": "off",
+      "active": "active",
+      "wait": "wait",
+      "ago": "{{delta}} 前"
+    },
+    "status": {
+      "ready": "READY",
+      "starting": "STARTING",
+      "exited": "EXITED",
+      "uptime": "已运行 {{delta}}"
+    }
+  },
+  "wizard": {
+    "title": "创建工作空间",
+    "subtitle": "给一群 agent 起个名、挂载目录、选一个配方",
+    "step1": "命名 & 选色",
+    "namePlaceholder": "my-project",
+    "aiNamed": "AI 命名",
+    "step2": "挂载项目目录",
+    "step2Hint": "AI 自动识别栈，无需配置",
+    "dirPlaceholder1": "/Users/you/code/myapp",
+    "dirPlaceholderMore": "再加一个目录（可选）",
+    "dirHint": "会作为 workspace_dir 传给 spell",
+    "removeDir": "移除",
+    "addDir": "添加项目目录",
+    "step3": "配方",
+    "pickSpell": "选一个配方",
+    "agentCountInfo": "将启动 {{count}} 个 agent",
+    "defaultInfo": "AI 选了 1 个目录 · 推荐 1 个配方",
     "cancel": "取消",
-    "delete": "删除",
-    "edit": "编辑",
-    "search": "搜索",
+    "create": "创建工作空间",
+    "creating": "创建中…"
+  },
+  "messages": {
+    "filter": "过滤 发送方 / 接收方 / 正文",
     "refresh": "刷新",
-    "close": "关闭"
+    "bySender": "按发送方未读 ({{count}})",
+    "bySenderNone": "无",
+    "empty": "暂无消息",
+    "unread": "未读",
+    "read": "已读",
+    "jumpParent": "跳转到被回复的消息",
+    "reply": "回复",
+    "markRead": "标记为已读",
+    "replying": "正在回复 #{{id}}",
+    "cancelReply": "取消回复",
+    "fromPlaceholder": "发送方（留空 = system）",
+    "toPlaceholder": "接收方（agent id）",
+    "bodyPlaceholder": "消息正文",
+    "send": "发送",
+    "sending": "发送中…"
+  },
+  "cmdk": {
+    "placeholder": "搜索命令、跳转、唤醒 agent…",
+    "groups": {
+      "nav": "导航",
+      "workspaces": "工作空间",
+      "wakeAgent": "唤醒 agent",
+      "theme": "主题",
+      "actions": "操作"
+    },
+    "navHint": {
+      "chat": "Chat 三栏",
+      "dag": "DAG",
+      "replays": "Replays",
+      "context": "Blackboard",
+      "inbox": "Approval Inbox",
+      "notifications": "Notification Center",
+      "settings": "Preferences",
+      "debug": "Legacy M2 grid"
+    },
+    "switchWs": "切到此工作空间",
+    "wake": "唤醒 {{role}}",
+    "switchToLight": "切换到浅色",
+    "switchToDark": "切换到深色",
+    "followSystem": "跟随系统",
+    "newWorkspace": "新建工作空间…",
+    "runSpell": "运行配方…",
+    "openWizard": "打开 Wizard",
+    "kbd": {
+      "navigate": "选择",
+      "confirm": "确定",
+      "close": "关闭",
+      "openHint": "⌘K 随时呼出"
+    }
   }
 }

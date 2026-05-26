@@ -19,6 +19,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   ChevronDown,
   ChevronRight,
@@ -48,6 +49,7 @@ function formatTime(ms: number): string {
 }
 
 export function MessagesPanel({ liveMessage, liveRead, unreadByFrom }: Props) {
+  const { t } = useTranslation();
   const [items, setItems] = useState<MessageRecord[]>([]);
   const [filter, setFilter] = useState("");
   const [from, setFrom] = useState("");
@@ -184,14 +186,14 @@ export function MessagesPanel({ liveMessage, liveRead, unreadByFrom }: Props) {
           <input
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
-            placeholder="过滤 发送方 / 接收方 / 正文"
+            placeholder={t("messages.filter")}
             className="min-w-0 flex-1 bg-transparent text-xs text-foreground-primary placeholder:text-foreground-tertiary focus:outline-none"
           />
         </div>
         <button
           onClick={refresh}
           className="flex size-8 items-center justify-center rounded-md text-foreground-tertiary hover:bg-surface-tertiary"
-          title="刷新"
+          title={t("messages.refresh")}
         >
           <RefreshCw className="size-3.5" />
         </button>
@@ -202,20 +204,20 @@ export function MessagesPanel({ liveMessage, liveRead, unreadByFrom }: Props) {
         <button
           onClick={() => setShowBySender((v) => !v)}
           className="flex items-center gap-1 self-start font-caption text-[11px] text-foreground-tertiary hover:text-foreground-secondary"
-          title="按发送方查看未读"
+          title={t("messages.bySender", { count: senders.length })}
         >
           {showBySender ? (
             <ChevronDown className="size-3" />
           ) : (
             <ChevronRight className="size-3" />
           )}
-          按发送方未读 ({senders.length})
+          {t("messages.bySender", { count: senders.length })}
         </button>
         {showBySender && (
           <div className="flex flex-wrap gap-1.5 pt-1">
             {senders.length === 0 && (
               <span className="font-caption text-[11px] text-foreground-tertiary">
-                无
+                {t("messages.bySenderNone")}
               </span>
             )}
             {senders.map(([who, n]) => (
@@ -243,7 +245,7 @@ export function MessagesPanel({ liveMessage, liveRead, unreadByFrom }: Props) {
       <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
         {visible.length === 0 && (
           <p className="mt-6 text-center font-caption text-xs text-foreground-tertiary">
-            暂无消息
+            {t("messages.empty")}
           </p>
         )}
         <ul className="flex flex-col gap-1.5">
@@ -272,7 +274,7 @@ export function MessagesPanel({ liveMessage, liveRead, unreadByFrom }: Props) {
                       "font-bold",
                       unread ? "text-state-busy" : "text-state-success",
                     )}
-                    title={unread ? "未读" : "已读"}
+                    title={unread ? t("messages.unread") : t("messages.read")}
                   >
                     {unread ? "★" : "✓"}
                   </span>
@@ -292,7 +294,7 @@ export function MessagesPanel({ liveMessage, liveRead, unreadByFrom }: Props) {
                     <button
                       onClick={() => jumpToParent(m.in_reply_to!)}
                       className="ml-1 flex items-center gap-0.5 rounded px-1 text-state-busy hover:bg-status-busy-soft"
-                      title="跳转到被回复的消息"
+                      title={t("messages.jumpParent")}
                     >
                       <CornerUpLeft className="size-2.5" />#{m.in_reply_to}
                     </button>
@@ -301,16 +303,16 @@ export function MessagesPanel({ liveMessage, liveRead, unreadByFrom }: Props) {
                   <button
                     onClick={() => startReply(m)}
                     className="opacity-0 transition-opacity group-hover:opacity-100 rounded border border-border-subtle bg-surface-elevated px-1.5 text-foreground-secondary hover:bg-surface-tertiary"
-                    title="回复这条消息"
+                    title={t("messages.reply")}
                   >
-                    回复
+                    {t("messages.reply")}
                   </button>
                   {unread && (
                     <button
                       onClick={() => markRead(m)}
                       disabled={marking === m.id}
                       className="rounded border border-border-subtle bg-surface-elevated px-1.5 text-foreground-secondary hover:bg-surface-tertiary disabled:opacity-50"
-                      title="标记为已读"
+                      title={t("messages.markRead")}
                     >
                       ✓
                     </button>
@@ -335,11 +337,11 @@ export function MessagesPanel({ liveMessage, liveRead, unreadByFrom }: Props) {
         {inReplyTo != null && (
           <div className="flex items-center gap-2 self-start rounded-md bg-accent-primary-soft px-2 py-1 text-[11px] text-accent-primary-deep">
             <CornerUpLeft className="size-3" />
-            正在回复 #{inReplyTo}
+            {t("messages.replying", { id: inReplyTo })}
             <button
               onClick={() => setInReplyTo(null)}
               className="ml-1 rounded hover:bg-surface-elevated"
-              title="取消回复"
+              title={t("messages.cancelReply")}
             >
               <X className="size-3" />
             </button>
@@ -349,20 +351,20 @@ export function MessagesPanel({ liveMessage, liveRead, unreadByFrom }: Props) {
           <input
             value={from}
             onChange={(e) => setFrom(e.target.value)}
-            placeholder="发送方（留空 = system）"
+            placeholder={t("messages.fromPlaceholder")}
             className="min-w-0 flex-1 rounded-md border border-border-subtle bg-surface-elevated px-2.5 py-1.5 font-mono text-xs text-foreground-primary placeholder:text-foreground-tertiary focus:border-accent-primary focus:outline-none"
           />
           <input
             value={to}
             onChange={(e) => setTo(e.target.value)}
-            placeholder="接收方（agent id）"
+            placeholder={t("messages.toPlaceholder")}
             className="min-w-0 flex-1 rounded-md border border-border-subtle bg-surface-elevated px-2.5 py-1.5 font-mono text-xs text-foreground-primary placeholder:text-foreground-tertiary focus:border-accent-primary focus:outline-none"
           />
         </div>
         <textarea
           value={body}
           onChange={(e) => setBody(e.target.value)}
-          placeholder="消息正文"
+          placeholder={t("messages.bodyPlaceholder")}
           rows={3}
           className="resize-y rounded-md border border-border-subtle bg-surface-elevated px-2.5 py-1.5 font-body text-xs text-foreground-primary placeholder:text-foreground-tertiary focus:border-accent-primary focus:outline-none"
         />
@@ -373,7 +375,7 @@ export function MessagesPanel({ liveMessage, liveRead, unreadByFrom }: Props) {
             className="flex items-center gap-1.5 rounded-md bg-accent-primary px-4 py-1.5 text-xs font-semibold text-foreground-on-accent hover:bg-accent-primary-deep disabled:opacity-50"
           >
             <Send className="size-3.5" />
-            {sending ? "发送中…" : "发送"}
+            {sending ? t("messages.sending") : t("messages.send")}
           </button>
         </div>
       </div>

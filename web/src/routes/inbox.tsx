@@ -14,6 +14,7 @@
  */
 
 import { useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   AlertCircle,
   Check,
@@ -50,6 +51,8 @@ interface MockApproval {
   at: string;
 }
 
+// Mock data stays English — once the real backend lands, rationale/at strings
+// come from the server's payload, where localisation belongs.
 const MOCKS: MockApproval[] = [
   {
     id: "ap-001",
@@ -59,10 +62,10 @@ const MOCKS: MockApproval[] = [
     tool: "git push origin main",
     command: "git push origin main",
     rationale:
-      "提交了 38 个 commit 的 PR 分支。包含 apps/backend/api/routes.py +124 / alembic migration / requirements.txt +2 deps。",
+      "PR branch with 38 commits. Touches apps/backend/api/routes.py +124 / alembic migration / requirements.txt +2 deps.",
     files: "git push origin main",
     severity: "danger",
-    at: "刚才 (mock)",
+    at: "just now (mock)",
   },
   {
     id: "ap-002",
@@ -72,10 +75,10 @@ const MOCKS: MockApproval[] = [
     tool: "write_blackboard",
     command: "swarm.write_blackboard release.yaml",
     rationale:
-      "写 release 元数据到共享黑板，下游 deploy spell 会读它跑发布。",
+      "Writing release metadata to the shared blackboard; downstream deploy spell will read it.",
     files: "swarm.write_blackboard release.yaml [12 lines]",
     severity: "default",
-    at: "1 分钟前 (mock)",
+    at: "1 min ago (mock)",
   },
   {
     id: "ap-003",
@@ -85,16 +88,17 @@ const MOCKS: MockApproval[] = [
     tool: "swarm_run_spell deploy",
     command: 'swarm.run_spell deploy --task="prod cutover"',
     rationale:
-      "已跑 deploy spell 子流程，包含 2 个 agent：deployer、smoke-test。",
+      "Spawned the deploy spell sub-flow, includes 2 agents: deployer + smoke-test.",
     files: 'swarm.run_spell deploy --task="prod cutover"',
     severity: "default",
-    at: "3 分钟前 (mock)",
+    at: "3 min ago (mock)",
   },
 ];
 
 type Filter = "all" | "high" | "default";
 
 export default function InboxRoute() {
+  const { t } = useTranslation();
   const [filter, setFilter] = useState<Filter>("all");
   const [dismissed, setDismissed] = useState<Set<string>>(new Set());
 
@@ -116,10 +120,10 @@ export default function InboxRoute() {
         </span>
         <div className="flex flex-col">
           <h1 className="font-heading text-sm font-semibold text-foreground-primary">
-            待批准
+            {t("inbox.title")}
           </h1>
           <span className="font-caption text-[10px] text-foreground-tertiary">
-            agent 请求进入人在回路决定
+            {t("inbox.subtitle")}
           </span>
         </div>
         <span className="flex-1" />
@@ -128,7 +132,7 @@ export default function InboxRoute() {
         </span>
         <button
           className="flex size-8 items-center justify-center rounded-md bg-surface-tertiary text-foreground-secondary hover:bg-surface-secondary"
-          title="设置"
+          title={t("nav.settings")}
         >
           <ShieldCheck className="size-4" />
         </button>
@@ -138,9 +142,9 @@ export default function InboxRoute() {
       <div className="flex h-11 shrink-0 items-center gap-1.5 border-b border-border-subtle bg-surface-secondary px-5">
         {(
           [
-            { id: "all", label: "全部" },
-            { id: "high", label: "高风险" },
-            { id: "default", label: "中" },
+            { id: "all", labelKey: "inbox.all" },
+            { id: "high", labelKey: "inbox.high" },
+            { id: "default", labelKey: "inbox.default" },
           ] as const
         ).map((f) => {
           const active = f.id === filter;
@@ -155,13 +159,13 @@ export default function InboxRoute() {
                   : "border border-border-subtle bg-surface-elevated text-foreground-secondary hover:bg-surface-tertiary",
               )}
             >
-              {f.label}
+              {t(f.labelKey)}
             </button>
           );
         })}
         <span className="flex-1" />
         <button className="flex h-6 items-center gap-1 rounded border border-border-subtle bg-surface-elevated px-2 font-caption text-[11px] text-foreground-secondary">
-          全部拒绝
+          {t("inbox.rejectAll")}
           <ChevronDown className="size-3" />
         </button>
       </div>
@@ -170,20 +174,8 @@ export default function InboxRoute() {
       <div className="m-4 flex items-start gap-3 rounded-lg border border-status-warning/40 bg-status-warning-soft p-3">
         <AlertCircle className="mt-0.5 size-4 shrink-0 text-status-warning" />
         <div className="font-caption text-[11px] text-foreground-secondary">
-          <p className="font-semibold text-foreground-primary">
-            后端未就绪 — 以下为 mock 数据
-          </p>
-          <p>
-            目前 shim 用{" "}
-            <code className="font-mono">--dangerously-skip-permissions</code>{" "}
-            起 CLI，所有工具调用直接放行。要做 Approval Inbox
-            需要给 shim 加 <code className="font-mono">--approval-mode=inbox</code>
-            模式 +
-            <code className="font-mono">/api/approvals</code> 端点 +
-            <code className="font-mono">approval_pending / approval_resolved</code>{" "}
-            两个 SwarmEvent。等 backend 落地后这页 UI 不动，只把
-            MOCKS 换成 api.listApprovals()。
-          </p>
+          <p className="font-semibold text-foreground-primary">{t("inbox.wipTitle")}</p>
+          <p>{t("inbox.wipBody")}</p>
         </div>
       </div>
 
@@ -216,7 +208,7 @@ export default function InboxRoute() {
               </span>
               {a.severity === "danger" && (
                 <span className="rounded-full bg-status-danger-soft px-2 py-0.5 font-caption text-[9px] text-state-danger">
-                  高风险
+                  {t("inbox.highRiskChip")}
                 </span>
               )}
               <span className="ml-auto font-caption text-[10px] text-foreground-tertiary">
@@ -236,29 +228,29 @@ export default function InboxRoute() {
               <span className="flex-1" />
               <button
                 className="flex h-7 items-center gap-1 rounded-md border border-border-subtle bg-surface-elevated px-3 text-xs text-foreground-secondary hover:bg-surface-tertiary"
-                title="查看完整 tool_use payload"
+                title={t("inbox.viewTooltip")}
               >
                 <Eye className="size-3" />
-                查看
+                {t("inbox.view")}
               </button>
               <button
                 disabled
-                title="后端未就绪（见顶部说明）"
+                title={t("inbox.disabledTooltip")}
                 className="flex h-7 items-center gap-1 rounded-md border border-border-subtle bg-surface-elevated px-3 text-xs text-state-danger opacity-50"
                 onClick={() =>
                   setDismissed((p) => new Set(p).add(a.id))
                 }
               >
                 <X className="size-3" />
-                拒绝
+                {t("inbox.reject")}
               </button>
               <button
                 disabled
-                title="后端未就绪（见顶部说明）"
+                title={t("inbox.disabledTooltip")}
                 className="flex h-7 items-center gap-1 rounded-md bg-accent-primary px-3 text-xs font-bold text-foreground-on-accent opacity-50"
               >
                 <Check className="size-3" />
-                批准
+                {t("inbox.approve")}
               </button>
             </div>
           </article>
@@ -266,7 +258,7 @@ export default function InboxRoute() {
         {filtered.length === 0 && (
           <div className="flex flex-1 flex-col items-center justify-center gap-3 text-foreground-tertiary">
             <InboxIcon className="size-10 opacity-40" />
-            <p className="font-caption text-sm">收件箱空了</p>
+            <p className="font-caption text-sm">{t("inbox.empty")}</p>
           </div>
         )}
       </div>
@@ -275,11 +267,11 @@ export default function InboxRoute() {
       <footer className="flex shrink-0 items-center gap-3 border-t border-border-subtle bg-surface-elevated px-5 py-3">
         <Info className="size-3 text-foreground-tertiary" />
         <span className="font-caption text-[11px] text-foreground-secondary">
-          Agent 在等你决定，其余工作不受影响
+          {t("inbox.footerHint")}
         </span>
         <span className="flex-1" />
         <span className="rounded bg-surface-tertiary px-2 py-1 font-caption text-[10px] text-foreground-tertiary">
-          自动刷新 30s
+          {t("inbox.autoRefresh")}
         </span>
       </footer>
     </div>

@@ -14,6 +14,7 @@
 import { useEffect, useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { useTranslation } from "react-i18next";
 import {
   ChevronDown,
   ChevronRight,
@@ -210,6 +211,7 @@ function shortSha(sha: string): string {
 }
 
 export default function ContextRoute() {
+  const { t } = useTranslation();
   const [entries, setEntries] = useState<BlackboardEntry[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [snap, setSnap] = useState<BlackboardSnapshot | null>(null);
@@ -297,10 +299,10 @@ export default function ContextRoute() {
         </span>
         <div className="flex flex-col">
           <h1 className="font-heading text-sm font-semibold text-foreground-primary">
-            上下文看板
+            {t("context.title")}
           </h1>
           <span className="font-caption text-[10px] text-foreground-tertiary">
-            {entries.length} 个 key · 浏览 + 历史（编辑去 /debug）
+            {t("context.subtitle", { count: entries.length })}
           </span>
         </div>
         <span className="flex-1" />
@@ -309,14 +311,14 @@ export default function ContextRoute() {
           <input
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
-            placeholder="按 key 搜索"
+            placeholder={t("context.search")}
             className="min-w-0 flex-1 bg-transparent text-xs text-foreground-primary placeholder:text-foreground-tertiary focus:outline-none"
           />
         </div>
         <button
           onClick={refreshList}
           className="flex size-8 items-center justify-center rounded-md bg-surface-tertiary text-foreground-secondary hover:bg-surface-secondary"
-          title="刷新"
+          title={t("common.refresh")}
         >
           <RefreshCw className="size-4" />
         </button>
@@ -328,7 +330,7 @@ export default function ContextRoute() {
         <aside className="flex w-[280px] shrink-0 flex-col gap-1 overflow-y-auto border-r border-border-subtle bg-surface-secondary px-2 py-3">
           {entries.length === 0 ? (
             <p className="px-3 py-2 font-caption text-xs text-foreground-tertiary">
-              暂无 blackboard 内容
+              {t("context.empty")}
             </p>
           ) : (
             <FileTree
@@ -362,14 +364,14 @@ export default function ContextRoute() {
                           : "text-foreground-secondary hover:bg-surface-tertiary",
                       )}
                     >
-                      {v === "rendered" ? "渲染" : "Raw"}
+                      {v === "rendered" ? t("context.rendered") : t("context.raw")}
                     </button>
                   ))}
                 </div>
               </>
             ) : (
               <span className="font-caption text-xs text-foreground-tertiary">
-                左侧选一个 key 查看
+                {t("context.selectKey")}
               </span>
             )}
           </div>
@@ -382,12 +384,12 @@ export default function ContextRoute() {
             {!selected && (
               <div className="flex h-full flex-col items-center justify-center gap-2 text-foreground-tertiary">
                 <FileText className="size-10 opacity-40" />
-                <p className="font-caption text-sm">没有选中任何 key</p>
+                <p className="font-caption text-sm">{t("context.noSelection")}</p>
               </div>
             )}
             {selected && loadingDoc && (
               <p className="font-caption text-sm text-foreground-tertiary">
-                加载中…
+                {t("common.loading")}
               </p>
             )}
             {selected && !loadingDoc && snap && view === "rendered" && (
@@ -411,7 +413,7 @@ export default function ContextRoute() {
             <>
               <section>
                 <h3 className="mb-2 font-heading text-[11px] font-semibold uppercase tracking-wider text-foreground-tertiary">
-                  元数据
+                  {t("context.meta")}
                 </h3>
                 <dl className="grid grid-cols-[64px_1fr] gap-y-2 font-caption text-xs">
                   <dt className="text-foreground-tertiary">path</dt>
@@ -426,7 +428,7 @@ export default function ContextRoute() {
                   <dd className="text-foreground-primary">{formatTime(selectedEntry.at)}</dd>
                   {snap && (
                     <>
-                      <dt className="text-foreground-tertiary">size</dt>
+                      <dt className="text-foreground-tertiary">{t("context.size")}</dt>
                       <dd className="text-foreground-primary">{snap.content.length} B</dd>
                     </>
                   )}
@@ -435,12 +437,12 @@ export default function ContextRoute() {
               <section>
                 <h3 className="mb-2 flex items-center gap-1.5 font-heading text-[11px] font-semibold uppercase tracking-wider text-foreground-tertiary">
                   <History className="size-3" />
-                  历史 ({history.length})
+                  {t("context.history", { count: history.length })}
                 </h3>
                 <ul className="flex flex-col gap-1">
                   {history.length === 0 && (
                     <li className="font-caption text-xs text-foreground-tertiary">
-                      暂无历史
+                      {t("context.noHistory")}
                     </li>
                   )}
                   {history.map((h) => (
@@ -470,7 +472,7 @@ export default function ContextRoute() {
             </>
           ) : (
             <p className="font-caption text-xs text-foreground-tertiary">
-              选中 key 查看元数据与历史
+              {t("context.rightHint")}
             </p>
           )}
         </aside>

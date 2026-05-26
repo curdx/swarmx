@@ -16,6 +16,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import { Download, Play, RefreshCw, Search } from "lucide-react";
 import { api } from "../../api/http";
 import type { RecordingInfo } from "../../api/types";
@@ -58,6 +59,7 @@ function formatDuration(ms: number | null): string {
 }
 
 export default function ReplaysIndex() {
+  const { t } = useTranslation();
   const [items, setItems] = useState<RecordingInfo[]>([]);
   const [filter, setFilter] = useState("");
   const [activeTag, setActiveTag] = useState<string>("all");
@@ -112,10 +114,10 @@ export default function ReplaysIndex() {
         </span>
         <div className="flex flex-col">
           <h1 className="font-heading text-sm font-semibold text-foreground-primary">
-            录像库
+            {t("replays.title")}
           </h1>
           <span className="font-caption text-[10px] text-foreground-tertiary">
-            {items.length} 个录像
+            {t("replays.count", { count: items.length })}
           </span>
         </div>
         <span className="flex-1" />
@@ -124,14 +126,14 @@ export default function ReplaysIndex() {
           <input
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
-            placeholder="按 agent / id 搜索"
+            placeholder={t("replays.search")}
             className="min-w-0 flex-1 bg-transparent text-xs text-foreground-primary placeholder:text-foreground-tertiary focus:outline-none"
           />
         </div>
         <button
           onClick={refresh}
           className="flex size-8 items-center justify-center rounded-md bg-surface-tertiary text-foreground-secondary hover:bg-surface-secondary"
-          title="刷新"
+          title={t("common.refresh")}
         >
           <RefreshCw className="size-4" />
         </button>
@@ -139,12 +141,12 @@ export default function ReplaysIndex() {
 
       {/* Tag bar */}
       <div className="flex h-11 shrink-0 items-center gap-1.5 border-b border-border-subtle bg-surface-secondary px-5">
-        {tags.map((t) => {
-          const active = t === activeTag;
+        {tags.map((tag) => {
+          const active = tag === activeTag;
           return (
             <button
-              key={t}
-              onClick={() => setActiveTag(t)}
+              key={tag}
+              onClick={() => setActiveTag(tag)}
               className={cn(
                 "rounded-full px-3 py-1 text-xs transition-colors",
                 active
@@ -152,13 +154,13 @@ export default function ReplaysIndex() {
                   : "border border-border-subtle bg-surface-elevated text-foreground-secondary hover:bg-surface-tertiary",
               )}
             >
-              {t === "all" ? "全部" : t}
+              {tag === "all" ? t("replays.tagAll") : tag}
             </button>
           );
         })}
         <span className="flex-1" />
         <span className="font-caption text-xs text-foreground-tertiary">
-          {filtered.length} / {items.length} 条
+          {t("replays.ratio", { shown: filtered.length, total: items.length })}
         </span>
       </div>
 
@@ -172,7 +174,7 @@ export default function ReplaysIndex() {
         {filtered.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center gap-2 text-foreground-tertiary">
             <Play className="size-8 opacity-40" />
-            <p className="font-caption text-sm">没有匹配的录像</p>
+            <p className="font-caption text-sm">{t("replays.empty")}</p>
           </div>
         ) : (
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
@@ -205,9 +207,9 @@ export default function ReplaysIndex() {
                           ? "bg-status-running-soft text-status-running"
                           : "bg-surface-tertiary text-foreground-tertiary",
                       )}
-                      title={live ? "录像还在进行" : "录像已完结"}
+                      title={live ? t("replays.live") : t("replays.completed")}
                     >
-                      {live ? "● live" : "○ completed"}
+                      {live ? t("replays.live") : t("replays.completed")}
                     </span>
                   </div>
 
@@ -229,13 +231,13 @@ export default function ReplaysIndex() {
                       )}
                     </div>
                     <div className="text-term-blue">
-                      {live ? "▶ recording…" : "✓ ready to replay"}
+                      {live ? t("replays.recording") : t("replays.ready")}
                     </div>
                     {/* hover overlay */}
                     <div className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 transition-opacity group-hover:opacity-100">
                       <span className="flex items-center gap-1.5 rounded-full bg-accent-primary px-4 py-2 text-xs font-medium text-foreground-on-accent">
                         <Play className="size-3.5" />
-                        播放
+                        {t("replays.play")}
                       </span>
                     </div>
                   </Link>
@@ -251,16 +253,16 @@ export default function ReplaysIndex() {
                       className="flex h-7 items-center gap-1 rounded-md bg-accent-primary px-2.5 text-xs text-foreground-on-accent hover:bg-accent-primary-deep"
                     >
                       <Play className="size-3" />
-                      播放
+                      {t("replays.play")}
                     </Link>
                     <a
                       href={api.recordingCastUrl(r.id)}
                       download={`${r.id}.cast`}
                       className="flex h-7 items-center gap-1 rounded-md border border-border-subtle bg-surface-elevated px-2.5 text-xs hover:bg-surface-tertiary"
-                      title="下载 .cast"
+                      title={t("player.downloadCast")}
                     >
                       <Download className="size-3" />
-                      下载
+                      {t("replays.download")}
                     </a>
                   </div>
                 </article>

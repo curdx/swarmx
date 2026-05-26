@@ -20,6 +20,7 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   Check,
   ChevronDown,
@@ -50,6 +51,7 @@ interface Props {
 }
 
 export function CreateWizard({ open, onClose, onCreated }: Props) {
+  const { t } = useTranslation();
   const [name, setName] = useState("");
   const [accent, setAccent] = useState<string>("peach");
   const [dirs, setDirs] = useState<string[]>([""]);
@@ -123,10 +125,10 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
           </span>
           <div className="flex flex-col">
             <h2 className="font-heading text-base font-semibold text-foreground-primary">
-              创建工作空间
+              {t("wizard.title")}
             </h2>
             <span className="font-caption text-[11px] text-foreground-tertiary">
-              给一群 agent 起个名、挂载目录、选一个配方
+              {t("wizard.subtitle")}
             </span>
           </div>
           <span className="flex-1" />
@@ -148,7 +150,7 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
 
           {/* Step 1: name + accent */}
           <section>
-            <StepHeader n={1} label="命名 & 选色" />
+            <StepHeader n={1} label={t("wizard.step1")} />
             <div className="flex items-center gap-3">
               <div
                 className="flex h-11 flex-1 items-center gap-3 rounded-md border-[1.5px] bg-surface-elevated px-3.5"
@@ -159,12 +161,12 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
                   autoFocus
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  placeholder="my-project"
+                  placeholder={t("wizard.namePlaceholder")}
                   className="min-w-0 flex-1 bg-transparent text-sm font-semibold text-foreground-primary placeholder:text-foreground-tertiary focus:outline-none"
                 />
                 {name && (
                   <span className="rounded-sm bg-accent-primary-soft px-1.5 py-0.5 font-caption text-[10px] text-accent-primary-deep">
-                    AI 命名
+                    {t("wizard.aiNamed")}
                   </span>
                 )}
               </div>
@@ -191,8 +193,8 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
           <section>
             <StepHeader
               n={2}
-              label="挂载项目目录"
-              hint="AI 自动识别栈，无需配置"
+              label={t("wizard.step2")}
+              hint={t("wizard.step2Hint")}
             />
             <div className="flex flex-col gap-2">
               {dirs.map((d, i) => (
@@ -222,14 +224,14 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
                       }
                       placeholder={
                         i === 0
-                          ? "/Users/you/code/myapp"
-                          : "再加一个目录（可选）"
+                          ? t("wizard.dirPlaceholder1")
+                          : t("wizard.dirPlaceholderMore")
                       }
                       className="bg-transparent font-mono text-sm text-foreground-primary placeholder:text-foreground-tertiary focus:outline-none"
                     />
                     {d.trim() && (
                       <span className="font-caption text-[10px] text-foreground-tertiary">
-                        会作为 workspace_dir 传给 spell
+                        {t("wizard.dirHint")}
                       </span>
                     )}
                   </div>
@@ -239,7 +241,7 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
                     }
                     disabled={dirs.length === 1}
                     className="flex size-7 items-center justify-center rounded-md text-foreground-tertiary hover:bg-surface-tertiary disabled:opacity-30"
-                    title="移除"
+                    title={t("wizard.removeDir")}
                   >
                     <Trash2 className="size-3.5" />
                   </button>
@@ -252,14 +254,14 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
                 <span className="flex size-7 items-center justify-center rounded-md bg-accent-primary-soft text-accent-primary-deep">
                   <Plus className="size-4" />
                 </span>
-                添加项目目录
+                {t("wizard.addDir")}
               </button>
             </div>
           </section>
 
           {/* Step 3: spell */}
           <section>
-            <StepHeader n={3} label="配方" />
+            <StepHeader n={3} label={t("wizard.step3")} />
             <div
               className="flex items-center gap-3.5 rounded-lg border-[1.5px] bg-surface-accent-tint px-4 py-3.5"
               style={{ borderColor: "var(--color-accent-primary)" }}
@@ -272,7 +274,7 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
                   {selectedSpell?.name ?? "—"}
                 </span>
                 <span className="line-clamp-2 font-caption text-[11px] text-foreground-secondary">
-                  {selectedSpell?.description ?? "选一个配方"}
+                  {selectedSpell?.description ?? t("wizard.pickSpell")}
                   {selectedSpell && selectedSpell.agents.length > 0 && (
                     <>
                       {" · "}
@@ -306,15 +308,15 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
           <span className="flex items-center gap-1.5 font-caption text-[11px] text-foreground-tertiary">
             <Layers className="size-3" />
             {selectedSpell
-              ? `将启动 ${selectedSpell.agents.length} 个 agent`
-              : "AI 选了 1 个目录 · 推荐 1 个配方"}
+              ? t("wizard.agentCountInfo", { count: selectedSpell.agents.length })
+              : t("wizard.defaultInfo")}
           </span>
           <span className="flex-1" />
           <button
             onClick={onClose}
             className="rounded-md border border-border-subtle bg-surface-elevated px-4 py-2 text-xs text-foreground-secondary hover:bg-surface-tertiary"
           >
-            取消
+            {t("wizard.cancel")}
           </button>
           <button
             onClick={submit}
@@ -322,7 +324,7 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
             className="flex items-center gap-1.5 rounded-md bg-accent-primary px-4 py-2 text-xs font-bold text-foreground-on-accent hover:bg-accent-primary-deep disabled:opacity-50"
           >
             <Check className="size-3.5" />
-            {busy ? "创建中…" : "创建工作空间"}
+            {busy ? t("wizard.creating") : t("wizard.create")}
           </button>
         </footer>
       </div>

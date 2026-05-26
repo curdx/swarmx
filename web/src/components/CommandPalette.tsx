@@ -19,6 +19,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Command } from "cmdk";
 import { useNavigate } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import {
   Activity,
   Bell,
@@ -41,17 +42,18 @@ import type { AgentInfo } from "../api/types";
 import { setTheme, type ThemeMode } from "@/lib/theme";
 
 const NAV = [
-  { label: "对话", href: "/chat", icon: MessageSquare, hint: "Chat 三栏" },
-  { label: "协作图", href: "/dag", icon: GitBranch, hint: "DAG" },
-  { label: "录像库", href: "/replays", icon: Play, hint: "Replays" },
-  { label: "上下文看板", href: "/context", icon: FileText, hint: "Blackboard" },
-  { label: "审批", href: "/inbox", icon: InboxIcon, hint: "Approval Inbox" },
-  { label: "通知", href: "/notifications", icon: Bell, hint: "Notification Center" },
-  { label: "设置", href: "/settings", icon: SettingsIcon, hint: "Preferences" },
-  { label: "Debug 仪表盘", href: "/debug", icon: Bug, hint: "Legacy M2 grid" },
-];
+  { labelKey: "nav.chat", href: "/chat", icon: MessageSquare, hintKey: "cmdk.navHint.chat" },
+  { labelKey: "nav.dag", href: "/dag", icon: GitBranch, hintKey: "cmdk.navHint.dag" },
+  { labelKey: "nav.replays", href: "/replays", icon: Play, hintKey: "cmdk.navHint.replays" },
+  { labelKey: "nav.context", href: "/context", icon: FileText, hintKey: "cmdk.navHint.context" },
+  { labelKey: "nav.inbox", href: "/inbox", icon: InboxIcon, hintKey: "cmdk.navHint.inbox" },
+  { labelKey: "nav.notifications", href: "/notifications", icon: Bell, hintKey: "cmdk.navHint.notifications" },
+  { labelKey: "nav.settings", href: "/settings", icon: SettingsIcon, hintKey: "cmdk.navHint.settings" },
+  { labelKey: "nav.debug", href: "/debug", icon: Bug, hintKey: "cmdk.navHint.debug" },
+] as const;
 
 export function CommandPalette() {
+  const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const navigate = useNavigate();
@@ -98,7 +100,7 @@ export function CommandPalette() {
     <Command.Dialog
       open={open}
       onOpenChange={setOpen}
-      label="命令面板"
+      label={t("cmdk.placeholder")}
       className="fixed inset-0 z-[60] flex items-start justify-center bg-black/40 p-6 pt-[15vh] backdrop-blur-sm"
       shouldFilter={true}
     >
@@ -107,16 +109,16 @@ export function CommandPalette() {
         onClick={(e) => e.stopPropagation()}
       >
         <Command.Input
-          placeholder="搜索命令、跳转、唤醒 agent…"
+          placeholder={t("cmdk.placeholder")}
           className="h-12 w-full border-b border-border-subtle bg-transparent px-4 font-body text-sm text-foreground-primary placeholder:text-foreground-tertiary focus:outline-none"
         />
         <Command.List className="max-h-[60vh] overflow-y-auto p-2">
           <Command.Empty className="py-6 text-center font-caption text-xs text-foreground-tertiary">
-            没有匹配
+            {t("common.noMatch")}
           </Command.Empty>
 
           <Command.Group
-            heading="导航"
+            heading={t("cmdk.groups.nav")}
             className="[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:font-caption [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-wider [&_[cmdk-group-heading]]:text-foreground-tertiary"
           >
             {NAV.map((n) => {
@@ -126,8 +128,8 @@ export function CommandPalette() {
                   key={n.href}
                   onSelect={() => go(n.href)}
                   icon={<Icon className="size-4" />}
-                  label={n.label}
-                  hint={n.hint}
+                  label={t(n.labelKey)}
+                  hint={t(n.hintKey)}
                 />
               );
             })}
@@ -135,7 +137,7 @@ export function CommandPalette() {
 
           {workspaces.length > 0 && (
             <Command.Group
-              heading="工作空间"
+              heading={t("cmdk.groups.workspaces")}
               className="mt-1 [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:font-caption [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-wider [&_[cmdk-group-heading]]:text-foreground-tertiary"
             >
               {workspaces.map((ws) => {
@@ -147,7 +149,7 @@ export function CommandPalette() {
                     onSelect={() => go(`/chat/${id}`)}
                     icon={<Activity className="size-4" />}
                     label={ws.split("/").slice(-2).join("/") || ws}
-                    hint="切到此工作空间"
+                    hint={t("cmdk.switchWs")}
                   />
                 );
               })}
@@ -156,7 +158,7 @@ export function CommandPalette() {
 
           {liveAgents.length > 0 && (
             <Command.Group
-              heading="唤醒 agent"
+              heading={t("cmdk.groups.wakeAgent")}
               className="mt-1 [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:font-caption [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-wider [&_[cmdk-group-heading]]:text-foreground-tertiary"
             >
               {liveAgents.map((a) => (
@@ -168,7 +170,7 @@ export function CommandPalette() {
                     close();
                   }}
                   icon={<Zap className="size-4 text-state-wake" />}
-                  label={`唤醒 ${a.role}`}
+                  label={t("cmdk.wake", { role: a.role })}
                   hint={a.agent_id}
                 />
               ))}
@@ -176,47 +178,47 @@ export function CommandPalette() {
           )}
 
           <Command.Group
-            heading="主题"
+            heading={t("cmdk.groups.theme")}
             className="mt-1 [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:font-caption [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-wider [&_[cmdk-group-heading]]:text-foreground-tertiary"
           >
             <Item
-              value="theme light 浅色"
+              value="theme light"
               onSelect={() => {
                 persistTheme("light");
                 close();
               }}
               icon={<Sun className="size-4" />}
-              label="切换到浅色"
+              label={t("cmdk.switchToLight")}
               hint="light"
             />
             <Item
-              value="theme dark 深色"
+              value="theme dark"
               onSelect={() => {
                 persistTheme("dark");
                 close();
               }}
               icon={<Moon className="size-4" />}
-              label="切换到深色"
+              label={t("cmdk.switchToDark")}
               hint="dark"
             />
             <Item
-              value="theme system 跟随系统"
+              value="theme system"
               onSelect={() => {
                 persistTheme("system");
                 close();
               }}
               icon={<SunMoon className="size-4" />}
-              label="跟随系统"
+              label={t("cmdk.followSystem")}
               hint="system"
             />
           </Command.Group>
 
           <Command.Group
-            heading="操作"
+            heading={t("cmdk.groups.actions")}
             className="mt-1 [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:font-caption [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-wider [&_[cmdk-group-heading]]:text-foreground-tertiary"
           >
             <Item
-              value="new workspace 新建"
+              value="new workspace"
               onSelect={() => {
                 // Surface a window-level event so chat route's wizard
                 // can open without prop-drilling state across routes.
@@ -224,31 +226,31 @@ export function CommandPalette() {
                 go("/chat");
               }}
               icon={<Plus className="size-4" />}
-              label="新建工作空间…"
-              hint="打开 Wizard"
+              label={t("cmdk.newWorkspace")}
+              hint={t("cmdk.openWizard")}
             />
             <Item
-              value="run spell 配方"
+              value="run spell"
               onSelect={() => {
                 window.dispatchEvent(new CustomEvent("flockmux:open-wizard"));
                 go("/chat");
               }}
               icon={<Sparkles className="size-4" />}
-              label="运行配方…"
-              hint="同上"
+              label={t("cmdk.runSpell")}
+              hint={t("cmdk.openWizard")}
             />
           </Command.Group>
         </Command.List>
         <div className="flex items-center justify-between border-t border-border-subtle bg-surface-secondary px-3 py-2 font-caption text-[10px] text-foreground-tertiary">
           <span>
             <kbd className="rounded bg-surface-tertiary px-1.5 py-0.5">↑↓</kbd>{" "}
-            选择
+            {t("cmdk.kbd.navigate")}
             <kbd className="ml-2 rounded bg-surface-tertiary px-1.5 py-0.5">⏎</kbd>{" "}
-            确定
+            {t("cmdk.kbd.confirm")}
             <kbd className="ml-2 rounded bg-surface-tertiary px-1.5 py-0.5">Esc</kbd>{" "}
-            关闭
+            {t("cmdk.kbd.close")}
           </span>
-          <span className="font-mono">⌘K 随时呼出</span>
+          <span className="font-mono">{t("cmdk.kbd.openHint")}</span>
         </div>
       </div>
     </Command.Dialog>
