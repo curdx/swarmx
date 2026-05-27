@@ -127,8 +127,14 @@ export function AppShell() {
                     collapsed
                       ? "size-10 justify-center"
                       : "gap-3 px-3 py-2 text-sm",
+                    // active state — light: blue-100 soft tint + blue-600 text 是
+                    // Linear/Notion 风的 subtle 高亮，contrast 够。
+                    // dark: 同样 soft tint 是 blue-900 (#1E3A8A) 配 blue-500
+                    // (#3B82F6) 字 — contrast ~2.5:1 远低于 AA 4.5:1，"对话"
+                    // 几乎跟背景融在一起读不清。换成实色 accent + on-accent
+                    // 高对比文字，loud 一点但能看见。
                     isActive
-                      ? "bg-accent-primary-soft text-accent-primary"
+                      ? "bg-accent-primary-soft text-accent-primary dark:bg-accent-primary dark:text-foreground-on-accent"
                       : "text-foreground-tertiary hover:bg-surface-tertiary hover:text-foreground-primary",
                   )
                 }
