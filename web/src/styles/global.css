@@ -33,6 +33,15 @@
   --color-border-subtle: #E2E8F0;    /* slate-200 */
   --color-border-strong: #CBD5E1;    /* slate-300 */
 
+  /* Scrollbar — match the muted-overlay look you see in Slack / Linear /
+   * Notion (Chromium-based desktop apps): track always transparent, thumb
+   * is a faint pill that gets a touch more contrast on hover. The 2px
+   * transparent border + background-clip:content-box trick gives the
+   * thumb breathing room from the track edge so it reads as floating
+   * rather than as a chunky bar glued to the side. */
+  --scrollbar-thumb: rgba(15, 23, 42, 0.18);          /* slate-900 @ 18% */
+  --scrollbar-thumb-hover: rgba(15, 23, 42, 0.34);    /* slate-900 @ 34% */
+
   /* Primary accent — blue 600. Used for active state, primary CTA,
    * focus rings. Restraint matters: use only where the user must look. */
   --color-accent-primary: #2563EB;        /* blue-600 */
@@ -143,6 +152,11 @@
 
   --color-border-subtle: #334155;    /* slate-700 */
   --color-border-strong: #475569;    /* slate-600 */
+
+  /* Scrollbar — same shape as light theme, just inverted so the pill
+   * stays visible against dark surface-primary (slate-900). */
+  --scrollbar-thumb: rgba(248, 250, 252, 0.18);       /* slate-50 @ 18% */
+  --scrollbar-thumb-hover: rgba(248, 250, 252, 0.34); /* slate-50 @ 34% */
 
   --color-accent-primary: #3B82F6;             /* blue-500 — slightly brighter on dark */
   --color-accent-primary-soft: #1E3A8A;        /* blue-900 — soft bg becomes deep */
@@ -344,4 +358,81 @@ html, body, #root {
     opacity: 1;
     transform: translateY(-2px);
   }
+}
+
+/* ── Custom scrollbar ────────────────────────────────────────────────────
+ * Make scrollbars look like the ones in Slack / Linear / Notion / native
+ * macOS overlay style, instead of the default chunky Chromium gray bar
+ * that immediately reads as "embedded web page" inside the desktop shell.
+ *
+ * Two stacks both addressed:
+ *   - `scrollbar-width` + `scrollbar-color` are the CSSWG standard, picked
+ *     up by Firefox and modern Chromium (≥121). Setting them here also
+ *     gracefully covers WebKit on older macOS where the ::-webkit pseudo
+ *     elements aren't customisable on overlay scrollbars.
+ *   - `::-webkit-scrollbar*` is the legacy WebKit/Blink path; still hit
+ *     in Tauri's wry webview on macOS so we keep it for parity.
+ *
+ * The 2px transparent border + background-clip:content-box trick gives
+ * the thumb 2px breathing room from the edge — same approach Notion uses.
+ * Track and arrow buttons stay invisible. Corner (where vertical meets
+ * horizontal) is transparent so it doesn't show a beige square in
+ * scrollable areas with both axes. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+  background: transparent;
+}
+
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-track-piece,
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  background-clip: content-box;
+  border: 2px solid transparent;
+  border-radius: 999px;
+  min-height: 32px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:active {
+  background: var(--scrollbar-thumb-hover);
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-button {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+/* Terminal pane has its own scrollback rendering inside xterm.js — leave
+ * native scrollbar styling alone there so xterm's own theming wins. */
+.xterm,
+.xterm-viewport {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(248, 250, 252, 0.18) transparent;
+}
+.xterm-viewport::-webkit-scrollbar-thumb {
+  background: rgba(248, 250, 252, 0.18);
+  background-clip: content-box;
+  border: 2px solid transparent;
+  border-radius: 999px;
+}
+.xterm-viewport::-webkit-scrollbar-thumb:hover {
+  background: rgba(248, 250, 252, 0.34);
+  background-clip: content-box;
 }
