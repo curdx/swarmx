@@ -292,6 +292,8 @@
     "dirHint": "AI will work inside this folder",
     "removeDir": "Remove",
     "addDir": "Add another folder",
+    "pickFolder": "Pick a folder (open system dialog)",
+    "pickFolderShort": "Browse…",
     "defaultInfo": "After you hit Start, AI scouts your project first",
     "cancel": "Cancel",
     "create": "Start",

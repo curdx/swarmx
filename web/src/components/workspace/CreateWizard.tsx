@@ -26,6 +26,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   Check,
+  FolderOpen,
   FolderPlus,
   Loader2,
   Plus,
@@ -53,6 +54,33 @@ import { cn } from "@/lib/cn";
 
 const INIT_SPELL = "init";
 const SCOUT_TIMEOUT_MS = 60_000;
+
+// Tauri runtime detection — only the desktop shell exposes
+// __TAURI_INTERNALS__ on window. Vite dev (plain browser) is undefined,
+// so we hide the "选择文件夹" button there (browser security sandbox
+// can't return an absolute filesystem path anyway, so the button would
+// be cosmetic).
+const IS_TAURI =
+  typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+
+// Tauri 2.x plugin-dialog. Bring it in via dynamic import so vite-dev (no
+// Tauri runtime) doesn't try to bundle the native bridge at module init.
+async function pickDirectoryViaTauri(): Promise<string | null> {
+  try {
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    const result = await open({
+      directory: true,
+      multiple: false,
+      title: "选择项目文件夹",
+    });
+    if (typeof result === "string") return result;
+    return null;
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn("[wizard] dialog.open failed", err);
+    return null;
+  }
+}
 
 const ACCENT_OPTIONS = [
   { id: "peach", color: "var(--color-accent-primary)" },
@@ -317,6 +345,25 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
                         </span>
                       )}
                     </div>
+                    {IS_TAURI && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={async () => {
+                          const picked = await pickDirectoryViaTauri();
+                          if (picked) {
+                            setDirs((prev) =>
+                              prev.map((x, j) => (j === i ? picked : x)),
+                            );
+                          }
+                        }}
+                        title={t("wizard.pickFolder")}
+                        className="h-8 shrink-0 gap-1.5 px-2.5 text-xs"
+                      >
+                        <FolderOpen className="size-3.5" />
+                        {t("wizard.pickFolderShort")}
+                      </Button>
+                    )}
                     <Button
                       variant="ghost"
                       size="icon"
