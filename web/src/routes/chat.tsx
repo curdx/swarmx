@@ -199,6 +199,56 @@ export default function ChatRoute() {
   const activeWs =
     workspaces.find((w) => w.id === workspaceId) ?? workspaces[0] ?? null;
   const activeMembers = activeWs?.members ?? [];
+  const allAliveAgents = useMemo(
+    () => agents.filter((a) => a.killed_at == null && a.shim_exit == null),
+    [agents],
+  );
+  // 当前 workspace 历史成员 id 集合（含已 killed / shim_exit 的 agent）。
+  // MessagesPanel 用它把别的 workspace 的旧消息过滤掉 — 否则切换工作空间
+  // 后聊天框还显示其它房间的消息，不符合 "一个 workspace = 一个聊天" 的语义。
+  const activeWorkspaceAgentIds = useMemo(() => {
+    if (!activeWs) return [];
+    return agents
+      .filter((a) => (a.workspace || "(no workspace)") === activeWs.path)
+      .map((a) => a.agent_id);
+  }, [agents, activeWs]);
+
+  // 「init-only 工作空间」探测：该房间所有 agent 都是 scout 角色（不论生死）。
+  // 说明 wizard 刚跑过 init spell、scout 在打招呼、用户还没启动任何业务 agent。
+  // 此时 composer 第一条消息应该触发 auto-dispatch，而不是发给已 STOP 的 scout。
+  const isInitOnlyWorkspace = useMemo(() => {
+    if (!activeWs || activeWorkspaceAgentIds.length === 0) return false;
+    return activeWorkspaceAgentIds.every((id) => {
+      const a = agents.find((x) => x.agent_id === id);
+      return a?.role === "scout";
+    });
+  }, [activeWs, activeWorkspaceAgentIds, agents]);
+
+  // composer override：scout-only 房间用户发的第一条消息走 auto-dispatch，
+  // task 自动拼上 blackboard 里 scout 写的 project.summary（如有），让 planner
+  // 不用重新扫目录就能挑 spell。普通房间不提供 override → MessagesPanel 走
+  // 默认的 sendMessage 路径。
+  const composerOverride = useMemo(() => {
+    if (!isInitOnlyWorkspace || !activeWs) return undefined;
+    const wsPath = activeWs.path;
+    return async (body: string) => {
+      let summary: string | null = null;
+      try {
+        const snap = await api.readBlackboard("project.summary");
+        summary = snap?.content ?? null;
+      } catch {
+        // 没拿到 summary 也不阻塞用户，planner 自己会摸索。
+      }
+      const task = summary
+        ? `${body}\n\n[项目摘要 / project summary]\n${summary}`
+        : body;
+      await api.runSpell({
+        name: "auto-dispatch",
+        task,
+        workspace_dir: wsPath,
+      });
+    };
+  }, [isInitOnlyWorkspace, activeWs]);
 
   const totalUnread = Object.values(unreadByFrom).reduce((a, b) => a + b, 0);
 
@@ -285,6 +335,16 @@ export default function ChatRoute() {
               liveMessage={liveMessage}
               liveRead={liveRead}
               unreadByFrom={unreadByFrom}
+              activeMembers={activeMembers}
+              allAliveAgents={allAliveAgents}
+              workspaceAgentIds={activeWorkspaceAgentIds}
+              workspaceLabel={
+                activeWs
+                  ? activeWs.path.split("/").slice(-2).join("/")
+                  : undefined
+              }
+              composerOverride={composerOverride}
+              onOpenAgent={openDrawer}
             />
           </div>
         </div>

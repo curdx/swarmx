@@ -332,3 +332,16 @@ html, body, #root {
   text-align: left;
 }
 .prose-context th { background: var(--color-surface-tertiary); }
+
+/* Three-dot "typing" animation used by MessagesPanel's PendingBubble.
+   Bounces opacity and a small Y offset so consecutive dots ripple. */
+@keyframes flockmuxTypingDot {
+  0%, 80%, 100% {
+    opacity: 0.25;
+    transform: translateY(0);
+  }
+  40% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
+}

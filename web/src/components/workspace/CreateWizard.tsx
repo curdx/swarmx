@@ -1,40 +1,37 @@
 /**
- * CreateWizard — Pencil frame UygPU.
+ * CreateWizard — 极简两步：起名字 + 选项目文件夹。
  *
- * Three sections rendered inline (not a stepper — the mock shows all three
- * visible at once so users can scrub freely):
- *   1. 命名 & 选色  : workspace name + accent picker
- *   2. 挂载项目目录: one or more absolute paths
- *   3. 配方         : pick a spell from /api/spells
+ * 提交后做的事：
+ *   1. 调 `runSpell("init", workspace_dir=dirs[0])` — init spell 启动一个
+ *      scout agent 进目录扫一眼、写 `project.summary` 黑板、给 user 发开场白。
+ *   2. wizard 切到 loading 视图，订阅 /ws/swarm，等 `blackboard_changed`
+ *      事件 path == "project.summary" 到达后关闭 wizard、通知父组件。
+ *   3. 超时 / 用户主动跳过 → 也直接关闭进群，scout 在后台继续跑（黑板和
+ *      它发给 user 的开场白会自然出现在 chat 里）。
  *
- * Submission maps to POST /api/spell/run:
- *   { name: <spell>, task: <wizard name + dirs joined>, workspace_dir: dirs[0] }
- *
- * The wizard owns no agent_id state — the server returns RunSpellResponse
- * with the spawned agent ids; we surface those to the parent via
- * onCreated() so it can re-fetch /api/agent.
- *
- * Directory pickers fall back to a text input because the web build has
- * no native dir chooser. The Tauri shell will swap this for dialog.open()
- * via a future bridge.
+ * 用户在 chat 输入第一条消息时由 ChatRoute 检测「workspace 仅有 scout 且
+ * project.summary 已存在」→ 改走 auto-dispatch 而非普通 sendMessage。
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   Check,
-  ChevronDown,
   FolderPlus,
-  Layers,
+  Loader2,
   Plus,
-  Sparkles,
   Trash2,
   Type as TypeIcon,
   X,
 } from "lucide-react";
 import { api } from "../../api/http";
-import type { SpellInfo } from "../../api/types";
+import type { SpellInfo, SwarmEvent } from "../../api/types";
+import { useSwarmFeed } from "../../hooks/useSwarmFeed";
 import { cn } from "@/lib/cn";
+
+const INIT_SPELL = "init";
+const SUMMARY_KEY = "project.summary";
+const SCOUT_TIMEOUT_MS = 60_000;
 
 const ACCENT_OPTIONS = [
   { id: "peach", color: "var(--color-accent-primary)" },
@@ -50,24 +47,56 @@ interface Props {
   onCreated?: () => void;
 }
 
+interface ScanState {
+  startedAt: number;
+}
+
 export function CreateWizard({ open, onClose, onCreated }: Props) {
   const { t } = useTranslation();
   const [name, setName] = useState("");
   const [accent, setAccent] = useState<string>("peach");
   const [dirs, setDirs] = useState<string[]>([""]);
-  const [spellName, setSpellName] = useState<string>("");
   const [spells, setSpells] = useState<SpellInfo[]>([]);
-  const [busy, setBusy] = useState(false);
+  const [scan, setScan] = useState<ScanState | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // useSwarmFeed 必须无条件调用 — 但只在 scan 进行中才处理事件。
+  // ref 让 onEvent 闭包永远拿到最新的 scan 引用，不重开 WS。
+  const scanRef = useRef<ScanState | null>(null);
+  useEffect(() => {
+    scanRef.current = scan;
+  }, [scan]);
+
+  const finishScan = useRef(() => {});
+  finishScan.current = () => {
+    setScan(null);
+    onCreated?.();
+    onClose();
+    // reset 用户输入，让下次打开是空的
+    setName("");
+    setDirs([""]);
+    setError(null);
+  };
+
+  useSwarmFeed({
+    onEvent: (ev: SwarmEvent) => {
+      const cur = scanRef.current;
+      if (!cur) return;
+      if (
+        ev.type === "blackboard_changed" &&
+        ev.path === SUMMARY_KEY &&
+        ev.at >= cur.startedAt
+      ) {
+        finishScan.current();
+      }
+    },
+  });
 
   useEffect(() => {
     if (!open) return;
     api
       .listSpells()
-      .then((rows) => {
-        setSpells(rows);
-        if (rows[0]) setSpellName(rows[0].name);
-      })
+      .then((rows) => setSpells(rows))
       .catch((e) => setError((e as Error).message));
   }, [open]);
 
@@ -80,44 +109,49 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
     return () => window.removeEventListener("keydown", onKey);
   }, [open, onClose]);
 
+  // scan 超时兜底：scout 因为 LLM 不可用 / 目录权限等问题没有写黑板，60s
+  // 后也直接进群，让用户能看到失败状态、自己处理。
+  useEffect(() => {
+    if (!scan) return;
+    const timer = window.setTimeout(() => {
+      if (scanRef.current?.startedAt === scan.startedAt) {
+        finishScan.current();
+      }
+    }, SCOUT_TIMEOUT_MS);
+    return () => window.clearTimeout(timer);
+  }, [scan]);
+
   const cleanDirs = useMemo(() => dirs.map((d) => d.trim()).filter(Boolean), [dirs]);
-  const canSubmit = name.trim().length > 0 && cleanDirs.length > 0 && spellName;
+  const canSubmit = name.trim().length > 0 && cleanDirs.length > 0 && !scan;
+  const hasInitSpell = spells.some((s) => s.name === INIT_SPELL);
 
   const submit = async () => {
     if (!canSubmit) return;
-    setBusy(true);
     setError(null);
+    const startedAt = Date.now();
+    setScan({ startedAt });
     try {
+      if (!hasInitSpell) {
+        throw new Error(
+          "后端未加载 `init` spell — 请重启 flockmux-server 让它发现 spells/init.md",
+        );
+      }
       await api.runSpell({
-        name: spellName,
-        task: `${name.trim()} — dirs: ${cleanDirs.join(", ")}`,
+        name: INIT_SPELL,
+        task: name.trim(),
         workspace_dir: cleanDirs[0],
       });
-      onCreated?.();
-      onClose();
-      // reset for next open
-      setName("");
-      setDirs([""]);
     } catch (e) {
+      setScan(null);
       setError((e as Error).message);
-    } finally {
-      setBusy(false);
     }
   };
 
   if (!open) return null;
 
-  const selectedSpell = spells.find((s) => s.name === spellName);
-
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-6"
-      onClick={onClose}
-    >
-      <div
-        className="flex max-h-full w-[680px] flex-col overflow-hidden rounded-xl bg-surface-primary shadow-2xl"
-        onClick={(e) => e.stopPropagation()}
-      >
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-6">
+      <div className="flex max-h-full w-[680px] flex-col overflow-hidden rounded-xl bg-surface-primary shadow-2xl">
         {/* Head */}
         <header className="flex items-center gap-4 border-b border-border-subtle bg-surface-elevated px-6 py-5">
           <span className="flex size-9 items-center justify-center rounded-md bg-accent-primary-soft">
@@ -141,193 +175,176 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
         </header>
 
         {/* Body */}
-        <div className="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto p-6">
-          {error && (
-            <div className="rounded-md border border-state-danger/40 bg-status-danger-soft px-3 py-2 text-xs text-state-danger">
-              {error}
-            </div>
-          )}
-
-          {/* Step 1: name + accent */}
-          <section>
-            <StepHeader n={1} label={t("wizard.step1")} />
-            <div className="flex items-center gap-3">
-              <div
-                className="flex h-11 flex-1 items-center gap-3 rounded-md border-[1.5px] bg-surface-elevated px-3.5"
-                style={{ borderColor: "var(--color-accent-primary)" }}
-              >
-                <TypeIcon className="size-3.5 text-foreground-tertiary" />
-                <input
-                  autoFocus
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder={t("wizard.namePlaceholder")}
-                  className="min-w-0 flex-1 bg-transparent text-sm font-semibold text-foreground-primary placeholder:text-foreground-tertiary focus:outline-none"
-                />
-                {name && (
-                  <span className="rounded-sm bg-accent-primary-soft px-1.5 py-0.5 font-caption text-[10px] text-accent-primary-deep">
-                    {t("wizard.aiNamed")}
-                  </span>
-                )}
+        {scan ? (
+          <ScanView
+            label={t("wizard.scanning")}
+            hint={t("wizard.scanningHint")}
+          />
+        ) : (
+          <div className="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto p-6">
+            {error && (
+              <div className="rounded-md border border-state-danger/40 bg-status-danger-soft px-3 py-2 text-xs text-state-danger">
+                {error}
               </div>
-              <div className="flex items-center gap-1.5">
-                {ACCENT_OPTIONS.map((opt) => (
-                  <button
-                    key={opt.id}
-                    onClick={() => setAccent(opt.id)}
-                    className={cn(
-                      "size-7 rounded-full transition-transform",
-                      accent === opt.id
-                        ? "ring-2 ring-foreground-primary ring-offset-2"
-                        : "hover:scale-110",
-                    )}
-                    style={{ background: opt.color }}
-                    title={opt.id}
-                  />
-                ))}
-              </div>
-            </div>
-          </section>
+            )}
 
-          {/* Step 2: dirs */}
-          <section>
-            <StepHeader
-              n={2}
-              label={t("wizard.step2")}
-              hint={t("wizard.step2Hint")}
-            />
-            <div className="flex flex-col gap-2">
-              {dirs.map((d, i) => (
+            {/* Step 1: name + accent */}
+            <section>
+              <StepHeader n={1} label={t("wizard.step1")} />
+              <div className="flex items-center gap-3">
                 <div
-                  key={i}
-                  className="flex items-center gap-3 rounded-lg border border-border-subtle bg-surface-elevated px-3.5 py-3 shadow-sm"
+                  className="flex h-11 flex-1 items-center gap-3 rounded-md border-[1.5px] bg-surface-elevated px-3.5"
+                  style={{ borderColor: "var(--color-accent-primary)" }}
                 >
-                  <span
-                    className={cn(
-                      "flex size-9 items-center justify-center rounded-md font-mono text-xs font-bold text-foreground-on-accent",
-                      i === 0
-                        ? "bg-agent-frontend"
-                        : i === 1
-                          ? "bg-agent-backend"
-                          : "bg-agent-test",
-                    )}
-                  >
-                    {i + 1}
-                  </span>
-                  <div className="flex min-w-0 flex-1 flex-col">
-                    <input
-                      value={d}
-                      onChange={(e) =>
-                        setDirs((prev) =>
-                          prev.map((x, j) => (j === i ? e.target.value : x)),
-                        )
-                      }
-                      placeholder={
-                        i === 0
-                          ? t("wizard.dirPlaceholder1")
-                          : t("wizard.dirPlaceholderMore")
-                      }
-                      className="bg-transparent font-mono text-sm text-foreground-primary placeholder:text-foreground-tertiary focus:outline-none"
-                    />
-                    {d.trim() && (
-                      <span className="font-caption text-[10px] text-foreground-tertiary">
-                        {t("wizard.dirHint")}
-                      </span>
-                    )}
-                  </div>
-                  <button
-                    onClick={() =>
-                      setDirs((prev) => prev.filter((_, j) => j !== i))
-                    }
-                    disabled={dirs.length === 1}
-                    className="flex size-7 items-center justify-center rounded-md text-foreground-tertiary hover:bg-surface-tertiary disabled:opacity-30"
-                    title={t("wizard.removeDir")}
-                  >
-                    <Trash2 className="size-3.5" />
-                  </button>
+                  <TypeIcon className="size-3.5 text-foreground-tertiary" />
+                  <input
+                    autoFocus
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    placeholder={t("wizard.namePlaceholder")}
+                    className="min-w-0 flex-1 bg-transparent text-sm font-semibold text-foreground-primary placeholder:text-foreground-tertiary focus:outline-none"
+                  />
                 </div>
-              ))}
-              <button
-                onClick={() => setDirs((prev) => [...prev, ""])}
-                className="flex items-center justify-center gap-2 rounded-lg border-[1.5px] border-dashed border-border-strong bg-transparent px-4 py-3 font-caption text-xs text-foreground-secondary hover:bg-surface-tertiary"
-              >
-                <span className="flex size-7 items-center justify-center rounded-md bg-accent-primary-soft text-accent-primary-deep">
-                  <Plus className="size-4" />
-                </span>
-                {t("wizard.addDir")}
-              </button>
-            </div>
-          </section>
-
-          {/* Step 3: spell */}
-          <section>
-            <StepHeader n={3} label={t("wizard.step3")} />
-            <div
-              className="flex items-center gap-3.5 rounded-lg border-[1.5px] bg-surface-accent-tint px-4 py-3.5"
-              style={{ borderColor: "var(--color-accent-primary)" }}
-            >
-              <span className="flex size-9 items-center justify-center rounded-md bg-accent-primary text-foreground-on-accent">
-                <Sparkles className="size-4" />
-              </span>
-              <div className="flex min-w-0 flex-1 flex-col gap-1">
-                <span className="truncate font-heading text-sm font-semibold text-foreground-primary">
-                  {selectedSpell?.name ?? "—"}
-                </span>
-                <span className="line-clamp-2 font-caption text-[11px] text-foreground-secondary">
-                  {selectedSpell?.description ?? t("wizard.pickSpell")}
-                  {selectedSpell && selectedSpell.agents.length > 0 && (
-                    <>
-                      {" · "}
-                      {selectedSpell.agents
-                        .map((a) => `${a.role}(${a.cli})`)
-                        .join(" · ")}
-                    </>
-                  )}
-                </span>
-              </div>
-              <div className="relative">
-                <select
-                  value={spellName}
-                  onChange={(e) => setSpellName(e.target.value)}
-                  className="appearance-none rounded-md border border-border-subtle bg-surface-elevated py-1.5 pr-7 pl-3 font-caption text-xs text-foreground-secondary focus:outline-none"
-                >
-                  {spells.map((s) => (
-                    <option key={s.name} value={s.name}>
-                      {s.name}
-                    </option>
+                <div className="flex items-center gap-1.5">
+                  {ACCENT_OPTIONS.map((opt) => (
+                    <button
+                      key={opt.id}
+                      onClick={() => setAccent(opt.id)}
+                      className={cn(
+                        "size-7 rounded-full transition-transform",
+                        accent === opt.id
+                          ? "ring-2 ring-foreground-primary ring-offset-2"
+                          : "hover:scale-110",
+                      )}
+                      style={{ background: opt.color }}
+                      title={opt.id}
+                    />
                   ))}
-                </select>
-                <ChevronDown className="pointer-events-none absolute top-1.5 right-1.5 size-3 text-foreground-tertiary" />
+                </div>
               </div>
-            </div>
-          </section>
-        </div>
+            </section>
+
+            {/* Step 2: dirs */}
+            <section>
+              <StepHeader
+                n={2}
+                label={t("wizard.step2")}
+                hint={t("wizard.step2Hint")}
+              />
+              <div className="flex flex-col gap-2">
+                {dirs.map((d, i) => (
+                  <div
+                    key={i}
+                    className="flex items-center gap-3 rounded-lg border border-border-subtle bg-surface-elevated px-3.5 py-3 shadow-sm"
+                  >
+                    <span
+                      className={cn(
+                        "flex size-9 items-center justify-center rounded-md font-mono text-xs font-bold text-foreground-on-accent",
+                        i === 0
+                          ? "bg-agent-frontend"
+                          : i === 1
+                            ? "bg-agent-backend"
+                            : "bg-agent-test",
+                      )}
+                    >
+                      {i + 1}
+                    </span>
+                    <div className="flex min-w-0 flex-1 flex-col">
+                      <input
+                        value={d}
+                        onChange={(e) =>
+                          setDirs((prev) =>
+                            prev.map((x, j) => (j === i ? e.target.value : x)),
+                          )
+                        }
+                        placeholder={
+                          i === 0
+                            ? t("wizard.dirPlaceholder1")
+                            : t("wizard.dirPlaceholderMore")
+                        }
+                        className="bg-transparent font-mono text-sm text-foreground-primary placeholder:text-foreground-tertiary focus:outline-none"
+                      />
+                      {d.trim() && (
+                        <span className="font-caption text-[10px] text-foreground-tertiary">
+                          {t("wizard.dirHint")}
+                        </span>
+                      )}
+                    </div>
+                    <button
+                      onClick={() =>
+                        setDirs((prev) => prev.filter((_, j) => j !== i))
+                      }
+                      disabled={dirs.length === 1}
+                      className="flex size-7 items-center justify-center rounded-md text-foreground-tertiary hover:bg-surface-tertiary disabled:opacity-30"
+                      title={t("wizard.removeDir")}
+                    >
+                      <Trash2 className="size-3.5" />
+                    </button>
+                  </div>
+                ))}
+                <button
+                  onClick={() => setDirs((prev) => [...prev, ""])}
+                  className="flex items-center justify-center gap-2 rounded-lg border-[1.5px] border-dashed border-border-strong bg-transparent px-4 py-3 font-caption text-xs text-foreground-secondary hover:bg-surface-tertiary"
+                >
+                  <span className="flex size-7 items-center justify-center rounded-md bg-accent-primary-soft text-accent-primary-deep">
+                    <Plus className="size-4" />
+                  </span>
+                  {t("wizard.addDir")}
+                </button>
+              </div>
+            </section>
+          </div>
+        )}
 
         {/* Foot */}
         <footer className="flex items-center gap-3 border-t border-border-subtle bg-surface-elevated px-6 py-4">
           <span className="flex items-center gap-1.5 font-caption text-[11px] text-foreground-tertiary">
-            <Layers className="size-3" />
-            {selectedSpell
-              ? t("wizard.agentCountInfo", { count: selectedSpell.agents.length })
-              : t("wizard.defaultInfo")}
+            {scan ? t("wizard.scanningFootHint") : t("wizard.defaultInfo")}
           </span>
           <span className="flex-1" />
-          <button
-            onClick={onClose}
-            className="rounded-md border border-border-subtle bg-surface-elevated px-4 py-2 text-xs text-foreground-secondary hover:bg-surface-tertiary"
-          >
-            {t("wizard.cancel")}
-          </button>
-          <button
-            onClick={submit}
-            disabled={!canSubmit || busy}
-            className="flex items-center gap-1.5 rounded-md bg-accent-primary px-4 py-2 text-xs font-bold text-foreground-on-accent hover:bg-accent-primary-deep disabled:opacity-50"
-          >
-            <Check className="size-3.5" />
-            {busy ? t("wizard.creating") : t("wizard.create")}
-          </button>
+          {scan ? (
+            <button
+              onClick={() => finishScan.current()}
+              className="rounded-md border border-border-subtle bg-surface-elevated px-4 py-2 text-xs text-foreground-secondary hover:bg-surface-tertiary"
+            >
+              {t("wizard.enterAnyway")}
+            </button>
+          ) : (
+            <>
+              <button
+                onClick={onClose}
+                className="rounded-md border border-border-subtle bg-surface-elevated px-4 py-2 text-xs text-foreground-secondary hover:bg-surface-tertiary"
+              >
+                {t("wizard.cancel")}
+              </button>
+              <button
+                onClick={submit}
+                disabled={!canSubmit}
+                className="flex items-center gap-1.5 rounded-md bg-accent-primary px-4 py-2 text-xs font-bold text-foreground-on-accent hover:bg-accent-primary-deep disabled:opacity-50"
+              >
+                <Check className="size-3.5" />
+                {t("wizard.create")}
+              </button>
+            </>
+          )}
         </footer>
       </div>
+    </div>
+  );
+}
+
+function ScanView({ label, hint }: { label: string; hint: string }) {
+  return (
+    <div className="flex min-h-[280px] flex-1 flex-col items-center justify-center gap-4 p-10 text-center">
+      <span className="flex size-14 items-center justify-center rounded-full bg-accent-primary-soft text-accent-primary-deep">
+        <Loader2 className="size-7 animate-spin" />
+      </span>
+      <h3 className="font-heading text-base font-semibold text-foreground-primary">
+        {label}
+      </h3>
+      <p className="max-w-[420px] font-body text-[13px] leading-relaxed text-foreground-secondary">
+        {hint}
+      </p>
     </div>
   );
 }
