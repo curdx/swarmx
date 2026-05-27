@@ -44,7 +44,6 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -394,7 +393,14 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
           </div>
         )}
 
-        <DialogFooter className="flex flex-row items-center gap-3 border-t border-border-subtle bg-surface-elevated px-6 py-4 sm:justify-start">
+        {/* 不用 shadcn DialogFooter — 它默认有 `-mx-4 -mb-4 bg-muted/50
+            rounded-b-xl border-t`，是给标准 DialogContent p-4 用的，假设
+            footer 通过负 margin 顶到 content 边缘。我们的 DialogContent
+            是 p-0 + 自己 header/body/footer 控制 padding，那套负 margin
+            会把 footer 顶出 modal 边界 16px，配合 overflow-hidden 把
+            border-t / rounded-b 都裁掉，看上去 footer 像"飘"在外面没
+            分隔线。用普通 div + 我们自己的 border-t / bg / padding 即可。 */}
+        <div className="flex flex-row items-center gap-3 border-t border-border-subtle bg-surface-elevated px-6 py-4">
           <span className="font-caption text-[11px] text-foreground-tertiary">
             {scan ? t("wizard.scanningFootHint") : t("wizard.defaultInfo")}
           </span>
@@ -414,7 +420,7 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
               </Button>
             </>
           )}
-        </DialogFooter>
+        </div>
       </DialogContent>
     </Dialog>
   );

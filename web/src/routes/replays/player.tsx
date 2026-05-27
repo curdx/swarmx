@@ -21,6 +21,17 @@ import type { RecordingInfo } from "../../api/types";
 import { AsciicastPlayer } from "../../components/AsciicastPlayer";
 import { EmptyState } from "../../components/EmptyState";
 
+// Tauri 用 titleBarStyle:"Overlay"，OS 在窗口左上角约 (0,0)→(78,28) 画
+// 红黄绿三个原生按钮，浮在 webview 内容之上。任何 fullscreen 路由 (escape
+// AppShell 的) 都得自己给 toolbar 左边留 ~80px 空避免被红黄绿压住。
+// AppShell.tsx 同名常量做了同样的事；下次再加 fullscreen 路由可以抽到
+// lib/tauri.ts。
+const IS_TAURI =
+  typeof window !== "undefined" &&
+  (window.location.protocol === "tauri:" ||
+    window.location.hostname === "tauri.localhost" ||
+    "__TAURI_INTERNALS__" in window);
+
 function formatTime(ms: number): string {
   return new Date(ms).toLocaleString();
 }
@@ -109,7 +120,10 @@ export default function ReplayPlayer() {
   return (
     <div className="flex h-full flex-col bg-term-bg">
       {/* Header — Pencil kq4c9 */}
-      <header className="flex h-14 shrink-0 items-center gap-4 border-b border-[#1F1F1F] bg-[#141414] px-6">
+      <header
+        className="flex h-14 shrink-0 items-center gap-4 border-b border-[#1F1F1F] bg-[#141414] px-6"
+        style={IS_TAURI ? { paddingLeft: 88 } : undefined}
+      >
         <button
           onClick={() => navigate("/replays")}
           className="flex h-9 items-center gap-1.5 rounded-md bg-[#1F1F1F] px-3 text-xs text-foreground-inverse-secondary hover:bg-[#262626] hover:text-foreground-inverse"
