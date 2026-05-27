@@ -26,6 +26,7 @@ import { AgentDrawer } from "../components/agent/AgentDrawer";
 import { CreateWizard } from "../components/workspace/CreateWizard";
 import { useSwarmFeed } from "../hooks/useSwarmFeed";
 import {
+  FULLSTACK_INTERNAL_KEYS,
   projectSummaryKey,
   workspaceSlug,
 } from "../lib/workspace";
@@ -299,6 +300,19 @@ export default function ChatRoute() {
     if (!isInitOnlyWorkspace || !activeWs) return undefined;
     const wsPath = activeWs.path;
     return async (body: string) => {
+      // 启动 auto-dispatch 之前先清掉上一轮 spell 残留的全局 role keys。
+      // 不清的话 test/critic 在第一次 wake 时会看到旧值（"backend.done 是上次
+      // password-strength run 的"），选择 idle 等当前 BE 覆盖 — 流程没死锁，
+      // 但加了好几分钟延迟。清干净后 FE/BE/test/critic 都从空状态开始。
+      // 见 lib/workspace.ts 里 FULLSTACK_INTERNAL_KEYS 注释。
+      await Promise.all(
+        FULLSTACK_INTERNAL_KEYS.map((k) =>
+          api.writeBlackboard(k, { content: "" }).catch(() => {
+            /* best-effort */
+          }),
+        ),
+      );
+
       let summary: string | null = null;
       try {
         const snap = await api.readBlackboard(projectSummaryKey(wsPath));

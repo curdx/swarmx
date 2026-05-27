@@ -38,3 +38,32 @@ export function workspaceNameKey(path: string): string {
  *  client-side path doesn't quite match server-side canonicalized cwd,
  *  e.g. /tmp vs /private/tmp on macOS). */
 export const PROJECT_SUMMARY_KEY_PREFIX = "project.summary.";
+
+/** Blackboard keys that fullstack-feature* spells write internally and
+ *  read across roles. They live in the GLOBAL blackboard namespace (not
+ *  per-workspace), so a previous spell run's leftover values bleed into
+ *  the next run — `test` sees a stale `backend.done` and idles waiting
+ *  for `codex-<new>` to overwrite it, adding minutes of delay.
+ *
+ *  Chat composer clears these keys right before firing auto-dispatch so
+ *  the new spell starts from an empty slate. Cleared = write empty
+ *  content (server doesn't expose a delete-key endpoint); downstream
+ *  prompts already treat empty content as "not yet written".
+ *
+ *  KNOWN LIMITATION: clearing is global, so two workspaces firing
+ *  auto-dispatch simultaneously would step on each other. Real fix is
+ *  per-spell-run namespace in the blackboard schema; tracked as future
+ *  work. Single-user single-active-spell is the 80% case where this
+ *  workaround is fine. */
+export const FULLSTACK_INTERNAL_KEYS = [
+  "api.spec",
+  "frontend.done",
+  "frontend.review",
+  "backend.done",
+  "backend.review",
+  "review.completed",
+  "test.passed",
+  "fixer.done",
+  "fixer.skipped",
+  "architect.done",
+] as const;
