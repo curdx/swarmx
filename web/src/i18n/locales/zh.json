@@ -11,7 +11,9 @@
   "shell": {
     "cmdkHint": "按 ⌘K 打开命令面板",
     "collapse": "收起",
-    "expand": "展开"
+    "expand": "展开",
+    "appMenu": "应用菜单",
+    "about": "关于"
   },
   "common": {
     "save": "保存",

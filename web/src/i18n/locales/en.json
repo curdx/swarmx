@@ -11,7 +11,9 @@
   "shell": {
     "cmdkHint": "Press ⌘K to open the command palette",
     "collapse": "Collapse",
-    "expand": "Expand"
+    "expand": "Expand",
+    "appMenu": "App menu",
+    "about": "About"
   },
   "common": {
     "save": "Save",

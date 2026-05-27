@@ -1,196 +1,232 @@
 /**
  * AppShell — top-level chrome shared by every product route.
  *
- * Layout: collapsible left sidebar + thin top bar + outlet.
+ * Layout: thin top bar (brand left + actions right) + outlet fills below.
  *
- * Sidebar matches Linear / Cursor / Discord conventions — icon + label
- * column on the left. Default width is 12rem (192px) so the Chinese
- * labels read; users can collapse to 3.5rem (56px) icon-only when chat's
- * "workspace + messages + members" three-pane layout needs the
- * horizontal room. State persists to localStorage so the user's choice
- * sticks across reloads.
+ * The previous design had a 192px / 56px collapsible left nav with
+ * 4 items (Chat / Notifications / Settings / Debug). After the workspace
+ * Shell refactor, "Chat" was the only first-class entry; the other 3
+ * are account-level / dev-tool surfaces that don't deserve always-on
+ * sidebar real estate. We follow the Slack / Linear / Notion playbook
+ * now: brand top-left, app menu top-right (notification bell + ⌘K +
+ * dropdown for settings / theme / debug). The Outlet gets the entire
+ * horizontal width — important because the workspace Shell already
+ * owns a 264px sidebar of its own.
+ *
+ * Sources: Slack's "Meet your simpler, more streamlined sidebar"
+ * blog + Linear "How we redesigned the Linear UI" — both moved
+ * notifications/settings out of the primary nav and into the user
+ * menu / top right.
  *
  * /debug renders without AppShell (it owns its own dark chrome).
  */
 
-import { useEffect, useState } from "react";
-import { NavLink, Outlet } from "react-router-dom";
+import { Link, useLocation, useNavigate, NavLink, Outlet } from "react-router-dom";
 import { useTranslation } from "react-i18next";
+import { useEffect } from "react";
 import {
   Bell,
   Boxes,
   Bug,
-  MessageSquare,
-  PanelLeftClose,
-  PanelLeftOpen,
+  ChevronDown,
+  Info,
+  Moon,
   Settings,
-  type LucideIcon,
+  Sun,
+  SunMoon,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { CommandPalette } from "@/components/CommandPalette";
+import { useNotificationBadge } from "@/hooks/useNotificationBadge";
+import { setTheme, type ThemeMode } from "@/lib/theme";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 
 // Tauri uses titleBarStyle:"Overlay" so the OS draws real traffic lights
-// in the window's top-left ~(0,0)→(78,28) region. We hide our painted
-// decoration there and reserve that strip with padding so OS lights
-// don't cover the brand row. In a plain browser there are no OS lights
-// — show our painted ones so the chrome doesn't look bare.
+// in the window's top-left ~(0,0)→(78,28) region. The header reserves a
+// matching left padding so the brand logo doesn't collide with them.
 const IS_TAURI =
   typeof window !== "undefined" &&
   (window.location.protocol === "tauri:" ||
     window.location.hostname === "tauri.localhost" ||
-    // Tauri 2 injects internals into every webview, dev included.
     "__TAURI_INTERNALS__" in window);
 
-interface NavItem {
-  to: string;
-  key: string;
-  icon: LucideIcon;
+const STORAGE_KEY = "flockmux:settings:v1";
+function persistTheme(mode: ThemeMode) {
+  try {
+    const raw = window.localStorage.getItem(STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    parsed.themeMode = mode;
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(parsed));
+  } catch {
+    /* ignore */
+  }
+  setTheme(mode);
 }
-
-// nav 故意只留 4 项：chat (主入口) + notifications (跨 ws 全局响铃) +
-// settings + debug。DAG / Replays / Context 之前是顶级 nav，但用户大
-// 部分时间只关心当前 workspace 的图 / 录像 / 上下文 — 提升到 chat
-// channel header 下面的 secondary tab bar (`WorkspaceTabBar`)，进入
-// workspace 自动按 ws 过滤。"看全部历史" 的少数场景从 ⌘K 命令面板进
-// (cmdk 里 NAV 仍列全部 4 个目标路径)，主 nav 简洁优先。
-const NAV: readonly NavItem[] = [
-  { to: "/chat", key: "nav.chat", icon: MessageSquare },
-  { to: "/notifications", key: "nav.notifications", icon: Bell },
-  { to: "/settings", key: "nav.settings", icon: Settings },
-  { to: "/debug", key: "nav.debug", icon: Bug },
-] as const;
-
-const COLLAPSED_KEY = "flockmux:nav-collapsed";
 
 export function AppShell() {
   const { t } = useTranslation();
-  const [collapsed, setCollapsed] = useState<boolean>(() => {
-    try {
-      return window.localStorage.getItem(COLLAPSED_KEY) === "1";
-    } catch {
-      return false;
-    }
-  });
+  const navigate = useNavigate();
+  const location = useLocation();
+  const { hasUnseen, markSeen } = useNotificationBadge();
 
+  // 进入 /notifications 时把 badge 标记 seen — 用户已经在看了，红点应该
+  // 消失。其他路由变化不动 seenAt。
   useEffect(() => {
-    try {
-      window.localStorage.setItem(COLLAPSED_KEY, collapsed ? "1" : "0");
-    } catch {
-      /* ignore quota errors */
-    }
-  }, [collapsed]);
+    if (location.pathname.startsWith("/notifications")) markSeen();
+  }, [location.pathname, markSeen]);
+
+  const goNotifications = () => navigate("/notifications");
+
+  const isMac =
+    typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
+  const modKey = isMac ? "⌘" : "Ctrl";
 
   return (
-    <div className="flex h-full bg-surface-primary text-foreground-primary">
-      <aside
-        className={cn(
-          "flex shrink-0 flex-col border-r border-border-subtle bg-surface-secondary transition-[width] duration-150",
-          collapsed ? "w-14" : "w-48",
-        )}
-        // Reserve the OS traffic-lights overlay strip in Tauri so logo
-        // + label don't collide with the kernel-drawn buttons. Browser
-        // gets a small top padding too for visual symmetry.
-        style={IS_TAURI ? { paddingTop: 28 } : undefined}
-      >
-        {/* Brand row — Boxes icon (一群 box → multi-agent flock 的视觉
-            隐喻) + (展开时) wordmark。logotype 走 font-mono + tight
-            letter spacing，保留全小写的 developer-brand 风（vercel /
-            linear / supabase / neon 同款），但比之前纯文字朴素的版本
-            多了 "技术工具" 的辨识度。Icon 容器有 shadow-sm + 上下两个
-            对角的 dot 营造一点纵深，跟左侧 nav 平面 icon 形成区分。 */}
-        <div
-          className={cn(
-            "flex h-11 shrink-0 items-center border-b border-border-subtle",
-            collapsed ? "justify-center" : "px-3",
-          )}
+    <TooltipProvider delayDuration={300}>
+      <div className="flex h-full flex-col bg-surface-primary text-foreground-primary">
+        <header
+          className="flex h-11 shrink-0 items-center gap-3 border-b border-border-subtle bg-surface-secondary px-3"
+          // Tauri OS lights live in the top-left ~78px strip; pad past them.
+          style={IS_TAURI ? { paddingLeft: 88 } : undefined}
         >
-          <span className="flex size-7 items-center justify-center rounded-lg bg-accent-primary text-foreground-on-accent shadow-sm">
-            <Boxes className="size-4" strokeWidth={2.25} />
-          </span>
-          {!collapsed && (
-            <span className="ml-2.5 font-mono text-[15px] font-semibold tracking-tight text-foreground-primary">
+          {/* Brand — top-left in browser, right after OS traffic lights in Tauri. */}
+          <Link
+            to="/chat"
+            className="group flex items-center gap-2 rounded-md px-1.5 py-1 transition-colors hover:bg-surface-tertiary"
+            title={t("nav.chat")}
+          >
+            <span className="flex size-7 items-center justify-center rounded-lg bg-accent-primary text-foreground-on-accent shadow-sm">
+              <Boxes className="size-4" strokeWidth={2.25} />
+            </span>
+            <span className="font-mono text-[15px] font-semibold tracking-tight text-foreground-primary">
               flockmux
             </span>
-          )}
-        </div>
+          </Link>
 
-        <nav
-          className={cn(
-            "flex flex-1 flex-col gap-0.5 py-2",
-            collapsed ? "items-center" : "px-2",
-          )}
-        >
-          {NAV.map((item) => {
-            const Icon = item.icon;
-            return (
-              <NavLink
-                key={item.to}
-                to={item.to}
-                title={collapsed ? t(item.key) : undefined}
-                aria-label={t(item.key)}
-                className={({ isActive }) =>
-                  cn(
-                    "flex items-center rounded-lg transition-colors",
-                    collapsed
-                      ? "size-10 justify-center"
-                      : "gap-3 px-3 py-2 text-sm",
-                    // active state — light: blue-100 soft tint + blue-600 text 是
-                    // Linear/Notion 风的 subtle 高亮，contrast 够。
-                    // dark: 同样 soft tint 是 blue-900 (#1E3A8A) 配 blue-500
-                    // (#3B82F6) 字 — contrast ~2.5:1 远低于 AA 4.5:1，"对话"
-                    // 几乎跟背景融在一起读不清。换成实色 accent + on-accent
-                    // 高对比文字，loud 一点但能看见。
-                    isActive
-                      ? "bg-accent-primary-soft text-accent-primary dark:bg-accent-primary dark:text-foreground-on-accent"
-                      : "text-foreground-tertiary hover:bg-surface-tertiary hover:text-foreground-primary",
-                  )
-                }
-              >
-                <Icon className="size-[18px] shrink-0" />
-                {!collapsed && <span>{t(item.key)}</span>}
-              </NavLink>
-            );
-          })}
-        </nav>
+          <span className="flex-1" />
 
-        {/* Collapse toggle — bottom of rail so it's out of the way but
-            findable. Icon flips based on state. */}
-        <button
-          onClick={() => setCollapsed((v) => !v)}
-          title={collapsed ? t("shell.expand") : t("shell.collapse")}
-          aria-label={collapsed ? t("shell.expand") : t("shell.collapse")}
-          className={cn(
-            "flex shrink-0 items-center gap-2 border-t border-border-subtle text-foreground-tertiary transition-colors hover:bg-surface-tertiary hover:text-foreground-primary",
-            collapsed ? "h-10 justify-center" : "h-10 px-4 text-xs",
-          )}
-        >
-          {collapsed ? (
-            <PanelLeftOpen className="size-[18px]" />
-          ) : (
-            <>
-              <PanelLeftClose className="size-[18px]" />
-              <span>{t("shell.collapse")}</span>
-            </>
-          )}
-        </button>
-      </aside>
-
-      <div className="flex min-w-0 flex-1 flex-col">
-        <header
-          className="flex h-11 shrink-0 items-center gap-3 border-b border-border-subtle bg-surface-secondary px-4"
-          // Tauri OS lights overlap the sidebar only; the header starts
-          // right of the sidebar so it's clear, but keep small top
-          // padding so the header content visually settles below the
-          // OS title strip when present.
-          style={IS_TAURI ? { paddingTop: 4 } : undefined}
-        >
-          <div className="flex-1" />
-          <kbd
-            className="rounded border border-border-subtle bg-surface-elevated px-1.5 py-0.5 font-mono text-[10px] text-foreground-tertiary"
+          {/* ⌘K hint — interactive: clicking dispatches the same keyboard
+              event so users who haven't memorized the shortcut still
+              discover the palette. */}
+          <button
+            type="button"
+            onClick={() => {
+              const ev = new KeyboardEvent("keydown", {
+                key: "k",
+                code: "KeyK",
+                metaKey: isMac,
+                ctrlKey: !isMac,
+                bubbles: true,
+              });
+              window.dispatchEvent(ev);
+            }}
+            className="flex h-7 items-center gap-1.5 rounded-md border border-border-subtle bg-surface-elevated px-2 text-[11px] text-foreground-tertiary transition-colors hover:bg-surface-tertiary hover:text-foreground-primary"
             title={t("shell.cmdkHint")}
           >
-            ⌘K
-          </kbd>
+            <span className="font-mono text-[10px]">{modKey}K</span>
+          </button>
+
+          {/* Notification bell — red dot when there's anything new since
+              the last visit to /notifications. */}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                onClick={goNotifications}
+                className={cn(
+                  "relative flex size-7 items-center justify-center rounded-md transition-colors hover:bg-surface-tertiary",
+                  location.pathname.startsWith("/notifications")
+                    ? "text-foreground-primary"
+                    : "text-foreground-tertiary hover:text-foreground-primary",
+                )}
+                aria-label={t("nav.notifications")}
+              >
+                <Bell className="size-4" />
+                {hasUnseen && (
+                  <span
+                    className="absolute right-1 top-1 size-1.5 rounded-full bg-state-danger"
+                    aria-label={t("nav.notifications")}
+                  />
+                )}
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">{t("nav.notifications")}</TooltipContent>
+          </Tooltip>
+
+          {/* App menu — settings / theme / debug / about. Replaces the
+              old left-nav items for everything that isn't "chat". */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                className="flex h-7 items-center gap-1 rounded-md px-1.5 text-foreground-tertiary transition-colors hover:bg-surface-tertiary hover:text-foreground-primary"
+                aria-label={t("shell.appMenu")}
+              >
+                <Settings className="size-4" />
+                <ChevronDown className="size-3" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" side="bottom" className="w-56">
+              <DropdownMenuLabel className="text-[10px] font-semibold uppercase tracking-wider text-foreground-tertiary">
+                {t("shell.appMenu")}
+              </DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              <NavLink to="/settings" className="block">
+                {({ isActive }) => (
+                  <DropdownMenuItem
+                    className={cn("gap-2", isActive && "bg-surface-tertiary")}
+                  >
+                    <Settings className="size-3.5" />
+                    <span>{t("nav.settings")}</span>
+                  </DropdownMenuItem>
+                )}
+              </NavLink>
+              <DropdownMenuSeparator />
+              <DropdownMenuLabel className="text-[10px] font-semibold uppercase tracking-wider text-foreground-tertiary">
+                {t("cmdk.groups.theme")}
+              </DropdownMenuLabel>
+              <DropdownMenuItem onSelect={() => persistTheme("light")} className="gap-2">
+                <Sun className="size-3.5" />
+                <span>{t("cmdk.switchToLight")}</span>
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => persistTheme("dark")} className="gap-2">
+                <Moon className="size-3.5" />
+                <span>{t("cmdk.switchToDark")}</span>
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => persistTheme("system")} className="gap-2">
+                <SunMoon className="size-3.5" />
+                <span>{t("cmdk.followSystem")}</span>
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <NavLink to="/debug" className="block">
+                <DropdownMenuItem className="gap-2 text-foreground-tertiary">
+                  <Bug className="size-3.5" />
+                  <span>{t("nav.debug")}</span>
+                </DropdownMenuItem>
+              </NavLink>
+              <DropdownMenuItem
+                onSelect={() => navigate("/settings/about")}
+                className="gap-2 text-foreground-tertiary"
+              >
+                <Info className="size-3.5" />
+                <span>{t("shell.about")}</span>
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+
           <span className="font-caption text-xs text-foreground-tertiary">
             127.0.0.1:7777
           </span>
@@ -198,8 +234,8 @@ export function AppShell() {
         <main className="min-h-0 flex-1 overflow-hidden">
           <Outlet />
         </main>
+        <CommandPalette />
       </div>
-      <CommandPalette />
-    </div>
+    </TooltipProvider>
   );
 }
