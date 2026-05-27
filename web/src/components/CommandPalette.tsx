@@ -2,7 +2,7 @@
  * CommandPalette — ⌘K (or Ctrl+K) global launcher.
  *
  * Sections:
- *   - 导航: jump to /chat /dag /replays /context /inbox /notifications /settings /debug
+ *   - 导航: jump to /chat /dag /replays /context /notifications /settings /debug
  *   - 工作空间: switch active workspace (from live /api/agent group-by)
  *   - 主题: light / dark / system (calls lib/theme.setTheme directly)
  *   - 操作: 新建工作空间(打开 Wizard via custom event) / 全部标已读(notif) ...
@@ -26,7 +26,6 @@ import {
   Bug,
   FileText,
   GitBranch,
-  Inbox as InboxIcon,
   MessageSquare,
   Moon,
   Play,
@@ -46,7 +45,6 @@ const NAV = [
   { labelKey: "nav.dag", href: "/dag", icon: GitBranch, hintKey: "cmdk.navHint.dag" },
   { labelKey: "nav.replays", href: "/replays", icon: Play, hintKey: "cmdk.navHint.replays" },
   { labelKey: "nav.context", href: "/context", icon: FileText, hintKey: "cmdk.navHint.context" },
-  { labelKey: "nav.inbox", href: "/inbox", icon: InboxIcon, hintKey: "cmdk.navHint.inbox" },
   { labelKey: "nav.notifications", href: "/notifications", icon: Bell, hintKey: "cmdk.navHint.notifications" },
   { labelKey: "nav.settings", href: "/settings", icon: SettingsIcon, hintKey: "cmdk.navHint.settings" },
   { labelKey: "nav.debug", href: "/debug", icon: Bug, hintKey: "cmdk.navHint.debug" },

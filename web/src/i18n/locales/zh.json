@@ -4,7 +4,6 @@
     "dag": "协作图",
     "replays": "录像库",
     "context": "上下文",
-    "inbox": "审批",
     "notifications": "通知",
     "settings": "设置",
     "debug": "Debug"
@@ -100,7 +99,7 @@
       "title": "隐私 & 安全",
       "hint": "本地数据导出 / 清空，shim 工具调用模式",
       "approvalMode": "工具调用审批",
-      "approvalModeHint": "当前 shim 用 --dangerously-skip-permissions 启动 CLI，所有工具调用直接放行；切换 inbox 模式见 Approval 路由的 WIP 说明",
+      "approvalModeHint": "当前 shim 用 --dangerously-skip-permissions 启动 CLI，所有工具调用直接放行；产品方向上不打算加人工审批，永远 bypass",
       "approvalCurrent": "bypass（默认）",
       "exportTitle": "导出本地数据",
       "exportHint": "把 localStorage 中 flockmux:* 开头的 key 序列化为 JSON 下载",
@@ -211,25 +210,6 @@
     "history": "历史 ({{count}})",
     "noHistory": "暂无历史",
     "rightHint": "选中 key 查看元数据与历史"
-  },
-  "inbox": {
-    "title": "待批准",
-    "subtitle": "agent 请求进入人在回路决定",
-    "all": "全部",
-    "high": "高风险",
-    "default": "中",
-    "rejectAll": "全部拒绝",
-    "wipTitle": "后端未就绪 — 以下为 mock 数据",
-    "wipBody": "目前 shim 用 --dangerously-skip-permissions 起 CLI，所有工具调用直接放行。要做 Approval Inbox 需要给 shim 加 --approval-mode=inbox 模式 + /api/approvals 端点 + approval_pending / approval_resolved 两个 SwarmEvent。等 backend 落地后这页 UI 不动，只把 MOCKS 换成 api.listApprovals()。",
-    "highRiskChip": "高风险",
-    "view": "查看",
-    "reject": "拒绝",
-    "approve": "批准",
-    "empty": "收件箱空了",
-    "footerHint": "Agent 在等你决定，其余工作不受影响",
-    "autoRefresh": "自动刷新 30s",
-    "viewTooltip": "查看完整 tool_use payload",
-    "disabledTooltip": "后端未就绪（见顶部说明）"
   },
   "notifications": {
     "title": "通知",
@@ -361,7 +341,6 @@
       "dag": "DAG",
       "replays": "Replays",
       "context": "Blackboard",
-      "inbox": "Approval Inbox",
       "notifications": "Notification Center",
       "settings": "Preferences",
       "debug": "Legacy M2 grid"
