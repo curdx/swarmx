@@ -4,20 +4,20 @@
  * Sections:
  *   - 导航: jump to /chat /dag /replays /context /notifications /settings /debug
  *   - 工作空间: switch active workspace (from live /api/agent group-by)
+ *   - 唤醒 agent: wake any alive agent by role + id
  *   - 主题: light / dark / system (calls lib/theme.setTheme directly)
  *   - 操作: 新建工作空间(打开 Wizard via custom event) / 全部标已读(notif) ...
  *
- * Implementation notes:
- *   - Mounted once in AppShell, listens for window keydown.
- *   - cmdk Command.Dialog handles ⌘K open + Esc close + ↑↓ navigation
- *     + filtering by typing.
- *   - Workspace + agent data refreshed lazily on open (one /api/agent
- *     call); cheap, avoids a long-lived subscription just for the
- *     palette.
+ * Built on shadcn `CommandDialog` (which wraps cmdk + Radix Dialog):
+ * 自带 portal / focus trap / ESC / ↑↓ / fuzzy filter / 分组渲染.
+ * 主题切换 token 跟 popover 一套，跟其他 shadcn 组件视觉一致。
+ *
+ * Mounted once in AppShell, listens for window keydown to toggle open.
+ * Workspace + agent data refreshed lazily on open (one /api/agent call);
+ * cheap, avoids a long-lived subscription just for the palette.
  */
 
 import { useCallback, useEffect, useState } from "react";
-import { Command } from "cmdk";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import {
@@ -39,6 +39,15 @@ import {
 import { api } from "../api/http";
 import type { AgentInfo } from "../api/types";
 import { setTheme, type ThemeMode } from "@/lib/theme";
+import {
+  CommandDialog,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+  CommandShortcut,
+} from "@/components/ui/command";
 
 const NAV = [
   { labelKey: "nav.chat", href: "/chat", icon: MessageSquare, hintKey: "cmdk.navHint.chat" },
@@ -106,190 +115,158 @@ export function CommandPalette() {
   );
 
   return (
-    <Command.Dialog
+    <CommandDialog
       open={open}
       onOpenChange={setOpen}
-      label={t("cmdk.placeholder")}
-      className="fixed inset-0 z-[60] flex items-start justify-center bg-black/40 p-6 pt-[15vh] backdrop-blur-sm"
-      shouldFilter={true}
+      title={t("cmdk.placeholder")}
+      description={t("cmdk.kbd.openHint")}
     >
-      <div
-        className="flex w-full max-w-xl flex-col overflow-hidden rounded-xl border border-border-subtle bg-surface-elevated shadow-2xl"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <Command.Input
-          placeholder={t("cmdk.placeholder")}
-          className="h-12 w-full border-b border-border-subtle bg-transparent px-4 font-body text-sm text-foreground-primary placeholder:text-foreground-tertiary focus:outline-none"
-        />
-        <Command.List className="max-h-[60vh] overflow-y-auto p-2">
-          <Command.Empty className="py-6 text-center font-caption text-xs text-foreground-tertiary">
-            {t("common.noMatch")}
-          </Command.Empty>
+      <CommandInput placeholder={t("cmdk.placeholder")} />
+      <CommandList>
+        <CommandEmpty>{t("common.noMatch")}</CommandEmpty>
 
-          <Command.Group
-            heading={t("cmdk.groups.nav")}
-            className="[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:font-caption [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-wider [&_[cmdk-group-heading]]:text-foreground-tertiary"
-          >
-            {NAV.map((n) => {
-              const Icon = n.icon;
+        <CommandGroup heading={t("cmdk.groups.nav")}>
+          {NAV.map((n) => {
+            const Icon = n.icon;
+            return (
+              <CommandItem
+                key={n.href}
+                value={`${n.href} ${t(n.labelKey)}`}
+                onSelect={() => go(n.href)}
+              >
+                <Icon />
+                <span>{t(n.labelKey)}</span>
+                <CommandShortcut>{t(n.hintKey)}</CommandShortcut>
+              </CommandItem>
+            );
+          })}
+        </CommandGroup>
+
+        {workspaces.length > 0 && (
+          <CommandGroup heading={t("cmdk.groups.workspaces")}>
+            {workspaces.map((ws) => {
+              const id = ws.slice(-8) || "default";
               return (
-                <Item
-                  key={n.href}
-                  onSelect={() => go(n.href)}
-                  icon={<Icon className="size-4" />}
-                  label={t(n.labelKey)}
-                  hint={t(n.hintKey)}
-                />
+                <CommandItem
+                  key={ws}
+                  value={`ws ${ws}`}
+                  onSelect={() => go(`/chat/${id}`)}
+                >
+                  <Activity />
+                  <span>{ws.split("/").slice(-2).join("/") || ws}</span>
+                  <CommandShortcut>{t("cmdk.switchWs")}</CommandShortcut>
+                </CommandItem>
               );
             })}
-          </Command.Group>
+          </CommandGroup>
+        )}
 
-          {workspaces.length > 0 && (
-            <Command.Group
-              heading={t("cmdk.groups.workspaces")}
-              className="mt-1 [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:font-caption [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-wider [&_[cmdk-group-heading]]:text-foreground-tertiary"
-            >
-              {workspaces.map((ws) => {
-                const id = ws.slice(-8) || "default";
-                return (
-                  <Item
-                    key={ws}
-                    value={`ws ${ws}`}
-                    onSelect={() => go(`/chat/${id}`)}
-                    icon={<Activity className="size-4" />}
-                    label={ws.split("/").slice(-2).join("/") || ws}
-                    hint={t("cmdk.switchWs")}
-                  />
-                );
-              })}
-            </Command.Group>
-          )}
+        {liveAgents.length > 0 && (
+          <CommandGroup heading={t("cmdk.groups.wakeAgent")}>
+            {liveAgents.map((a) => (
+              <CommandItem
+                key={a.agent_id}
+                value={`wake ${a.role} ${a.agent_id}`}
+                onSelect={() => {
+                  api.wakeAgent(a.agent_id).catch(() => {});
+                  close();
+                }}
+              >
+                <Zap className="text-state-wake" />
+                <span>{t("cmdk.wake", { role: a.role })}</span>
+                <CommandShortcut>{a.agent_id}</CommandShortcut>
+              </CommandItem>
+            ))}
+          </CommandGroup>
+        )}
 
-          {liveAgents.length > 0 && (
-            <Command.Group
-              heading={t("cmdk.groups.wakeAgent")}
-              className="mt-1 [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:font-caption [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-wider [&_[cmdk-group-heading]]:text-foreground-tertiary"
-            >
-              {liveAgents.map((a) => (
-                <Item
-                  key={a.agent_id}
-                  value={`wake ${a.role} ${a.agent_id}`}
-                  onSelect={() => {
-                    api.wakeAgent(a.agent_id).catch(() => {});
-                    close();
-                  }}
-                  icon={<Zap className="size-4 text-state-wake" />}
-                  label={t("cmdk.wake", { role: a.role })}
-                  hint={a.agent_id}
-                />
-              ))}
-            </Command.Group>
-          )}
-
-          <Command.Group
-            heading={t("cmdk.groups.theme")}
-            className="mt-1 [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:font-caption [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-wider [&_[cmdk-group-heading]]:text-foreground-tertiary"
+        <CommandGroup heading={t("cmdk.groups.theme")}>
+          <CommandItem
+            value="theme light"
+            onSelect={() => {
+              persistTheme("light");
+              close();
+            }}
           >
-            <Item
-              value="theme light"
-              onSelect={() => {
-                persistTheme("light");
-                close();
-              }}
-              icon={<Sun className="size-4" />}
-              label={t("cmdk.switchToLight")}
-              hint="light"
-            />
-            <Item
-              value="theme dark"
-              onSelect={() => {
-                persistTheme("dark");
-                close();
-              }}
-              icon={<Moon className="size-4" />}
-              label={t("cmdk.switchToDark")}
-              hint="dark"
-            />
-            <Item
-              value="theme system"
-              onSelect={() => {
-                persistTheme("system");
-                close();
-              }}
-              icon={<SunMoon className="size-4" />}
-              label={t("cmdk.followSystem")}
-              hint="system"
-            />
-          </Command.Group>
-
-          <Command.Group
-            heading={t("cmdk.groups.actions")}
-            className="mt-1 [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:font-caption [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-wider [&_[cmdk-group-heading]]:text-foreground-tertiary"
+            <Sun />
+            <span>{t("cmdk.switchToLight")}</span>
+            <CommandShortcut>light</CommandShortcut>
+          </CommandItem>
+          <CommandItem
+            value="theme dark"
+            onSelect={() => {
+              persistTheme("dark");
+              close();
+            }}
           >
-            <Item
-              value="new workspace"
-              onSelect={() => {
-                // Surface a window-level event so chat route's wizard
-                // can open without prop-drilling state across routes.
-                window.dispatchEvent(new CustomEvent("flockmux:open-wizard"));
-                go("/chat");
-              }}
-              icon={<Plus className="size-4" />}
-              label={t("cmdk.newWorkspace")}
-              hint={t("cmdk.openWizard")}
-            />
-            <Item
-              value="run spell"
-              onSelect={() => {
-                window.dispatchEvent(new CustomEvent("flockmux:open-wizard"));
-                go("/chat");
-              }}
-              icon={<Sparkles className="size-4" />}
-              label={t("cmdk.runSpell")}
-              hint={t("cmdk.openWizard")}
-            />
-          </Command.Group>
-
-          <Command.Group
-            heading={t("cmdk.groups.settings")}
-            className="mt-1 [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:font-caption [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-wider [&_[cmdk-group-heading]]:text-foreground-tertiary"
+            <Moon />
+            <span>{t("cmdk.switchToDark")}</span>
+            <CommandShortcut>dark</CommandShortcut>
+          </CommandItem>
+          <CommandItem
+            value="theme system"
+            onSelect={() => {
+              persistTheme("system");
+              close();
+            }}
           >
-            {SETTINGS_SECTIONS.map((s, i) => {
-              const label = t(s.labelKey);
-              // cmdk filter only sees `value`; include both the english id
-              // (typeable in any locale) and the translated label so e.g.
-              // searching "隐私" or "privacy" both surface the same item.
-              return (
-                <Item
-                  key={s.id}
-                  value={`settings ${s.id} ${label}`}
-                  onSelect={() => go(`/settings/${s.id}`)}
-                  icon={<SettingsIcon className="size-4" />}
-                  label={label}
-                  hint={`⌘${i + 1}`}
-                />
-              );
-            })}
-          </Command.Group>
-        </Command.List>
-        <div className="flex items-center justify-between border-t border-border-subtle bg-surface-secondary px-3 py-2 font-caption text-[10px] text-foreground-tertiary">
-          <span>
-            <kbd className="rounded bg-surface-tertiary px-1.5 py-0.5">↑↓</kbd>{" "}
-            {t("cmdk.kbd.navigate")}
-            <kbd className="ml-2 rounded bg-surface-tertiary px-1.5 py-0.5">⏎</kbd>{" "}
-            {t("cmdk.kbd.confirm")}
-            <kbd className="ml-2 rounded bg-surface-tertiary px-1.5 py-0.5">Esc</kbd>{" "}
-            {t("cmdk.kbd.close")}
-          </span>
-          <span className="font-mono">{t("cmdk.kbd.openHint")}</span>
-        </div>
-      </div>
-    </Command.Dialog>
+            <SunMoon />
+            <span>{t("cmdk.followSystem")}</span>
+            <CommandShortcut>system</CommandShortcut>
+          </CommandItem>
+        </CommandGroup>
+
+        <CommandGroup heading={t("cmdk.groups.actions")}>
+          <CommandItem
+            value="new workspace"
+            onSelect={() => {
+              // 用 window-level 事件让 chat 路由的 wizard 自己开，避免把
+              // wizard open state 沿 route 树拽下来。
+              window.dispatchEvent(new CustomEvent("flockmux:open-wizard"));
+              go("/chat");
+            }}
+          >
+            <Plus />
+            <span>{t("cmdk.newWorkspace")}</span>
+            <CommandShortcut>{t("cmdk.openWizard")}</CommandShortcut>
+          </CommandItem>
+          <CommandItem
+            value="run spell"
+            onSelect={() => {
+              window.dispatchEvent(new CustomEvent("flockmux:open-wizard"));
+              go("/chat");
+            }}
+          >
+            <Sparkles />
+            <span>{t("cmdk.runSpell")}</span>
+            <CommandShortcut>{t("cmdk.openWizard")}</CommandShortcut>
+          </CommandItem>
+        </CommandGroup>
+
+        <CommandGroup heading={t("cmdk.groups.settings")}>
+          {SETTINGS_SECTIONS.map((s, i) => {
+            const label = t(s.labelKey);
+            // cmdk 只看 `value` 过滤，把英文 id + 翻译后的 label 都塞进
+            // value，这样输 "隐私" 或 "privacy" 都能命中。
+            return (
+              <CommandItem
+                key={s.id}
+                value={`settings ${s.id} ${label}`}
+                onSelect={() => go(`/settings/${s.id}`)}
+              >
+                <SettingsIcon />
+                <span>{label}</span>
+                <CommandShortcut>{`⌘${i + 1}`}</CommandShortcut>
+              </CommandItem>
+            );
+          })}
+        </CommandGroup>
+      </CommandList>
+    </CommandDialog>
   );
 }
 
-// Update localStorage in the same shape Settings persists, then apply
-// runtime. Avoids drift between palette and Settings UI.
+// 同 Settings 持久化主题的写入路径，避免 palette 和 Settings UI 漂移。
 function persistTheme(mode: ThemeMode) {
   const KEY = "flockmux:settings:v1";
   try {
@@ -301,34 +278,4 @@ function persistTheme(mode: ThemeMode) {
     /* ignore */
   }
   setTheme(mode);
-}
-
-function Item({
-  value,
-  onSelect,
-  icon,
-  label,
-  hint,
-}: {
-  value?: string;
-  onSelect: () => void;
-  icon: React.ReactNode;
-  label: string;
-  hint?: string;
-}) {
-  return (
-    <Command.Item
-      value={value ?? label}
-      onSelect={onSelect}
-      className="flex cursor-pointer items-center gap-2.5 rounded-md px-2 py-2 text-sm text-foreground-secondary aria-selected:bg-accent-primary-soft aria-selected:text-foreground-primary"
-    >
-      <span className="text-foreground-tertiary">{icon}</span>
-      <span className="flex-1">{label}</span>
-      {hint && (
-        <span className="font-caption text-[10px] text-foreground-tertiary">
-          {hint}
-        </span>
-      )}
-    </Command.Item>
-  );
 }

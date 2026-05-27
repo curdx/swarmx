@@ -30,6 +30,7 @@ import type {
   BlackboardSnapshot,
 } from "../api/types";
 import { useSwarmFeed } from "../hooks/useSwarmFeed";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
 
 interface TreeNode {
@@ -315,13 +316,15 @@ export default function ContextRoute() {
             className="min-w-0 flex-1 bg-transparent text-xs text-foreground-primary placeholder:text-foreground-tertiary focus:outline-none"
           />
         </div>
-        <button
+        <Button
+          variant="ghost"
+          size="icon"
           onClick={refreshList}
-          className="flex size-8 items-center justify-center rounded-md bg-surface-tertiary text-foreground-secondary hover:bg-surface-secondary"
           title={t("common.refresh")}
+          className="size-8"
         >
           <RefreshCw className="size-4" />
-        </button>
+        </Button>
       </header>
 
       {/* Body */}

@@ -22,6 +22,7 @@ import { api } from "../../api/http";
 import type { RecordingInfo } from "../../api/types";
 import { useSwarmFeed } from "../../hooks/useSwarmFeed";
 import { loadCastPreview, getCachedCastPreview } from "@/lib/castPreview";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
 
 const ROLE_BG: Record<string, string> = {
@@ -131,13 +132,15 @@ export default function ReplaysIndex() {
             className="min-w-0 flex-1 bg-transparent text-xs text-foreground-primary placeholder:text-foreground-tertiary focus:outline-none"
           />
         </div>
-        <button
+        <Button
+          variant="ghost"
+          size="icon"
           onClick={refresh}
-          className="flex size-8 items-center justify-center rounded-md bg-surface-tertiary text-foreground-secondary hover:bg-surface-secondary"
           title={t("common.refresh")}
+          className="size-8"
         >
           <RefreshCw className="size-4" />
-        </button>
+        </Button>
       </header>
 
       {/* Tag bar */}
@@ -145,18 +148,15 @@ export default function ReplaysIndex() {
         {tags.map((tag) => {
           const active = tag === activeTag;
           return (
-            <button
+            <Button
               key={tag}
+              variant={active ? "default" : "outline"}
+              size="sm"
               onClick={() => setActiveTag(tag)}
-              className={cn(
-                "rounded-full px-3 py-1 text-xs transition-colors",
-                active
-                  ? "bg-accent-primary text-foreground-on-accent"
-                  : "border border-border-subtle bg-surface-elevated text-foreground-secondary hover:bg-surface-tertiary",
-              )}
+              className="h-7 rounded-full"
             >
               {tag === "all" ? t("replays.tagAll") : tag}
-            </button>
+            </Button>
           );
         })}
         <span className="flex-1" />

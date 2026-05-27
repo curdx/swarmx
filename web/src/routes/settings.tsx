@@ -12,7 +12,7 @@
  * preference matrix.
  */
 
-import { useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import i18n from "@/i18n";
@@ -34,6 +34,9 @@ import {
   Sun,
   SunMoon,
 } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/cn";
 
 const STORAGE_KEY = "flockmux:settings:v1";
@@ -533,24 +536,18 @@ function PrivacyPanel() {
         label={t("settings.privacy.exportTitle")}
         hint={t("settings.privacy.exportHint")}
       >
-        <button
-          onClick={exportJson}
-          className="self-start rounded-md border border-border-subtle bg-surface-elevated px-4 py-2 text-xs text-foreground-secondary hover:bg-surface-tertiary"
-        >
+        <Button variant="outline" onClick={exportJson} className="self-start">
           {t("settings.privacy.exportButton")}
-        </button>
+        </Button>
       </Field>
 
       <Field
         label={t("settings.privacy.clearTitle")}
         hint={t("settings.privacy.clearHint")}
       >
-        <button
-          onClick={clearAll}
-          className="self-start rounded-md border border-state-danger/40 bg-status-danger-soft px-4 py-2 text-xs font-medium text-state-danger hover:bg-state-danger hover:text-foreground-on-accent"
-        >
+        <Button variant="destructive" onClick={clearAll} className="self-start">
           {t("settings.privacy.clearButton")}
-        </button>
+        </Button>
       </Field>
 
       {toast && (
@@ -817,34 +814,24 @@ function ToggleRow({
   value: boolean;
   onChange: (v: boolean) => void;
 }) {
+  // 用 React.useId 给 Switch + Label 配对，可访问性 + 点 Label 也能切 Switch。
+  const id = React.useId();
   return (
     <div className="flex items-center gap-3 rounded-lg border border-border-subtle bg-surface-elevated px-4 py-3">
       <div className="flex min-w-0 flex-1 flex-col">
-        <span className="font-heading text-sm font-medium text-foreground-primary">
+        <Label
+          htmlFor={id}
+          className="cursor-pointer font-heading text-sm font-medium text-foreground-primary"
+        >
           {label}
-        </span>
+        </Label>
         {hint && (
           <span className="font-caption text-[11px] text-foreground-tertiary">
             {hint}
           </span>
         )}
       </div>
-      <button
-        onClick={() => onChange(!value)}
-        className={cn(
-          "relative h-6 w-11 shrink-0 rounded-full transition-colors",
-          value ? "bg-accent-primary" : "bg-surface-tertiary",
-        )}
-        aria-pressed={value}
-      >
-        {/* Inline `left` instead of Tailwind translate-x classes — v4 doesn't
-            always synthesize the transform stack on arbitrary values, which
-            wedged both states at the same x position. */}
-        <span
-          className="absolute top-0.5 size-5 rounded-full bg-surface-elevated shadow-sm transition-[left] duration-150 ease-out border border-border-subtle"
-          style={{ left: value ? "22px" : "2px" }}
-        />
-      </button>
+      <Switch id={id} checked={value} onCheckedChange={onChange} />
     </div>
   );
 }

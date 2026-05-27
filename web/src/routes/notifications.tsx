@@ -30,6 +30,8 @@ import {
 import { api } from "../api/http";
 import type { BlackboardEntry, MessageRecord, SwarmEvent } from "../api/types";
 import { useSwarmFeed } from "../hooks/useSwarmFeed";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
 
 type NotifKind = "message" | "blackboard" | "state" | "error" | "completed";
@@ -251,19 +253,18 @@ export default function NotificationsRoute() {
           </span>
         </div>
         <span className="flex-1" />
-        <button
-          onClick={markAllRead}
-          className="rounded-md border border-border-subtle bg-surface-elevated px-3 py-1.5 text-xs text-foreground-secondary hover:bg-surface-tertiary"
-        >
+        <Button variant="outline" size="sm" onClick={markAllRead}>
           {t("notifications.markAllRead")}
-        </button>
-        <button
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
           onClick={seed}
-          className="flex size-8 items-center justify-center rounded-md bg-surface-tertiary text-foreground-secondary hover:bg-surface-secondary"
           title={t("common.refresh")}
+          className="size-8"
         >
           <RefreshCw className="size-4" />
-        </button>
+        </Button>
       </header>
 
       {/* Tab bar */}
@@ -273,31 +274,29 @@ export default function NotificationsRoute() {
           const active = tabItem.id === tab;
           const c = countBy(tabItem.id);
           return (
-            <button
+            <Button
               key={tabItem.id}
+              variant={active ? "default" : "outline"}
+              size="sm"
               onClick={() => setTab(tabItem.id)}
-              className={cn(
-                "flex h-7 items-center gap-1.5 rounded-full px-3 text-xs transition-colors",
-                active
-                  ? "bg-accent-primary text-foreground-on-accent"
-                  : "border border-border-subtle bg-surface-elevated text-foreground-secondary hover:bg-surface-tertiary",
-              )}
+              className="h-7 rounded-full"
             >
               <Icon className="size-3" />
               {t(tabItem.labelKey)}
               {c > 0 && (
-                <span
+                <Badge
+                  variant={active ? "secondary" : "outline"}
                   className={cn(
-                    "rounded-full px-1.5 py-0.5 text-[9px] font-semibold",
+                    "rounded-full px-1.5 py-0.5 text-[9px]",
                     active
                       ? "bg-foreground-on-accent text-accent-primary"
                       : "bg-surface-tertiary text-foreground-tertiary",
                   )}
                 >
                   {c}
-                </span>
+                </Badge>
               )}
-            </button>
+            </Button>
           );
         })}
       </div>
@@ -368,13 +367,15 @@ export default function NotificationsRoute() {
                     </div>
                   </div>
                   {!isRead && (
-                    <button
+                    <Button
+                      variant="ghost"
+                      size="icon"
                       onClick={() => markRead(n.id)}
-                      className="flex size-6 shrink-0 items-center justify-center rounded text-foreground-tertiary hover:bg-surface-tertiary hover:text-foreground-primary"
                       title={t("notifications.markRead")}
+                      className="size-6 text-foreground-tertiary hover:text-foreground-primary"
                     >
                       <X className="size-3" />
-                    </button>
+                    </Button>
                   )}
                 </li>
               );
