@@ -26,8 +26,10 @@ import { AgentDrawer } from "../components/agent/AgentDrawer";
 import { CreateWizard } from "../components/workspace/CreateWizard";
 import { useSwarmFeed } from "../hooks/useSwarmFeed";
 import {
+  accentToCssVar,
   FULLSTACK_INTERNAL_KEYS,
   projectSummaryKey,
+  WORKSPACE_ACCENT_KEY_PREFIX,
   workspaceSlug,
 } from "../lib/workspace";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -115,26 +117,48 @@ export default function ChatRoute() {
   // 用户给工作空间起的人类可读名字（来自 wizard，写到 workspace.name.<slug>）。
   // slug → name 映射；侧栏 / 顶栏 channel header 优先显示，回退到 path basename。
   const [workspaceNames, setWorkspaceNames] = useState<Record<string, string>>({});
+  // workspace accent id (用户在 wizard 挑的标识色)。slug → accent id 映射；
+  // sidebar / channel header 用它给每个 workspace 一个区分色。
+  const [workspaceAccents, setWorkspaceAccents] = useState<Record<string, string>>({});
   const idToFromRef = useRef<Map<number, string>>(new Map());
 
   const refreshWorkspaceNames = useCallback(async () => {
     try {
       const entries = await api.listBlackboard();
+      // 一次 listBlackboard 同时拉 name + accent 两套 per-workspace key —
+      // 都是从 wizard 提交时写的，生命周期一致，没必要分两次 round-trip。
       const nameEntries = entries.filter((e) =>
         e.path.startsWith(WORKSPACE_NAME_KEY_PREFIX),
       );
-      const pairs = await Promise.all(
-        nameEntries.map(async (e) => {
-          const slug = e.path.slice(WORKSPACE_NAME_KEY_PREFIX.length);
-          try {
-            const snap = await api.readBlackboard(e.path);
-            return [slug, snap.content] as const;
-          } catch {
-            return [slug, ""] as const;
-          }
-        }),
+      const accentEntries = entries.filter((e) =>
+        e.path.startsWith(WORKSPACE_ACCENT_KEY_PREFIX),
       );
-      setWorkspaceNames(Object.fromEntries(pairs.filter(([, v]) => v)));
+      const [namePairs, accentPairs] = await Promise.all([
+        Promise.all(
+          nameEntries.map(async (e) => {
+            const slug = e.path.slice(WORKSPACE_NAME_KEY_PREFIX.length);
+            try {
+              const snap = await api.readBlackboard(e.path);
+              return [slug, snap.content] as const;
+            } catch {
+              return [slug, ""] as const;
+            }
+          }),
+        ),
+        Promise.all(
+          accentEntries.map(async (e) => {
+            const slug = e.path.slice(WORKSPACE_ACCENT_KEY_PREFIX.length);
+            try {
+              const snap = await api.readBlackboard(e.path);
+              return [slug, snap.content] as const;
+            } catch {
+              return [slug, ""] as const;
+            }
+          }),
+        ),
+      ]);
+      setWorkspaceNames(Object.fromEntries(namePairs.filter(([, v]) => v)));
+      setWorkspaceAccents(Object.fromEntries(accentPairs.filter(([, v]) => v)));
     } catch {
       // best-effort
     }
@@ -234,7 +258,10 @@ export default function ChatRoute() {
           });
           break;
         case "blackboard_changed":
-          if (ev.path.startsWith(WORKSPACE_NAME_KEY_PREFIX)) {
+          if (
+            ev.path.startsWith(WORKSPACE_NAME_KEY_PREFIX) ||
+            ev.path.startsWith(WORKSPACE_ACCENT_KEY_PREFIX)
+          ) {
             refreshWorkspaceNames();
           }
           break;
@@ -259,19 +286,22 @@ export default function ChatRoute() {
     }
     return Array.from(byWs.entries()).map(([path, members]) => {
       const { name: basename, parent } = splitWorkspacePath(path);
+      const slug = workspaceSlug(path);
       // wizard 写到黑板的人类名优先；没有就回退到路径末段。这样老 workspace
       // （没经过 wizard，没 workspace.name.<slug>）仍然能显示出来。
-      const userName = workspaceNames[workspaceSlug(path)];
+      const userName = workspaceNames[slug];
+      const accentColor = accentToCssVar(workspaceAccents[slug]);
       return {
         path,
         members,
         name: userName || basename,
         parent,
+        accentColor,
         // Stable id = last 8 chars of path; good enough for URL routing.
         id: path.slice(-8) || "default",
       };
     });
-  }, [agents, workspaceNames]);
+  }, [agents, workspaceNames, workspaceAccents]);
 
   const activeWs =
     workspaces.find((w) => w.id === workspaceId) ?? workspaces[0] ?? null;
@@ -423,9 +453,24 @@ export default function ChatRoute() {
         </div>
         <nav className="flex flex-col gap-0.5 overflow-y-auto">
           {workspaces.length === 0 && (
-            <span className="px-3 py-2 font-caption text-xs text-foreground-tertiary">
-              {t("chat.noActiveAgents")} <a className="text-accent-primary hover:underline" href="/debug">/debug</a>
-            </span>
+            // 之前是 "暂无活跃 agent · 去 /debug"，"/debug" 是开发者入口，
+            // 对小白完全不友好（去那儿没法新建 ws）。改成大 Sparkles CTA
+            // 引导主动作 — 用户进 chat 第一眼就知道下一步该干啥。
+            <button
+              type="button"
+              onClick={() => setWizardOpen(true)}
+              className="mx-2 mt-2 flex flex-col items-center gap-2 rounded-lg border border-dashed border-border-strong px-3 py-6 text-center transition-colors hover:border-accent-primary hover:bg-accent-primary-soft"
+            >
+              <span className="flex size-9 items-center justify-center rounded-full bg-accent-primary-soft text-accent-primary-deep">
+                <Sparkles className="size-4" />
+              </span>
+              <span className="font-heading text-[13px] font-semibold text-foreground-primary">
+                {t("chat.emptyStateTitle")}
+              </span>
+              <span className="font-caption text-[10px] leading-relaxed text-foreground-tertiary">
+                {t("chat.emptyStateHint")}
+              </span>
+            </button>
           )}
           {workspaces.map((ws) => {
             const active = ws.id === activeWs?.id;
@@ -441,7 +486,13 @@ export default function ChatRoute() {
                     : "text-foreground-secondary hover:bg-surface-tertiary",
                 )}
               >
-                <span className="mt-1 size-2 shrink-0 self-start rounded-full bg-state-success" />
+                {/* 用户在 wizard 给这个 workspace 挑的标识色 — 多 workspace
+                    时一眼区分谁是谁（Discord 服务器 icon 风）。alive status
+                    通过 chat 顶 LIVE chip + 成员列表 dot 表达，不挤这里。*/}
+                <span
+                  className="mt-1 size-2 shrink-0 self-start rounded-full"
+                  style={{ background: ws.accentColor }}
+                />
                 <span className="flex min-w-0 flex-1 flex-col gap-0.5">
                   <span className="truncate font-heading text-[13px] font-semibold text-foreground-primary">
                     {ws.name || t("chat.noWorkspaceName")}
@@ -478,8 +529,13 @@ export default function ChatRoute() {
             users always see *which folder* this room is rooted in. */}
         <div className="flex shrink-0 flex-col gap-1.5 border-b border-border-subtle px-5 py-3">
           <div className="flex min-w-0 items-center gap-3">
-            <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-surface-tertiary">
-              <FolderOpen className="size-[15px] text-accent-primary" />
+            <span
+              className="flex size-7 shrink-0 items-center justify-center rounded-md bg-surface-tertiary"
+              style={
+                activeWs ? { color: activeWs.accentColor } : undefined
+              }
+            >
+              <FolderOpen className="size-[15px]" />
             </span>
             <div className="flex min-w-0 flex-1 items-center gap-2">
               <h1 className="truncate font-heading text-[15px] font-bold leading-tight text-foreground-primary">

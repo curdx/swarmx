@@ -36,7 +36,9 @@ import { api } from "../../api/http";
 import type { SpellInfo, SwarmEvent } from "../../api/types";
 import { useSwarmFeed } from "../../hooks/useSwarmFeed";
 import {
+  ACCENT_OPTIONS,
   PROJECT_SUMMARY_KEY_PREFIX,
+  workspaceAccentKey,
   workspaceNameKey,
 } from "../../lib/workspace";
 import { Button } from "@/components/ui/button";
@@ -81,13 +83,6 @@ async function pickDirectoryViaTauri(): Promise<string | null> {
   }
 }
 
-const ACCENT_OPTIONS = [
-  { id: "peach", color: "var(--color-accent-primary)" },
-  { id: "frontend", color: "var(--color-agent-frontend)" },
-  { id: "backend", color: "var(--color-agent-backend)" },
-  { id: "test", color: "var(--color-agent-test)" },
-  { id: "critic", color: "var(--color-agent-critic)" },
-];
 
 interface Props {
   open: boolean;
@@ -208,6 +203,15 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
         .catch(() => {
           /* best-effort — sidebar fallback 到 basename，没 name 也能用 */
         });
+      // 持久化用户挑的 accent — chat sidebar / channel header 据此给每个
+      // workspace 一个区分色，多 ws 时一眼看出谁是谁（Discord 服务器风）。
+      api
+        .writeBlackboard(workspaceAccentKey(canonicalPath), {
+          content: accent,
+        })
+        .catch(() => {
+          /* best-effort — accent 缺失就用默认色 (peach) */
+        });
     } catch (e) {
       setScan(null);
       setError((e as Error).message);
@@ -289,8 +293,8 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
                           ? "ring-2 ring-foreground-primary ring-offset-2"
                           : "hover:scale-110",
                       )}
-                      style={{ background: opt.color }}
-                      title={opt.id}
+                      style={{ background: opt.cssVar }}
+                      title={t("wizard.accentTitle", { name: opt.id })}
                       aria-label={`accent ${opt.id}`}
                     />
                   ))}
@@ -333,7 +337,9 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
                         }
                         placeholder={
                           i === 0
-                            ? t("wizard.dirPlaceholder1")
+                            ? IS_TAURI
+                              ? t("wizard.dirPlaceholder1Tauri")
+                              : t("wizard.dirPlaceholder1")
                             : t("wizard.dirPlaceholderMore")
                         }
                         className="h-8 border-none bg-transparent px-0 font-mono text-sm shadow-none focus-visible:ring-0"

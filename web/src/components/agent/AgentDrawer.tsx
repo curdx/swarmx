@@ -33,7 +33,7 @@
  *   close enough to the design's intent without forking a new PTY-write path.
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   ChevronRight,
@@ -45,7 +45,6 @@ import {
   Pause,
   Play,
   RotateCcw,
-  SendHorizonal,
   Terminal as TerminalIcon,
   Wrench,
   Zap,
@@ -62,7 +61,6 @@ import type {
 import { XtermPane } from "../XtermPane";
 import { useSwarmFeed } from "../../hooks/useSwarmFeed";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import {
   Sheet,
   SheetContent,
@@ -119,7 +117,6 @@ export function AgentDrawer({ agentId, onClose }: Props) {
   const [info, setInfo] = useState<AgentInfo | null>(null);
   const [tab, setTab] = useState<TabId>("terminal");
   const [now, setNow] = useState(Date.now());
-  const injectRef = useRef<HTMLInputElement>(null);
 
   const refreshInfo = async () => {
     try {
@@ -153,7 +150,6 @@ export function AgentDrawer({ agentId, onClose }: Props) {
     },
   });
 
-  const focusInjector = () => injectRef.current?.focus();
   const wake = () => api.wakeAgent(agentId).catch(() => {});
 
   return (
@@ -181,7 +177,6 @@ export function AgentDrawer({ agentId, onClose }: Props) {
           info={info}
           agentId={agentId}
           now={now}
-          onFocusInjector={focusInjector}
           onWake={wake}
         />
         <TabBar tab={tab} onChange={setTab} />
@@ -195,7 +190,6 @@ export function AgentDrawer({ agentId, onClose }: Props) {
           {tab === "tools" && <ToolsTab />}
           {tab === "context" && <ContextTab agentId={agentId} />}
         </div>
-        <InjectBar agentId={agentId} inputRef={injectRef} />
         <StatBar info={info} now={now} />
       </SheetContent>
     </Sheet>
@@ -208,13 +202,11 @@ function Header({
   info,
   agentId,
   now,
-  onFocusInjector,
   onWake,
 }: {
   info: AgentInfo | null;
   agentId: string;
   now: number;
-  onFocusInjector: () => void;
   onWake: () => void;
 }) {
   const { t } = useTranslation();
@@ -281,12 +273,12 @@ function Header({
         </div>
       </div>
 
-      {/* ActionRow */}
+      {/* ActionRow — 之前有「发送消息」按钮指向 drawer 自带的 InjectBar，
+          但 chat 主 composer 上的 recipient picker 已经能选这个 agent
+          发消息（同一 mailbox 路径，行为完全等价），两套 prompt-inject UI
+          是重复，drawer 这边删了。Wake / Pause / Restart 保留，是 agent
+          独有的操作。 */}
       <div className="flex items-center gap-2 px-5 pt-1 pb-4">
-        <Button size="sm" onClick={onFocusInjector}>
-          <SendHorizonal className="size-3" />
-          {t("agent.sendMessage")}
-        </Button>
         <Button size="sm" variant="outline" onClick={onWake}>
           <Zap className="size-3" />
           {t("agent.wake")}
@@ -604,74 +596,6 @@ function ContextTab({ agentId }: { agentId: string }) {
   );
 }
 
-// ── InjectBar ────────────────────────────────────────────────────────────
-
-function InjectBar({
-  agentId,
-  inputRef,
-}: {
-  agentId: string;
-  inputRef: React.RefObject<HTMLInputElement | null>;
-}) {
-  const { t } = useTranslation();
-  // Cast away the null-union on render — useRef<HTMLInputElement>(null)
-  // technically yields `RefObject<HTMLInputElement | null>` in @types/react@18,
-  // but DOM ref props expect a non-null inner. Safe because React never reads
-  // the ref before mount.
-  const ref = inputRef as React.RefObject<HTMLInputElement>;
-  const [text, setText] = useState("");
-  const [sending, setSending] = useState(false);
-
-  const send = async () => {
-    const body = text.trim();
-    if (!body) return;
-    setSending(true);
-    try {
-      // PTY input is owned by XtermPane; we route prompts through the
-      // message bus instead. Agents pull from mailbox between turns, so
-      // the effect is "human note arrives" rather than "key bytes typed".
-      await api.sendMessage({ to: agentId, kind: "note", body });
-      setText("");
-    } catch (e) {
-      // eslint-disable-next-line no-alert
-      alert(`${t("agent.send")}: ${(e as Error).message}`);
-    } finally {
-      setSending(false);
-    }
-  };
-
-  return (
-    <div className="flex shrink-0 items-center gap-3 border-t border-border-subtle bg-surface-tertiary px-4 py-3">
-      <span className="shrink-0 font-caption text-[11px] text-foreground-secondary">
-        {t("agent.injectLabel")}
-      </span>
-      <div className="relative flex min-w-0 flex-1 items-center">
-        <Input
-          ref={ref}
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault();
-              send();
-            }
-          }}
-          placeholder={t("agent.injectPlaceholder")}
-          className="h-8 pr-7 font-mono text-xs"
-        />
-        <span className="pointer-events-none absolute right-2.5 font-mono text-[9px] text-foreground-tertiary">⏎</span>
-      </div>
-      <Button
-        size="sm"
-        onClick={send}
-        disabled={sending || !text.trim()}
-        className="h-8"
-      >
-        {sending ? "…" : t("agent.send")}
-      </Button>
-    </div>
-  );
-}
 
 // ── StatBar ──────────────────────────────────────────────────────────────
 

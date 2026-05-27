@@ -220,6 +220,16 @@ export default function NotificationsRoute() {
     });
   };
   const markAllRead = () => {
+    // 防误触：100 条 unread 一下全 mark read 是不可逆操作（read 状态
+    // 只存 localStorage，没法 undo）。当 unread 数 > 5 时弹一个 confirm
+    // 让用户确认；少量 (≤5) 直接执行省点击。
+    const unreadCount = items.filter((n) => !read.has(n.id)).length;
+    if (unreadCount > 5) {
+      const ok = window.confirm(
+        t("notifications.markAllReadConfirm", { count: unreadCount }),
+      );
+      if (!ok) return;
+    }
     setRead((prev) => {
       const next = new Set(prev);
       for (const n of items) next.add(n.id);

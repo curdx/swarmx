@@ -17,6 +17,15 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api/http";
+
+// Tauri 用 titleBarStyle:"Overlay"，OS 在窗口左上角 ~78px 区域画红黄绿
+// 原生按钮，浮在 webview 之上。/debug 跟 /replays/:id 一样是 fullscreen
+// 路由 escape AppShell，自绘 header 得给左边留空避免被压。
+const IS_TAURI =
+  typeof window !== "undefined" &&
+  (window.location.protocol === "tauri:" ||
+    window.location.hostname === "tauri.localhost" ||
+    "__TAURI_INTERNALS__" in window);
 import type { CliPluginInfo, SpawnAgentResponse, SwarmEvent } from "../api/types";
 import { XtermPane } from "../components/XtermPane";
 import { SwarmPanel } from "../components/SwarmPanel";
@@ -188,7 +197,7 @@ export default function DebugRoute() {
           display: "flex",
           flexDirection: "column",
           gap: 6,
-          padding: "8px 12px",
+          padding: IS_TAURI ? "8px 12px 8px 88px" : "8px 12px",
         }}
       >
         <div

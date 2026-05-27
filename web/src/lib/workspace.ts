@@ -32,6 +32,36 @@ export function workspaceNameKey(path: string): string {
   return `workspace.name.${workspaceSlug(path)}`;
 }
 
+/** Per-workspace accent color id chosen in the wizard. Used by chat
+ *  sidebar / channel header to render a small color chip so the user
+ *  can tell multiple workspaces apart at a glance (like Discord server
+ *  icons or GitHub repo project labels). Value is one of ACCENT_OPTIONS'
+ *  `id` string; falls back to "peach" (default accent) when missing. */
+export function workspaceAccentKey(path: string): string {
+  return `workspace.accent.${workspaceSlug(path)}`;
+}
+
+export const WORKSPACE_ACCENT_KEY_PREFIX = "workspace.accent.";
+
+/** Wizard 给用户挑的 5 个 accent — id 持久化到 blackboard，cssVar 用于
+ *  渲染时给 `style={{ background: cssVar }}` 之类的。Single source of
+ *  truth: wizard / chat sidebar / channel header 都从这里读，加新 accent
+ *  只改这里。*/
+export const ACCENT_OPTIONS = [
+  { id: "peach", cssVar: "var(--color-accent-primary)" },
+  { id: "frontend", cssVar: "var(--color-agent-frontend)" },
+  { id: "backend", cssVar: "var(--color-agent-backend)" },
+  { id: "test", cssVar: "var(--color-agent-test)" },
+  { id: "critic", cssVar: "var(--color-agent-critic)" },
+] as const;
+
+export type AccentId = (typeof ACCENT_OPTIONS)[number]["id"];
+
+export function accentToCssVar(id: string | null | undefined): string {
+  const found = ACCENT_OPTIONS.find((o) => o.id === id);
+  return found?.cssVar ?? ACCENT_OPTIONS[0].cssVar;
+}
+
 /** Prefix every per-workspace key shares — used by the wizard to listen
  *  for "scout finished writing the summary" via the WS feed without
  *  having to know which slug the scout ended up using (matters when
