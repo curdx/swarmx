@@ -321,6 +321,8 @@
     "you": "我",
     "broadcast": "全员",
     "to": "发给",
+    "changeRecipient": "换一个发送对象",
+    "recipientPicker": "发给当前房间的…",
     "details": "详情",
     "send": "发送",
     "sending": "发送中…",

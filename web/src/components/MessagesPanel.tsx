@@ -30,6 +30,7 @@ import {
 } from "react";
 import { useTranslation } from "react-i18next";
 import {
+  ChevronDown,
   CornerUpLeft,
   Filter,
   RefreshCw,
@@ -40,6 +41,14 @@ import {
 import { api } from "../api/http";
 import type { AgentInfo, MessageRecord } from "../api/types";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/cn";
 
@@ -337,12 +346,34 @@ export function MessagesPanel({
   }, [rows.length, pendingResponders.length]);
 
   // ── send / reply / mark-read ──────────────────────────────────────────
-  const defaultRecipient = useMemo(() => {
+  // composer 默认 recipient — 取当前 ws 第一个 alive agent。用户能通过 chip
+  // 上的下拉自己改（见 selectedRecipientId state 下面 + Popover picker）。
+  const fallbackRecipient = useMemo(() => {
     if (activeMembers.length === 0) return null;
-    // 1-on-1 → that agent. Multi → first agent for now; future iteration
-    // will surface a member-picker chip in the composer.
     return activeMembers[0];
   }, [activeMembers]);
+
+  const [selectedRecipientId, setSelectedRecipientId] = useState<string | null>(
+    null,
+  );
+  // 切换 workspace 时 activeMembers 整组换 — 之前选的 recipient 可能已经不在
+  // 当前 ws 里了，reset 到 null 让 fallbackRecipient 接管。
+  useEffect(() => {
+    if (
+      selectedRecipientId &&
+      !activeMembers.some((m) => m.agent_id === selectedRecipientId)
+    ) {
+      setSelectedRecipientId(null);
+    }
+  }, [activeMembers, selectedRecipientId]);
+
+  const defaultRecipient = useMemo(() => {
+    if (selectedRecipientId) {
+      const pinned = activeMembers.find((m) => m.agent_id === selectedRecipientId);
+      if (pinned) return pinned;
+    }
+    return fallbackRecipient;
+  }, [activeMembers, selectedRecipientId, fallbackRecipient]);
 
   const send = async () => {
     const trimmed = body.trim();
@@ -768,21 +799,63 @@ export function MessagesPanel({
           </div>
         )}
         <div className="flex items-end gap-2">
-          {defaultRecipient && (
-            <span
-              className="inline-flex items-center gap-1 self-start rounded-full bg-surface-tertiary px-2 py-1 font-caption text-[10px] text-foreground-secondary"
-              title={defaultRecipient.agent_id}
-            >
-              <span
-                className={cn(
-                  "size-3 shrink-0 rounded-full",
-                  roleColor(defaultRecipient.role),
-                )}
-              />
-              <span>
-                {t("messages.to")} {defaultRecipient.role}
-              </span>
-            </span>
+          {defaultRecipient && !composerOverride && (
+            // composerOverride 路径下 to= 是定死的（system + 触发 auto-dispatch），
+            // 给 picker 选别人没意义，所以这种模式下隐藏 chip。其他情况下点
+            // chip 弹出 DropdownMenu 列出当前 ws 所有 alive 成员，选谁就发给谁。
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1 self-start rounded-full bg-surface-tertiary px-2 py-1 font-caption text-[10px] text-foreground-secondary outline-none hover:bg-surface-secondary focus-visible:ring-2 focus-visible:ring-accent-primary"
+                  title={defaultRecipient.agent_id}
+                  aria-label={t("messages.changeRecipient")}
+                >
+                  <span
+                    className={cn(
+                      "size-3 shrink-0 rounded-full",
+                      roleColor(defaultRecipient.role),
+                    )}
+                  />
+                  <span>
+                    {t("messages.to")} {defaultRecipient.role}
+                  </span>
+                  <ChevronDown className="size-3 text-foreground-tertiary" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" side="top" className="w-56">
+                <DropdownMenuLabel className="text-[10px] font-semibold uppercase tracking-wider text-foreground-tertiary">
+                  {t("messages.recipientPicker")}
+                </DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                {activeMembers.map((m) => {
+                  const isActive = m.agent_id === defaultRecipient.agent_id;
+                  return (
+                    <DropdownMenuItem
+                      key={m.agent_id}
+                      onSelect={() => setSelectedRecipientId(m.agent_id)}
+                      className="flex items-center gap-2"
+                    >
+                      <span
+                        className={cn(
+                          "size-3 shrink-0 rounded-full",
+                          roleColor(m.role),
+                        )}
+                      />
+                      <span className="flex-1 truncate">
+                        <span className="font-medium">{m.role}</span>
+                        <span className="ml-1.5 font-mono text-[10px] text-foreground-tertiary">
+                          {m.agent_id.slice(-8)}
+                        </span>
+                      </span>
+                      {isActive && (
+                        <span className="text-[10px] text-accent-primary">✓</span>
+                      )}
+                    </DropdownMenuItem>
+                  );
+                })}
+              </DropdownMenuContent>
+            </DropdownMenu>
           )}
           <Textarea
             ref={composerRef}

@@ -321,6 +321,8 @@
     "you": "You",
     "broadcast": "Everyone",
     "to": "To",
+    "changeRecipient": "Change recipient",
+    "recipientPicker": "Send to someone in this room…",
     "details": "Details",
     "send": "Send",
     "sending": "Sending…",
