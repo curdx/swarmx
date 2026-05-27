@@ -21,7 +21,7 @@
  * /debug renders without AppShell (it owns its own dark chrome).
  */
 
-import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
+import { Link, Outlet, useLocation } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useEffect } from "react";
 import { Boxes, Settings } from "lucide-react";
@@ -115,23 +115,25 @@ export function AppShell() {
           {/* Settings — 直接跳完整页，不做下拉杂物箱。GitHub / Slack /
               Cursor 都是这模式：gear icon = 单击就走，theme / debug /
               about 全部活在 /settings 内部 section。Debug 主入口走 ⌘K
-              (它是开发者后门，不该 first-class)。 */}
+              (它是开发者后门，不该 first-class)。
+              不用 NavLink callable-className + Tooltip asChild 组合 —
+              Radix Slot 会把 callable className 当字符串落到 DOM，整套
+              CSS 失效，icon 直接超尺寸。改用普通 Link + useLocation
+              手动判 active。 */}
           <Tooltip>
             <TooltipTrigger asChild>
-              <NavLink
+              <Link
                 to="/settings"
-                className={({ isActive }) =>
-                  cn(
-                    "flex size-7 items-center justify-center rounded-md transition-colors hover:bg-surface-tertiary hover:text-foreground-primary",
-                    isActive
-                      ? "text-foreground-primary"
-                      : "text-foreground-tertiary",
-                  )
-                }
+                className={cn(
+                  "flex size-7 items-center justify-center rounded-md transition-colors hover:bg-surface-tertiary hover:text-foreground-primary",
+                  location.pathname.startsWith("/settings")
+                    ? "text-foreground-primary"
+                    : "text-foreground-tertiary",
+                )}
                 aria-label={t("nav.settings")}
               >
                 <Settings className="size-4" />
-              </NavLink>
+              </Link>
             </TooltipTrigger>
             <TooltipContent side="bottom">{t("nav.settings")}</TooltipContent>
           </Tooltip>
