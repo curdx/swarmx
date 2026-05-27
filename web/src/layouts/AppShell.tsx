@@ -18,6 +18,7 @@ import { NavLink, Outlet } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import {
   Bell,
+  Boxes,
   Bug,
   FileText,
   GitBranch,
@@ -91,17 +92,23 @@ export function AppShell() {
         // gets a small top padding too for visual symmetry.
         style={IS_TAURI ? { paddingTop: 28 } : undefined}
       >
-        {/* Brand row — logo dot + (when expanded) the app name. Sized to
-            match the top header height so the divider lines up. */}
+        {/* Brand row — Boxes icon (一群 box → multi-agent flock 的视觉
+            隐喻) + (展开时) wordmark。logotype 走 font-mono + tight
+            letter spacing，保留全小写的 developer-brand 风（vercel /
+            linear / supabase / neon 同款），但比之前纯文字朴素的版本
+            多了 "技术工具" 的辨识度。Icon 容器有 shadow-sm + 上下两个
+            对角的 dot 营造一点纵深，跟左侧 nav 平面 icon 形成区分。 */}
         <div
           className={cn(
             "flex h-11 shrink-0 items-center border-b border-border-subtle",
             collapsed ? "justify-center" : "px-3",
           )}
         >
-          <span className="size-6 rounded-md bg-accent-primary" />
+          <span className="flex size-7 items-center justify-center rounded-lg bg-accent-primary text-foreground-on-accent shadow-sm">
+            <Boxes className="size-4" strokeWidth={2.25} />
+          </span>
           {!collapsed && (
-            <span className="ml-2 font-heading text-sm font-semibold">
+            <span className="ml-2.5 font-mono text-[15px] font-semibold tracking-tight text-foreground-primary">
               flockmux
             </span>
           )}

@@ -331,10 +331,13 @@ export default function NotificationsRoute() {
                 <li
                   key={n.id}
                   className={cn(
-                    "flex items-start gap-3 rounded-lg px-3 py-2.5",
-                    isRead
-                      ? "border border-border-subtle bg-surface-elevated"
-                      : "border border-accent-primary/20 bg-surface-accent-tint",
+                    "flex items-start gap-3 rounded-lg border border-border-subtle bg-surface-elevated px-3 py-2.5",
+                    // unread 之前用整张 bg-surface-accent-tint — light 下还
+                    // 行，dark 下解析成 blue-900 整片蓝海，视觉太重。改成
+                    // Slack / Mail / Notion 同款 "左侧 accent bar" 风：卡片
+                    // 主背景保持 surface-elevated（跟 read 一致），unread 只
+                    // 用左边 2px 蓝条标识 + 右上 dot，subtle 但能扫到。
+                    !isRead && "border-l-2 border-l-accent-primary",
                   )}
                 >
                   <span
