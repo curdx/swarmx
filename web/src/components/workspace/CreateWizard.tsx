@@ -255,6 +255,7 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
           <ScanView
             label={t("wizard.scanning")}
             hint={t("wizard.scanningHint")}
+            startedAt={scan.startedAt}
           />
         ) : (
           <div className="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto p-6">
@@ -281,23 +282,30 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
                     className="h-10"
                   />
                 </div>
-                <div className="flex items-center gap-1.5">
-                  {ACCENT_OPTIONS.map((opt) => (
-                    <button
-                      key={opt.id}
-                      type="button"
-                      onClick={() => setAccent(opt.id)}
-                      className={cn(
-                        "size-7 rounded-full transition-transform",
-                        accent === opt.id
-                          ? "ring-2 ring-foreground-primary ring-offset-2"
-                          : "hover:scale-110",
-                      )}
-                      style={{ background: opt.cssVar }}
-                      title={t("wizard.accentTitle", { name: opt.id })}
-                      aria-label={`accent ${opt.id}`}
-                    />
-                  ))}
+                {/* 5 个标识色 — 之前裸着 5 个圆，新手不知道是干啥的。加
+                 *  小 label 说明用途（多 workspace 时一眼区分谁是谁）。 */}
+                <div className="flex flex-col items-end gap-1">
+                  <span className="font-caption text-[10px] text-foreground-tertiary">
+                    {t("wizard.accentLabel")}
+                  </span>
+                  <div className="flex items-center gap-1.5">
+                    {ACCENT_OPTIONS.map((opt) => (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        onClick={() => setAccent(opt.id)}
+                        className={cn(
+                          "size-6 rounded-full transition-transform",
+                          accent === opt.id
+                            ? "ring-2 ring-foreground-primary ring-offset-2"
+                            : "hover:scale-110",
+                        )}
+                        style={{ background: opt.cssVar }}
+                        title={t("wizard.accentTitle", { name: opt.id })}
+                        aria-label={`accent ${opt.id}`}
+                      />
+                    ))}
+                  </div>
                 </div>
               </div>
             </section>
@@ -440,9 +448,31 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
   );
 }
 
-function ScanView({ label, hint }: { label: string; hint: string }) {
+function ScanView({
+  label,
+  hint,
+  startedAt,
+}: {
+  label: string;
+  hint: string;
+  startedAt: number;
+}) {
+  const { t } = useTranslation();
+  // 实时 elapsed 秒数 — 用户等 30 秒 spinner 转着不动会怀疑挂了，给个
+  // 实时跳秒 + 隐式进度条让他知道 "在动、快好"。
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(Date.now()), 500);
+    return () => window.clearInterval(id);
+  }, []);
+  const elapsedMs = Math.max(0, now - startedAt);
+  const elapsedSec = Math.floor(elapsedMs / 1000);
+  // 平均完成时间 ~25s；按 30s 当 90% (留 10% 给最后一公里，看着没卡住)。
+  // 超过 30s 后吸到 95% 静止，等真正完成 effect 关闭 modal。
+  const pct = Math.min(95, Math.floor((elapsedMs / 30_000) * 90));
+
   return (
-    <div className="flex min-h-[280px] flex-1 flex-col items-center justify-center gap-4 p-10 text-center">
+    <div className="flex min-h-[300px] flex-1 flex-col items-center justify-center gap-4 p-10 text-center">
       <span className="flex size-14 items-center justify-center rounded-full bg-accent-primary-soft text-accent-primary-deep">
         <Loader2 className="size-7 animate-spin" />
       </span>
@@ -452,6 +482,19 @@ function ScanView({ label, hint }: { label: string; hint: string }) {
       <p className="max-w-[420px] font-body text-[13px] leading-relaxed text-foreground-secondary">
         {hint}
       </p>
+      {/* 进度条 + 实时秒数。进度条是基于平均时长的"心理安抚条"，不精确
+       *  跟后端 scout 真实进度挂钩 (后端没暴露阶段事件)。 */}
+      <div className="flex w-full max-w-[320px] flex-col gap-1.5">
+        <div className="h-1.5 w-full overflow-hidden rounded-full bg-surface-tertiary">
+          <div
+            className="h-full rounded-full bg-accent-primary transition-all duration-500 ease-out"
+            style={{ width: `${pct}%` }}
+          />
+        </div>
+        <span className="font-mono text-[10px] text-foreground-tertiary">
+          {t("wizard.scanningElapsed", { s: elapsedSec })}
+        </span>
+      </div>
     </div>
   );
 }

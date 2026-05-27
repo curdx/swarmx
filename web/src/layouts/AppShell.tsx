@@ -24,7 +24,7 @@
 import { Link, Outlet, useLocation } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useEffect } from "react";
-import { Boxes, Settings } from "lucide-react";
+import { Boxes, Search, Settings } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { CommandPalette } from "@/components/CommandPalette";
 import { NotificationPopover } from "@/components/NotificationPopover";
@@ -84,26 +84,36 @@ export function AppShell() {
 
           <span className="flex-1" />
 
-          {/* ⌘K hint — interactive: clicking dispatches the same keyboard
-              event so users who haven't memorized the shortcut still
-              discover the palette. */}
-          <button
-            type="button"
-            onClick={() => {
-              const ev = new KeyboardEvent("keydown", {
-                key: "k",
-                code: "KeyK",
-                metaKey: isMac,
-                ctrlKey: !isMac,
-                bubbles: true,
-              });
-              window.dispatchEvent(ev);
-            }}
-            className="flex h-7 items-center gap-1.5 rounded-md border border-border-subtle bg-surface-elevated px-2 text-[11px] text-foreground-tertiary transition-colors hover:bg-surface-tertiary hover:text-foreground-primary"
-            title={t("shell.cmdkHint")}
-          >
-            <span className="font-mono text-[10px]">{modKey}K</span>
-          </button>
+          {/* ⌘K trigger — 用 Search icon + 旁边小 kbd hint，跟 🔔 / ⚙
+              统一成 icon button 风格。之前用纯 kbd + border 像"输入框
+              提示"，视觉权重比旁边的 icon button 重，三个并排不统一。
+              click 仍触发同个 keyboard event，键盘党 / 鼠标党都覆盖。
+              Notion / Slack / Linear 顶栏 search 全是这模式。 */}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                onClick={() => {
+                  const ev = new KeyboardEvent("keydown", {
+                    key: "k",
+                    code: "KeyK",
+                    metaKey: isMac,
+                    ctrlKey: !isMac,
+                    bubbles: true,
+                  });
+                  window.dispatchEvent(ev);
+                }}
+                className="flex h-7 items-center gap-1.5 rounded-md px-1.5 text-foreground-tertiary transition-colors hover:bg-surface-tertiary hover:text-foreground-primary"
+                aria-label={t("shell.cmdkHint")}
+              >
+                <Search className="size-4" />
+                <span className="hidden font-mono text-[10px] text-foreground-tertiary sm:inline">
+                  {modKey}K
+                </span>
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">{t("shell.cmdkHint")}</TooltipContent>
+          </Tooltip>
 
           {/* Notification bell — Popover quick preview。点 bell 弹 360px
               panel 显示最近 12 条事件，每条 click 跳对应 workspace；底
