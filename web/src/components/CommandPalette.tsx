@@ -17,7 +17,7 @@
  * cheap, avoids a long-lived subscription just for the palette.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import {
@@ -49,14 +49,22 @@ import {
   CommandShortcut,
 } from "@/components/ui/command";
 
+// 主导航 — Shell 化后 dag/replays/context 都是 workspace-scoped child
+// route，不存在"全局视图"了。CommandPalette 改成：先列对话/通知/设置等
+// app-level 入口，再用 WORKSPACE_VIEWS 给当前 workspace 加 4 个内部 view
+// 跳转项（只在用户已经选了 workspace 时显示）。
 const NAV = [
   { labelKey: "nav.chat", href: "/chat", icon: MessageSquare, hintKey: "cmdk.navHint.chat" },
-  { labelKey: "nav.dag", href: "/dag", icon: GitBranch, hintKey: "cmdk.navHint.dag" },
-  { labelKey: "nav.replays", href: "/replays", icon: Play, hintKey: "cmdk.navHint.replays" },
-  { labelKey: "nav.context", href: "/context", icon: FileText, hintKey: "cmdk.navHint.context" },
   { labelKey: "nav.notifications", href: "/notifications", icon: Bell, hintKey: "cmdk.navHint.notifications" },
   { labelKey: "nav.settings", href: "/settings", icon: SettingsIcon, hintKey: "cmdk.navHint.settings" },
   { labelKey: "nav.debug", href: "/debug", icon: Bug, hintKey: "cmdk.navHint.debug" },
+] as const;
+
+const WORKSPACE_VIEWS = [
+  { id: "chat", labelKey: "chat.tabs.chat", icon: MessageSquare, suffix: "" },
+  { id: "dag", labelKey: "chat.tabs.dag", icon: GitBranch, suffix: "/dag" },
+  { id: "replays", labelKey: "chat.tabs.replays", icon: Play, suffix: "/replays" },
+  { id: "context", labelKey: "chat.tabs.context", icon: FileText, suffix: "/context" },
 ] as const;
 
 // Keep in sync with SECTIONS in routes/settings.tsx; surfaced here so
@@ -73,6 +81,13 @@ const SETTINGS_SECTIONS = [
 export function CommandPalette() {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
+  // 进入 open 时把当前 URL 的 wsId 冻结到一个 ref —— 不用 useLocation 是
+  // 因为 react-router 的 location 变化会触发 CommandPalette 全量 re-render，
+  // 让里头 cmdk 的内部 store 在 dialog 还 mount 时被重新初始化，触发
+  // "Cannot read properties of undefined (reading 'subscribe')" 整个 root
+  // 白屏。CommandPalette 只在用户主动开 ⌘K 时关心 URL，所以读一次就够。
+  const currentWsIdRef = useRef<string | null>(null);
+  const [currentWsId, setCurrentWsId] = useState<string | null>(null);
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const navigate = useNavigate();
 
@@ -90,10 +105,14 @@ export function CommandPalette() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  // Refresh agents lazily on open — palette stays fresh without paying
-  // for a constant /ws subscription.
+  // Refresh agents + 读取当前 URL 的 wsId — 都只在 dialog 打开瞬间发生，
+  // 不订阅 router state，避免 nav 流量轰炸 CommandPalette。
   useEffect(() => {
     if (!open) return;
+    const m = window.location.pathname.match(/^\/chat\/([^/]+)/);
+    const ws = m ? m[1] : null;
+    currentWsIdRef.current = ws;
+    setCurrentWsId(ws);
     api
       .listAgents()
       .then(setAgents)
@@ -141,6 +160,26 @@ export function CommandPalette() {
             );
           })}
         </CommandGroup>
+
+        {currentWsId && (
+          <CommandGroup heading={t("cmdk.groups.currentWsView")}>
+            {WORKSPACE_VIEWS.map((v, i) => {
+              const Icon = v.icon;
+              const href = `/chat/${currentWsId}${v.suffix}`;
+              return (
+                <CommandItem
+                  key={v.id}
+                  value={`view ${v.id} ${t(v.labelKey)}`}
+                  onSelect={() => go(href)}
+                >
+                  <Icon />
+                  <span>{t(v.labelKey)}</span>
+                  <CommandShortcut>{`⌘${i + 1}`}</CommandShortcut>
+                </CommandItem>
+              );
+            })}
+          </CommandGroup>
+        )}
 
         {workspaces.length > 0 && (
           <CommandGroup heading={t("cmdk.groups.workspaces")}>

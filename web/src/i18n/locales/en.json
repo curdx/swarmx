@@ -349,6 +349,7 @@
     "placeholder": "Search commands, jumps, wake agents…",
     "groups": {
       "nav": "Navigate",
+      "currentWsView": "Current workspace view",
       "workspaces": "Workspaces",
       "wakeAgent": "Wake agent",
       "theme": "Theme",

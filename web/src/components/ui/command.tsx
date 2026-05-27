@@ -57,7 +57,12 @@ function CommandDialog({
         )}
         showCloseButton={showCloseButton}
       >
-        {children}
+        {/* shadcn 的 cmdk wrapper 要求 CommandInput / List / Item 必须在
+         *  <Command> (即 cmdk Root) 内才能拿到 store context；否则 cmdk 内
+         *  部 useStore 拿到 undefined，触发 "Cannot read properties of
+         *  undefined (reading 'subscribe')" 整个 root unmount 白屏。这层
+         *  Command 包裹之前漏了 (本地 shadcn 模板从老版本拷来的)。 */}
+        <Command>{children}</Command>
       </DialogContent>
     </Dialog>
   )

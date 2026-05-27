@@ -173,10 +173,14 @@ export function AgentDrawer({ agentId, onClose }: Props) {
               across tab switches), but xterm holds a WebGL slot and a WS
               so we'd burn budget on idle panes. Switch-unmount instead. */}
           {tab === "terminal" && <TerminalTab agentId={agentId} />}
-          {tab === "recordings" && <RecordingsTab agentId={agentId} />}
+          {tab === "recordings" && (
+            <RecordingsTab agentId={agentId} wsId={info?.workspace ? info.workspace.slice(-8) : null} />
+          )}
           {tab === "messages" && <MessagesTab agentId={agentId} />}
           {tab === "tools" && <ToolsTab />}
-          {tab === "context" && <ContextTab agentId={agentId} />}
+          {tab === "context" && (
+            <ContextTab agentId={agentId} wsId={info?.workspace ? info.workspace.slice(-8) : null} />
+          )}
         </div>
         <StatBar info={info} now={now} />
       </SheetContent>
@@ -325,7 +329,13 @@ function TerminalTab({ agentId }: { agentId: string }) {
 
 // ── Tab: Recordings ──────────────────────────────────────────────────────
 
-function RecordingsTab({ agentId }: { agentId: string }) {
+function RecordingsTab({
+  agentId,
+  wsId,
+}: {
+  agentId: string;
+  wsId: string | null;
+}) {
   const { t } = useTranslation();
   const [items, setItems] = useState<RecordingInfo[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -364,7 +374,13 @@ function RecordingsTab({ agentId }: { agentId: string }) {
         return (
           <Link
             key={r.id}
-            to={`/replays/${encodeURIComponent(r.id)}`}
+            // 没拿到 wsId（agent 无 workspace 或还在加载）就退回 chat 主页 —
+            // 录像本身没法在 Shell 外播放，给个能登陆的入口比 404 强。
+            to={
+              wsId
+                ? `/chat/${wsId}/replays/${encodeURIComponent(r.id)}`
+                : "/chat"
+            }
             className="group flex items-center gap-3 rounded-md border border-border-subtle bg-surface-primary p-3 hover:border-accent-primary"
           >
             <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-term-bg text-term-green">
@@ -514,7 +530,13 @@ function ToolsTab() {
 
 // ── Tab: Context ─────────────────────────────────────────────────────────
 
-function ContextTab({ agentId }: { agentId: string }) {
+function ContextTab({
+  agentId,
+  wsId,
+}: {
+  agentId: string;
+  wsId: string | null;
+}) {
   const { t } = useTranslation();
   const [history, setHistory] = useState<
     { path: string; at: number; op: string }[]
@@ -568,7 +590,13 @@ function ContextTab({ agentId }: { agentId: string }) {
       {history.map((h, i) => (
         <Link
           key={`${h.path}-${h.at}-${i}`}
-          to="/context"
+          // 跳到当前 workspace 的 context view 并选中这个 key；wsId 缺失
+          // 时回退到 chat 主页 (跳 /context 旧路径已死)。
+          to={
+            wsId
+              ? `/chat/${wsId}/context?key=${encodeURIComponent(h.path)}`
+              : "/chat"
+          }
           className="flex items-center gap-2 rounded-md px-3 py-2 hover:bg-surface-tertiary"
         >
           <FileText className="size-4 shrink-0 text-foreground-tertiary" />

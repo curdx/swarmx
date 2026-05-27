@@ -1,20 +1,19 @@
 /**
- * Context Board — Pencil frame a3RrDG.
+ * Context view — blackboard browser inside WorkspaceShell.
  *
- * Three-pane read surface over /api/blackboard:
- *   FileTree (280) | MarkdownView (fill) | MetaSidebar (280)
+ * Strips the previous /context route's header + WorkspaceScopeBar.
+ * Selected key + search live in URL state.
  *
- * Intentionally read-only. BlackboardPanel under /debug already owns
- * write + HITL approve/reject; product surface is for browsing. The
- * data hooks here re-call the same /api/blackboard endpoints rather
- * than sharing state with BlackboardPanel — keeps /debug stable while
- * we iterate on the product UI.
+ * wsSlug comes from Shell's workspace (we already have a canonical path),
+ * so this view doesn't need to listAgents again to figure out which slug
+ * to filter blackboard keys by.
  */
 
 import { useEffect, useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useTranslation } from "react-i18next";
+import { useSearchParams } from "react-router-dom";
 import {
   ChevronDown,
   ChevronRight,
@@ -23,26 +22,24 @@ import {
   RefreshCw,
   Search,
 } from "lucide-react";
-import { api } from "../api/http";
+import { api } from "../../../api/http";
 import type {
+  AgentInfo,
   BlackboardEntry,
   BlackboardHistoryEntry,
   BlackboardSnapshot,
-} from "../api/types";
-import { useSwarmFeed } from "../hooks/useSwarmFeed";
-import { useSearchParams } from "react-router-dom";
+} from "../../../api/types";
+import { useSwarmFeed } from "../../../hooks/useSwarmFeed";
 import { Button } from "@/components/ui/button";
-import { WorkspaceScopeBar } from "@/components/workspace/WorkspaceScopeBar";
-import { api as apiTyped } from "../api/http";
-import type { AgentInfo as AgentInfoTyped } from "../api/types";
-import { workspaceSlug as ctxWorkspaceSlug } from "../lib/workspace";
+import { workspaceSlug } from "../../../lib/workspace";
 import { buildRoleLookup } from "@/lib/agent";
 import { AgentChip } from "@/components/agent/AgentChip";
 import { cn } from "@/lib/cn";
+import { useWorkspaceContext } from "../Shell";
 
 interface TreeNode {
   name: string;
-  fullPath: string | null; // null for folder nodes
+  fullPath: string | null;
   children: TreeNode[];
 }
 
@@ -66,7 +63,6 @@ function buildTree(entries: BlackboardEntry[]): TreeNode {
       cur = child;
     }
   }
-  // Sort: folders first, then files; alpha within group.
   const sort = (n: TreeNode) => {
     n.children.sort((a, b) => {
       const aFolder = a.fullPath === null;
@@ -80,11 +76,6 @@ function buildTree(entries: BlackboardEntry[]): TreeNode {
   return root;
 }
 
-/** Strip the trailing `.${slug}` workspace suffix from a blackboard key.
- *  Keys are persisted as e.g. `project.summary.Users_wdx_opc_flockmux-core`
- *  to namespace per workspace, but exposing that mangled path to humans
- *  inside the workspace's own context tab is noise — they already know
- *  which workspace they're in. */
 function stripWsSuffix(key: string, slug: string | null): string {
   if (!slug) return key;
   const suffix = `.${slug}`;
@@ -104,10 +95,7 @@ function FileTree({
   filter: string;
   wsSlug: string | null;
 }) {
-  const [expanded, setExpanded] = useState<Set<string>>(
-    () => new Set(), // empty = everything collapsed; toggled below
-  );
-  // First mount: open every folder so the user sees something immediately.
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   useEffect(() => {
     if (expanded.size > 0) return;
     const all = new Set<string>();
@@ -187,10 +175,8 @@ function FileTree({
     );
   };
 
-  // Always expand folders when a search is active — easier to scan.
   const renderRoot = () => {
     if (q) {
-      // Flatten: show every matching leaf at depth 0 with its full path.
       const matches: BlackboardEntry[] = [];
       const walk = (n: TreeNode) => {
         if (n.fullPath && n.fullPath.toLowerCase().includes(q)) {
@@ -235,60 +221,67 @@ function shortSha(sha: string): string {
   return sha.slice(0, 8);
 }
 
-export default function ContextRoute() {
+export default function ContextView() {
   const { t } = useTranslation();
-  const [searchParams] = useSearchParams();
-  const wsId = searchParams.get("ws");
+  const { workspace } = useWorkspaceContext();
+  const wsSlug = useMemo(() => workspaceSlug(workspace.path), [workspace.path]);
+
+  const [searchParams, setSearchParams] = useSearchParams();
+  const selected = searchParams.get("key");
+  const filter = searchParams.get("q") ?? "";
+
+  const setSelected = (key: string | null) => {
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        if (key) next.set("key", key);
+        else next.delete("key");
+        return next;
+      },
+      { replace: true },
+    );
+  };
+  const setFilter = (q: string) => {
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        if (q) next.set("q", q);
+        else next.delete("q");
+        return next;
+      },
+      { replace: true },
+    );
+  };
+
   const [allEntries, setAllEntries] = useState<BlackboardEntry[]>([]);
-  const [selected, setSelected] = useState<string | null>(null);
   const [snap, setSnap] = useState<BlackboardSnapshot | null>(null);
   const [history, setHistory] = useState<BlackboardHistoryEntry[]>([]);
-  const [filter, setFilter] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loadingDoc, setLoadingDoc] = useState(false);
   const [view, setView] = useState<"rendered" | "raw">("rendered");
-  // 当 wsId 在 URL 时，把 workspace path 反查出来，blackboard key 用 path
-  // 末尾的 slug 过滤 (project.summary.<slug> / workspace.name.<slug> 这种
-  // namespaced key)。全局 key (api.spec / frontend.done) 在 wsId 模式下
-  // 显示不了 — 它们没 namespace，无法可靠归属 workspace。
-  const [wsSlug, setWsSlug] = useState<string | null>(null);
-  // agent_id → role lookup 给历史条目里的 AgentChip 用。
   const [roleLookup, setRoleLookup] = useState<Map<string, string>>(
     () => new Map(),
   );
+
   useEffect(() => {
     let cancelled = false;
-    apiTyped
+    api
       .listAgents()
-      .then((agents: AgentInfoTyped[]) => {
+      .then((agents: AgentInfo[]) => {
         if (cancelled) return;
         setRoleLookup(buildRoleLookup(agents));
-        if (wsId) {
-          const matched = agents.find(
-            (a) => (a.workspace ?? "").slice(-8) === wsId,
-          );
-          if (matched?.workspace) {
-            setWsSlug(ctxWorkspaceSlug(matched.workspace));
-          }
-        } else {
-          setWsSlug(null);
-        }
       })
       .catch(() => {});
     return () => {
       cancelled = true;
     };
-  }, [wsId]);
+  }, []);
 
   const entries = useMemo(() => {
-    if (!wsId) return allEntries;
-    if (!wsSlug) return [];
-    // 只显示路径里含本 workspace slug 的 key — 涵盖 project.summary.<slug>
-    // / workspace.name.<slug> / workspace.accent.<slug> 等 namespaced key。
-    // 全局 key (api.spec / frontend.done / 各 .review 等) 没 workspace
-    // 归属，在 wsId 模式下不显示 (会被全局视图 / 时间筛过滤掉)。
+    // workspace 已知 → 直接过滤含 slug 的 key（namespaced 写入）。全局 key
+    // 在 wsId 模式下显示不了 — 跟之前一致。
     return allEntries.filter((e) => e.path.includes(wsSlug));
-  }, [allEntries, wsId, wsSlug]);
+  }, [allEntries, wsSlug]);
 
   const refreshList = async () => {
     try {
@@ -304,17 +297,12 @@ export default function ContextRoute() {
     refreshList();
   }, []);
 
-  // Hot-refresh: list every blackboard_changed; doc only if the changed
-  // path matches what we're viewing.
   useSwarmFeed({
     onEvent: (ev) => {
       if (ev.type !== "blackboard_changed") return;
       refreshList();
       if (ev.path === selected) {
-        api
-          .readBlackboard(ev.path)
-          .then(setSnap)
-          .catch(() => {});
+        api.readBlackboard(ev.path).then(setSnap).catch(() => {});
         api
           .listBlackboardHistory(ev.path, 50, false)
           .then(setHistory)
@@ -352,33 +340,21 @@ export default function ContextRoute() {
     };
   }, [selected]);
 
-  // 用过滤后的 entries 建树。wsId 模式下树只展示该 workspace 相关的 key。
   const tree = useMemo(() => buildTree(entries), [entries]);
-  void allEntries;
-
   const selectedEntry = useMemo(
     () => entries.find((e) => e.path === selected) ?? null,
     [entries, selected],
   );
 
   return (
-    <div className="flex h-full flex-col bg-surface-primary">
-      <WorkspaceScopeBar wsId={wsId} />
-      {/* Header */}
-      <header className="flex h-14 shrink-0 items-center gap-3 border-b border-border-subtle bg-surface-elevated px-5">
-        <span className="flex size-8 items-center justify-center rounded-md bg-accent-primary-soft">
-          <FileText className="size-4 text-accent-primary-deep" />
+    <div className="flex min-h-0 flex-1 flex-col bg-surface-primary">
+      {/* sub-header: search + refresh */}
+      <div className="flex h-11 shrink-0 items-center gap-2 border-b border-border-subtle bg-surface-secondary px-5">
+        <span className="font-caption text-[11px] text-foreground-tertiary">
+          {t("context.subtitle", { count: entries.length })}
         </span>
-        <div className="flex flex-col">
-          <h1 className="font-heading text-sm font-semibold text-foreground-primary">
-            {t("context.title")}
-          </h1>
-          <span className="font-caption text-[10px] text-foreground-tertiary">
-            {t("context.subtitle", { count: entries.length })}
-          </span>
-        </div>
         <span className="flex-1" />
-        <div className="flex h-8 w-60 items-center gap-2 rounded-md bg-surface-tertiary px-3">
+        <div className="flex h-8 w-60 items-center gap-2 rounded-md bg-surface-primary px-3">
           <Search className="size-3.5 text-foreground-tertiary" />
           <input
             value={filter}
@@ -392,15 +368,13 @@ export default function ContextRoute() {
           size="icon"
           onClick={refreshList}
           title={t("common.refresh")}
-          className="size-8"
+          className="size-7"
         >
-          <RefreshCw className="size-4" />
+          <RefreshCw className="size-3.5" />
         </Button>
-      </header>
+      </div>
 
-      {/* Body */}
       <div className="flex min-h-0 flex-1">
-        {/* Left — file tree */}
         <aside className="flex w-[280px] shrink-0 flex-col gap-1 overflow-y-auto border-r border-border-subtle bg-surface-secondary px-2 py-3">
           {entries.length === 0 ? (
             <p className="px-3 py-2 font-caption text-xs text-foreground-tertiary">
@@ -417,7 +391,6 @@ export default function ContextRoute() {
           )}
         </aside>
 
-        {/* Center — markdown */}
         <section className="flex min-w-0 flex-1 flex-col bg-surface-primary">
           <div className="flex h-11 shrink-0 items-center gap-3 border-b border-border-subtle px-5">
             {selected ? (
@@ -429,7 +402,7 @@ export default function ContextRoute() {
                 >
                   {stripWsSuffix(selected, wsSlug)}
                 </span>
-                {wsSlug && selected.endsWith(`.${wsSlug}`) && (
+                {selected.endsWith(`.${wsSlug}`) && (
                   <span
                     className="shrink-0 rounded bg-surface-tertiary px-1.5 py-0.5 font-caption text-[10px] text-foreground-tertiary"
                     title={`workspace · ${wsSlug}`}
@@ -493,7 +466,6 @@ export default function ContextRoute() {
           </div>
         </section>
 
-        {/* Right — meta + history */}
         <aside className="flex w-[280px] shrink-0 flex-col gap-4 overflow-y-auto border-l border-border-subtle bg-surface-elevated p-4">
           {selectedEntry ? (
             <>
@@ -545,9 +517,7 @@ export default function ContextRoute() {
                         <span className="font-mono text-foreground-primary">
                           #{h.id}
                         </span>
-                        <span className="text-foreground-tertiary">
-                          {h.op}
-                        </span>
+                        <span className="text-foreground-tertiary">{h.op}</span>
                         <span className="flex-1" />
                         <span className="font-mono text-foreground-tertiary">
                           {shortSha(h.sha256)}

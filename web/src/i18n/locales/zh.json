@@ -349,6 +349,7 @@
     "placeholder": "搜索命令、跳转、唤醒 agent…",
     "groups": {
       "nav": "导航",
+      "currentWsView": "当前工作空间视图",
       "workspaces": "工作空间",
       "wakeAgent": "唤醒 agent",
       "theme": "主题",

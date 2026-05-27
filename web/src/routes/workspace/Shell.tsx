@@ -1,0 +1,837 @@
+/**
+ * WorkspaceShell — 4 个工作空间内 view (chat / dag / replays / context) 的
+ * 共享 chrome。React Router 拿它当 layout route：所有 /chat/:wsId/* 都进这
+ * 一层，子 view 通过 <Outlet/> 渲染。
+ *
+ * 解决的核心问题：之前每个子 view 是独立的 top-level route，切 tab → 整页
+ * 卸载 + 重画，连工作空间列表都不在了，用户感觉自己"跳了页面"而不是
+ * "切了视图"。Shell 化之后切 tab 只重渲染 Outlet：
+ *   - 左侧工作空间列表常驻
+ *   - Channel header（workspace 名 + 路径 + 未读 + 复制）常驻
+ *   - Tab bar 常驻
+ *   - swarm event 订阅常驻 → 切走再回来 unread/agent state 不丢
+ *
+ * Outlet context 把 activeWs / agents / liveMessage 等下发给子 view，
+ * 避免每个 view 自己 listAgents / 开 swarm subscription（之前协作图
+ * 和录像页各开了一个，重复请求 + 重复 ws 连接）。
+ */
+
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
+import {
+  Link,
+  NavLink,
+  Outlet,
+  useLocation,
+  useNavigate,
+  useOutletContext,
+  useParams,
+  useSearchParams,
+} from "react-router-dom";
+import { useTranslation } from "react-i18next";
+import {
+  Check,
+  Copy,
+  FileText,
+  FolderOpen,
+  GitBranch,
+  MessageSquare,
+  Play,
+  Plus,
+  Sparkles,
+} from "lucide-react";
+import { api } from "../../api/http";
+import type { AgentInfo, MessageRecord, SwarmEvent } from "../../api/types";
+import { AgentDrawer } from "../../components/agent/AgentDrawer";
+import { CreateWizard } from "../../components/workspace/CreateWizard";
+import { useSwarmFeed } from "../../hooks/useSwarmFeed";
+import {
+  accentToCssVar,
+  WORKSPACE_ACCENT_KEY_PREFIX,
+  workspaceSlug,
+} from "../../lib/workspace";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { cn } from "@/lib/cn";
+
+const WORKSPACE_NAME_KEY_PREFIX = "workspace.name.";
+
+// ── Types ──────────────────────────────────────────────────────────────
+
+export interface WorkspaceSummary {
+  /** Stable id used in URLs — last 8 chars of `path`. */
+  id: string;
+  /** Full filesystem path of the workspace (canonical). */
+  path: string;
+  /** Human name from the create wizard, or path basename fallback. */
+  name: string;
+  /** Path parent for the small mono caption under the name. */
+  parent: string;
+  /** Accent color CSS var; comes from wizard or defaults to peach. */
+  accentColor: string;
+  /** Alive agents in this workspace. */
+  members: AgentInfo[];
+}
+
+/** Threaded down to children via <Outlet context={...}/>. Anything a child
+ *  view needs that the Shell already computed lives here so we don't run
+ *  redundant fetches / subscriptions. */
+export interface ShellOutletContext {
+  workspace: WorkspaceSummary;
+  /** Alive agents in the active workspace (= workspace.members alias). */
+  activeMembers: AgentInfo[];
+  /** Every alive agent across all workspaces — composer needs it to
+   *  resolve cross-workspace mentions ("planner is responding…"). */
+  allAliveAgents: AgentInfo[];
+  /** Historical id set of agents that ever lived in this workspace
+   *  (alive + killed). MessagesPanel filters by it so each workspace
+   *  is a self-contained room. */
+  workspaceAgentIds: string[];
+  /** Latest swarm message event, or null. Child re-broadcasts. */
+  liveMessage: MessageRecord | null;
+  /** Latest message_read event, or null. */
+  liveRead: { ids: number[]; to_agent: string; at: number } | null;
+  /** Unread tally, already filtered to this workspace's senders. */
+  unreadByFrom: Record<string, number>;
+  /** Click → bump this counter, MessagesPanel scrolls to first unread. */
+  jumpUnreadTick: number;
+  /** Open the right-side AgentDrawer (writes ?agent=<id> into URL). */
+  openAgent: (agentId: string) => void;
+  /** "init-only" workspace heuristic + composer override for the first
+   *  human message → triggers auto-dispatch instead of going to STOPped
+   *  scout. Lives in Shell because it depends on workspace path + slug. */
+  composerOverride?: (body: string) => Promise<void>;
+  /** Imperative refresh handle child views can call after mutations
+   *  (e.g. wake-agent button → listAgents() to update spinner state). */
+  refreshAgents: () => void;
+}
+
+/** Convenience hook so child views don't import the context object. */
+export function useWorkspaceContext(): ShellOutletContext {
+  return useOutletContext<ShellOutletContext>();
+}
+
+// ── Helpers ────────────────────────────────────────────────────────────
+
+function splitWorkspacePath(path: string): { name: string; parent: string } {
+  if (!path || path === "(no workspace)") return { name: path || "", parent: "" };
+  const trimmed = path.replace(/[\\/]+$/, "");
+  const idx = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
+  if (idx < 0) return { name: trimmed, parent: "" };
+  return { name: trimmed.slice(idx + 1) || trimmed, parent: trimmed.slice(0, idx) };
+}
+
+// ── Workspaces list (left sidebar, also re-used by /chat home) ─────────
+
+export function WorkspaceList({
+  workspaces,
+  activeId,
+  onOpenWizard,
+}: {
+  workspaces: WorkspaceSummary[];
+  activeId: string | null;
+  onOpenWizard: () => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <aside className="flex w-[264px] shrink-0 flex-col gap-3 border-r border-border-subtle bg-surface-secondary px-2 py-3">
+      <div className="flex items-center justify-between px-2">
+        <h2 className="font-heading text-xs font-semibold uppercase tracking-wider text-foreground-tertiary">
+          {t("chat.workspaces")}
+        </h2>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              onClick={onOpenWizard}
+              className="size-7 text-foreground-tertiary hover:text-foreground-primary"
+            >
+              <Plus className="size-4" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">{t("chat.newWorkspace")}</TooltipContent>
+        </Tooltip>
+      </div>
+      <nav className="flex flex-col gap-0.5 overflow-y-auto">
+        {workspaces.length === 0 && (
+          <button
+            type="button"
+            onClick={onOpenWizard}
+            className="mx-2 mt-2 flex flex-col items-center gap-2 rounded-lg border border-dashed border-border-strong px-3 py-6 text-center transition-colors hover:border-accent-primary hover:bg-accent-primary-soft"
+          >
+            <span className="flex size-9 items-center justify-center rounded-full bg-accent-primary-soft text-accent-primary-deep">
+              <Sparkles className="size-4" />
+            </span>
+            <span className="font-heading text-[13px] font-semibold text-foreground-primary">
+              {t("chat.emptyStateTitle")}
+            </span>
+            <span className="font-caption text-[10px] leading-relaxed text-foreground-tertiary">
+              {t("chat.emptyStateHint")}
+            </span>
+          </button>
+        )}
+        {workspaces.map((ws) => {
+          const active = ws.id === activeId;
+          return (
+            // 用 NavLink 而不是 button+navigate — 浏览器中键 / cmd+click 自然
+            // 开新 tab，URL 在 hover 时显示在状态栏，符合 web 原生预期。
+            <NavLink
+              key={ws.id}
+              to={`/chat/${ws.id}`}
+              title={ws.path}
+              className={cn(
+                "group flex items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors",
+                active
+                  ? "bg-accent-primary-soft text-foreground-primary"
+                  : "text-foreground-secondary hover:bg-surface-tertiary",
+              )}
+            >
+              <span
+                className="mt-1 size-2 shrink-0 self-start rounded-full"
+                style={{ background: ws.accentColor }}
+              />
+              <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                <span className="truncate font-heading text-[13px] font-semibold text-foreground-primary">
+                  {ws.name}
+                </span>
+                {ws.parent && (
+                  <span className="truncate font-mono text-[10px] leading-tight text-foreground-tertiary">
+                    {ws.parent}
+                  </span>
+                )}
+              </span>
+              <span className="self-start font-caption text-[10px] font-semibold text-foreground-tertiary">
+                {ws.members.length}
+              </span>
+            </NavLink>
+          );
+        })}
+      </nav>
+      <div className="mt-auto px-2 pt-3">
+        <Button onClick={onOpenWizard} className="w-full">
+          <Sparkles className="size-4" />
+          {t("chat.runSpell")}
+        </Button>
+      </div>
+    </aside>
+  );
+}
+
+// ── Channel header (workspace name + path + unread + copy) ─────────────
+
+function ChannelHeader({
+  workspace,
+  agentCount,
+  totalUnread,
+  onJumpUnread,
+}: {
+  workspace: WorkspaceSummary;
+  agentCount: number;
+  totalUnread: number;
+  onJumpUnread: () => void;
+}) {
+  const { t } = useTranslation();
+  const [copied, setCopied] = useState(false);
+  const timerRef = useRef<number | null>(null);
+
+  const handleCopy = useCallback(() => {
+    const text = workspace.path;
+    const finish = () => {
+      setCopied(true);
+      if (timerRef.current != null) window.clearTimeout(timerRef.current);
+      timerRef.current = window.setTimeout(() => setCopied(false), 1400);
+    };
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(text).then(finish, () => {});
+    } else {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      try {
+        document.execCommand("copy");
+        finish();
+      } finally {
+        document.body.removeChild(ta);
+      }
+    }
+  }, [workspace.path]);
+
+  useEffect(() => () => {
+    if (timerRef.current != null) window.clearTimeout(timerRef.current);
+  }, []);
+
+  return (
+    <div className="flex shrink-0 flex-col gap-1.5 border-b border-border-subtle px-5 py-3">
+      <div className="flex min-w-0 items-center gap-3">
+        <span
+          className="flex size-7 shrink-0 items-center justify-center rounded-md bg-surface-tertiary"
+          style={{ color: workspace.accentColor }}
+        >
+          <FolderOpen className="size-[15px]" />
+        </span>
+        <div className="flex min-w-0 flex-1 items-center gap-2">
+          <h1 className="truncate font-heading text-[15px] font-bold leading-tight text-foreground-primary">
+            {workspace.name}
+          </h1>
+          <span
+            className="size-[3px] shrink-0 rounded-full bg-foreground-tertiary"
+            aria-hidden
+          />
+          <span className="shrink-0 font-mono text-[11px] text-accent-primary-deep">
+            {t("chat.memberCount", { count: agentCount })}
+          </span>
+          {agentCount > 0 && (
+            <Badge
+              variant="secondary"
+              className="shrink-0 rounded-sm bg-accent-primary-soft px-1.5 py-px font-caption text-[9px] font-bold uppercase tracking-wide text-accent-primary-deep"
+            >
+              {t("common.live")}
+            </Badge>
+          )}
+        </div>
+        {totalUnread > 0 && (
+          <button
+            type="button"
+            onClick={onJumpUnread}
+            title={t("chat.jumpUnread")}
+            className="shrink-0 cursor-pointer"
+          >
+            <Badge className="rounded-full px-2 py-0.5 text-[10px] transition-transform hover:scale-105">
+              {t("chat.unread", { count: totalUnread })}
+            </Badge>
+          </button>
+        )}
+      </div>
+      <div className="group/path flex min-w-0 items-center gap-1.5 pl-10">
+        <span
+          className="min-w-0 flex-1 truncate font-mono text-[11px] text-foreground-tertiary"
+          title={workspace.path}
+        >
+          {workspace.path}
+        </span>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              onClick={handleCopy}
+              className="size-6 shrink-0 text-foreground-tertiary opacity-50 transition-opacity hover:bg-surface-tertiary hover:text-foreground-secondary hover:opacity-100 focus:opacity-100 group-hover/path:opacity-100"
+              aria-label={copied ? t("chat.pathCopied") : t("chat.copyPath")}
+            >
+              {copied ? (
+                <Check className="size-3 text-state-success" />
+              ) : (
+                <Copy className="size-3" />
+              )}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">
+            {copied ? t("chat.pathCopied") : t("chat.copyPath")}
+          </TooltipContent>
+        </Tooltip>
+      </div>
+    </div>
+  );
+}
+
+// ── Tab bar (chat / dag / replays / context) ───────────────────────────
+
+interface TabDef {
+  to: string;
+  labelKey: string;
+  icon: typeof MessageSquare;
+  // ⌘1 / ⌘2 / ⌘3 / ⌘4 shortcut (1-based). Shell registers a global
+  // keydown handler that maps Meta/Ctrl + digit → navigate(tab.to).
+  shortcut: number;
+}
+
+function buildTabs(wsId: string): TabDef[] {
+  return [
+    { to: `/chat/${wsId}`, labelKey: "chat.tabs.chat", icon: MessageSquare, shortcut: 1 },
+    { to: `/chat/${wsId}/dag`, labelKey: "chat.tabs.dag", icon: GitBranch, shortcut: 2 },
+    { to: `/chat/${wsId}/replays`, labelKey: "chat.tabs.replays", icon: Play, shortcut: 3 },
+    { to: `/chat/${wsId}/context`, labelKey: "chat.tabs.context", icon: FileText, shortcut: 4 },
+  ];
+}
+
+function TabBar({ wsId }: { wsId: string }) {
+  const { t } = useTranslation();
+  const tabs = buildTabs(wsId);
+  const isMac =
+    typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
+  const modKey = isMac ? "⌘" : "Ctrl";
+  return (
+    <nav className="flex shrink-0 items-center gap-1 border-b border-border-subtle px-5">
+      {tabs.map((tab) => {
+        const Icon = tab.icon;
+        return (
+          <NavLink
+            key={tab.to}
+            to={tab.to}
+            // index route 必须 end，否则 /chat/:wsId 在 /chat/:wsId/dag 时
+            // 也算 active。其他 tab 路径足够独特，end 无所谓但保持一致。
+            end
+            className={({ isActive }) =>
+              cn(
+                "relative flex items-center gap-1.5 px-3 py-2 text-xs transition-colors",
+                isActive
+                  ? "text-foreground-primary after:absolute after:inset-x-0 after:-bottom-px after:h-0.5 after:bg-accent-primary"
+                  : "text-foreground-secondary hover:text-foreground-primary",
+              )
+            }
+            title={`${t(tab.labelKey)}  ${modKey}${tab.shortcut}`}
+          >
+            <Icon className="size-3.5" />
+            {t(tab.labelKey)}
+          </NavLink>
+        );
+      })}
+    </nav>
+  );
+}
+
+// ── View transition wrapper ────────────────────────────────────────────
+
+/** 60-80ms cross-fade on Outlet child swap. Long enough to feel soft, short
+ *  enough that quick tab-juggling doesn't stack delays. The `key` ties the
+ *  fade to the location, so navigating to the same path doesn't replay. */
+function ViewTransition({ children }: { children: ReactNode }) {
+  const location = useLocation();
+  return (
+    <div
+      key={location.pathname}
+      className="flex h-full min-h-0 flex-1 flex-col animate-in fade-in duration-75"
+    >
+      {children}
+    </div>
+  );
+}
+
+// ── Shell ──────────────────────────────────────────────────────────────
+
+export default function WorkspaceShell() {
+  const { t } = useTranslation();
+  const { wsId } = useParams<{ wsId: string }>();
+  const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  // Right-side AgentDrawer state lives in URL (?agent=<id>) so the user
+  // can deep-link / refresh. Shell owns it so any view can open it.
+  const drawerAgentId = searchParams.get("agent");
+  const openAgent = useCallback(
+    (id: string) => {
+      setSearchParams((prev) => {
+        const next = new URLSearchParams(prev);
+        next.set("agent", id);
+        return next;
+      });
+    },
+    [setSearchParams],
+  );
+  const closeAgent = useCallback(() => {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.delete("agent");
+      return next;
+    });
+  }, [setSearchParams]);
+
+  // CreateWizard opens from sidebar + ⌘K (window event).
+  const [wizardOpen, setWizardOpen] = useState(false);
+  useEffect(() => {
+    const onOpen = () => setWizardOpen(true);
+    window.addEventListener("flockmux:open-wizard", onOpen as EventListener);
+    return () =>
+      window.removeEventListener("flockmux:open-wizard", onOpen as EventListener);
+  }, []);
+
+  // ── Shared state (was per-route before, now per-Shell) ──────────────
+  const [agents, setAgents] = useState<AgentInfo[]>([]);
+  const [liveMessage, setLiveMessage] = useState<MessageRecord | null>(null);
+  const [liveRead, setLiveRead] = useState<
+    { ids: number[]; to_agent: string; at: number } | null
+  >(null);
+  const [unreadByFrom, setUnreadByFrom] = useState<Record<string, number>>({});
+  const [jumpUnreadTick, setJumpUnreadTick] = useState(0);
+  const [workspaceNames, setWorkspaceNames] = useState<Record<string, string>>({});
+  const [workspaceAccents, setWorkspaceAccents] = useState<Record<string, string>>({});
+  const idToFromRef = useRef<Map<number, string>>(new Map());
+
+  const refreshWorkspaceNames = useCallback(async () => {
+    try {
+      const entries = await api.listBlackboard();
+      const nameEntries = entries.filter((e) =>
+        e.path.startsWith(WORKSPACE_NAME_KEY_PREFIX),
+      );
+      const accentEntries = entries.filter((e) =>
+        e.path.startsWith(WORKSPACE_ACCENT_KEY_PREFIX),
+      );
+      const [namePairs, accentPairs] = await Promise.all([
+        Promise.all(
+          nameEntries.map(async (e) => {
+            const slug = e.path.slice(WORKSPACE_NAME_KEY_PREFIX.length);
+            try {
+              const snap = await api.readBlackboard(e.path);
+              return [slug, snap.content] as const;
+            } catch {
+              return [slug, ""] as const;
+            }
+          }),
+        ),
+        Promise.all(
+          accentEntries.map(async (e) => {
+            const slug = e.path.slice(WORKSPACE_ACCENT_KEY_PREFIX.length);
+            try {
+              const snap = await api.readBlackboard(e.path);
+              return [slug, snap.content] as const;
+            } catch {
+              return [slug, ""] as const;
+            }
+          }),
+        ),
+      ]);
+      setWorkspaceNames(Object.fromEntries(namePairs.filter(([, v]) => v)));
+      setWorkspaceAccents(Object.fromEntries(accentPairs.filter(([, v]) => v)));
+    } catch {
+      /* best-effort */
+    }
+  }, []);
+
+  const refreshAgents = useCallback(async () => {
+    try {
+      const items = await api.listAgents();
+      setAgents(items);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn("listAgents failed", err);
+    }
+  }, []);
+
+  const recomputeUnread = useCallback(async () => {
+    try {
+      const rows = await api.listMessages({ limit: 200 });
+      const counts: Record<string, number> = {};
+      const ids = new Map<number, string>();
+      for (const m of rows) {
+        ids.set(m.id, m.from_agent);
+        if (m.read_at === null && m.to_agent === "user") {
+          counts[m.from_agent] = (counts[m.from_agent] ?? 0) + 1;
+        }
+      }
+      idToFromRef.current = ids;
+      setUnreadByFrom(counts);
+    } catch {
+      /* best-effort */
+    }
+  }, []);
+
+  useEffect(() => {
+    refreshAgents();
+    recomputeUnread();
+    refreshWorkspaceNames();
+  }, [refreshAgents, recomputeUnread, refreshWorkspaceNames]);
+
+  const refreshTimerRef = useRef<number | null>(null);
+  const scheduleRefresh = useCallback(() => {
+    if (refreshTimerRef.current != null) {
+      window.clearTimeout(refreshTimerRef.current);
+    }
+    refreshTimerRef.current = window.setTimeout(() => {
+      refreshTimerRef.current = null;
+      refreshAgents();
+    }, 200);
+  }, [refreshAgents]);
+
+  useSwarmFeed({
+    onEvent: (ev: SwarmEvent) => {
+      switch (ev.type) {
+        case "agent_state":
+          scheduleRefresh();
+          break;
+        case "message": {
+          const rec: MessageRecord = {
+            id: ev.id,
+            from_agent: ev.from_agent,
+            to_agent: ev.to_agent,
+            kind: ev.kind,
+            body: ev.body,
+            sent_at: ev.sent_at,
+            delivered_at: null,
+            read_at: null,
+            in_reply_to: ev.in_reply_to ?? null,
+          };
+          setLiveMessage(rec);
+          idToFromRef.current.set(ev.id, ev.from_agent);
+          if (ev.to_agent === "user") {
+            setUnreadByFrom((prev) => ({
+              ...prev,
+              [ev.from_agent]: (prev[ev.from_agent] ?? 0) + 1,
+            }));
+          }
+          break;
+        }
+        case "message_read":
+          setLiveRead({ ids: ev.ids, to_agent: ev.to_agent, at: ev.at });
+          setUnreadByFrom((prev) => {
+            const next = { ...prev };
+            for (const id of ev.ids) {
+              const from = idToFromRef.current.get(id);
+              if (!from) continue;
+              const cur = next[from] ?? 0;
+              const dec = Math.max(0, cur - 1);
+              if (dec === 0) delete next[from];
+              else next[from] = dec;
+            }
+            return next;
+          });
+          break;
+        case "blackboard_changed":
+          if (
+            ev.path.startsWith(WORKSPACE_NAME_KEY_PREFIX) ||
+            ev.path.startsWith(WORKSPACE_ACCENT_KEY_PREFIX)
+          ) {
+            refreshWorkspaceNames();
+          }
+          break;
+      }
+    },
+    onReconnect: () => {
+      scheduleRefresh();
+      recomputeUnread();
+      refreshWorkspaceNames();
+    },
+  });
+
+  // ── Workspaces (alive only — exited workspaces fall off the list) ───
+  const workspaces = useMemo<WorkspaceSummary[]>(() => {
+    const live = agents.filter((a) => a.killed_at == null && a.shim_exit == null);
+    const byWs = new Map<string, AgentInfo[]>();
+    for (const a of live) {
+      const key = a.workspace || "(no workspace)";
+      if (!byWs.has(key)) byWs.set(key, []);
+      byWs.get(key)!.push(a);
+    }
+    return Array.from(byWs.entries()).map(([path, members]) => {
+      const { name: basename, parent } = splitWorkspacePath(path);
+      const slug = workspaceSlug(path);
+      const userName = workspaceNames[slug];
+      const accentColor = accentToCssVar(workspaceAccents[slug]);
+      return {
+        path,
+        members,
+        name: userName || basename,
+        parent,
+        accentColor,
+        id: path.slice(-8) || "default",
+      };
+    });
+  }, [agents, workspaceNames, workspaceAccents]);
+
+  const activeWs = useMemo(
+    () => workspaces.find((w) => w.id === wsId) ?? null,
+    [workspaces, wsId],
+  );
+
+  // ── Per-workspace derivations passed down via OutletContext ─────────
+  const allAliveAgents = useMemo(
+    () => agents.filter((a) => a.killed_at == null && a.shim_exit == null),
+    [agents],
+  );
+
+  const workspaceAgentIds = useMemo(() => {
+    if (!activeWs) return [];
+    return agents
+      .filter((a) => (a.workspace || "(no workspace)") === activeWs.path)
+      .map((a) => a.agent_id);
+  }, [agents, activeWs]);
+
+  const isInitOnlyWorkspace = useMemo(() => {
+    if (!activeWs || workspaceAgentIds.length === 0) return false;
+    return workspaceAgentIds.every((id) => {
+      const a = agents.find((x) => x.agent_id === id);
+      return a?.role === "scout";
+    });
+  }, [activeWs, workspaceAgentIds, agents]);
+
+  // composerOverride for init-only workspaces — lifted from chat.tsx.
+  // Loaded lazily so import cost doesn't hit /chat/:wsId/dag etc. that
+  // don't use it. Kept inline (not its own file) because it's only ~30
+  // lines and reads three workspace-scoped things.
+  const composerOverride = useMemo(() => {
+    if (!isInitOnlyWorkspace || !activeWs) return undefined;
+    const wsPath = activeWs.path;
+    return async (body: string) => {
+      const { FULLSTACK_INTERNAL_KEYS, projectSummaryKey } = await import(
+        "../../lib/workspace"
+      );
+      await Promise.all(
+        FULLSTACK_INTERNAL_KEYS.map((k) =>
+          api.writeBlackboard(k, { content: "" }).catch(() => {
+            /* best-effort */
+          }),
+        ),
+      );
+      let summary: string | null = null;
+      try {
+        const snap = await api.readBlackboard(projectSummaryKey(wsPath));
+        summary = snap?.content ?? null;
+      } catch {
+        /* fall back to scout-less prompt */
+      }
+      const taskParts = [body, `\n[workspace_dir: ${wsPath}]`];
+      if (summary) {
+        taskParts.push(`\n[项目摘要 / project summary]\n${summary}`);
+      }
+      await api.runSpell({
+        name: "auto-dispatch",
+        task: taskParts.join(""),
+        workspace_dir: wsPath,
+      });
+    };
+  }, [isInitOnlyWorkspace, activeWs]);
+
+  const activeWorkspaceUnread = useMemo(() => {
+    if (!activeWs) return {} as Record<string, number>;
+    const wsSet = new Set(workspaceAgentIds);
+    return Object.fromEntries(
+      Object.entries(unreadByFrom).filter(([from]) => wsSet.has(from)),
+    );
+  }, [unreadByFrom, activeWs, workspaceAgentIds]);
+  const totalUnread = Object.values(activeWorkspaceUnread).reduce(
+    (a, b) => a + b,
+    0,
+  );
+
+  // ── ⌘1-4 global shortcut ───────────────────────────────────────────
+  useEffect(() => {
+    if (!activeWs) return;
+    const tabs = buildTabs(activeWs.id);
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey)) return;
+      if (e.target instanceof HTMLElement) {
+        const tag = e.target.tagName;
+        // 别和 IME / 表单组合键冲突 — 输入框里 ⌘1 仍走原生 (浏览器切 tab)。
+        if (tag === "INPUT" || tag === "TEXTAREA" || e.target.isContentEditable) {
+          return;
+        }
+      }
+      const n = Number.parseInt(e.key, 10);
+      if (!Number.isInteger(n) || n < 1 || n > tabs.length) return;
+      e.preventDefault();
+      navigate(tabs[n - 1].to);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [activeWs, navigate]);
+
+  // ── Render ─────────────────────────────────────────────────────────
+  if (!activeWs) {
+    // wsId 在 URL 但 listAgents 还没回 / 已经 evicted。先用 fallback：
+    // 渲染 sidebar + "找不到工作空间" 提示 + 跳到第一个可用 ws (如果有)。
+    if (workspaces.length > 0 && wsId && !workspaces.some((w) => w.id === wsId)) {
+      // workspace id 不存在 → 静默跳到第一个
+      navigate(`/chat/${workspaces[0].id}`, { replace: true });
+    }
+    return (
+      <TooltipProvider delayDuration={300}>
+        <div className="flex h-full min-h-0">
+          <WorkspaceList
+            workspaces={workspaces}
+            activeId={wsId ?? null}
+            onOpenWizard={() => setWizardOpen(true)}
+          />
+          <section className="flex min-w-0 flex-1 flex-col items-center justify-center gap-3 bg-surface-primary text-foreground-tertiary">
+            <FolderOpen className="size-10 opacity-40" />
+            <p className="font-caption text-sm">
+              {workspaces.length === 0
+                ? t("chat.emptyStateHint")
+                : t("chat.selectWorkspace")}
+            </p>
+            {workspaces.length === 0 && (
+              <Link
+                to="#"
+                onClick={(e) => {
+                  e.preventDefault();
+                  setWizardOpen(true);
+                }}
+                className="rounded-md bg-accent-primary px-3 py-1.5 text-xs text-foreground-on-accent hover:bg-accent-primary-deep"
+              >
+                {t("chat.emptyStateTitle")}
+              </Link>
+            )}
+          </section>
+          <CreateWizard
+            open={wizardOpen}
+            onClose={() => setWizardOpen(false)}
+            onCreated={refreshAgents}
+          />
+        </div>
+      </TooltipProvider>
+    );
+  }
+
+  const ctx: ShellOutletContext = {
+    workspace: activeWs,
+    activeMembers: activeWs.members,
+    allAliveAgents,
+    workspaceAgentIds,
+    liveMessage,
+    liveRead,
+    unreadByFrom: activeWorkspaceUnread,
+    jumpUnreadTick,
+    openAgent,
+    composerOverride,
+    refreshAgents,
+  };
+
+  return (
+    <TooltipProvider delayDuration={300}>
+      <div className="flex h-full min-h-0">
+        <WorkspaceList
+          workspaces={workspaces}
+          activeId={activeWs.id}
+          onOpenWizard={() => setWizardOpen(true)}
+        />
+        <section className="flex min-w-0 flex-1 flex-col bg-surface-primary">
+          <ChannelHeader
+            workspace={activeWs}
+            agentCount={activeWs.members.length}
+            totalUnread={totalUnread}
+            onJumpUnread={() => setJumpUnreadTick((v) => v + 1)}
+          />
+          <TabBar wsId={activeWs.id} />
+          <ViewTransition>
+            <Outlet context={ctx} />
+          </ViewTransition>
+        </section>
+
+        {drawerAgentId && (
+          <AgentDrawer agentId={drawerAgentId} onClose={closeAgent} />
+        )}
+        <CreateWizard
+          open={wizardOpen}
+          onClose={() => setWizardOpen(false)}
+          onCreated={refreshAgents}
+        />
+      </div>
+    </TooltipProvider>
+  );
+}

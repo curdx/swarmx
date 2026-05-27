@@ -13,7 +13,7 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { ArrowLeft, Download, FileSearch, Share2, X } from "lucide-react";
 import { api } from "../../api/http";
@@ -69,15 +69,13 @@ function formatDuration(ms: number | null): string {
 
 export default function ReplayPlayer() {
   const { t } = useTranslation();
-  const { id } = useParams<{ id: string }>();
+  // Canonical URL is /chat/:wsId/replays/:recId — both params are required.
+  const { wsId, recId } = useParams<{ wsId: string; recId: string }>();
+  const id = recId;
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
-  // 来自 /chat/<ws> → Replays tab → card 进入时带的 workspace id。
-  // Esc / 返回按钮要带着它跳回，否则用户从 workspace 里点进来、却被
-  // 弹回全局录像库，丢失上下文。
-  const wsId = searchParams.get("ws");
+  // Esc / 返回按钮跳回该 workspace 的 Replays tab，保持上下文。
   const backTo = useMemo(
-    () => (wsId ? `/replays?ws=${wsId}` : "/replays"),
+    () => (wsId ? `/chat/${wsId}/replays` : "/chat"),
     [wsId],
   );
 
