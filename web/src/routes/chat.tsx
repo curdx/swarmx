@@ -14,7 +14,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { Plus, Sparkles, Users, Zap } from "lucide-react";
+import { Check, Copy, FolderOpen, Plus, Sparkles, Users, Zap } from "lucide-react";
 import { api } from "../api/http";
 import type {
   AgentInfo,
@@ -38,6 +38,20 @@ const ROLE_COLOR: Record<string, string> = {
 
 function roleColor(role: string) {
   return ROLE_COLOR[role.toLowerCase()] ?? "bg-state-idle";
+}
+
+// Workspace path → { name, parent }. Name is the basename (last segment) so
+// users see the human-meaningful folder name big; parent is everything above,
+// rendered small + monospace so the full location stays visible without
+// swallowing the title. Mirrors the Pencil ChannelHeader (frame gOTxD): a
+// bold name on row 1 + a secondary descriptor on row 2.
+function splitWorkspacePath(path: string): { name: string; parent: string } {
+  if (!path || path === "(no workspace)") return { name: path || "", parent: "" };
+  // Strip trailing slashes, then split. Handles both POSIX and Windows-ish.
+  const trimmed = path.replace(/[\\/]+$/, "");
+  const idx = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
+  if (idx < 0) return { name: trimmed, parent: "" };
+  return { name: trimmed.slice(idx + 1) || trimmed, parent: trimmed.slice(0, idx) };
 }
 
 function statusDot(a: AgentInfo, t: (k: string) => string) {
@@ -129,7 +143,7 @@ export default function ChatRoute() {
     }, 200);
   }, [refreshAgents]);
 
-  const status = useSwarmFeed({
+  useSwarmFeed({
     onEvent: (ev: SwarmEvent) => {
       switch (ev.type) {
         case "agent_state":
@@ -188,12 +202,17 @@ export default function ChatRoute() {
       if (!byWs.has(key)) byWs.set(key, []);
       byWs.get(key)!.push(a);
     }
-    return Array.from(byWs.entries()).map(([path, members]) => ({
-      path,
-      members,
-      // Stable id = last 8 chars of path; good enough for URL routing.
-      id: path.slice(-8) || "default",
-    }));
+    return Array.from(byWs.entries()).map(([path, members]) => {
+      const { name, parent } = splitWorkspacePath(path);
+      return {
+        path,
+        members,
+        name,
+        parent,
+        // Stable id = last 8 chars of path; good enough for URL routing.
+        id: path.slice(-8) || "default",
+      };
+    });
   }, [agents]);
 
   const activeWs =
@@ -250,7 +269,56 @@ export default function ChatRoute() {
     };
   }, [isInitOnlyWorkspace, activeWs]);
 
-  const totalUnread = Object.values(unreadByFrom).reduce((a, b) => a + b, 0);
+  // 顶栏 / "by sender" 下拉的未读 chip 都只算当前 workspace 的发件人 — 否则
+  // 用户在 workspace A 看到的"15 未读"其实是 cross-workspace 全局值，跟当前
+  // 房间消息列表对不上号，会困惑。按 activeWorkspaceAgentIds 过滤后再聚合。
+  // 右侧成员列表的 per-agent badge 仍用原始 unreadByFrom（按 agent_id 直接索引）。
+  const activeWorkspaceUnread = useMemo(() => {
+    if (!activeWs) return {} as Record<string, number>;
+    const wsSet = new Set(activeWorkspaceAgentIds);
+    return Object.fromEntries(
+      Object.entries(unreadByFrom).filter(([from]) => wsSet.has(from)),
+    );
+  }, [unreadByFrom, activeWs, activeWorkspaceAgentIds]);
+  const totalUnread = Object.values(activeWorkspaceUnread).reduce(
+    (a, b) => a + b,
+    0,
+  );
+
+  // Brief check-icon flash after copying the workspace path. Pure UI sugar —
+  // no toast lib pulled in for a single button.
+  const [copiedPath, setCopiedPath] = useState(false);
+  const copyTimerRef = useRef<number | null>(null);
+  const handleCopyPath = useCallback(() => {
+    if (!activeWs?.path) return;
+    const text = activeWs.path;
+    const finish = () => {
+      setCopiedPath(true);
+      if (copyTimerRef.current != null) window.clearTimeout(copyTimerRef.current);
+      copyTimerRef.current = window.setTimeout(() => setCopiedPath(false), 1400);
+    };
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(text).then(finish, () => {});
+    } else {
+      // Fallback for non-secure contexts; Tauri webview usually exposes
+      // clipboard, but guard so we never throw.
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      try {
+        document.execCommand("copy");
+        finish();
+      } finally {
+        document.body.removeChild(ta);
+      }
+    }
+  }, [activeWs?.path]);
+  useEffect(() => () => {
+    if (copyTimerRef.current != null) window.clearTimeout(copyTimerRef.current);
+  }, []);
 
   return (
     <div className="flex h-full min-h-0">
@@ -281,18 +349,26 @@ export default function ChatRoute() {
               <button
                 key={ws.id}
                 onClick={() => navigate(`/chat/${ws.id}`)}
+                title={ws.path}
                 className={cn(
-                  "group flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors",
+                  "group flex items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors",
                   active
                     ? "bg-accent-primary-soft text-foreground-primary"
                     : "text-foreground-secondary hover:bg-surface-tertiary",
                 )}
               >
-                <span className="size-2 shrink-0 rounded-full bg-state-success" />
-                <span className="flex-1 truncate font-mono text-xs">
-                  {ws.path.split("/").slice(-2).join("/") || ws.path}
+                <span className="mt-1 size-2 shrink-0 self-start rounded-full bg-state-success" />
+                <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                  <span className="truncate font-heading text-[13px] font-semibold text-foreground-primary">
+                    {ws.name || t("chat.noWorkspaceName")}
+                  </span>
+                  {ws.parent && (
+                    <span className="truncate font-mono text-[10px] leading-tight text-foreground-tertiary">
+                      {ws.parent}
+                    </span>
+                  )}
                 </span>
-                <span className="font-caption text-[10px] text-foreground-tertiary">
+                <span className="self-start font-caption text-[10px] font-semibold text-foreground-tertiary">
                   {ws.members.length}
                 </span>
               </button>
@@ -312,20 +388,68 @@ export default function ChatRoute() {
 
       {/* ── Center: messages ─────────────────────────────────────── */}
       <section className="flex min-w-0 flex-1 flex-col bg-surface-primary">
-        <div className="flex h-12 shrink-0 items-center gap-3 border-b border-border-subtle px-4">
-          <h1 className="font-heading text-sm font-semibold text-foreground-primary">
-            {activeWs
-              ? activeWs.path.split("/").slice(-2).join("/")
-              : t("chat.noConversation")}
-          </h1>
-          <span className="font-caption text-xs text-foreground-tertiary">
-            {t("chat.agentCountWs", { count: activeMembers.length, status })}
-          </span>
-          <span className="flex-1" />
-          {totalUnread > 0 && (
-            <span className="rounded-full bg-accent-primary px-2 py-0.5 text-[10px] font-semibold text-foreground-on-accent">
-              {t("chat.unread", { count: totalUnread })}
+        {/* ChannelHeader — Pencil frame gOTxD. Row 1: avatar + workspace
+            name (bold) + agent-count dot + live chip. Row 2: full workspace
+            directory in mono+tertiary with truncate + copy-to-clipboard so
+            users always see *which folder* this room is rooted in. */}
+        <div className="flex shrink-0 flex-col gap-1.5 border-b border-border-subtle px-5 py-3">
+          <div className="flex min-w-0 items-center gap-3">
+            <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-surface-tertiary">
+              <FolderOpen className="size-[15px] text-accent-primary" />
             </span>
+            <div className="flex min-w-0 flex-1 items-center gap-2">
+              <h1 className="truncate font-heading text-[15px] font-bold leading-tight text-foreground-primary">
+                {activeWs ? activeWs.name : t("chat.noConversation")}
+              </h1>
+              {activeWs && (
+                <>
+                  <span
+                    className="size-[3px] shrink-0 rounded-full bg-foreground-tertiary"
+                    aria-hidden
+                  />
+                  <span className="shrink-0 font-mono text-[11px] text-accent-primary-deep">
+                    {t("chat.memberCount", { count: activeMembers.length })}
+                  </span>
+                  {activeMembers.length > 0 && (
+                    <span className="shrink-0 rounded-sm bg-accent-primary-soft px-1.5 py-px font-caption text-[9px] font-bold uppercase tracking-wide text-accent-primary-deep">
+                      {t("common.live")}
+                    </span>
+                  )}
+                </>
+              )}
+            </div>
+            {totalUnread > 0 && (
+              <span className="shrink-0 rounded-full bg-accent-primary px-2 py-0.5 text-[10px] font-semibold text-foreground-on-accent">
+                {t("chat.unread", { count: totalUnread })}
+              </span>
+            )}
+          </div>
+          {activeWs ? (
+            <div className="group/path flex min-w-0 items-center gap-1.5 pl-10">
+              <span
+                className="min-w-0 flex-1 truncate font-mono text-[11px] text-foreground-tertiary"
+                title={activeWs.path}
+              >
+                {activeWs.path}
+              </span>
+              <button
+                type="button"
+                onClick={handleCopyPath}
+                className="shrink-0 rounded p-0.5 text-foreground-tertiary opacity-0 transition-opacity hover:bg-surface-tertiary hover:text-foreground-secondary focus:opacity-100 group-hover/path:opacity-100"
+                title={copiedPath ? t("chat.pathCopied") : t("chat.copyPath")}
+                aria-label={copiedPath ? t("chat.pathCopied") : t("chat.copyPath")}
+              >
+                {copiedPath ? (
+                  <Check className="size-3 text-state-success" />
+                ) : (
+                  <Copy className="size-3" />
+                )}
+              </button>
+            </div>
+          ) : (
+            <p className="pl-10 font-caption text-[11px] text-foreground-tertiary">
+              {t("chat.selectWorkspace")}
+            </p>
           )}
         </div>
         <div className="min-h-0 flex-1 overflow-hidden">
@@ -334,15 +458,11 @@ export default function ChatRoute() {
             <MessagesPanel
               liveMessage={liveMessage}
               liveRead={liveRead}
-              unreadByFrom={unreadByFrom}
+              unreadByFrom={activeWorkspaceUnread}
               activeMembers={activeMembers}
               allAliveAgents={allAliveAgents}
               workspaceAgentIds={activeWorkspaceAgentIds}
-              workspaceLabel={
-                activeWs
-                  ? activeWs.path.split("/").slice(-2).join("/")
-                  : undefined
-              }
+              workspaceLabel={activeWs ? activeWs.name : undefined}
               composerOverride={composerOverride}
               onOpenAgent={openDrawer}
             />
