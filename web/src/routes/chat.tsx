@@ -30,6 +30,15 @@ import {
   projectSummaryKey,
   workspaceSlug,
 } from "../lib/workspace";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { cn } from "@/lib/cn";
 
 const WORKSPACE_NAME_KEY_PREFIX = "workspace.name.";
@@ -389,6 +398,7 @@ export default function ChatRoute() {
   }, []);
 
   return (
+    <TooltipProvider delayDuration={300}>
     <div className="flex h-full min-h-0">
       {/* ── Left: workspace / group list ─────────────────────────── */}
       <aside className="flex w-[264px] shrink-0 flex-col gap-3 border-r border-border-subtle bg-surface-secondary px-2 py-3">
@@ -396,14 +406,20 @@ export default function ChatRoute() {
           <h2 className="font-heading text-xs font-semibold uppercase tracking-wider text-foreground-tertiary">
             {t("chat.workspaces")}
           </h2>
-          <button
-            type="button"
-            onClick={() => setWizardOpen(true)}
-            className="rounded-md p-1 text-foreground-tertiary hover:bg-surface-tertiary hover:text-foreground-primary"
-            title={t("chat.newWorkspace")}
-          >
-            <Plus className="size-4" />
-          </button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                onClick={() => setWizardOpen(true)}
+                className="size-7 text-foreground-tertiary hover:text-foreground-primary"
+              >
+                <Plus className="size-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">{t("chat.newWorkspace")}</TooltipContent>
+          </Tooltip>
         </div>
         <nav className="flex flex-col gap-0.5 overflow-y-auto">
           {workspaces.length === 0 && (
@@ -444,13 +460,13 @@ export default function ChatRoute() {
           })}
         </nav>
         <div className="mt-auto px-2 pt-3">
-          <button
+          <Button
             onClick={() => setWizardOpen(true)}
-            className="flex w-full items-center justify-center gap-2 rounded-md bg-accent-primary px-3 py-2 text-xs font-medium text-foreground-on-accent hover:bg-accent-primary-deep"
+            className="w-full"
           >
             <Sparkles className="size-4" />
             {t("chat.runSpell")}
-          </button>
+          </Button>
         </div>
       </aside>
 
@@ -479,17 +495,17 @@ export default function ChatRoute() {
                     {t("chat.memberCount", { count: activeMembers.length })}
                   </span>
                   {activeMembers.length > 0 && (
-                    <span className="shrink-0 rounded-sm bg-accent-primary-soft px-1.5 py-px font-caption text-[9px] font-bold uppercase tracking-wide text-accent-primary-deep">
+                    <Badge variant="secondary" className="shrink-0 rounded-sm bg-accent-primary-soft px-1.5 py-px font-caption text-[9px] font-bold uppercase tracking-wide text-accent-primary-deep">
                       {t("common.live")}
-                    </span>
+                    </Badge>
                   )}
                 </>
               )}
             </div>
             {totalUnread > 0 && (
-              <span className="shrink-0 rounded-full bg-accent-primary px-2 py-0.5 text-[10px] font-semibold text-foreground-on-accent">
+              <Badge className="shrink-0 rounded-full px-2 py-0.5 text-[10px]">
                 {t("chat.unread", { count: totalUnread })}
-              </span>
+              </Badge>
             )}
           </div>
           {activeWs ? (
@@ -500,19 +516,27 @@ export default function ChatRoute() {
               >
                 {activeWs.path}
               </span>
-              <button
-                type="button"
-                onClick={handleCopyPath}
-                className="shrink-0 rounded p-0.5 text-foreground-tertiary opacity-0 transition-opacity hover:bg-surface-tertiary hover:text-foreground-secondary focus:opacity-100 group-hover/path:opacity-100"
-                title={copiedPath ? t("chat.pathCopied") : t("chat.copyPath")}
-                aria-label={copiedPath ? t("chat.pathCopied") : t("chat.copyPath")}
-              >
-                {copiedPath ? (
-                  <Check className="size-3 text-state-success" />
-                ) : (
-                  <Copy className="size-3" />
-                )}
-              </button>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    onClick={handleCopyPath}
+                    className="size-6 shrink-0 text-foreground-tertiary opacity-0 transition-opacity hover:text-foreground-secondary focus:opacity-100 group-hover/path:opacity-100"
+                    aria-label={copiedPath ? t("chat.pathCopied") : t("chat.copyPath")}
+                  >
+                    {copiedPath ? (
+                      <Check className="size-3 text-state-success" />
+                    ) : (
+                      <Copy className="size-3" />
+                    )}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">
+                  {copiedPath ? t("chat.pathCopied") : t("chat.copyPath")}
+                </TooltipContent>
+              </Tooltip>
             </div>
           ) : (
             <p className="pl-10 font-caption text-[11px] text-foreground-tertiary">
@@ -568,15 +592,16 @@ export default function ChatRoute() {
                   isOpen && "bg-accent-primary-soft hover:bg-accent-primary-soft",
                 )}
               >
-                <span
-                  className={cn(
-                    "flex size-8 shrink-0 items-center justify-center rounded-full text-xs font-medium text-foreground-on-accent",
-                    roleColor(a.role),
-                  )}
-                  title={a.role}
-                >
-                  {a.role.slice(0, 1).toUpperCase()}
-                </span>
+                <Avatar className="size-8 shrink-0" title={a.role}>
+                  <AvatarFallback
+                    className={cn(
+                      "text-xs font-medium text-foreground-on-accent",
+                      roleColor(a.role),
+                    )}
+                  >
+                    {a.role.slice(0, 1).toUpperCase()}
+                  </AvatarFallback>
+                </Avatar>
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
                     <span className="truncate font-heading text-sm text-foreground-primary">
@@ -592,20 +617,29 @@ export default function ChatRoute() {
                   </div>
                 </div>
                 {unread > 0 && (
-                  <span className="rounded-full bg-state-danger px-1.5 py-0.5 text-[10px] font-semibold text-foreground-on-accent">
+                  <Badge
+                    variant="destructive"
+                    className="rounded-full px-1.5 py-0.5 text-[10px]"
+                  >
                     {unread}
-                  </span>
+                  </Badge>
                 )}
-                <button
-                  className="rounded-md p-1.5 text-foreground-tertiary hover:bg-surface-secondary hover:text-state-wake"
-                  title={t("chat.wake")}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    api.wakeAgent(a.agent_id).catch(() => {});
-                  }}
-                >
-                  <Zap className="size-4" />
-                </button>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="size-7 text-foreground-tertiary hover:text-state-wake"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        api.wakeAgent(a.agent_id).catch(() => {});
+                      }}
+                    >
+                      <Zap className="size-4" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="left">{t("chat.wake")}</TooltipContent>
+                </Tooltip>
               </div>
             );
           })}
@@ -621,5 +655,6 @@ export default function ChatRoute() {
         onCreated={refreshAgents}
       />
     </div>
+    </TooltipProvider>
   );
 }

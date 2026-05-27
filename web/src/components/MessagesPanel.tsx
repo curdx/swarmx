@@ -39,6 +39,8 @@ import {
 } from "lucide-react";
 import { api } from "../api/http";
 import type { AgentInfo, MessageRecord } from "../api/types";
+import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/cn";
 
 interface Props {
@@ -471,27 +473,31 @@ export function MessagesPanel({
               placeholder={t("messages.filter")}
               className="min-w-0 flex-1 bg-transparent text-xs text-foreground-primary placeholder:text-foreground-tertiary focus:outline-none"
             />
-            <button
+            <Button
+              variant="ghost"
+              size="icon"
               onClick={() => {
                 setFilter("");
                 setFilterOpen(false);
               }}
-              className="rounded p-0.5 text-foreground-tertiary hover:bg-surface-elevated"
               title={t("messages.cancelReply")}
+              className="size-6 text-foreground-tertiary"
             >
               <X className="size-3" />
-            </button>
+            </Button>
           </div>
         ) : (
           <>
             <span className="flex-1" />
-            <button
+            <Button
+              variant="ghost"
+              size="icon"
               onClick={() => setFilterOpen(true)}
-              className="flex size-7 items-center justify-center rounded-md text-foreground-tertiary hover:bg-surface-tertiary"
               title={t("messages.filter")}
+              className="size-7 text-foreground-tertiary"
             >
               <Search className="size-3.5" />
-            </button>
+            </Button>
           </>
         )}
         <div className="relative">
@@ -539,13 +545,15 @@ export function MessagesPanel({
             </div>
           )}
         </div>
-        <button
+        <Button
+          variant="ghost"
+          size="icon"
           onClick={refresh}
-          className="flex size-7 items-center justify-center rounded-md text-foreground-tertiary hover:bg-surface-tertiary"
           title={t("messages.refresh")}
+          className="size-7 text-foreground-tertiary"
         >
           <RefreshCw className="size-3.5" />
-        </button>
+        </Button>
       </div>
 
       {error && (
@@ -776,7 +784,7 @@ export function MessagesPanel({
               </span>
             </span>
           )}
-          <textarea
+          <Textarea
             ref={composerRef}
             value={body}
             onChange={(e) => {
@@ -787,16 +795,17 @@ export function MessagesPanel({
             placeholder={composerPlaceholder}
             disabled={!composerOverride && !defaultRecipient}
             rows={1}
-            className="min-w-0 flex-1 resize-none rounded-2xl border border-border-subtle bg-surface-elevated px-3 py-2 font-body text-[13px] leading-snug text-foreground-primary placeholder:text-foreground-tertiary focus:border-accent-primary focus:outline-none disabled:opacity-60"
+            className="min-w-0 flex-1 resize-none rounded-2xl px-3 py-2 font-body text-[13px] leading-snug"
           />
-          <button
+          <Button
+            size="icon"
             onClick={send}
             disabled={sendDisabled}
-            className="flex size-9 shrink-0 items-center justify-center rounded-full bg-accent-primary text-foreground-on-accent shadow-sm transition-colors hover:bg-accent-primary-deep disabled:opacity-50"
             title={sending ? t("messages.sending") : t("messages.send")}
+            className="size-9 shrink-0 rounded-full"
           >
             <Send className="size-4" />
-          </button>
+          </Button>
         </div>
         <span className="self-end font-caption text-[10px] text-foreground-tertiary">
           {t("messages.sendHint")}

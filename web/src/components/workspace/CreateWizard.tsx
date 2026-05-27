@@ -1,7 +1,11 @@
 /**
  * CreateWizard — 极简两步：起名字 + 选项目文件夹。
  *
- * 提交后做的事：
+ * UI 走 shadcn primitives (Dialog / Button / Input / Label)。Dialog 自带
+ * focus trap + portal + aria-modal + ESC 关闭。我们额外禁掉 backdrop 点
+ * 关闭（用户填了一半 path 不小心点旁边会丢全部输入，体验巨差）。
+ *
+ * 提交后的事：
  *   1. 调 `runSpell("init", workspace_dir=dirs[0])` — init spell 启动一个
  *      scout agent 进目录扫一眼、写 `project.summary.<slug>` 黑板（per-
  *      workspace 命名，见 lib/workspace.ts）+ 给 user 发开场白。
@@ -26,8 +30,6 @@ import {
   Loader2,
   Plus,
   Trash2,
-  Type as TypeIcon,
-  X,
 } from "lucide-react";
 import { api } from "../../api/http";
 import type { SpellInfo, SwarmEvent } from "../../api/types";
@@ -36,6 +38,17 @@ import {
   PROJECT_SUMMARY_KEY_PREFIX,
   workspaceNameKey,
 } from "../../lib/workspace";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/cn";
 
 const INIT_SPELL = "init";
@@ -112,15 +125,6 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
       .catch((e) => setError((e as Error).message));
   }, [open]);
 
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
-
   // scan 超时兜底：scout 因为 LLM 不可用 / 目录权限等问题没有写黑板，60s
   // 后也直接进群，让用户能看到失败状态、自己处理。
   useEffect(() => {
@@ -183,34 +187,39 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
     }
   };
 
-  if (!open) return null;
-
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-6">
-      <div className="flex max-h-full w-[680px] flex-col overflow-hidden rounded-xl bg-surface-primary shadow-2xl">
-        {/* Head */}
-        <header className="flex items-center gap-4 border-b border-border-subtle bg-surface-elevated px-6 py-5">
-          <span className="flex size-9 items-center justify-center rounded-md bg-accent-primary-soft">
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!next) onClose();
+      }}
+    >
+      <DialogContent
+        showCloseButton={!scan}
+        className="flex max-h-[90vh] w-[680px] max-w-[680px] flex-col gap-0 overflow-hidden p-0 sm:max-w-[680px]"
+        // 禁掉 backdrop / outside click 关闭 — 用户填了一半路径，不小心点空白
+        // 全部清空体验巨差。ESC + ✕ + 取消 三个显式入口仍然能关。
+        onInteractOutside={(e) => e.preventDefault()}
+        // 扫描中禁 ESC，避免误触关了 wizard 但 scout 仍在后台跑。loading 视图
+        // 有 "直接进群" 按钮显式离开。
+        onEscapeKeyDown={(e) => {
+          if (scan) e.preventDefault();
+        }}
+      >
+        <DialogHeader className="flex flex-row items-center gap-3 border-b border-border-subtle bg-surface-elevated px-6 py-5">
+          <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-accent-primary-soft">
             <FolderPlus className="size-5 text-accent-primary-deep" />
           </span>
-          <div className="flex flex-col">
-            <h2 className="font-heading text-base font-semibold text-foreground-primary">
+          <div className="flex min-w-0 flex-col text-left">
+            <DialogTitle className="font-heading text-base font-semibold text-foreground-primary">
               {t("wizard.title")}
-            </h2>
-            <span className="font-caption text-[11px] text-foreground-tertiary">
+            </DialogTitle>
+            <DialogDescription className="font-caption text-[11px] text-foreground-tertiary">
               {t("wizard.subtitle")}
-            </span>
+            </DialogDescription>
           </div>
-          <span className="flex-1" />
-          <button
-            onClick={onClose}
-            className="flex size-8 items-center justify-center rounded-md bg-surface-tertiary text-foreground-secondary hover:bg-surface-secondary"
-          >
-            <X className="size-4" />
-          </button>
-        </header>
+        </DialogHeader>
 
-        {/* Body */}
         {scan ? (
           <ScanView
             label={t("wizard.scanning")}
@@ -225,26 +234,27 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
             )}
 
             {/* Step 1: name + accent */}
-            <section>
+            <section className="flex flex-col gap-3">
               <StepHeader n={1} label={t("wizard.step1")} />
               <div className="flex items-center gap-3">
-                <div
-                  className="flex h-11 flex-1 items-center gap-3 rounded-md border-[1.5px] bg-surface-elevated px-3.5"
-                  style={{ borderColor: "var(--color-accent-primary)" }}
-                >
-                  <TypeIcon className="size-3.5 text-foreground-tertiary" />
-                  <input
+                <div className="flex min-w-0 flex-1 flex-col gap-1">
+                  <Label htmlFor="wizard-name" className="sr-only">
+                    {t("wizard.step1")}
+                  </Label>
+                  <Input
+                    id="wizard-name"
                     autoFocus
                     value={name}
                     onChange={(e) => setName(e.target.value)}
                     placeholder={t("wizard.namePlaceholder")}
-                    className="min-w-0 flex-1 bg-transparent text-sm font-semibold text-foreground-primary placeholder:text-foreground-tertiary focus:outline-none"
+                    className="h-10"
                   />
                 </div>
                 <div className="flex items-center gap-1.5">
                   {ACCENT_OPTIONS.map((opt) => (
                     <button
                       key={opt.id}
+                      type="button"
                       onClick={() => setAccent(opt.id)}
                       className={cn(
                         "size-7 rounded-full transition-transform",
@@ -254,6 +264,7 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
                       )}
                       style={{ background: opt.color }}
                       title={opt.id}
+                      aria-label={`accent ${opt.id}`}
                     />
                   ))}
                 </div>
@@ -261,7 +272,7 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
             </section>
 
             {/* Step 2: dirs */}
-            <section>
+            <section className="flex flex-col gap-3">
               <StepHeader
                 n={2}
                 label={t("wizard.step2")}
@@ -275,7 +286,7 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
                   >
                     <span
                       className={cn(
-                        "flex size-9 items-center justify-center rounded-md font-mono text-xs font-bold text-foreground-on-accent",
+                        "flex size-9 shrink-0 items-center justify-center rounded-md font-mono text-xs font-bold text-foreground-on-accent",
                         i === 0
                           ? "bg-agent-frontend"
                           : i === 1
@@ -285,8 +296,8 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
                     >
                       {i + 1}
                     </span>
-                    <div className="flex min-w-0 flex-1 flex-col">
-                      <input
+                    <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                      <Input
                         value={d}
                         onChange={(e) =>
                           setDirs((prev) =>
@@ -298,7 +309,7 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
                             ? t("wizard.dirPlaceholder1")
                             : t("wizard.dirPlaceholderMore")
                         }
-                        className="bg-transparent font-mono text-sm text-foreground-primary placeholder:text-foreground-tertiary focus:outline-none"
+                        className="h-8 border-none bg-transparent px-0 font-mono text-sm shadow-none focus-visible:ring-0"
                       />
                       {d.trim() && (
                         <span className="font-caption text-[10px] text-foreground-tertiary">
@@ -306,66 +317,59 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
                         </span>
                       )}
                     </div>
-                    <button
+                    <Button
+                      variant="ghost"
+                      size="icon"
                       onClick={() =>
                         setDirs((prev) => prev.filter((_, j) => j !== i))
                       }
                       disabled={dirs.length === 1}
-                      className="flex size-7 items-center justify-center rounded-md text-foreground-tertiary hover:bg-surface-tertiary disabled:opacity-30"
                       title={t("wizard.removeDir")}
+                      className="size-7 text-foreground-tertiary"
                     >
                       <Trash2 className="size-3.5" />
-                    </button>
+                    </Button>
                   </div>
                 ))}
-                <button
+                <Button
+                  type="button"
+                  variant="outline"
                   onClick={() => setDirs((prev) => [...prev, ""])}
-                  className="flex items-center justify-center gap-2 rounded-lg border-[1.5px] border-dashed border-border-strong bg-transparent px-4 py-3 font-caption text-xs text-foreground-secondary hover:bg-surface-tertiary"
+                  className="h-auto justify-center gap-2 rounded-lg border-[1.5px] border-dashed border-border-strong bg-transparent py-3 text-xs text-foreground-secondary hover:bg-surface-tertiary"
                 >
                   <span className="flex size-7 items-center justify-center rounded-md bg-accent-primary-soft text-accent-primary-deep">
                     <Plus className="size-4" />
                   </span>
                   {t("wizard.addDir")}
-                </button>
+                </Button>
               </div>
             </section>
           </div>
         )}
 
-        {/* Foot */}
-        <footer className="flex items-center gap-3 border-t border-border-subtle bg-surface-elevated px-6 py-4">
-          <span className="flex items-center gap-1.5 font-caption text-[11px] text-foreground-tertiary">
+        <DialogFooter className="flex flex-row items-center gap-3 border-t border-border-subtle bg-surface-elevated px-6 py-4 sm:justify-start">
+          <span className="font-caption text-[11px] text-foreground-tertiary">
             {scan ? t("wizard.scanningFootHint") : t("wizard.defaultInfo")}
           </span>
           <span className="flex-1" />
           {scan ? (
-            <button
-              onClick={() => finishScan.current()}
-              className="rounded-md border border-border-subtle bg-surface-elevated px-4 py-2 text-xs text-foreground-secondary hover:bg-surface-tertiary"
-            >
+            <Button variant="outline" onClick={() => finishScan.current()}>
               {t("wizard.enterAnyway")}
-            </button>
+            </Button>
           ) : (
             <>
-              <button
-                onClick={onClose}
-                className="rounded-md border border-border-subtle bg-surface-elevated px-4 py-2 text-xs text-foreground-secondary hover:bg-surface-tertiary"
-              >
+              <Button variant="outline" onClick={onClose}>
                 {t("wizard.cancel")}
-              </button>
-              <button
-                onClick={submit}
-                disabled={!canSubmit}
-                className="flex items-center gap-1.5 rounded-md bg-accent-primary px-4 py-2 text-xs font-bold text-foreground-on-accent hover:bg-accent-primary-deep disabled:opacity-50"
-              >
+              </Button>
+              <Button onClick={submit} disabled={!canSubmit}>
                 <Check className="size-3.5" />
                 {t("wizard.create")}
-              </button>
+              </Button>
             </>
           )}
-        </footer>
-      </div>
-    </div>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -395,7 +399,7 @@ function StepHeader({
   hint?: string;
 }) {
   return (
-    <div className="mb-3 flex items-center gap-2">
+    <div className="flex items-center gap-2">
       <span className="flex size-[18px] items-center justify-center rounded-full bg-accent-primary font-heading text-[10px] font-bold text-foreground-on-accent">
         {n}
       </span>

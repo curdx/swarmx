@@ -48,7 +48,6 @@ import {
   SendHorizonal,
   Terminal as TerminalIcon,
   Wrench,
-  X,
   Zap,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -62,6 +61,16 @@ import type {
 } from "../../api/types";
 import { XtermPane } from "../XtermPane";
 import { useSwarmFeed } from "../../hooks/useSwarmFeed";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/cn";
 
 type TabId = "terminal" | "recordings" | "messages" | "tools" | "context";
@@ -134,14 +143,7 @@ export function AgentDrawer({ agentId, onClose }: Props) {
     return () => window.clearInterval(timer);
   }, []);
 
-  // Esc closes — mirrors the player and modal behaviour elsewhere.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  // Esc 关闭由 Sheet 自身处理（Radix Dialog primitive 内部监听）。
 
   useSwarmFeed({
     onEvent: (ev: SwarmEvent) => {
@@ -155,33 +157,48 @@ export function AgentDrawer({ agentId, onClose }: Props) {
   const wake = () => api.wakeAgent(agentId).catch(() => {});
 
   return (
-    <div
-      className="fixed inset-y-0 right-0 z-40 flex w-[540px] flex-col border-l border-border-subtle bg-surface-elevated shadow-2xl"
-      role="dialog"
-      aria-label="Agent drawer"
+    <Sheet
+      open
+      modal={false}
+      onOpenChange={(next) => {
+        if (!next) onClose();
+      }}
     >
-      <Header
-        info={info}
-        agentId={agentId}
-        now={now}
-        onClose={onClose}
-        onFocusInjector={focusInjector}
-        onWake={wake}
-      />
-      <TabBar tab={tab} onChange={setTab} />
-      <div className="min-h-0 flex-1 overflow-hidden">
-        {/* Mount all tabs concurrently is tempting (keeps terminal alive
-            across tab switches), but xterm holds a WebGL slot and a WS
-            so we'd burn budget on idle panes. Switch-unmount instead. */}
-        {tab === "terminal" && <TerminalTab agentId={agentId} />}
-        {tab === "recordings" && <RecordingsTab agentId={agentId} />}
-        {tab === "messages" && <MessagesTab agentId={agentId} />}
-        {tab === "tools" && <ToolsTab />}
-        {tab === "context" && <ContextTab agentId={agentId} />}
-      </div>
-      <InjectBar agentId={agentId} inputRef={injectRef} />
-      <StatBar info={info} now={now} />
-    </div>
+      <SheetContent
+        side="right"
+        className="flex w-[540px] flex-col gap-0 border-l border-border-subtle bg-surface-elevated p-0 shadow-xl sm:max-w-[540px]"
+        // modal=false 时 Radix 不渲染 overlay，但 SheetContent 默认 onInteractOutside
+        // 会关 sheet — 我们希望用户点 chat 列表切 agent 不关 drawer，drawer
+        // 跟着切新 agent_id 重新 mount 就行。
+        onInteractOutside={(e) => e.preventDefault()}
+        onPointerDownOutside={(e) => e.preventDefault()}
+      >
+        <SheetHeader className="sr-only">
+          <SheetTitle>{`Agent drawer · ${info?.role ?? agentId}`}</SheetTitle>
+          <SheetDescription>{`PTY 终端 / 录像 / 消息 / 工具 / 上下文 for agent ${agentId}`}</SheetDescription>
+        </SheetHeader>
+        <Header
+          info={info}
+          agentId={agentId}
+          now={now}
+          onFocusInjector={focusInjector}
+          onWake={wake}
+        />
+        <TabBar tab={tab} onChange={setTab} />
+        <div className="min-h-0 flex-1 overflow-hidden">
+          {/* Mount all tabs concurrently is tempting (keeps terminal alive
+              across tab switches), but xterm holds a WebGL slot and a WS
+              so we'd burn budget on idle panes. Switch-unmount instead. */}
+          {tab === "terminal" && <TerminalTab agentId={agentId} />}
+          {tab === "recordings" && <RecordingsTab agentId={agentId} />}
+          {tab === "messages" && <MessagesTab agentId={agentId} />}
+          {tab === "tools" && <ToolsTab />}
+          {tab === "context" && <ContextTab agentId={agentId} />}
+        </div>
+        <InjectBar agentId={agentId} inputRef={injectRef} />
+        <StatBar info={info} now={now} />
+      </SheetContent>
+    </Sheet>
   );
 }
 
@@ -191,14 +208,12 @@ function Header({
   info,
   agentId,
   now,
-  onClose,
   onFocusInjector,
   onWake,
 }: {
   info: AgentInfo | null;
   agentId: string;
   now: number;
-  onClose: () => void;
   onFocusInjector: () => void;
   onWake: () => void;
 }) {
@@ -264,47 +279,26 @@ function Header({
             </span>
           </div>
         </div>
-        <button
-          onClick={onClose}
-          className="flex size-8 items-center justify-center rounded-md bg-surface-tertiary text-foreground-secondary hover:bg-surface-secondary"
-          title={t("agent.close")}
-        >
-          <X className="size-4" />
-        </button>
       </div>
 
       {/* ActionRow */}
       <div className="flex items-center gap-2 px-5 pt-1 pb-4">
-        <button
-          onClick={onFocusInjector}
-          className="flex h-7 items-center gap-1.5 rounded-md bg-accent-primary px-3 text-xs font-bold text-foreground-on-accent hover:bg-accent-primary-deep"
-        >
+        <Button size="sm" onClick={onFocusInjector}>
           <SendHorizonal className="size-3" />
           {t("agent.sendMessage")}
-        </button>
-        <button
-          onClick={onWake}
-          className="flex h-7 items-center gap-1.5 rounded-md border border-border-subtle bg-surface-elevated px-2.5 text-xs text-foreground-secondary hover:bg-surface-tertiary"
-        >
+        </Button>
+        <Button size="sm" variant="outline" onClick={onWake}>
           <Zap className="size-3" />
           {t("agent.wake")}
-        </button>
-        <button
-          disabled
-          className="flex h-7 items-center gap-1.5 rounded-md border border-border-subtle bg-surface-elevated px-2.5 text-xs text-foreground-tertiary opacity-50"
-          title={t("agent.notImplemented")}
-        >
+        </Button>
+        <Button size="sm" variant="outline" disabled title={t("agent.notImplemented")}>
           <Pause className="size-3" />
           {t("agent.pause")}
-        </button>
-        <button
-          disabled
-          className="flex h-7 items-center gap-1.5 rounded-md border border-border-subtle bg-surface-elevated px-2.5 text-xs text-foreground-tertiary opacity-50"
-          title={t("agent.notImplemented")}
-        >
+        </Button>
+        <Button size="sm" variant="outline" disabled title={t("agent.notImplemented")}>
           <RotateCcw className="size-3" />
           {t("agent.restart")}
-        </button>
+        </Button>
       </div>
     </header>
   );
@@ -315,27 +309,27 @@ function Header({
 function TabBar({ tab, onChange }: { tab: TabId; onChange: (t: TabId) => void }) {
   const { t: tr } = useTranslation();
   return (
-    <nav className="flex shrink-0 items-center gap-1 border-b border-border-subtle px-5">
-      {TABS.map((item) => {
-        const active = item.id === tab;
-        const Icon = item.icon;
-        return (
-          <button
-            key={item.id}
-            onClick={() => onChange(item.id)}
-            className={cn(
-              "flex items-center gap-1.5 px-4 py-3 text-xs transition-colors",
-              active
-                ? "border-b-2 border-accent-primary text-foreground-primary"
-                : "border-b-2 border-transparent text-foreground-secondary hover:text-foreground-primary",
-            )}
-          >
-            <Icon className="size-3.5" />
-            {tr(item.labelKey)}
-          </button>
-        );
-      })}
-    </nav>
+    <Tabs
+      value={tab}
+      onValueChange={(v) => onChange(v as TabId)}
+      className="shrink-0"
+    >
+      <TabsList className="h-auto w-full justify-start rounded-none border-b border-border-subtle bg-transparent p-0 px-5">
+        {TABS.map((item) => {
+          const Icon = item.icon;
+          return (
+            <TabsTrigger
+              key={item.id}
+              value={item.id}
+              className="relative gap-1.5 rounded-none border-0 bg-transparent px-4 py-3 text-xs text-foreground-secondary shadow-none hover:text-foreground-primary data-[state=active]:bg-transparent data-[state=active]:text-foreground-primary data-[state=active]:shadow-none data-[state=active]:after:absolute data-[state=active]:after:inset-x-0 data-[state=active]:after:-bottom-px data-[state=active]:after:h-0.5 data-[state=active]:after:bg-accent-primary"
+            >
+              <Icon className="size-3.5" />
+              {tr(item.labelKey)}
+            </TabsTrigger>
+          );
+        })}
+      </TabsList>
+    </Tabs>
   );
 }
 
@@ -651,8 +645,8 @@ function InjectBar({
       <span className="shrink-0 font-caption text-[11px] text-foreground-secondary">
         {t("agent.injectLabel")}
       </span>
-      <div className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-md border border-border-subtle bg-surface-elevated px-2.5">
-        <input
+      <div className="relative flex min-w-0 flex-1 items-center">
+        <Input
           ref={ref}
           value={text}
           onChange={(e) => setText(e.target.value)}
@@ -663,17 +657,18 @@ function InjectBar({
             }
           }}
           placeholder={t("agent.injectPlaceholder")}
-          className="min-w-0 flex-1 bg-transparent font-mono text-xs text-foreground-primary placeholder:text-foreground-tertiary focus:outline-none"
+          className="h-8 pr-7 font-mono text-xs"
         />
-        <span className="shrink-0 font-mono text-[9px] text-foreground-tertiary">⏎</span>
+        <span className="pointer-events-none absolute right-2.5 font-mono text-[9px] text-foreground-tertiary">⏎</span>
       </div>
-      <button
+      <Button
+        size="sm"
         onClick={send}
         disabled={sending || !text.trim()}
-        className="flex h-8 shrink-0 items-center justify-center rounded-md bg-accent-primary px-3 text-xs font-bold text-foreground-on-accent hover:bg-accent-primary-deep disabled:opacity-50"
+        className="h-8"
       >
         {sending ? "…" : t("agent.send")}
-      </button>
+      </Button>
     </div>
   );
 }
