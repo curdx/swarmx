@@ -239,6 +239,7 @@
       "completed": "Done"
     },
     "empty": "Nothing here yet",
+    "viewAll": "View all",
     "markRead": "Mark read",
     "kinds": {
       "errorTitle": "Error reported",

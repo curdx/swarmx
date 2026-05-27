@@ -21,32 +21,14 @@
  * /debug renders without AppShell (it owns its own dark chrome).
  */
 
-import { Link, useLocation, useNavigate, NavLink, Outlet } from "react-router-dom";
+import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useEffect } from "react";
-import {
-  Bell,
-  Boxes,
-  Bug,
-  ChevronDown,
-  Info,
-  Moon,
-  Settings,
-  Sun,
-  SunMoon,
-} from "lucide-react";
+import { Boxes, Settings } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { CommandPalette } from "@/components/CommandPalette";
+import { NotificationPopover } from "@/components/NotificationPopover";
 import { useNotificationBadge } from "@/hooks/useNotificationBadge";
-import { setTheme, type ThemeMode } from "@/lib/theme";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import {
   Tooltip,
   TooltipContent,
@@ -63,22 +45,8 @@ const IS_TAURI =
     window.location.hostname === "tauri.localhost" ||
     "__TAURI_INTERNALS__" in window);
 
-const STORAGE_KEY = "flockmux:settings:v1";
-function persistTheme(mode: ThemeMode) {
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    const parsed = raw ? JSON.parse(raw) : {};
-    parsed.themeMode = mode;
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(parsed));
-  } catch {
-    /* ignore */
-  }
-  setTheme(mode);
-}
-
 export function AppShell() {
   const { t } = useTranslation();
-  const navigate = useNavigate();
   const location = useLocation();
   const { hasUnseen, markSeen } = useNotificationBadge();
 
@@ -87,8 +55,6 @@ export function AppShell() {
   useEffect(() => {
     if (location.pathname.startsWith("/notifications")) markSeen();
   }, [location.pathname, markSeen]);
-
-  const goNotifications = () => navigate("/notifications");
 
   const isMac =
     typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
@@ -139,93 +105,36 @@ export function AppShell() {
             <span className="font-mono text-[10px]">{modKey}K</span>
           </button>
 
-          {/* Notification bell — red dot when there's anything new since
-              the last visit to /notifications. */}
+          {/* Notification bell — Popover quick preview。点 bell 弹 360px
+              panel 显示最近 12 条事件，每条 click 跳对应 workspace；底
+              部"查看全部"跳 /notifications 完整页。GitHub / Discord /
+              Notion 同款做法 — 通知是"瞄一眼"动作，不该跳走当前 view。
+              hasUnseen 触发右上红点；popover open 时自动 markSeen 清掉。 */}
+          <NotificationPopover hasUnseen={hasUnseen} onSeen={markSeen} />
+
+          {/* Settings — 直接跳完整页，不做下拉杂物箱。GitHub / Slack /
+              Cursor 都是这模式：gear icon = 单击就走，theme / debug /
+              about 全部活在 /settings 内部 section。Debug 主入口走 ⌘K
+              (它是开发者后门，不该 first-class)。 */}
           <Tooltip>
             <TooltipTrigger asChild>
-              <button
-                type="button"
-                onClick={goNotifications}
-                className={cn(
-                  "relative flex size-7 items-center justify-center rounded-md transition-colors hover:bg-surface-tertiary",
-                  location.pathname.startsWith("/notifications")
-                    ? "text-foreground-primary"
-                    : "text-foreground-tertiary hover:text-foreground-primary",
-                )}
-                aria-label={t("nav.notifications")}
-              >
-                <Bell className="size-4" />
-                {hasUnseen && (
-                  <span
-                    className="absolute right-1 top-1 size-1.5 rounded-full bg-state-danger"
-                    aria-label={t("nav.notifications")}
-                  />
-                )}
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">{t("nav.notifications")}</TooltipContent>
-          </Tooltip>
-
-          {/* App menu — settings / theme / debug / about. Replaces the
-              old left-nav items for everything that isn't "chat". */}
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <button
-                type="button"
-                className="flex h-7 items-center gap-1 rounded-md px-1.5 text-foreground-tertiary transition-colors hover:bg-surface-tertiary hover:text-foreground-primary"
-                aria-label={t("shell.appMenu")}
+              <NavLink
+                to="/settings"
+                className={({ isActive }) =>
+                  cn(
+                    "flex size-7 items-center justify-center rounded-md transition-colors hover:bg-surface-tertiary hover:text-foreground-primary",
+                    isActive
+                      ? "text-foreground-primary"
+                      : "text-foreground-tertiary",
+                  )
+                }
+                aria-label={t("nav.settings")}
               >
                 <Settings className="size-4" />
-                <ChevronDown className="size-3" />
-              </button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" side="bottom" className="w-56">
-              <DropdownMenuLabel className="text-[10px] font-semibold uppercase tracking-wider text-foreground-tertiary">
-                {t("shell.appMenu")}
-              </DropdownMenuLabel>
-              <DropdownMenuSeparator />
-              <NavLink to="/settings" className="block">
-                {({ isActive }) => (
-                  <DropdownMenuItem
-                    className={cn("gap-2", isActive && "bg-surface-tertiary")}
-                  >
-                    <Settings className="size-3.5" />
-                    <span>{t("nav.settings")}</span>
-                  </DropdownMenuItem>
-                )}
               </NavLink>
-              <DropdownMenuSeparator />
-              <DropdownMenuLabel className="text-[10px] font-semibold uppercase tracking-wider text-foreground-tertiary">
-                {t("cmdk.groups.theme")}
-              </DropdownMenuLabel>
-              <DropdownMenuItem onSelect={() => persistTheme("light")} className="gap-2">
-                <Sun className="size-3.5" />
-                <span>{t("cmdk.switchToLight")}</span>
-              </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => persistTheme("dark")} className="gap-2">
-                <Moon className="size-3.5" />
-                <span>{t("cmdk.switchToDark")}</span>
-              </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => persistTheme("system")} className="gap-2">
-                <SunMoon className="size-3.5" />
-                <span>{t("cmdk.followSystem")}</span>
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <NavLink to="/debug" className="block">
-                <DropdownMenuItem className="gap-2 text-foreground-tertiary">
-                  <Bug className="size-3.5" />
-                  <span>{t("nav.debug")}</span>
-                </DropdownMenuItem>
-              </NavLink>
-              <DropdownMenuItem
-                onSelect={() => navigate("/settings/about")}
-                className="gap-2 text-foreground-tertiary"
-              >
-                <Info className="size-3.5" />
-                <span>{t("shell.about")}</span>
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">{t("nav.settings")}</TooltipContent>
+          </Tooltip>
 
           <span className="font-caption text-xs text-foreground-tertiary">
             127.0.0.1:7777
