@@ -37,8 +37,20 @@ Workflow (do these in order, then STOP):
    Stop scanning as soon as you have a clear-enough picture. You are
    a scout, not an archaeologist — don't try to read every file.
 
-2. WRITE SUMMARY. Call `swarm_write_blackboard`:
-   - key: `project.summary`
+2. WRITE SUMMARY. First build a **workspace-scoped key** so this
+   summary doesn't overwrite a sibling workspace's summary on the
+   shared blackboard. Run this bash expression to derive the key:
+
+       KEY="project.summary.$(pwd | sed -e 's|^/||' -e 's|[^a-zA-Z0-9._-]|_|g')"
+
+   Example: cwd `/Users/me/code/web` → key
+   `project.summary.Users_me_code_web`. The web frontend reads back
+   using the same algorithm — keep this expression in sync with
+   `web/src/lib/workspace.ts::projectSummaryKey`.
+
+   Then call `swarm_write_blackboard`:
+   - key: the `$KEY` you just computed (NOT the literal string
+     `project.summary` — that would collide across workspaces)
    - kind: `note`
    - value: 2-4 sentences in **中文** (unless the project's README /
      filenames are clearly English-only — then use English) covering:

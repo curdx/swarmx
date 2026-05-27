@@ -3,14 +3,19 @@
  *
  * 提交后做的事：
  *   1. 调 `runSpell("init", workspace_dir=dirs[0])` — init spell 启动一个
- *      scout agent 进目录扫一眼、写 `project.summary` 黑板、给 user 发开场白。
- *   2. wizard 切到 loading 视图，订阅 /ws/swarm，等 `blackboard_changed`
- *      事件 path == "project.summary" 到达后关闭 wizard、通知父组件。
- *   3. 超时 / 用户主动跳过 → 也直接关闭进群，scout 在后台继续跑（黑板和
- *      它发给 user 的开场白会自然出现在 chat 里）。
+ *      scout agent 进目录扫一眼、写 `project.summary.<slug>` 黑板（per-
+ *      workspace 命名，见 lib/workspace.ts）+ 给 user 发开场白。
+ *   2. spawn 完成后立刻 listAgents 拿到 scout 的 canonical workspace 路径
+ *      （macOS /tmp → /private/tmp 这类符号链接需要 canonical 才能让 chat
+ *      sidebar 算出同样的 slug），用它写 `workspace.name.<slug>` = 用户起
+ *      的名字。
+ *   3. wizard 切 loading 视图，订阅 /ws/swarm，看到 path 以
+ *      `project.summary.` 开头的事件就关闭 wizard 进群。
+ *   4. 超时 / 用户跳过 → 也直接关闭进群，scout 在后台继续跑（黑板和它发给
+ *      user 的开场白会自然出现在 chat 里）。
  *
  * 用户在 chat 输入第一条消息时由 ChatRoute 检测「workspace 仅有 scout 且
- * project.summary 已存在」→ 改走 auto-dispatch 而非普通 sendMessage。
+ * project.summary.<slug> 已存在」→ 改走 auto-dispatch 而非普通 sendMessage。
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -27,10 +32,13 @@ import {
 import { api } from "../../api/http";
 import type { SpellInfo, SwarmEvent } from "../../api/types";
 import { useSwarmFeed } from "../../hooks/useSwarmFeed";
+import {
+  PROJECT_SUMMARY_KEY_PREFIX,
+  workspaceNameKey,
+} from "../../lib/workspace";
 import { cn } from "@/lib/cn";
 
 const INIT_SPELL = "init";
-const SUMMARY_KEY = "project.summary";
 const SCOUT_TIMEOUT_MS = 60_000;
 
 const ACCENT_OPTIONS = [
@@ -82,9 +90,13 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
     onEvent: (ev: SwarmEvent) => {
       const cur = scanRef.current;
       if (!cur) return;
+      // 用 prefix 匹配（不精确匹配 slug）— wizard 用用户填的原始 path 算 slug，
+      // 但 scout 写黑板用的是 server canonicalize 过的 cwd（macOS /tmp ↔
+      // /private/tmp 不一致），slug 对不上。同一时刻只有一个 scout 在跑，
+      // 看到任何 project.summary.* 写入就当成本次的完成信号。
       if (
         ev.type === "blackboard_changed" &&
-        ev.path === SUMMARY_KEY &&
+        ev.path.startsWith(PROJECT_SUMMARY_KEY_PREFIX) &&
         ev.at >= cur.startedAt
       ) {
         finishScan.current();
@@ -129,6 +141,7 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
     if (!canSubmit) return;
     setError(null);
     const startedAt = Date.now();
+    const wsName = name.trim();
     setScan({ startedAt });
     try {
       if (!hasInitSpell) {
@@ -136,11 +149,34 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
           "后端未加载 `init` spell — 请重启 flockmux-server 让它发现 spells/init.md",
         );
       }
-      await api.runSpell({
+      const resp = await api.runSpell({
         name: INIT_SPELL,
-        task: name.trim(),
+        task: wsName,
         workspace_dir: cleanDirs[0],
       });
+      // 写 workspace.name.<slug> 让 chat sidebar 显示用户起的名字。slug 必须
+      // 用 canonical path（spawn_agent ensure_shared_workspace 调过
+      // canonicalize），所以先从 listAgents 把刚 spawn 的 scout 取回来，
+      // 用它的 workspace 字段算 slug。失败 fallback 用户输入的原始路径 —
+      // sidebar 拿不到 name 时也只是 fallback basename，不致命。
+      const scoutId = resp.agents[0]?.agent_id;
+      let canonicalPath: string = cleanDirs[0];
+      if (scoutId) {
+        try {
+          const all = await api.listAgents();
+          const sc = all.find((a) => a.agent_id === scoutId);
+          if (sc?.workspace) canonicalPath = sc.workspace;
+        } catch {
+          /* best-effort */
+        }
+      }
+      api
+        .writeBlackboard(workspaceNameKey(canonicalPath), {
+          content: wsName,
+        })
+        .catch(() => {
+          /* best-effort — sidebar fallback 到 basename，没 name 也能用 */
+        });
     } catch (e) {
       setScan(null);
       setError((e as Error).message);

@@ -25,7 +25,13 @@ import { MessagesPanel } from "../components/MessagesPanel";
 import { AgentDrawer } from "../components/agent/AgentDrawer";
 import { CreateWizard } from "../components/workspace/CreateWizard";
 import { useSwarmFeed } from "../hooks/useSwarmFeed";
+import {
+  projectSummaryKey,
+  workspaceSlug,
+} from "../lib/workspace";
 import { cn } from "@/lib/cn";
+
+const WORKSPACE_NAME_KEY_PREFIX = "workspace.name.";
 
 const ROLE_COLOR: Record<string, string> = {
   planner: "bg-agent-planner",
@@ -96,7 +102,33 @@ export default function ChatRoute() {
     { ids: number[]; to_agent: string; at: number } | null
   >(null);
   const [unreadByFrom, setUnreadByFrom] = useState<Record<string, number>>({});
+  // 用户给工作空间起的人类可读名字（来自 wizard，写到 workspace.name.<slug>）。
+  // slug → name 映射；侧栏 / 顶栏 channel header 优先显示，回退到 path basename。
+  const [workspaceNames, setWorkspaceNames] = useState<Record<string, string>>({});
   const idToFromRef = useRef<Map<number, string>>(new Map());
+
+  const refreshWorkspaceNames = useCallback(async () => {
+    try {
+      const entries = await api.listBlackboard();
+      const nameEntries = entries.filter((e) =>
+        e.path.startsWith(WORKSPACE_NAME_KEY_PREFIX),
+      );
+      const pairs = await Promise.all(
+        nameEntries.map(async (e) => {
+          const slug = e.path.slice(WORKSPACE_NAME_KEY_PREFIX.length);
+          try {
+            const snap = await api.readBlackboard(e.path);
+            return [slug, snap.content] as const;
+          } catch {
+            return [slug, ""] as const;
+          }
+        }),
+      );
+      setWorkspaceNames(Object.fromEntries(pairs.filter(([, v]) => v)));
+    } catch {
+      // best-effort
+    }
+  }, []);
 
   const refreshAgents = useCallback(async () => {
     try {
@@ -129,7 +161,8 @@ export default function ChatRoute() {
   useEffect(() => {
     refreshAgents();
     recomputeUnread();
-  }, [refreshAgents, recomputeUnread]);
+    refreshWorkspaceNames();
+  }, [refreshAgents, recomputeUnread, refreshWorkspaceNames]);
 
   // Debounced agent refresh on agent_state, same playbook as DebugRoute.
   const refreshTimerRef = useRef<number | null>(null);
@@ -184,11 +217,17 @@ export default function ChatRoute() {
             return next;
           });
           break;
+        case "blackboard_changed":
+          if (ev.path.startsWith(WORKSPACE_NAME_KEY_PREFIX)) {
+            refreshWorkspaceNames();
+          }
+          break;
       }
     },
     onReconnect: () => {
       scheduleRefresh();
       recomputeUnread();
+      refreshWorkspaceNames();
     },
   });
 
@@ -203,17 +242,20 @@ export default function ChatRoute() {
       byWs.get(key)!.push(a);
     }
     return Array.from(byWs.entries()).map(([path, members]) => {
-      const { name, parent } = splitWorkspacePath(path);
+      const { name: basename, parent } = splitWorkspacePath(path);
+      // wizard 写到黑板的人类名优先；没有就回退到路径末段。这样老 workspace
+      // （没经过 wizard，没 workspace.name.<slug>）仍然能显示出来。
+      const userName = workspaceNames[workspaceSlug(path)];
       return {
         path,
         members,
-        name,
+        name: userName || basename,
         parent,
         // Stable id = last 8 chars of path; good enough for URL routing.
         id: path.slice(-8) || "default",
       };
     });
-  }, [agents]);
+  }, [agents, workspaceNames]);
 
   const activeWs =
     workspaces.find((w) => w.id === workspaceId) ?? workspaces[0] ?? null;
@@ -253,7 +295,7 @@ export default function ChatRoute() {
     return async (body: string) => {
       let summary: string | null = null;
       try {
-        const snap = await api.readBlackboard("project.summary");
+        const snap = await api.readBlackboard(projectSummaryKey(wsPath));
         summary = snap?.content ?? null;
       } catch {
         // 没拿到 summary 也不阻塞用户，planner 自己会摸索。
