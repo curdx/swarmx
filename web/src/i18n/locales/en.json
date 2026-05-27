@@ -146,6 +146,7 @@
     "copyPath": "Copy path",
     "pathCopied": "Copied",
     "unread": "{{count}} unread",
+    "jumpUnread": "Jump to first unread",
     "members": "Members",
     "selectWorkspace": "Pick a workspace to see its members",
     "wake": "Manual wake",
@@ -176,6 +177,7 @@
   "replays": {
     "title": "Replays",
     "count": "{{count}} recording(s)",
+    "countScoped": "Current workspace {{shown}} · {{total}} total",
     "search": "Search by agent / id",
     "tagAll": "All",
     "ratio": "{{shown}} / {{total}}",

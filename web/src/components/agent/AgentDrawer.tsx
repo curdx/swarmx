@@ -70,6 +70,7 @@ import {
 } from "@/components/ui/sheet";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/cn";
+import { roleColorClass as roleColor } from "@/lib/agent";
 
 type TabId = "terminal" | "recordings" | "messages" | "tools" | "context";
 
@@ -80,19 +81,6 @@ const TABS: { id: TabId; labelKey: string; icon: typeof TerminalIcon }[] = [
   { id: "tools", labelKey: "agent.tabs.tools", icon: Wrench },
   { id: "context", labelKey: "agent.tabs.context", icon: FileText },
 ];
-
-const ROLE_BG: Record<string, string> = {
-  planner: "bg-agent-planner",
-  backend: "bg-agent-backend",
-  frontend: "bg-agent-frontend",
-  architect: "bg-agent-architect",
-  critic: "bg-agent-critic",
-  test: "bg-agent-test",
-};
-
-function roleColor(role: string) {
-  return ROLE_BG[role.toLowerCase()] ?? "bg-state-idle";
-}
 
 function formatDelta(ms: number): string {
   const s = Math.max(0, Math.floor(ms / 1000));

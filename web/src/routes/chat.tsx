@@ -54,21 +54,9 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/cn";
+import { roleColorClass as roleColor } from "@/lib/agent";
 
 const WORKSPACE_NAME_KEY_PREFIX = "workspace.name.";
-
-const ROLE_COLOR: Record<string, string> = {
-  planner: "bg-agent-planner",
-  backend: "bg-agent-backend",
-  frontend: "bg-agent-frontend",
-  architect: "bg-agent-architect",
-  critic: "bg-agent-critic",
-  test: "bg-agent-test",
-};
-
-function roleColor(role: string) {
-  return ROLE_COLOR[role.toLowerCase()] ?? "bg-state-idle";
-}
 
 // chat → /chat/:wsId 自己，其他 3 个跳 ?ws=<id> query 给老路径用。
 // 老 path 不动是为了不破坏 ⌘K 里 "看全部 (无 ws)" 的入口 (cmdk 不带
@@ -174,6 +162,9 @@ export default function ChatRoute() {
     { ids: number[]; to_agent: string; at: number } | null
   >(null);
   const [unreadByFrom, setUnreadByFrom] = useState<Record<string, number>>({});
+  // 顶部 "N 未读" badge → 让 MessagesPanel 滚到第一条未读。每次点 badge
+  // 就 bump 一次，MessagesPanel useEffect 监听这个 tick。
+  const [jumpUnreadTick, setJumpUnreadTick] = useState(0);
   // 用户给工作空间起的人类可读名字（来自 wizard，写到 workspace.name.<slug>）。
   // slug → name 映射；侧栏 / 顶栏 channel header 优先显示，回退到 path basename。
   const [workspaceNames, setWorkspaceNames] = useState<Record<string, string>>({});
@@ -619,9 +610,16 @@ export default function ChatRoute() {
               )}
             </div>
             {totalUnread > 0 && (
-              <Badge className="shrink-0 rounded-full px-2 py-0.5 text-[10px]">
-                {t("chat.unread", { count: totalUnread })}
-              </Badge>
+              <button
+                type="button"
+                onClick={() => setJumpUnreadTick((v) => v + 1)}
+                title={t("chat.jumpUnread")}
+                className="shrink-0 cursor-pointer"
+              >
+                <Badge className="rounded-full px-2 py-0.5 text-[10px] transition-transform hover:scale-105">
+                  {t("chat.unread", { count: totalUnread })}
+                </Badge>
+              </button>
             )}
           </div>
           {activeWs ? (
@@ -639,7 +637,10 @@ export default function ChatRoute() {
                     variant="ghost"
                     size="icon"
                     onClick={handleCopyPath}
-                    className="size-6 shrink-0 text-foreground-tertiary opacity-0 transition-opacity hover:text-foreground-secondary focus:opacity-100 group-hover/path:opacity-100"
+                    // 之前 opacity-0 + 仅 hover-path 时显示 → 用户根本
+                    // 不知道按钮在。改成始终低调可见 (50% opacity)、hover
+                    // 路径行时加到 100%；点击后切到 ✓ 持续 1.4s 给反馈。
+                    className="size-6 shrink-0 text-foreground-tertiary opacity-50 transition-opacity hover:bg-surface-tertiary hover:text-foreground-secondary hover:opacity-100 focus:opacity-100 group-hover/path:opacity-100"
                     aria-label={copiedPath ? t("chat.pathCopied") : t("chat.copyPath")}
                   >
                     {copiedPath ? (
@@ -679,6 +680,7 @@ export default function ChatRoute() {
               workspaceAgentIds={activeWorkspaceAgentIds}
               workspaceLabel={activeWs ? activeWs.name : undefined}
               composerOverride={composerOverride}
+              jumpUnreadTick={jumpUnreadTick}
               onOpenAgent={openDrawer}
             />
           </div>

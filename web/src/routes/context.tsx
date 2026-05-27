@@ -36,6 +36,8 @@ import { WorkspaceScopeBar } from "@/components/workspace/WorkspaceScopeBar";
 import { api as apiTyped } from "../api/http";
 import type { AgentInfo as AgentInfoTyped } from "../api/types";
 import { workspaceSlug as ctxWorkspaceSlug } from "../lib/workspace";
+import { buildRoleLookup } from "@/lib/agent";
+import { AgentChip } from "@/components/agent/AgentChip";
 import { cn } from "@/lib/cn";
 
 interface TreeNode {
@@ -78,16 +80,29 @@ function buildTree(entries: BlackboardEntry[]): TreeNode {
   return root;
 }
 
+/** Strip the trailing `.${slug}` workspace suffix from a blackboard key.
+ *  Keys are persisted as e.g. `project.summary.Users_wdx_opc_flockmux-core`
+ *  to namespace per workspace, but exposing that mangled path to humans
+ *  inside the workspace's own context tab is noise — they already know
+ *  which workspace they're in. */
+function stripWsSuffix(key: string, slug: string | null): string {
+  if (!slug) return key;
+  const suffix = `.${slug}`;
+  return key.endsWith(suffix) ? key.slice(0, -suffix.length) : key;
+}
+
 function FileTree({
   root,
   selected,
   onSelect,
   filter,
+  wsSlug,
 }: {
   root: TreeNode;
   selected: string | null;
   onSelect: (path: string) => void;
   filter: string;
+  wsSlug: string | null;
 }) {
   const [expanded, setExpanded] = useState<Set<string>>(
     () => new Set(), // empty = everything collapsed; toggled below
@@ -136,7 +151,9 @@ function FileTree({
           style={{ paddingLeft: 6 + depth * 12 }}
         >
           <FileText className="size-3 shrink-0 text-foreground-tertiary" />
-          <span className="truncate font-mono">{node.name}</span>
+          <span className="truncate font-mono">
+            {stripWsSuffix(node.name, wsSlug)}
+          </span>
         </button>
       );
     }
@@ -196,7 +213,9 @@ function FileTree({
             )}
           >
             <FileText className="size-3 shrink-0 text-foreground-tertiary" />
-            <span className="truncate font-mono">{m.path}</span>
+            <span className="truncate font-mono">
+              {stripWsSuffix(m.path, wsSlug)}
+            </span>
           </button>
         );
       });
@@ -233,20 +252,26 @@ export default function ContextRoute() {
   // namespaced key)。全局 key (api.spec / frontend.done) 在 wsId 模式下
   // 显示不了 — 它们没 namespace，无法可靠归属 workspace。
   const [wsSlug, setWsSlug] = useState<string | null>(null);
+  // agent_id → role lookup 给历史条目里的 AgentChip 用。
+  const [roleLookup, setRoleLookup] = useState<Map<string, string>>(
+    () => new Map(),
+  );
   useEffect(() => {
-    if (!wsId) {
-      setWsSlug(null);
-      return;
-    }
     let cancelled = false;
     apiTyped
       .listAgents()
       .then((agents: AgentInfoTyped[]) => {
-        const matched = agents.find(
-          (a) => (a.workspace ?? "").slice(-8) === wsId,
-        );
-        if (!cancelled && matched?.workspace) {
-          setWsSlug(ctxWorkspaceSlug(matched.workspace));
+        if (cancelled) return;
+        setRoleLookup(buildRoleLookup(agents));
+        if (wsId) {
+          const matched = agents.find(
+            (a) => (a.workspace ?? "").slice(-8) === wsId,
+          );
+          if (matched?.workspace) {
+            setWsSlug(ctxWorkspaceSlug(matched.workspace));
+          }
+        } else {
+          setWsSlug(null);
         }
       })
       .catch(() => {});
@@ -387,6 +412,7 @@ export default function ContextRoute() {
               selected={selected}
               onSelect={setSelected}
               filter={filter}
+              wsSlug={wsSlug}
             />
           )}
         </aside>
@@ -397,9 +423,20 @@ export default function ContextRoute() {
             {selected ? (
               <>
                 <FileText className="size-4 text-foreground-tertiary" />
-                <span className="truncate font-mono text-sm text-foreground-primary">
-                  {selected}
+                <span
+                  className="truncate font-mono text-sm text-foreground-primary"
+                  title={selected}
+                >
+                  {stripWsSuffix(selected, wsSlug)}
                 </span>
+                {wsSlug && selected.endsWith(`.${wsSlug}`) && (
+                  <span
+                    className="shrink-0 rounded bg-surface-tertiary px-1.5 py-0.5 font-caption text-[10px] text-foreground-tertiary"
+                    title={`workspace · ${wsSlug}`}
+                  >
+                    ws
+                  </span>
+                )}
                 <span className="flex-1" />
                 <div className="flex rounded-md border border-border-subtle bg-surface-elevated p-0.5">
                   {(["rendered", "raw"] as const).map((v) => (
@@ -466,7 +503,12 @@ export default function ContextRoute() {
                 </h3>
                 <dl className="grid grid-cols-[64px_1fr] gap-y-2 font-caption text-xs">
                   <dt className="text-foreground-tertiary">path</dt>
-                  <dd className="break-all font-mono text-foreground-primary">{selectedEntry.path}</dd>
+                  <dd
+                    className="break-all font-mono text-foreground-primary"
+                    title={selectedEntry.path}
+                  >
+                    {stripWsSuffix(selectedEntry.path, wsSlug)}
+                  </dd>
                   <dt className="text-foreground-tertiary">sha256</dt>
                   <dd className="font-mono text-foreground-primary">
                     {shortSha(selectedEntry.sha256)}
@@ -511,8 +553,18 @@ export default function ContextRoute() {
                           {shortSha(h.sha256)}
                         </span>
                       </div>
-                      <div className="text-foreground-tertiary">
-                        {h.agent_id ?? "system"} · {formatTime(h.at)}
+                      <div className="flex items-center gap-1.5 text-foreground-tertiary">
+                        {h.agent_id ? (
+                          <AgentChip
+                            agentId={h.agent_id}
+                            roleLookup={roleLookup}
+                            size="xs"
+                            showAvatar={false}
+                          />
+                        ) : (
+                          <span className="font-mono">system</span>
+                        )}
+                        <span>· {formatTime(h.at)}</span>
                       </div>
                     </li>
                   ))}

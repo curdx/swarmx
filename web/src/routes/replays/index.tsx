@@ -17,38 +17,38 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { Download, Play, RefreshCw, Search } from "lucide-react";
+import { Clock, Download, Monitor, Play, RefreshCw, Search } from "lucide-react";
 import { api } from "../../api/http";
 import type { AgentInfo, RecordingInfo } from "../../api/types";
 import { useSwarmFeed } from "../../hooks/useSwarmFeed";
-import { loadCastPreview, getCachedCastPreview } from "@/lib/castPreview";
 import { Button } from "@/components/ui/button";
+import { AgentChip } from "@/components/agent/AgentChip";
 import { WorkspaceScopeBar } from "@/components/workspace/WorkspaceScopeBar";
+import { resolveRole } from "@/lib/agent";
 import { cn } from "@/lib/cn";
-
-const ROLE_BG: Record<string, string> = {
-  planner: "bg-agent-planner",
-  backend: "bg-agent-backend",
-  frontend: "bg-agent-frontend",
-  architect: "bg-agent-architect",
-  critic: "bg-agent-critic",
-  test: "bg-agent-test",
-};
-
-function inferRole(agentId: string): string {
-  // agent_id format: <cli>-<hash>; role is not embedded. We only get role
-  // off /api/agent, which is a heavier call. For the cards we'd rather
-  // colour by cli prefix as a cheap proxy.
-  const [cli] = agentId.split("-");
-  return cli ?? "unknown";
-}
-
-function roleColor(agentId: string) {
-  return ROLE_BG[inferRole(agentId)] ?? "bg-state-idle";
-}
 
 function formatTime(ms: number): string {
   return new Date(ms).toLocaleString();
+}
+
+/** Compact "today HH:mm" / "M/D HH:mm" used in card footer; the long
+ *  locale string ate horizontal space without adding info users care
+ *  about (year, seconds). Full timestamp stays in the hover title. */
+function formatShortTime(ms: number): string {
+  const d = new Date(ms);
+  const now = new Date();
+  const sameDay =
+    d.getFullYear() === now.getFullYear() &&
+    d.getMonth() === now.getMonth() &&
+    d.getDate() === now.getDate();
+  return sameDay
+    ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+    : d.toLocaleString([], {
+        month: "numeric",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
 }
 
 function formatDuration(ms: number | null): string {
@@ -71,6 +71,10 @@ export default function ReplaysIndex() {
   const [agentWorkspaceById, setAgentWorkspaceById] = useState<Map<string, string>>(
     () => new Map(),
   );
+  // agent_id → role 反查，给 AgentChip 用 — 录像 API 自身没 role 字段。
+  const [roleLookup, setRoleLookup] = useState<Map<string, string>>(
+    () => new Map(),
+  );
   const [filter, setFilter] = useState("");
   const [activeTag, setActiveTag] = useState<string>("all");
   const [error, setError] = useState<string | null>(null);
@@ -82,11 +86,14 @@ export default function ReplaysIndex() {
         api.listAgents(),
       ]);
       setItems(rows);
-      const m = new Map<string, string>();
+      const wsM = new Map<string, string>();
+      const roleM = new Map<string, string>();
       for (const a of agents as AgentInfo[]) {
-        if (a.workspace) m.set(a.agent_id, a.workspace);
+        if (a.workspace) wsM.set(a.agent_id, a.workspace);
+        roleM.set(a.agent_id, a.role);
       }
-      setAgentWorkspaceById(m);
+      setAgentWorkspaceById(wsM);
+      setRoleLookup(roleM);
       setError(null);
     } catch (e) {
       setError((e as Error).message);
@@ -108,27 +115,31 @@ export default function ReplaysIndex() {
 
   const tags = useMemo(() => {
     const set = new Set<string>();
-    for (const r of items) set.add(inferRole(r.agent_id));
+    for (const r of items) set.add(resolveRole(r.agent_id, roleLookup));
     return ["all", ...Array.from(set).sort()];
-  }, [items]);
+  }, [items, roleLookup]);
+
+  // 单独算一遍 wsId-only 过滤后的数量，给 header 副标题用 (这样 header
+  // 不受 tag/query 影响，永远显示"当前工作空间下 N 个录像")。
+  const scopedToWorkspace = useMemo(() => {
+    if (!wsId) return items;
+    return items.filter((r) => {
+      const ws = agentWorkspaceById.get(r.agent_id);
+      return ws && ws.slice(-8) === wsId;
+    });
+  }, [items, wsId, agentWorkspaceById]);
 
   const filtered = useMemo(() => {
     const q = filter.trim().toLowerCase();
-    return items.filter((r) => {
-      // wsId 过滤：recording 的 agent_id 找它的 workspace，比对 path 末 8
-      // 字符。陈旧的 recording (agent 已 evicted) 拿不到 workspace，wsId
-      // 模式下直接 hide 它们。
-      if (wsId) {
-        const ws = agentWorkspaceById.get(r.agent_id);
-        if (!ws || ws.slice(-8) !== wsId) return false;
-      }
-      if (activeTag !== "all" && inferRole(r.agent_id) !== activeTag) return false;
+    return scopedToWorkspace.filter((r) => {
+      if (activeTag !== "all" && resolveRole(r.agent_id, roleLookup) !== activeTag)
+        return false;
       if (q && !r.agent_id.toLowerCase().includes(q) && !r.id.toLowerCase().includes(q)) {
         return false;
       }
       return true;
     });
-  }, [items, filter, activeTag, wsId, agentWorkspaceById]);
+  }, [scopedToWorkspace, filter, activeTag, roleLookup]);
 
   return (
     <div className="flex h-full flex-col bg-surface-primary">
@@ -143,7 +154,12 @@ export default function ReplaysIndex() {
             {t("replays.title")}
           </h1>
           <span className="font-caption text-[10px] text-foreground-tertiary">
-            {t("replays.count", { count: items.length })}
+            {wsId
+              ? t("replays.countScoped", {
+                  shown: scopedToWorkspace.length,
+                  total: items.length,
+                })
+              : t("replays.count", { count: items.length })}
           </span>
         </div>
         <span className="flex-1" />
@@ -185,7 +201,10 @@ export default function ReplaysIndex() {
         })}
         <span className="flex-1" />
         <span className="font-caption text-xs text-foreground-tertiary">
-          {t("replays.ratio", { shown: filtered.length, total: items.length })}
+          {t("replays.ratio", {
+            shown: filtered.length,
+            total: scopedToWorkspace.length,
+          })}
         </span>
       </div>
 
@@ -205,26 +224,19 @@ export default function ReplaysIndex() {
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
             {filtered.map((r) => {
               const live = r.finalized_at == null;
-              const role = inferRole(r.agent_id);
               return (
                 <article
                   key={r.id}
                   className="group overflow-hidden rounded-lg border border-border-subtle bg-surface-elevated transition-shadow hover:shadow-lg"
                 >
-                  {/* Card head: role chip + live dot */}
+                  {/* Card head: agent chip + live dot */}
                   <div className="flex items-center gap-2 px-3 py-2">
-                    <span
-                      className={cn(
-                        "flex h-5 items-center rounded-full px-2 font-mono text-[10px] font-medium uppercase text-foreground-on-accent",
-                        roleColor(r.agent_id),
-                      )}
-                    >
-                      {role}
-                    </span>
-                    <span className="truncate font-mono text-[10px] text-foreground-tertiary">
-                      {r.agent_id}
-                    </span>
-                    <span className="flex-1" />
+                    <AgentChip
+                      agentId={r.agent_id}
+                      roleLookup={roleLookup}
+                      size="sm"
+                      className="min-w-0 flex-1"
+                    />
                     <span
                       className={cn(
                         "rounded-full px-2 py-0.5 font-caption text-[10px]",
@@ -240,7 +252,7 @@ export default function ReplaysIndex() {
 
                   {/* Cast thumbnail */}
                   <Link
-                    to={`/replays/${encodeURIComponent(r.id)}`}
+                    to={`/replays/${encodeURIComponent(r.id)}${wsId ? `?ws=${wsId}` : ""}`}
                     className="relative block h-32 overflow-hidden border-y border-[#1F1F1F] bg-term-bg"
                   >
                     <CastThumb recording={r} live={live} t={t} />
@@ -255,12 +267,20 @@ export default function ReplaysIndex() {
 
                   {/* Card foot */}
                   <div className="flex items-center gap-2 px-3 py-2 text-foreground-secondary">
-                    <span className="font-caption text-[11px]">
-                      {formatTime(r.started_at)}
+                    <span
+                      className="font-caption text-[11px]"
+                      title={`${formatTime(r.started_at)} · ${r.id}`}
+                    >
+                      {formatShortTime(r.started_at)}
+                      {r.duration_ms != null && (
+                        <span className="ml-1.5 text-foreground-tertiary">
+                          · {formatDuration(r.duration_ms)}
+                        </span>
+                      )}
                     </span>
                     <span className="flex-1" />
                     <Link
-                      to={`/replays/${encodeURIComponent(r.id)}`}
+                      to={`/replays/${encodeURIComponent(r.id)}${wsId ? `?ws=${wsId}` : ""}`}
                       className="flex h-7 items-center gap-1 rounded-md bg-accent-primary px-2.5 text-xs text-foreground-on-accent hover:bg-accent-primary-deep"
                     >
                       <Play className="size-3" />
@@ -287,12 +307,15 @@ export default function ReplaysIndex() {
 }
 
 /**
- * Renders the dark plate inside each replay card. Tries to fetch the
- * first ~16KB of the .cast file (then aborts), parses asciicast v2
- * frames, strips ANSI, shows the first few visible output lines.
+ * Renders the dark plate inside each replay card. Used to try to decode
+ * the first ~16KB of the .cast and show actual lines — the result was
+ * ANSI-mangled and often unreadable (escapes leaked, whitespace got
+ * eaten by the stripper, lines truncated mid-glyph). Replaced with a
+ * structural badge plate: big play icon + the few stable facts a user
+ * actually scans cards by (geometry / duration / live or ready).
  *
- * If the fetch fails or the cast has no output yet (e.g. brand-new
- * live recording), falls back to the synthetic header plate.
+ * If we ever ship a real first-frame PNG (server-side asciinema render),
+ * swap this body — keep the same call shape.
  */
 function CastThumb({
   recording: r,
@@ -303,55 +326,29 @@ function CastThumb({
   live: boolean;
   t: (k: string, opts?: Record<string, unknown>) => string;
 }) {
-  const [lines, setLines] = useState<string[] | null>(
-    () => getCachedCastPreview(r.id) ?? null,
-  );
-
-  useEffect(() => {
-    if (lines !== null) return;
-    let cancelled = false;
-    loadCastPreview(api.recordingCastUrl(r.id), r.id)
-      .then((preview) => {
-        if (!cancelled) setLines(preview);
-      })
-      .catch(() => {
-        if (!cancelled) setLines([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-    // Only fetch once per id.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [r.id]);
-
-  const hasRealPreview = lines && lines.length > 0;
-
-  if (hasRealPreview) {
-    return (
-      <div className="flex h-full flex-col gap-0 overflow-hidden px-4 py-2 font-mono text-[10px] leading-tight text-term-fg">
-        {lines.map((line, i) => (
-          <div key={i} className="truncate">
-            {line}
-          </div>
-        ))}
-      </div>
-    );
-  }
-
-  // Fallback: synthetic plate (preview pending or unavailable).
   return (
-    <div className="flex h-full flex-col gap-1 px-4 py-3 font-mono text-[10px] leading-snug text-term-fg">
-      <div className="text-term-green">
-        ❯ <span className="text-term-fg">flockmux replay {r.id.slice(0, 8)}</span>
+    <div className="flex h-full flex-col items-center justify-center gap-2 px-4 py-3 text-term-fg">
+      <div
+        className={cn(
+          "flex size-12 items-center justify-center rounded-full",
+          live
+            ? "bg-status-running-soft text-status-running"
+            : "bg-[#1F1F1F] text-term-dim",
+        )}
+      >
+        <Play className="size-6" />
       </div>
-      <div className="text-term-dim"># agent={r.agent_id}</div>
-      <div className="text-term-dim">
-        # geom={r.cols}×{r.rows}
+      <div className="flex items-center gap-2 font-mono text-[10px] text-term-dim">
+        <Monitor className="size-3" />
+        <span>{r.cols}×{r.rows}</span>
         {r.duration_ms != null && (
-          <> · dur={formatDuration(r.duration_ms)}</>
+          <>
+            <Clock className="size-3" />
+            <span>{formatDuration(r.duration_ms)}</span>
+          </>
         )}
       </div>
-      <div className="text-term-blue">
+      <div className="font-caption text-[10px] uppercase tracking-wider text-term-dim">
         {live ? t("replays.recording") : t("replays.ready")}
       </div>
     </div>

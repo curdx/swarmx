@@ -12,14 +12,16 @@
  * library grows we can add a dedicated endpoint to recorder later.
  */
 
-import { useEffect, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useEffect, useMemo, useState } from "react";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { ArrowLeft, Download, FileSearch, Share2, X } from "lucide-react";
 import { api } from "../../api/http";
-import type { RecordingInfo } from "../../api/types";
+import type { AgentInfo, RecordingInfo } from "../../api/types";
 import { AsciicastPlayer } from "../../components/AsciicastPlayer";
+import { AgentChip } from "../../components/agent/AgentChip";
 import { EmptyState } from "../../components/EmptyState";
+import { buildRoleLookup } from "@/lib/agent";
 
 // Tauri 用 titleBarStyle:"Overlay"，OS 在窗口左上角约 (0,0)→(78,28) 画
 // 红黄绿三个原生按钮，浮在 webview 内容之上。任何 fullscreen 路由 (escape
@@ -36,6 +38,25 @@ function formatTime(ms: number): string {
   return new Date(ms).toLocaleString();
 }
 
+/** Short human label: "15:12" today / "5/27 15:12" otherwise. Used in the
+ *  player header title where the OS-locale long form is too noisy. */
+function formatShortTime(ms: number): string {
+  const d = new Date(ms);
+  const now = new Date();
+  const sameDay =
+    d.getFullYear() === now.getFullYear() &&
+    d.getMonth() === now.getMonth() &&
+    d.getDate() === now.getDate();
+  return sameDay
+    ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+    : d.toLocaleString([], {
+        month: "numeric",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+}
+
 function formatDuration(ms: number | null): string {
   if (ms == null) return "—";
   if (ms < 1000) return `${ms}ms`;
@@ -50,8 +71,20 @@ export default function ReplayPlayer() {
   const { t } = useTranslation();
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  // 来自 /chat/<ws> → Replays tab → card 进入时带的 workspace id。
+  // Esc / 返回按钮要带着它跳回，否则用户从 workspace 里点进来、却被
+  // 弹回全局录像库，丢失上下文。
+  const wsId = searchParams.get("ws");
+  const backTo = useMemo(
+    () => (wsId ? `/replays?ws=${wsId}` : "/replays"),
+    [wsId],
+  );
 
   const [recording, setRecording] = useState<RecordingInfo | null>(null);
+  const [roleLookup, setRoleLookup] = useState<Map<string, string>>(
+    () => new Map(),
+  );
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -63,11 +96,15 @@ export default function ReplayPlayer() {
         // No GET /api/recording/:id today; list + find is fine on a
         // single-user box. If the library outgrows that, add a dedicated
         // endpoint to flockmux-recorder.
-        const rows = await api.listRecordings();
+        const [rows, agents] = await Promise.all([
+          api.listRecordings(),
+          api.listAgents().catch(() => [] as AgentInfo[]),
+        ]);
         if (cancelled) return;
         const r = rows.find((x) => x.id === id) ?? null;
         if (!r) setError(t("player.notFoundHint", { id }));
         setRecording(r);
+        setRoleLookup(buildRoleLookup(agents));
       } catch (e) {
         if (!cancelled) setError((e as Error).message);
       } finally {
@@ -82,11 +119,11 @@ export default function ReplayPlayer() {
   // Esc returns to library, matching legacy RecordingsPanel modal UX.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") navigate("/replays");
+      if (e.key === "Escape") navigate(backTo);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [navigate]);
+  }, [navigate, backTo]);
 
   if (loading) {
     return (
@@ -108,7 +145,7 @@ export default function ReplayPlayer() {
               ? t("player.requestFailed", { error })
               : t("player.notFoundHint", { id })
           }
-          primaryAction={{ label: t("player.backToLibrary"), href: "/replays" }}
+          primaryAction={{ label: t("player.backToLibrary"), href: backTo }}
           secondaryAction={{ label: t("player.goDebug"), href: "/debug" }}
         />
       </div>
@@ -125,7 +162,7 @@ export default function ReplayPlayer() {
         style={IS_TAURI ? { paddingLeft: 88 } : undefined}
       >
         <button
-          onClick={() => navigate("/replays")}
+          onClick={() => navigate(backTo)}
           className="flex h-9 items-center gap-1.5 rounded-md bg-[#1F1F1F] px-3 text-xs text-foreground-inverse-secondary hover:bg-[#262626] hover:text-foreground-inverse"
           title={t("player.closeEsc")}
         >
@@ -133,12 +170,25 @@ export default function ReplayPlayer() {
           {t("player.back")}
         </button>
         <div className="flex min-w-0 flex-col">
-          <h1 className="truncate font-mono text-sm text-foreground-inverse">
-            {recording.id}
-          </h1>
-          <span className="truncate font-caption text-[11px] text-foreground-inverse-secondary">
-            {recording.agent_id} · {recording.cols}×{recording.rows} ·{" "}
-            {formatDuration(recording.duration_ms)} · {formatTime(recording.started_at)}
+          <div className="flex items-center gap-2">
+            <AgentChip
+              agentId={recording.agent_id}
+              roleLookup={roleLookup}
+              size="sm"
+              tone="inverse"
+            />
+            <span className="truncate font-caption text-xs text-foreground-inverse">
+              {formatShortTime(recording.started_at)}
+              {recording.duration_ms != null && (
+                <> · {formatDuration(recording.duration_ms)}</>
+              )}
+            </span>
+          </div>
+          <span
+            className="truncate font-mono text-[10px] text-foreground-inverse-secondary"
+            title={`${recording.id} · ${formatTime(recording.started_at)}`}
+          >
+            {recording.cols}×{recording.rows} · {recording.id}
           </span>
         </div>
         <span className="flex-1" />
@@ -165,7 +215,7 @@ export default function ReplayPlayer() {
           <Share2 className="size-4" />
         </a>
         <button
-          onClick={() => navigate("/replays")}
+          onClick={() => navigate(backTo)}
           className="flex size-9 items-center justify-center rounded-md bg-[#1F1F1F] text-foreground-inverse-secondary hover:bg-[#262626] hover:text-foreground-inverse"
           title={t("player.closeEsc")}
         >

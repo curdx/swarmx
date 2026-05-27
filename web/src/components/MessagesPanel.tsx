@@ -50,7 +50,14 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { cn } from "@/lib/cn";
+import { AgentChip } from "@/components/agent/AgentChip";
+import { roleColorClass as roleColor } from "@/lib/agent";
 
 interface Props {
   /** Latest swarm `message` event observed by the parent (or null). */
@@ -83,6 +90,10 @@ interface Props {
   composerOverride?: (body: string) => Promise<void>;
   /** Click-handler when the user taps an avatar — typically opens AgentDrawer. */
   onOpenAgent?: (agentId: string) => void;
+  /** Parent bumps this counter when the user clicks the "N 未读" badge in
+   *  the chat header; we react by scrolling the first unread bubble into
+   *  view and flashing it. Initial 0 is the no-op state. */
+  jumpUnreadTick?: number;
 }
 
 const KIND_DEFAULT = "note";
@@ -93,19 +104,6 @@ const GROUP_GAP_MS = 5 * 60_000; // 5 minutes — same heuristic as Telegram
  *  placeholder alive. Beyond this, the agent is probably stuck/done and
  *  the indicator is more misleading than helpful. */
 const PENDING_TIMEOUT_MS = 60_000;
-
-const ROLE_COLOR: Record<string, string> = {
-  planner: "bg-agent-planner",
-  backend: "bg-agent-backend",
-  frontend: "bg-agent-frontend",
-  architect: "bg-agent-architect",
-  critic: "bg-agent-critic",
-  test: "bg-agent-test",
-};
-
-function roleColor(role: string) {
-  return ROLE_COLOR[role.toLowerCase()] ?? "bg-state-idle";
-}
 
 /** Resolve a role label for a from_agent id.
  *
@@ -183,6 +181,7 @@ export function MessagesPanel({
   workspaceLabel,
   composerOverride,
   onOpenAgent,
+  jumpUnreadTick = 0,
 }: Props) {
   const aliveForInference = allAliveAgents ?? activeMembers;
   const { t } = useTranslation();
@@ -463,6 +462,25 @@ export function MessagesPanel({
     );
   };
 
+  // 用户点顶栏 "N 未读" badge → bump jumpUnreadTick → 滚到第一条未读
+  // 并闪一下高亮。初始 0 不触发 (依赖数组改变才进 effect)。
+  useEffect(() => {
+    if (!jumpUnreadTick) return;
+    const firstUnread = items.find(
+      (m) => m.read_at === null && m.to_agent === USER_SENDER,
+    );
+    if (!firstUnread) return;
+    const el = rowRefs.current.get(firstUnread.id);
+    if (!el) return;
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    setHighlightId(firstUnread.id);
+    window.setTimeout(
+      () => setHighlightId((cur) => (cur === firstUnread.id ? null : cur)),
+      1200,
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jumpUnreadTick]);
+
   // Auto-grow composer (max ~5 lines).
   const autoGrow = (el: HTMLTextAreaElement | null) => {
     if (!el) return;
@@ -531,51 +549,57 @@ export function MessagesPanel({
             </Button>
           </>
         )}
-        <div className="relative">
-          <button
-            onClick={() => setBySenderOpen((v) => !v)}
-            className={cn(
-              "flex size-7 items-center justify-center rounded-md hover:bg-surface-tertiary",
-              senders.length > 0
-                ? "text-state-danger"
-                : "text-foreground-tertiary",
-            )}
-            title={t("messages.bySender", { count: senders.length })}
-          >
-            <Filter className="size-3.5" />
-            {senders.length > 0 && (
-              <span className="absolute right-1 top-1 size-1.5 rounded-full bg-state-danger" />
-            )}
-          </button>
-          {bySenderOpen && (
-            <div className="absolute right-0 top-9 z-10 w-56 rounded-md border border-border-subtle bg-surface-elevated p-2 shadow-lg">
-              <p className="mb-1.5 font-caption text-[10px] uppercase tracking-wider text-foreground-tertiary">
-                {t("messages.bySender", { count: senders.length })}
-              </p>
-              {senders.length === 0 ? (
-                <p className="font-caption text-[11px] text-foreground-tertiary">
-                  {t("messages.bySenderNone")}
-                </p>
-              ) : (
-                <ul className="flex flex-col gap-1">
-                  {senders.map(([who, n]) => (
-                    <li
-                      key={who}
-                      className="flex items-center gap-2 rounded px-1.5 py-1 text-[11px] hover:bg-surface-tertiary"
-                    >
-                      <span className="min-w-0 flex-1 truncate font-mono text-foreground-secondary">
-                        {who}
-                      </span>
-                      <span className="rounded-full bg-state-danger px-1.5 py-0.5 text-[10px] font-semibold text-foreground-on-accent">
-                        {n}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
+        <Popover open={bySenderOpen} onOpenChange={setBySenderOpen}>
+          <PopoverTrigger asChild>
+            <button
+              className={cn(
+                "relative flex size-7 items-center justify-center rounded-md hover:bg-surface-tertiary",
+                senders.length > 0
+                  ? "text-state-danger"
+                  : "text-foreground-tertiary",
               )}
-            </div>
-          )}
-        </div>
+              title={t("messages.bySender", { count: senders.length })}
+            >
+              <Filter className="size-3.5" />
+              {senders.length > 0 && (
+                <span className="absolute right-1 top-1 size-1.5 rounded-full bg-state-danger" />
+              )}
+            </button>
+          </PopoverTrigger>
+          <PopoverContent
+            align="end"
+            sideOffset={6}
+            className="w-60 p-2"
+          >
+            <p className="mb-1.5 font-caption text-[10px] uppercase tracking-wider text-foreground-tertiary">
+              {t("messages.bySender", { count: senders.length })}
+            </p>
+            {senders.length === 0 ? (
+              <p className="font-caption text-[11px] text-foreground-tertiary">
+                {t("messages.bySenderNone")}
+              </p>
+            ) : (
+              <ul className="flex flex-col gap-1">
+                {senders.map(([who, n]) => (
+                  <li
+                    key={who}
+                    className="flex items-center gap-2 rounded px-1.5 py-1 text-[11px] hover:bg-surface-tertiary"
+                  >
+                    <AgentChip
+                      agentId={who}
+                      roleLookup={roleLookup}
+                      size="xs"
+                      className="min-w-0 flex-1"
+                    />
+                    <span className="rounded-full bg-state-danger px-1.5 py-0.5 text-[10px] font-semibold text-foreground-on-accent">
+                      {n}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </PopoverContent>
+        </Popover>
         <Button
           variant="ghost"
           size="icon"
@@ -625,7 +649,7 @@ export function MessagesPanel({
                   )}
                   <span
                     className={cn(
-                      "rounded-full bg-surface-tertiary px-3 py-0.5 font-caption text-[10px] text-foreground-tertiary",
+                      "selectable rounded-full bg-surface-tertiary px-3 py-0.5 font-caption text-[10px] text-foreground-tertiary",
                       highlighted && "ring-1 ring-accent-primary",
                     )}
                     title={`#${m.id} · ${m.kind} · ${formatFullStamp(m.sent_at)}`}
@@ -721,7 +745,7 @@ export function MessagesPanel({
                         </button>
                       )}
 
-                      <p className="whitespace-pre-wrap break-words font-body text-[13px] leading-snug">
+                      <p className="selectable whitespace-pre-wrap break-words font-body text-[13px] leading-snug">
                         {m.body}
                       </p>
 
@@ -807,15 +831,15 @@ export function MessagesPanel({
               <DropdownMenuTrigger asChild>
                 <button
                   type="button"
-                  className="inline-flex items-center gap-1 self-start rounded-full bg-surface-tertiary px-2 py-1 font-caption text-[10px] text-foreground-secondary outline-none hover:bg-surface-secondary focus-visible:ring-2 focus-visible:ring-accent-primary"
+                  className="inline-flex items-center gap-1.5 self-start rounded-full bg-surface-tertiary py-1 pl-1 pr-2 font-caption text-[10px] text-foreground-secondary outline-none hover:bg-surface-secondary focus-visible:ring-2 focus-visible:ring-accent-primary"
                   title={defaultRecipient.agent_id}
                   aria-label={t("messages.changeRecipient")}
                 >
-                  <span
-                    className={cn(
-                      "size-3 shrink-0 rounded-full",
-                      roleColor(defaultRecipient.role),
-                    )}
+                  <AgentChip
+                    agentId={defaultRecipient.agent_id}
+                    role={defaultRecipient.role}
+                    variant="avatar-only"
+                    size="xs"
                   />
                   <span>
                     {t("messages.to")} {defaultRecipient.role}
@@ -836,18 +860,12 @@ export function MessagesPanel({
                       onSelect={() => setSelectedRecipientId(m.agent_id)}
                       className="flex items-center gap-2"
                     >
-                      <span
-                        className={cn(
-                          "size-3 shrink-0 rounded-full",
-                          roleColor(m.role),
-                        )}
+                      <AgentChip
+                        agentId={m.agent_id}
+                        role={m.role}
+                        size="xs"
+                        className="flex-1"
                       />
-                      <span className="flex-1 truncate">
-                        <span className="font-medium">{m.role}</span>
-                        <span className="ml-1.5 font-mono text-[10px] text-foreground-tertiary">
-                          {m.agent_id.slice(-8)}
-                        </span>
-                      </span>
                       {isActive && (
                         <span className="text-[10px] text-accent-primary">✓</span>
                       )}
@@ -875,7 +893,15 @@ export function MessagesPanel({
             onClick={send}
             disabled={sendDisabled}
             title={sending ? t("messages.sending") : t("messages.send")}
-            className="size-9 shrink-0 rounded-full"
+            // 默认 Button disabled 只是 opacity:0.5，accent 色 + 50% 看起来
+            // 跟 enabled 几乎一样 — 用户分不清是否能按。这里 disabled 切
+            // 到灰底+灰图标，enabled 时强制 accent + 阴影，对比一目了然。
+            className={cn(
+              "size-9 shrink-0 rounded-full transition-colors",
+              sendDisabled
+                ? "!bg-surface-tertiary !text-foreground-tertiary !opacity-100 shadow-none"
+                : "shadow-sm hover:shadow-md",
+            )}
           >
             <Send className="size-4" />
           </Button>

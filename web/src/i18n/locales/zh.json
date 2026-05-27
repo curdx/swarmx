@@ -146,6 +146,7 @@
     "copyPath": "复制路径",
     "pathCopied": "已复制",
     "unread": "{{count}} 未读",
+    "jumpUnread": "跳转到第一条未读",
     "members": "成员",
     "selectWorkspace": "选中一个工作空间查看成员",
     "wake": "手动唤醒",
@@ -174,8 +175,9 @@
     "startingShort": "启动中"
   },
   "replays": {
-    "title": "录像库",
+    "title": "录像",
     "count": "{{count}} 个录像",
+    "countScoped": "当前工作空间 {{shown}} 个 · 全部 {{total}}",
     "search": "按 agent / id 搜索",
     "tagAll": "全部",
     "ratio": "{{shown}} / {{total}} 条",
@@ -207,7 +209,7 @@
     }
   },
   "context": {
-    "title": "上下文看板",
+    "title": "上下文",
     "subtitle": "{{count}} 个 key · 浏览 + 历史（编辑去 /debug）",
     "search": "按 key 搜索",
     "empty": "暂无 blackboard 内容",

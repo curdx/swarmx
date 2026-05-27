@@ -45,31 +45,10 @@ import type { AgentInfo, BlackboardEntry, SwarmEvent } from "../api/types";
 import { useSwarmFeed } from "../hooks/useSwarmFeed";
 import { WorkspaceScopeBar } from "../components/workspace/WorkspaceScopeBar";
 import { cn } from "@/lib/cn";
-
-const ROLE_BG: Record<string, string> = {
-  planner: "bg-agent-planner",
-  backend: "bg-agent-backend",
-  frontend: "bg-agent-frontend",
-  architect: "bg-agent-architect",
-  critic: "bg-agent-critic",
-  test: "bg-agent-test",
-};
-
-const ROLE_HEX: Record<string, string> = {
-  planner: "#D97757",
-  backend: "#7B5BB8",
-  frontend: "#3B6FB8",
-  architect: "#C73E3E",
-  critic: "#C77A1F",
-  test: "#2E8B57",
-};
-
-function roleColor(role: string) {
-  return ROLE_BG[role.toLowerCase()] ?? "bg-state-idle";
-}
-function roleHex(role: string) {
-  return ROLE_HEX[role.toLowerCase()] ?? "#8E8B85";
-}
+import {
+  roleColorClass as roleColor,
+  roleColorHex as roleHex,
+} from "@/lib/agent";
 
 // ── Edge derivation ─────────────────────────────────────────────────────
 
@@ -198,9 +177,12 @@ interface CanvasProps {
   bbAt: Map<string, number>;
   selectedId: string | null;
   onSelect: (id: string | null) => void;
+  /** Hide the MiniMap when the graph is tiny — wastes screen real estate
+   *  and confuses users (looks like a stray block in the corner). */
+  showMinimap: boolean;
 }
 
-function Canvas({ agents, bbAt, selectedId, onSelect }: CanvasProps) {
+function Canvas({ agents, bbAt, selectedId, onSelect, showMinimap }: CanvasProps) {
   const live = useMemo(
     () => agents.filter((a) => a.killed_at == null && a.shim_exit == null),
     [agents],
@@ -259,19 +241,41 @@ function Canvas({ agents, bbAt, selectedId, onSelect }: CanvasProps) {
       onNodeClick={(_, n) => onSelect(n.id)}
       onPaneClick={() => onSelect(null)}
       fitView
+      // 2-agent 图 default fit 会把 zoom 顶到 maxZoom=2，结果 Zoom-In
+      // 按钮一上来就 disabled，看起来像坏。放宽上限到 4 让按钮可用。
+      maxZoom={4}
       proOptions={{ hideAttribution: true }}
+      nodesDraggable
+      nodesConnectable={false}
+      ariaLabelConfig={{
+        "node.a11yDescription.default":
+          "按 Enter 或空格选中节点，方向键移动，Esc 取消。",
+        "node.a11yDescription.keyboardDisabled": "节点不可移动。",
+        "node.a11yDescription.ariaLiveMessage": ({ direction, x, y }) =>
+          `节点已${direction === "up" ? "上移" : direction === "down" ? "下移" : direction === "left" ? "左移" : "右移"}至 ${Math.round(x)}, ${Math.round(y)}`,
+        "edge.a11yDescription.default": "agent 间的 handoff 依赖连线。",
+        "controls.ariaLabel": "画布缩放控制",
+        "controls.zoomIn.ariaLabel": "放大",
+        "controls.zoomOut.ariaLabel": "缩小",
+        "controls.fitView.ariaLabel": "适应画面",
+        "controls.interactive.ariaLabel": "切换交互模式",
+        "minimap.ariaLabel": "缩略图",
+        "handle.ariaLabel": "连接点",
+      }}
     >
       <Background gap={24} size={1.25} />
-      <MiniMap
-        pannable
-        zoomable
-        nodeColor={(n) => roleHex((n.data as AgentNodeData).info.role)}
-        nodeStrokeColor={(n) => roleHex((n.data as AgentNodeData).info.role)}
-        nodeStrokeWidth={2}
-        nodeBorderRadius={4}
-        maskStrokeColor="var(--color-border-strong)"
-        maskStrokeWidth={1}
-      />
+      {showMinimap && (
+        <MiniMap
+          pannable
+          zoomable
+          nodeColor={(n) => roleHex((n.data as AgentNodeData).info.role)}
+          nodeStrokeColor={(n) => roleHex((n.data as AgentNodeData).info.role)}
+          nodeStrokeWidth={2}
+          nodeBorderRadius={4}
+          maskStrokeColor="var(--color-border-strong)"
+          maskStrokeWidth={1}
+        />
+      )}
       <Controls showInteractive={false} />
     </ReactFlow>
   );
@@ -411,35 +415,35 @@ export default function DagRoute() {
           </section>
           <section>
             <h3 className="mb-2 font-heading text-[11px] font-semibold uppercase tracking-wider text-foreground-tertiary">
-              {t("dag.filter")}
-            </h3>
-            <div className="flex flex-col gap-1">
-              {roles.map((r) => (
-                <button
-                  key={r}
-                  onClick={() => setRoleFilter(r)}
-                  className={cn(
-                    "flex items-center gap-2 rounded px-2 py-1 text-left text-xs",
-                    roleFilter === r
-                      ? "bg-accent-primary-soft text-foreground-primary"
-                      : "text-foreground-secondary hover:bg-surface-tertiary",
-                  )}
-                >
-                  {r !== "all" && (
-                    <span
-                      className="size-2.5 rounded-full"
-                      style={{ background: roleHex(r) }}
-                    />
-                  )}
-                  <span>{r === "all" ? t("common.all") : r}</span>
-                </button>
-              ))}
-            </div>
-          </section>
-          <section>
-            <h3 className="mb-2 font-heading text-[11px] font-semibold uppercase tracking-wider text-foreground-tertiary">
               {t("dag.members")}
             </h3>
+            {/* role filter chips (含 "all") + 成员行合并为一栏。先是 role
+             *  filter，再是过滤后的成员；之前拆两个 section 列同一批数据，
+             *  顺序还互相不同，看着很冗余。*/}
+            {roles.length > 2 && (
+              <div className="mb-2 flex flex-wrap gap-1">
+                {roles.map((r) => (
+                  <button
+                    key={r}
+                    onClick={() => setRoleFilter(r)}
+                    className={cn(
+                      "flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px]",
+                      roleFilter === r
+                        ? "bg-accent-primary text-foreground-on-accent"
+                        : "bg-surface-tertiary text-foreground-secondary hover:bg-surface-primary",
+                    )}
+                  >
+                    {r !== "all" && (
+                      <span
+                        className="size-1.5 rounded-full"
+                        style={{ background: roleHex(r) }}
+                      />
+                    )}
+                    <span>{r === "all" ? t("common.all") : r}</span>
+                  </button>
+                ))}
+              </div>
+            )}
             <ul className="flex flex-col gap-1">
               {filteredAgents.map((a) => (
                 <li key={a.agent_id}>
@@ -456,12 +460,20 @@ export default function DagRoute() {
                       className="size-2 rounded-full"
                       style={{ background: roleHex(a.role) }}
                     />
-                    <span className="truncate font-mono text-[11px] text-foreground-primary">
+                    <span className="truncate font-heading text-xs text-foreground-primary">
                       {a.role}
+                    </span>
+                    <span className="ml-auto truncate font-mono text-[10px] text-foreground-tertiary">
+                      {a.agent_id.slice(-6)}
                     </span>
                   </button>
                 </li>
               ))}
+              {filteredAgents.length === 0 && (
+                <li className="px-2 py-1 font-caption text-[11px] text-foreground-tertiary">
+                  {t("dag.empty")}
+                </li>
+              )}
             </ul>
           </section>
         </aside>
@@ -485,6 +497,7 @@ export default function DagRoute() {
                 bbAt={bbAt}
                 selectedId={selectedId}
                 onSelect={setSelectedId}
+                showMinimap={liveAgents.length > 4}
               />
             </ReactFlowProvider>
           )}

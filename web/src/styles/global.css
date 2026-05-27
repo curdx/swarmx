@@ -101,6 +101,8 @@
   --color-agent-architect: #DC2626;   /* red-600 */
   --color-agent-critic: #EA580C;      /* orange-600 */
   --color-agent-test: #16A34A;        /* green-600 */
+  --color-agent-scout: #0D9488;       /* teal-600  — recon, exploratory */
+  --color-agent-fixer: #CA8A04;       /* yellow-600 — patch / repair */
 
   --color-term-bg: #0A0A0A;
   --color-term-fg: #E5E5E5;
@@ -195,6 +197,8 @@
   --color-agent-architect: #F87171;
   --color-agent-critic: #FB923C;
   --color-agent-test: #4ADE80;
+  --color-agent-scout: #2DD4BF;
+  --color-agent-fixer: #FACC15;
 }
 
 html, body, #root {
@@ -204,6 +208,63 @@ html, body, #root {
   background: var(--color-surface-primary);
   color: var(--color-foreground-primary);
   font-family: var(--font-body);
+}
+
+/* ── Native-app feel: 默认可选 + chrome 标记不可选 ──────────────────────
+ * 之前用 `body { user-select: none }` 一刀切，副作用：workspace 路径 /
+ * agent ID / 时间戳这种用户高频想复制的纯文本全选不到，且鼠标光标永远
+ * 是 default 没 I-beam 反馈，"哪儿能选" 完全不可猜。
+ *
+ * 改成 Linear / Slack / Cursor 真实做法：默认浏览器行为（哪儿都能选 /
+ * I-beam 反馈），只对真正的 chrome 元素（按钮、tab、菜单项）加
+ * `user-select: none`。任何普通文字 (路径 / ID / 名称 / 时间戳) 自然可
+ * 选可复制，不需要逐处加 `.selectable` opt-in。
+ *
+ * `.no-select` 类是逃生口：少数 chrome 容器不适合自动命中的，手动加。
+ * `.selectable` 类保留向后兼容（即便 body 已是 text，组件已有的标记不
+ * 会出错，是 no-op）。*/
+button,
+[role="button"],
+[role="tab"],
+[role="menuitem"],
+[role="menubar"],
+[role="option"],
+.no-select,
+.no-select * {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* 表单元素显式标 text — 浏览器默认是 auto，但 main.tsx 的 contextmenu
+ * handler 只放行 'text'，否则用户在输入框里右键无 Paste/Cut 体验稀烂。 */
+input,
+textarea,
+select,
+[contenteditable="true"],
+[contenteditable=""] {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+/* Link 仍走 pointer 手势 + 不可选 (跟原生 app 一致；外链文字想复制可用
+ * 右键 "复制链接")。 */
+a {
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* `.selectable` 是 escape hatch — 用在 button / a / nav 等 chrome 容器内
+ * 部时强制恢复 user-select: text。典型场景：
+ *   - sidebar workspace 卡片 (button) 里展示 /Users/.../path
+ *   - chat header (button-link) 里展示 workspace 名 / path
+ *   - agent drawer 里的 ID / hash
+ * 在 chrome 容器外用 `.selectable` 是 no-op (默认就能选)。 */
+.selectable,
+.selectable * {
+  user-select: text !important;
+  -webkit-user-select: text !important;
+  cursor: text;
 }
 
 /* Legacy M2 dashboard (now /debug) was authored against this dark scheme.
@@ -537,4 +598,14 @@ html, body, #root {
   html {
     @apply font-sans;
   }
+}
+
+/* asciinema-player 默认把 control bar (含 progress / timer / play 按钮)
+ * 设成 opacity:0，只在 :hover 或 .ap-hud class 上时显示。在我们的全屏
+ * 回放页面里这等于「没有进度条」—— 用户没线索能拖到任何位置，只能
+ * 用 ←/→ 5s 步进。这里强制 control bar 始终可见。
+ * 选择器写得跟 player 自带 specificity 一致 (`div.ap-player div.ap-control-bar`)
+ * 才能 win — 否则得 !important，更脏。 */
+div.ap-player div.ap-control-bar {
+  opacity: 1;
 }
