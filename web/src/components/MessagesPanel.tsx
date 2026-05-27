@@ -263,7 +263,14 @@ export function MessagesPanel({
   const visible = useMemo(() => {
     const f = filter.toLowerCase();
     return items.filter((m) => {
-      if (wsSet && !(wsSet.has(m.from_agent) || wsSet.has(m.to_agent))) {
+      // 负数 id = 本地 echo 的临时消息（见 send() 里 composerOverride
+      // 路径的注释），不能因为 to/from 不在 wsSet 就被过滤掉。
+      const isLocalEcho = m.id < 0;
+      if (
+        !isLocalEcho &&
+        wsSet &&
+        !(wsSet.has(m.from_agent) || wsSet.has(m.to_agent))
+      ) {
         return false;
       }
       if (!f) return true;
@@ -343,18 +350,28 @@ export function MessagesPanel({
     try {
       if (composerOverride) {
         // init-only workspace 路径：override 通常会启动 auto-dispatch spell。
-        // 先 sendMessage(to="system") 把 user 消息落库，本地立即 echo 出来，
-        // 让用户看到自己发出去了；然后 await override 启动 planner。
-        const rec = await api.sendMessage({
-          from: USER_SENDER,
-          to: SYSTEM_SENDER,
+        //
+        // 关键设计选择 — 不调 api.sendMessage 持久化这条 user 消息：
+        // - sendMessage(to=scout) → 会 wake scout 一次浪费 token，且要靠
+        //   md prompt 教 scout 二次 wake 时 STOP；prompt 约束不可靠。
+        // - sendMessage(to=system) → 消息无法关联到当前 ws，
+        //   MessagesPanel 的 workspace 过滤会把它隐藏；user 发完连自己刚
+        //   说的话都看不到。
+        // 折中：构造 negative-id 的临时本地消息塞 items，filter 端 id<0
+        // 总是保留。代价是切走再回来这条消息丢失，但 auto-dispatch 已经
+        // 启动业务 agent 进群干活，user 看 planner / FE / BE 的输出就够了。
+        const localMsg: MessageRecord = {
+          id: -Date.now(),
+          from_agent: USER_SENDER,
+          to_agent: SYSTEM_SENDER,
           kind: KIND_DEFAULT,
           body: trimmed,
-          in_reply_to: inReplyTo ?? undefined,
-        });
-        setItems((prev) =>
-          prev.some((m) => m.id === rec.id) ? prev : [...prev, rec],
-        );
+          sent_at: Date.now(),
+          delivered_at: null,
+          read_at: null,
+          in_reply_to: inReplyTo ?? null,
+        };
+        setItems((prev) => [...prev, localMsg]);
         await composerOverride(trimmed);
       } else {
         const rec = await api.sendMessage({
