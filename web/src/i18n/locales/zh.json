@@ -15,6 +15,27 @@
     "appMenu": "应用菜单",
     "about": "关于"
   },
+  "welcome": {
+    "title": "让 Claude / Codex 在你的项目里组队",
+    "subtitle": "把你已经登录的 AI CLI 拉成一支团队 — 你下需求，它们自己分工、互相协作、把活干完。",
+    "primary": "新建工作空间",
+    "secondary": "看看文档了解原理",
+    "highlight": {
+      "chat": {
+        "title": "群聊式协作",
+        "body": "每个 agent 一个房间成员，互相 @ 互相提问"
+      },
+      "spell": {
+        "title": "配方编排",
+        "body": "用一个 spell 文件描述「谁干啥、谁等谁」"
+      },
+      "auto": {
+        "title": "自然语言派活",
+        "body": "把任务用人话讲清楚，自动挑配方启动"
+      }
+    },
+    "sidebarEmpty": "还没有工作空间"
+  },
   "common": {
     "save": "保存",
     "cancel": "取消",
@@ -119,6 +140,8 @@
       "version": "版本 v{{v}}",
       "repo": "仓库",
       "repoUrl": "github.com/curdx/flockmux-core",
+      "endpointTitle": "后端地址",
+      "endpointHint": "本地 flockmux-server 监听的回环端口（loopback only）",
       "cratesTitle": "Rust crates",
       "cratesHint": "9 个 crate 组成后端，src-tauri 是壳",
       "depsTitle": "前端依赖",

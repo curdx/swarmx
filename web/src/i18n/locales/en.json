@@ -15,6 +15,27 @@
     "appMenu": "App menu",
     "about": "About"
   },
+  "welcome": {
+    "title": "Get Claude / Codex working as a team on your project",
+    "subtitle": "Wire up the AI CLIs you already use into one crew — tell them what you want, they split the work, talk to each other, and ship it.",
+    "primary": "Create workspace",
+    "secondary": "Read the docs",
+    "highlight": {
+      "chat": {
+        "title": "Group chat",
+        "body": "Every agent is a member, mention and reply like Slack"
+      },
+      "spell": {
+        "title": "Spell choreography",
+        "body": "One file describes who runs what and waits on whom"
+      },
+      "auto": {
+        "title": "Auto dispatch",
+        "body": "Describe the task in plain English, the planner picks a spell"
+      }
+    },
+    "sidebarEmpty": "No workspaces yet"
+  },
   "common": {
     "save": "Save",
     "cancel": "Cancel",
@@ -119,6 +140,8 @@
       "version": "Version v{{v}}",
       "repo": "Repository",
       "repoUrl": "github.com/curdx/flockmux-core",
+      "endpointTitle": "Backend endpoint",
+      "endpointHint": "Loopback port flockmux-server listens on (localhost only)",
       "cratesTitle": "Rust crates",
       "cratesHint": "9 crates make up the backend; src-tauri is the desktop shell",
       "depsTitle": "Frontend dependencies",

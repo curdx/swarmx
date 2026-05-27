@@ -25,7 +25,6 @@ import {
   type ReactNode,
 } from "react";
 import {
-  Link,
   NavLink,
   Outlet,
   useLocation,
@@ -50,6 +49,7 @@ import { api } from "../../api/http";
 import type { AgentInfo, MessageRecord, SwarmEvent } from "../../api/types";
 import { AgentDrawer } from "../../components/agent/AgentDrawer";
 import { CreateWizard } from "../../components/workspace/CreateWizard";
+import { Welcome } from "../../components/Welcome";
 import { useSwarmFeed } from "../../hooks/useSwarmFeed";
 import {
   accentToCssVar,
@@ -168,21 +168,12 @@ export function WorkspaceList({
       </div>
       <nav className="flex flex-col gap-0.5 overflow-y-auto">
         {workspaces.length === 0 && (
-          <button
-            type="button"
-            onClick={onOpenWizard}
-            className="mx-2 mt-2 flex flex-col items-center gap-2 rounded-lg border border-dashed border-border-strong px-3 py-6 text-center transition-colors hover:border-accent-primary hover:bg-accent-primary-soft"
-          >
-            <span className="flex size-9 items-center justify-center rounded-full bg-accent-primary-soft text-accent-primary-deep">
-              <Sparkles className="size-4" />
-            </span>
-            <span className="font-heading text-[13px] font-semibold text-foreground-primary">
-              {t("chat.emptyStateTitle")}
-            </span>
-            <span className="font-caption text-[10px] leading-relaxed text-foreground-tertiary">
-              {t("chat.emptyStateHint")}
-            </span>
-          </button>
+          // sidebar empty 只放一行安静提示，避免跟中间 Welcome 屏的大
+          // CTA 撞车。"+ 工作空间" 入口仍在 sidebar 顶部 (heading 旁的
+          // 小 + 按钮)，足够新建，不需要再画一个虚线大卡片。
+          <p className="mx-3 mt-2 font-caption text-[11px] leading-relaxed text-foreground-tertiary">
+            {t("welcome.sidebarEmpty")}
+          </p>
         )}
         {workspaces.map((ws) => {
           const active = ws.id === activeId;
@@ -221,12 +212,16 @@ export function WorkspaceList({
           );
         })}
       </nav>
-      <div className="mt-auto px-2 pt-3">
-        <Button onClick={onOpenWizard} className="w-full">
-          <Sparkles className="size-4" />
-          {t("chat.runSpell")}
-        </Button>
-      </div>
+      {/* "运行配方" 在空状态下 hide — 没工作空间运行什么配方？建完第
+       *  一个 ws 才出现底部 CTA。 */}
+      {workspaces.length > 0 && (
+        <div className="mt-auto px-2 pt-3">
+          <Button onClick={onOpenWizard} className="w-full">
+            <Sparkles className="size-4" />
+            {t("chat.runSpell")}
+          </Button>
+        </div>
+      )}
     </aside>
   );
 }
@@ -757,26 +752,19 @@ export default function WorkspaceShell() {
             activeId={wsId ?? null}
             onOpenWizard={() => setWizardOpen(true)}
           />
-          <section className="flex min-w-0 flex-1 flex-col items-center justify-center gap-3 bg-surface-primary text-foreground-tertiary">
-            <FolderOpen className="size-10 opacity-40" />
-            <p className="font-caption text-sm">
-              {workspaces.length === 0
-                ? t("chat.emptyStateHint")
-                : t("chat.selectWorkspace")}
-            </p>
-            {workspaces.length === 0 && (
-              <Link
-                to="#"
-                onClick={(e) => {
-                  e.preventDefault();
-                  setWizardOpen(true);
-                }}
-                className="rounded-md bg-accent-primary px-3 py-1.5 text-xs text-foreground-on-accent hover:bg-accent-primary-deep"
-              >
-                {t("chat.emptyStateTitle")}
-              </Link>
-            )}
-          </section>
+          {workspaces.length === 0 ? (
+            // 完全空：展示 Welcome 屏，跟 /chat 主入口体验一致。
+            <Welcome onCreateWorkspace={() => setWizardOpen(true)} />
+          ) : (
+            // 有别的 ws 但 URL 指的这个不存在 — 给个安静提示就行，重定向
+            // 已经在 useEffect 里发车。
+            <section className="flex min-w-0 flex-1 flex-col items-center justify-center gap-3 bg-surface-primary text-foreground-tertiary">
+              <FolderOpen className="size-10 opacity-40" />
+              <p className="font-caption text-sm">
+                {t("chat.selectWorkspace")}
+              </p>
+            </section>
+          )}
           <CreateWizard
             open={wizardOpen}
             onClose={() => setWizardOpen(false)}

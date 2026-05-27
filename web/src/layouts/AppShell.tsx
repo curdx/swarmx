@@ -137,10 +137,6 @@ export function AppShell() {
             </TooltipTrigger>
             <TooltipContent side="bottom">{t("nav.settings")}</TooltipContent>
           </Tooltip>
-
-          <span className="font-caption text-xs text-foreground-tertiary">
-            127.0.0.1:7777
-          </span>
         </header>
         <main className="min-h-0 flex-1 overflow-hidden">
           <Outlet />

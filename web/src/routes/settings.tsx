@@ -622,6 +622,12 @@ function AboutPanel() {
         </div>
       </section>
 
+      <Field label={t("settings.about.endpointTitle")} hint={t("settings.about.endpointHint")}>
+        <code className="inline-block rounded border border-border-subtle bg-surface-tertiary px-2 py-1 font-mono text-xs text-foreground-primary">
+          127.0.0.1:7777
+        </code>
+      </Field>
+
       <Field label={t("settings.about.cratesTitle")} hint={t("settings.about.cratesHint")}>
         <ul className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
           {CRATES.map((c) => (

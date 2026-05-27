@@ -9,9 +9,7 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
-import { useTranslation } from "react-i18next";
-import { FolderOpen, Sparkles } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import { api } from "../../api/http";
 import type { AgentInfo, SwarmEvent } from "../../api/types";
 import { useSwarmFeed } from "../../hooks/useSwarmFeed";
@@ -21,6 +19,7 @@ import {
   workspaceSlug,
 } from "../../lib/workspace";
 import { CreateWizard } from "../../components/workspace/CreateWizard";
+import { Welcome } from "../../components/Welcome";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { WorkspaceList, type WorkspaceSummary } from "../workspace/Shell";
 
@@ -35,7 +34,6 @@ function splitWorkspacePath(path: string): { name: string; parent: string } {
 }
 
 export default function ChatHome() {
-  const { t } = useTranslation();
   const navigate = useNavigate();
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [workspaceNames, setWorkspaceNames] = useState<Record<string, string>>({});
@@ -161,27 +159,11 @@ export default function ChatHome() {
           activeId={null}
           onOpenWizard={() => setWizardOpen(true)}
         />
-        <section className="flex min-w-0 flex-1 flex-col items-center justify-center gap-3 bg-surface-primary text-foreground-tertiary">
-          <FolderOpen className="size-12 opacity-30" />
-          <p className="font-caption text-sm">
-            {workspaces.length === 0
-              ? t("chat.emptyStateHint")
-              : t("chat.selectWorkspace")}
-          </p>
-          {workspaces.length === 0 && (
-            <Link
-              to="#"
-              onClick={(e) => {
-                e.preventDefault();
-                setWizardOpen(true);
-              }}
-              className="flex items-center gap-1.5 rounded-md bg-accent-primary px-3 py-1.5 text-xs text-foreground-on-accent hover:bg-accent-primary-deep"
-            >
-              <Sparkles className="size-3.5" />
-              {t("chat.emptyStateTitle")}
-            </Link>
-          )}
-        </section>
+        {/* 主战场就一个 — Welcome 屏。删了之前左 sidebar 大卡片 + 中
+         *  间又一个 "新建工作空间" 按钮的双 CTA，sidebar 那边 empty 现
+         *  在只画一行小提示 (WorkspaceList 内部已经做了)，主屏负责讲
+         *  清楚 flockmux 是干啥的 + 主 CTA。 */}
+        <Welcome onCreateWorkspace={() => setWizardOpen(true)} />
         <CreateWizard
           open={wizardOpen}
           onClose={() => setWizardOpen(false)}
