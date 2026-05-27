@@ -233,126 +233,13 @@ export function WorkspaceList({
 
 // ── Channel header (workspace name + path + unread + copy) ─────────────
 
-function ChannelHeader({
-  workspace,
-  agentCount,
-  totalUnread,
-  onJumpUnread,
-}: {
-  workspace: WorkspaceSummary;
-  agentCount: number;
-  totalUnread: number;
-  onJumpUnread: () => void;
-}) {
-  const { t } = useTranslation();
-  const [copied, setCopied] = useState(false);
-  const timerRef = useRef<number | null>(null);
-
-  const handleCopy = useCallback(() => {
-    const text = workspace.path;
-    const finish = () => {
-      setCopied(true);
-      if (timerRef.current != null) window.clearTimeout(timerRef.current);
-      timerRef.current = window.setTimeout(() => setCopied(false), 1400);
-    };
-    if (navigator.clipboard?.writeText) {
-      navigator.clipboard.writeText(text).then(finish, () => {});
-    } else {
-      const ta = document.createElement("textarea");
-      ta.value = text;
-      ta.style.position = "fixed";
-      ta.style.opacity = "0";
-      document.body.appendChild(ta);
-      ta.select();
-      try {
-        document.execCommand("copy");
-        finish();
-      } finally {
-        document.body.removeChild(ta);
-      }
-    }
-  }, [workspace.path]);
-
-  useEffect(() => () => {
-    if (timerRef.current != null) window.clearTimeout(timerRef.current);
-  }, []);
-
-  return (
-    <div className="flex shrink-0 flex-col gap-1.5 border-b border-border-subtle px-5 py-3">
-      <div className="flex min-w-0 items-center gap-3">
-        <span
-          className="flex size-7 shrink-0 items-center justify-center rounded-md bg-surface-tertiary"
-          style={{ color: workspace.accentColor }}
-        >
-          <FolderOpen className="size-[15px]" />
-        </span>
-        <div className="flex min-w-0 flex-1 items-center gap-2">
-          <h1 className="truncate font-heading text-[15px] font-bold leading-tight text-foreground-primary">
-            {workspace.name}
-          </h1>
-          <span
-            className="size-[3px] shrink-0 rounded-full bg-foreground-tertiary"
-            aria-hidden
-          />
-          <span className="shrink-0 font-mono text-[11px] text-accent-primary-deep">
-            {t("chat.memberCount", { count: agentCount })}
-          </span>
-          {agentCount > 0 && (
-            <Badge
-              variant="secondary"
-              className="shrink-0 rounded-sm bg-accent-primary-soft px-1.5 py-px font-caption text-[9px] font-bold uppercase tracking-wide text-accent-primary-deep"
-            >
-              {t("common.live")}
-            </Badge>
-          )}
-        </div>
-        {totalUnread > 0 && (
-          <button
-            type="button"
-            onClick={onJumpUnread}
-            title={t("chat.jumpUnread")}
-            className="shrink-0 cursor-pointer"
-          >
-            <Badge className="rounded-full px-2 py-0.5 text-[10px] transition-transform hover:scale-105">
-              {t("chat.unread", { count: totalUnread })}
-            </Badge>
-          </button>
-        )}
-      </div>
-      <div className="group/path flex min-w-0 items-center gap-1.5 pl-10">
-        <span
-          className="min-w-0 flex-1 truncate font-mono text-[11px] text-foreground-tertiary"
-          title={workspace.path}
-        >
-          {workspace.path}
-        </span>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              onClick={handleCopy}
-              className="size-6 shrink-0 text-foreground-tertiary opacity-50 transition-opacity hover:bg-surface-tertiary hover:text-foreground-secondary hover:opacity-100 focus:opacity-100 group-hover/path:opacity-100"
-              aria-label={copied ? t("chat.pathCopied") : t("chat.copyPath")}
-            >
-              {copied ? (
-                <Check className="size-3 text-state-success" />
-              ) : (
-                <Copy className="size-3" />
-              )}
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">
-            {copied ? t("chat.pathCopied") : t("chat.copyPath")}
-          </TooltipContent>
-        </Tooltip>
-      </div>
-    </div>
-  );
-}
-
-// ── Tab bar (chat / dag / replays / context) ───────────────────────────
+// ── View toolbar (tabs + workspace actions) ────────────────────────────
+//
+// Replaces the old 2-row ChannelHeader. workspace 身份 (name / path /
+// accent) 都在左侧 sidebar 已经显示了，header 重复一遍是浪费 64px 垂直
+// 空间。这里把真正不重复的 4 个 action (LIVE / agent count / 未读跳转
+// / 复制路径) 合并到 tab bar 末端，单行高度 ~36px。Slack / Linear /
+// Discord 都用这种风格。
 
 interface TabDef {
   to: string;
@@ -372,14 +259,58 @@ function buildTabs(wsId: string): TabDef[] {
   ];
 }
 
-function TabBar({ wsId }: { wsId: string }) {
+function WorkspaceToolbar({
+  workspace,
+  agentCount,
+  totalUnread,
+  onJumpUnread,
+}: {
+  workspace: WorkspaceSummary;
+  agentCount: number;
+  totalUnread: number;
+  onJumpUnread: () => void;
+}) {
   const { t } = useTranslation();
-  const tabs = buildTabs(wsId);
+  const tabs = buildTabs(workspace.id);
   const isMac =
     typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
   const modKey = isMac ? "⌘" : "Ctrl";
+
+  const [copied, setCopied] = useState(false);
+  const copyTimerRef = useRef<number | null>(null);
+  const handleCopy = useCallback(() => {
+    const text = workspace.path;
+    const finish = () => {
+      setCopied(true);
+      if (copyTimerRef.current != null) window.clearTimeout(copyTimerRef.current);
+      copyTimerRef.current = window.setTimeout(() => setCopied(false), 1400);
+    };
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(text).then(finish, () => {});
+    } else {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      try {
+        document.execCommand("copy");
+        finish();
+      } finally {
+        document.body.removeChild(ta);
+      }
+    }
+  }, [workspace.path]);
+  useEffect(
+    () => () => {
+      if (copyTimerRef.current != null) window.clearTimeout(copyTimerRef.current);
+    },
+    [],
+  );
+
   return (
-    <nav className="flex shrink-0 items-center gap-1 border-b border-border-subtle px-5">
+    <nav className="flex h-10 shrink-0 items-center gap-1 border-b border-border-subtle px-3">
       {tabs.map((tab) => {
         const Icon = tab.icon;
         return (
@@ -404,6 +335,74 @@ function TabBar({ wsId }: { wsId: string }) {
           </NavLink>
         );
       })}
+
+      <span className="flex-1" />
+
+      {/* workspace actions — 全部 shrink-0 + 小尺寸，跟 tab 行高保持一致 */}
+      {agentCount > 0 && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span
+              className="flex h-6 shrink-0 items-center gap-1 rounded-full bg-status-running-soft px-2 font-caption text-[10px] font-semibold uppercase tracking-wide text-status-running"
+              title={t("chat.memberCount", { count: agentCount })}
+            >
+              <span
+                className="size-1.5 rounded-full bg-status-running"
+                aria-hidden
+              />
+              {t("common.live")}
+            </span>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">
+            {t("chat.memberCount", { count: agentCount })}
+          </TooltipContent>
+        </Tooltip>
+      )}
+
+      {totalUnread > 0 && (
+        <button
+          type="button"
+          onClick={onJumpUnread}
+          title={t("chat.jumpUnread")}
+          className="shrink-0 cursor-pointer"
+        >
+          <Badge className="rounded-full px-2 py-0.5 text-[10px] transition-transform hover:scale-105">
+            {t("chat.unread", { count: totalUnread })}
+          </Badge>
+        </button>
+      )}
+
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            onClick={handleCopy}
+            // 复制按钮兼充"workspace 路径在哪"的提示：hover 时整行 path
+            // 由 native title tooltip 展示，比之前两行 header 单独 print
+            // 路径节省空间又不丢信息。
+            className="size-7 shrink-0 text-foreground-tertiary opacity-60 transition-opacity hover:bg-surface-tertiary hover:text-foreground-primary hover:opacity-100"
+            aria-label={copied ? t("chat.pathCopied") : t("chat.copyPath")}
+          >
+            {copied ? (
+              <Check className="size-3.5 text-state-success" />
+            ) : (
+              <Copy className="size-3.5" />
+            )}
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">
+          <div className="flex max-w-xs flex-col gap-0.5">
+            <span className="font-semibold">
+              {copied ? t("chat.pathCopied") : t("chat.copyPath")}
+            </span>
+            <span className="break-all font-mono text-[10px] text-foreground-tertiary">
+              {workspace.path}
+            </span>
+          </div>
+        </TooltipContent>
+      </Tooltip>
     </nav>
   );
 }
@@ -811,13 +810,12 @@ export default function WorkspaceShell() {
           onOpenWizard={() => setWizardOpen(true)}
         />
         <section className="flex min-w-0 flex-1 flex-col bg-surface-primary">
-          <ChannelHeader
+          <WorkspaceToolbar
             workspace={activeWs}
             agentCount={activeWs.members.length}
             totalUnread={totalUnread}
             onJumpUnread={() => setJumpUnreadTick((v) => v + 1)}
           />
-          <TabBar wsId={activeWs.id} />
           <ViewTransition>
             <Outlet context={ctx} />
           </ViewTransition>
