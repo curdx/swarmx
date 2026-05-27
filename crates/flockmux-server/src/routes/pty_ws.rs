@@ -100,7 +100,28 @@ async fn handle_socket(
     let head = snap.next_seq.saturating_sub(1);
     let mut gap_seq_lost: Option<(u32, u32)> = None;
     let cursor: u32 = match params.last_seq {
-        None | Some(0) => head, // fresh attach: live-tail only
+        None | Some(0) => {
+            // Fresh attach: replay the ENTIRE remaining ring buffer.
+            //
+            // Old behaviour was cursor=head (live-tail only) on the theory
+            // "new attach = new observer, don't waste bandwidth resending
+            // bytes they never asked for". But the dominant client is xterm
+            // in AgentDrawer — every time the drawer closes and reopens,
+            // React unmounts the XtermPane and the next mount gets a brand
+            // new Terminal with empty scrollback. cursor=head meant the
+            // user saw an empty pane unless the agent happened to be
+            // streaming new bytes right then; if the agent had STOPped
+            // (most common case for a one-shot scout/planner/critic), the
+            // pane stayed permanently blank.
+            //
+            // Replaying the buffer head costs at most MAX_BUFFER_BYTES
+            // (1 MiB) per attach, which is fine for the human-paced
+            // "click avatar" trigger.
+            match snap.oldest_buffered {
+                Some(oldest) => oldest.saturating_sub(1),
+                None => head, // buffer truly empty (no PTY output yet)
+            }
+        }
         Some(x) => {
             if x >= head {
                 // Client claims to know more than us — clamp to head, no replay.

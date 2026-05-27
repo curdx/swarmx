@@ -419,6 +419,14 @@ export function XtermPane({
       termRef.current = null;
       fitAddonRef.current = null;
       term.dispose();
+      // Clear the persisted lastSeq. The original design persisted it to
+      // resume from where we left off across remounts (StrictMode dev,
+      // page refresh). But xterm's scrollback dies with the Terminal
+      // instance, so a remount always needs the FULL ring buffer replay
+      // — not just the [lastSeq+1..] delta. Server-side cursor logic
+      // (pty_ws.rs) handles the no-last_seq case as "replay entire
+      // buffer", so dropping our memory of lastSeq triggers that path.
+      clearLastSeq(agentId);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agentId]);
