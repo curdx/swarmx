@@ -36,6 +36,30 @@
     },
     "sidebarEmpty": "No workspaces yet"
   },
+  "tour": {
+    "dialogTitle": "Quick tour",
+    "dialogDesc": "Get to know flockmux in 30 seconds",
+    "skip": "Skip",
+    "prev": "Back",
+    "next": "Next",
+    "done": "Got it",
+    "sidebar": {
+      "title": "Your workspaces live on the left",
+      "body": "One workspace = one project + a crew of AI agents. Run several at once and swap with the sidebar; right-click to rename / delete (soon)."
+    },
+    "tabs": {
+      "title": "Four views on the same workspace",
+      "body": "Chat for messages, DAG for who's waiting on whom, Replays for each agent's terminal, Context for the shared blackboard. ⌘1–4 jumps between them."
+    },
+    "composer": {
+      "title": "Tell the AI what you want — plain English",
+      "body": "\"Add a login page\", \"fix this bug\" — the planner picks a spell and spins up the right agents to do it."
+    },
+    "cmdk": {
+      "title": "⌘K opens the command palette",
+      "body": "Search commands, switch workspaces, wake stuck agents, change themes — almost everything is one keystroke away."
+    }
+  },
   "common": {
     "save": "Save",
     "cancel": "Cancel",
@@ -153,7 +177,7 @@
     "newWorkspace": "New workspace",
     "noActiveAgents": "No active agents · go to",
     "emptyStateTitle": "Create your first workspace",
-    "emptyStateHint": "Name it, pick a folder — AI scouts the project for you",
+    "emptyStateHint": "Name the workspace, point at the project folder — AI scouts it for you",
     "tabs": {
       "chat": "Chat",
       "dag": "Flow",
@@ -320,26 +344,27 @@
   },
   "wizard": {
     "title": "Create workspace",
-    "subtitle": "Name it, point at the folder — AI takes a look itself",
-    "step1": "Name it",
+    "subtitle": "A workspace = a chat room + AI crew bound to one project",
+    "step1": "Name the workspace",
     "namePlaceholder": "e.g. My Todo App",
     "aiNamed": "AI suggested",
     "step2": "Project folder",
-    "step2Hint": "Paste the absolute local path — AI reads the code itself",
+    "step2Hint": "Paste the absolute local path — AI will cd in, read code, run commands",
     "dirPlaceholder1": "e.g. /Users/<you>/code/my-project",
     "dirPlaceholder1Tauri": "Paste an absolute path, or click Browse… on the right",
-    "dirPlaceholderMore": "Add another folder (optional)",
+    "dirPlaceholderMore": "Add another folder (optional · multi-repo setup)",
     "dirHint": "AI will work inside this folder",
     "removeDir": "Remove",
     "addDir": "Add another folder",
     "pickFolder": "Pick a folder (open system dialog)",
     "pickFolderShort": "Browse…",
+    "pickFolderUnavailable": "Available inside the desktop app; paste the path manually in browser-dev mode",
     "accentTitle": "Accent color: {{name}}",
     "defaultInfo": "After you hit Start, AI scouts your project first",
     "cancel": "Cancel",
     "create": "Start",
     "scanning": "AI is scouting your project…",
-    "scanningHint": "AI is scanning the folder to figure out the stack and project type. When it's done it'll greet you in chat and ask what you want done.",
+    "scanningHint": "AI is scanning the project directory you just picked to figure out the stack and project type. When it's done it'll greet you in chat and ask what you want done.",
     "scanningFootHint": "Usually 20-40s — you can enter the room and wait",
     "enterAnyway": "Enter room now"
   },

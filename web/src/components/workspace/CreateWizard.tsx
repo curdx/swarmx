@@ -350,25 +350,33 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
                         </span>
                       )}
                     </div>
-                    {IS_TAURI && (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={async () => {
-                          const picked = await pickDirectoryViaTauri();
-                          if (picked) {
-                            setDirs((prev) =>
-                              prev.map((x, j) => (j === i ? picked : x)),
-                            );
-                          }
-                        }}
-                        title={t("wizard.pickFolder")}
-                        className="h-8 shrink-0 gap-1.5 px-2.5 text-xs"
-                      >
-                        <FolderOpen className="size-3.5" />
-                        {t("wizard.pickFolderShort")}
-                      </Button>
-                    )}
+                    {/* Picker button — Tauri 下打开原生文件夹 dialog；
+                     *  浏览器 dev / preview 模式下 disabled + tooltip 解
+                     *  释。之前直接 hide，用户根本不知道桌面 app 能直接
+                     *  选，audit 时被点出来"看不到选择按钮"。*/}
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={!IS_TAURI}
+                      onClick={async () => {
+                        if (!IS_TAURI) return;
+                        const picked = await pickDirectoryViaTauri();
+                        if (picked) {
+                          setDirs((prev) =>
+                            prev.map((x, j) => (j === i ? picked : x)),
+                          );
+                        }
+                      }}
+                      title={
+                        IS_TAURI
+                          ? t("wizard.pickFolder")
+                          : t("wizard.pickFolderUnavailable")
+                      }
+                      className="h-8 shrink-0 gap-1.5 px-2.5 text-xs"
+                    >
+                      <FolderOpen className="size-3.5" />
+                      {t("wizard.pickFolderShort")}
+                    </Button>
                     <Button
                       variant="ghost"
                       size="icon"

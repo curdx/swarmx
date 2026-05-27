@@ -36,6 +36,30 @@
     },
     "sidebarEmpty": "还没有工作空间"
   },
+  "tour": {
+    "dialogTitle": "新手引导",
+    "dialogDesc": "30 秒认识 flockmux",
+    "skip": "跳过",
+    "prev": "上一步",
+    "next": "下一步",
+    "done": "知道了",
+    "sidebar": {
+      "title": "左边是你的工作空间",
+      "body": "每个工作空间 = 一个项目 + 一支 AI 团队。你可以同时开几个，sidebar 切换；右键改名 / 删除（即将上线）。"
+    },
+    "tabs": {
+      "title": "中间有 4 个视角",
+      "body": "聊天看消息、协作图看 agent 怎么互相等、录像回放每个 agent 的终端、上下文看它们共享的黑板。⌘1-4 直接切。"
+    },
+    "composer": {
+      "title": "底下输入框 — 用人话告诉 AI 干啥",
+      "body": "「帮我加个登录页」「把这个 bug 修了」就行，planner 会自动挑配方拉起合适的 agent 去做。"
+    },
+    "cmdk": {
+      "title": "⌘K 随时呼出命令面板",
+      "body": "搜索命令、跳工作空间、唤醒卡住的 agent、切主题…几乎所有操作都能直接打字到达，不用找按钮。"
+    }
+  },
   "common": {
     "save": "保存",
     "cancel": "取消",
@@ -153,7 +177,7 @@
     "newWorkspace": "新建工作空间",
     "noActiveAgents": "暂无活跃 agent · 去",
     "emptyStateTitle": "新建一个工作空间",
-    "emptyStateHint": "起个名、选个项目文件夹，AI 会自己进去看一眼",
+    "emptyStateHint": "给工作空间起个名、选项目所在文件夹，AI 会自己进去看一眼",
     "tabs": {
       "chat": "聊天",
       "dag": "协作图",
@@ -320,26 +344,27 @@
   },
   "wizard": {
     "title": "创建工作空间",
-    "subtitle": "起个名字、选项目文件夹，AI 会自己看一眼项目",
-    "step1": "起个名字",
+    "subtitle": "工作空间 = 给一个项目配的群聊房间 + AI 团队",
+    "step1": "给工作空间起个名字",
     "namePlaceholder": "例如：我的待办 App",
     "aiNamed": "AI 起名",
-    "step2": "项目文件夹",
-    "step2Hint": "粘贴本地完整路径，AI 会自动看懂代码",
+    "step2": "项目所在的文件夹",
+    "step2Hint": "粘贴本地完整路径；AI 会进这个目录看代码、跑命令",
     "dirPlaceholder1": "例如:/Users/你的用户名/code/我的项目",
     "dirPlaceholder1Tauri": "粘贴绝对路径，或点右边「选择…」",
-    "dirPlaceholderMore": "再加一个文件夹（可选）",
+    "dirPlaceholderMore": "再加一个文件夹（可选 · 多项目场景）",
     "dirHint": "AI 会进入此文件夹工作",
     "removeDir": "移除",
     "addDir": "再加一个文件夹",
     "pickFolder": "选择文件夹（打开系统对话框）",
     "pickFolderShort": "选择…",
+    "pickFolderUnavailable": "在桌面 app 内可直接选文件夹；浏览器调试模式请手动粘路径",
     "accentTitle": "标识色：{{name}}",
     "defaultInfo": "点开始后 AI 会先看一眼你的项目",
     "cancel": "取消",
     "create": "开始",
     "scanning": "AI 正在看你的项目…",
-    "scanningHint": "AI 会扫描你的项目文件夹，搞清楚是什么技术栈、什么类型的项目。准备好后会在聊天里跟你打招呼，问你想做什么。",
+    "scanningHint": "AI 会扫描你刚选的项目目录，搞清楚是什么技术栈、什么类型的项目。准备好后会在聊天里跟你打招呼，问你想做什么。",
     "scanningFootHint": "通常 20-40 秒，可以先进群等",
     "enterAnyway": "直接进群"
   },

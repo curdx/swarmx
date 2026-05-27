@@ -14,6 +14,7 @@ import { useTranslation } from "react-i18next";
 import { api } from "../../../api/http";
 import type { AgentInfo } from "../../../api/types";
 import { MessagesPanel } from "../../../components/MessagesPanel";
+import { OnboardingTour } from "../../../components/OnboardingTour";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -55,6 +56,11 @@ export default function ChatView() {
 
   return (
     <div className="flex min-h-0 flex-1">
+      {/* 4 步 onboarding tour — 第一次进 chat 时弹，跳过/走完 mark seen
+       *  存 localStorage 之后不再弹。装在 ChatView 而不是 Shell，是因为
+       *  Shell 在没 workspace 时也 render (Welcome 屏)，那里 tour 没意
+       *  义；只有真的进了某个 workspace 的 chat 才相关。 */}
+      <OnboardingTour />
       <section className="flex min-w-0 flex-1 flex-col">
         <MessagesPanel
           liveMessage={liveMessage}
