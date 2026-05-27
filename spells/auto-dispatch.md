@@ -1,7 +1,11 @@
 +++
 name = "auto-dispatch"
 description = "自动派活：planner 看你输入的自然语言，自动选 spell 并启动它"
-shared_workspace = false
+# 必须 true：chat composer 在 scout-only workspace 触发 auto-dispatch 时把当前
+# workspace 路径作为 workspace_dir 传过来。如果 false，server 会忽略它走
+# PerAgent，planner 进 /Users/.flockmux/workspaces/<id> 这种孤儿目录，下游
+# 业务 agent 也没法用同一个 workspace。
+shared_workspace = true
 
 [[agents]]
 role_ref = "planner"

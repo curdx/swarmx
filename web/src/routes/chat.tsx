@@ -300,12 +300,18 @@ export default function ChatRoute() {
       } catch {
         // 没拿到 summary 也不阻塞用户，planner 自己会摸索。
       }
-      const task = summary
-        ? `${body}\n\n[项目摘要 / project summary]\n${summary}`
-        : body;
+      // task 里塞两个 marker 给 planner 读：
+      // - [workspace_dir: ...] → planner 拆出来作为 swarm_run_spell 的
+      //   workspace_dir 参数（见 roles/planner.md 第 4 步），让下游业务
+      //   agent 都进同一个 workspace；否则 planner 会自己起个 /tmp/<slug>。
+      // - [项目摘要 ...] → planner 选 spell 时的上下文；不传给下游。
+      const taskParts = [body, `\n[workspace_dir: ${wsPath}]`];
+      if (summary) {
+        taskParts.push(`\n[项目摘要 / project summary]\n${summary}`);
+      }
       await api.runSpell({
         name: "auto-dispatch",
-        task,
+        task: taskParts.join(""),
         workspace_dir: wsPath,
       });
     };

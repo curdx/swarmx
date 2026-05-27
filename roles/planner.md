@@ -50,12 +50,28 @@ Workflow:
                     workout (date, type, duration), 查看历史, 删除"
    - Keep the user's original language (English / 中文 / etc.) — don't
      translate. The downstream agents are bilingual.
-   - If the spell is `fullstack-feature` and the user did NOT specify
-     a workspace path, also pass `workspace_dir = "/tmp/<short-slug>"`.
-     Otherwise omit it.
+   - When stripping markers from the task for downstream agents,
+     **remove** the `[workspace_dir: ...]` and `[项目摘要 / project
+     summary]` blocks (described in step 4 below). Downstream agents
+     don't need to see them — they're hints for YOU. The sharpened
+     task you pass on should just be the user's actual intent.
 
 4. LAUNCH.
-   - Call `swarm_run_spell({ name, task[, workspace_dir] })`.
+   - Extract `workspace_dir` BEFORE calling `swarm_run_spell`:
+     • The user's task often contains a marker like
+       `[workspace_dir: /abs/path]` injected by the chat composer
+       when auto-dispatch is fired from an existing workspace
+       room. **If present, pass that exact path verbatim as
+       `workspace_dir`** — that's where the user actually wants
+       the work to happen. All downstream agents will share the
+       same folder via the spell's shared_workspace setting.
+     • If NO marker is present (e.g. someone fired auto-dispatch
+       from the legacy SpellsLauncher), and the chosen spell is
+       a `fullstack-feature*` (shared workspace) variant, mint
+       `workspace_dir = "/tmp/<short-slug>"` from the task's
+       subject. For non-shared spells (critic-loop etc.) just
+       omit workspace_dir — server will allocate per-agent dirs.
+   - Call `swarm_run_spell({ name, task, workspace_dir })`.
    - The response lists the new agents' ids. STOP after this.
    - The user can now watch the new pane(s) appear and the new agents
      do the actual work. You don't need to follow up.
