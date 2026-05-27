@@ -147,7 +147,10 @@ export default function ChatRoute() {
       const ids = new Map<number, string>();
       for (const m of rows) {
         ids.set(m.id, m.from_agent);
-        if (m.read_at === null) {
+        // "未读" = user 没读的、to=user 的消息。agent ↔ agent 的协商消息（FE
+        // 反驳 BE 的 api.spec 这种）跟用户无关，不该计入用户未读 chip。
+        // idToFromRef 仍记录全部消息，message_read 事件可以匹配任意 id。
+        if (m.read_at === null && m.to_agent === "user") {
           counts[m.from_agent] = (counts[m.from_agent] ?? 0) + 1;
         }
       }
@@ -196,10 +199,13 @@ export default function ChatRoute() {
           };
           setLiveMessage(rec);
           idToFromRef.current.set(ev.id, ev.from_agent);
-          setUnreadByFrom((prev) => ({
-            ...prev,
-            [ev.from_agent]: (prev[ev.from_agent] ?? 0) + 1,
-          }));
+          // 同 recomputeUnread 里的语义：只算 to=user 的消息。
+          if (ev.to_agent === "user") {
+            setUnreadByFrom((prev) => ({
+              ...prev,
+              [ev.from_agent]: (prev[ev.from_agent] ?? 0) + 1,
+            }));
+          }
           break;
         }
         case "message_read":
