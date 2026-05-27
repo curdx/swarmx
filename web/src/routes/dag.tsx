@@ -38,11 +38,12 @@ import {
   X,
   Zap,
 } from "lucide-react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { api } from "../api/http";
 import type { AgentInfo, BlackboardEntry, SwarmEvent } from "../api/types";
 import { useSwarmFeed } from "../hooks/useSwarmFeed";
+import { WorkspaceScopeBar } from "../components/workspace/WorkspaceScopeBar";
 import { cn } from "@/lib/cn";
 
 const ROLE_BG: Record<string, string> = {
@@ -280,7 +281,11 @@ function Canvas({ agents, bbAt, selectedId, onSelect }: CanvasProps) {
 
 export default function DagRoute() {
   const { t } = useTranslation();
-  const [agents, setAgents] = useState<AgentInfo[]>([]);
+  const [searchParams] = useSearchParams();
+  // ?ws=<id> 从 chat secondary tab bar 进来时带的 workspace id (path 末 8
+  // 字符)。null = 全局模式 (从 ⌘K 命令面板进来)。
+  const wsId = searchParams.get("ws");
+  const [allAgents, setAllAgents] = useState<AgentInfo[]>([]);
   const [bb, setBb] = useState<BlackboardEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -289,13 +294,20 @@ export default function DagRoute() {
   const refresh = useCallback(async () => {
     try {
       const [a, b] = await Promise.all([api.listAgents(), api.listBlackboard()]);
-      setAgents(a);
+      setAllAgents(a);
       setBb(b);
       setError(null);
     } catch (e) {
       setError((e as Error).message);
     }
   }, []);
+
+  // 按 ?ws=<id> 过滤 — 只显示属于该 workspace 的 agent (含已 killed，给
+  // 历史 handoff 边能画出来)。null wsId 时不过滤，显示全部。
+  const agents = useMemo(() => {
+    if (!wsId) return allAgents;
+    return allAgents.filter((a) => (a.workspace ?? "").slice(-8) === wsId);
+  }, [allAgents, wsId]);
 
   useEffect(() => {
     refresh();
@@ -342,6 +354,7 @@ export default function DagRoute() {
 
   return (
     <div className="flex h-full flex-col bg-surface-primary">
+      <WorkspaceScopeBar wsId={wsId} />
       {/* Header */}
       <header className="flex h-14 shrink-0 items-center gap-3 border-b border-border-subtle bg-surface-elevated px-5">
         <span className="flex size-8 items-center justify-center rounded-md bg-accent-primary-soft">

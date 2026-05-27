@@ -129,6 +129,14 @@
     "noActiveAgents": "No active agents · go to",
     "emptyStateTitle": "Create your first workspace",
     "emptyStateHint": "Name it, pick a folder — AI scouts the project for you",
+    "tabs": {
+      "chat": "Chat",
+      "dag": "Flow",
+      "replays": "Replays",
+      "context": "Context"
+    },
+    "backToChat": "← Back to {{name}}",
+    "globalScopeHint": "Showing data from every workspace · pick one in chat to scope this view",
     "runSpell": "Run spell",
     "noConversation": "No conversation",
     "noWorkspaceName": "(no workspace)",

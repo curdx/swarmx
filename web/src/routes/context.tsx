@@ -30,7 +30,12 @@ import type {
   BlackboardSnapshot,
 } from "../api/types";
 import { useSwarmFeed } from "../hooks/useSwarmFeed";
+import { useSearchParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
+import { WorkspaceScopeBar } from "@/components/workspace/WorkspaceScopeBar";
+import { api as apiTyped } from "../api/http";
+import type { AgentInfo as AgentInfoTyped } from "../api/types";
+import { workspaceSlug as ctxWorkspaceSlug } from "../lib/workspace";
 import { cn } from "@/lib/cn";
 
 interface TreeNode {
@@ -213,7 +218,9 @@ function shortSha(sha: string): string {
 
 export default function ContextRoute() {
   const { t } = useTranslation();
-  const [entries, setEntries] = useState<BlackboardEntry[]>([]);
+  const [searchParams] = useSearchParams();
+  const wsId = searchParams.get("ws");
+  const [allEntries, setAllEntries] = useState<BlackboardEntry[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [snap, setSnap] = useState<BlackboardSnapshot | null>(null);
   const [history, setHistory] = useState<BlackboardHistoryEntry[]>([]);
@@ -221,11 +228,47 @@ export default function ContextRoute() {
   const [error, setError] = useState<string | null>(null);
   const [loadingDoc, setLoadingDoc] = useState(false);
   const [view, setView] = useState<"rendered" | "raw">("rendered");
+  // 当 wsId 在 URL 时，把 workspace path 反查出来，blackboard key 用 path
+  // 末尾的 slug 过滤 (project.summary.<slug> / workspace.name.<slug> 这种
+  // namespaced key)。全局 key (api.spec / frontend.done) 在 wsId 模式下
+  // 显示不了 — 它们没 namespace，无法可靠归属 workspace。
+  const [wsSlug, setWsSlug] = useState<string | null>(null);
+  useEffect(() => {
+    if (!wsId) {
+      setWsSlug(null);
+      return;
+    }
+    let cancelled = false;
+    apiTyped
+      .listAgents()
+      .then((agents: AgentInfoTyped[]) => {
+        const matched = agents.find(
+          (a) => (a.workspace ?? "").slice(-8) === wsId,
+        );
+        if (!cancelled && matched?.workspace) {
+          setWsSlug(ctxWorkspaceSlug(matched.workspace));
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [wsId]);
+
+  const entries = useMemo(() => {
+    if (!wsId) return allEntries;
+    if (!wsSlug) return [];
+    // 只显示路径里含本 workspace slug 的 key — 涵盖 project.summary.<slug>
+    // / workspace.name.<slug> / workspace.accent.<slug> 等 namespaced key。
+    // 全局 key (api.spec / frontend.done / 各 .review 等) 没 workspace
+    // 归属，在 wsId 模式下不显示 (会被全局视图 / 时间筛过滤掉)。
+    return allEntries.filter((e) => e.path.includes(wsSlug));
+  }, [allEntries, wsId, wsSlug]);
 
   const refreshList = async () => {
     try {
       const rows = await api.listBlackboard();
-      setEntries(rows);
+      setAllEntries(rows);
       setError(null);
     } catch (e) {
       setError((e as Error).message);
@@ -284,7 +327,9 @@ export default function ContextRoute() {
     };
   }, [selected]);
 
+  // 用过滤后的 entries 建树。wsId 模式下树只展示该 workspace 相关的 key。
   const tree = useMemo(() => buildTree(entries), [entries]);
+  void allEntries;
 
   const selectedEntry = useMemo(
     () => entries.find((e) => e.path === selected) ?? null,
@@ -293,6 +338,7 @@ export default function ContextRoute() {
 
   return (
     <div className="flex h-full flex-col bg-surface-primary">
+      <WorkspaceScopeBar wsId={wsId} />
       {/* Header */}
       <header className="flex h-14 shrink-0 items-center gap-3 border-b border-border-subtle bg-surface-elevated px-5">
         <span className="flex size-8 items-center justify-center rounded-md bg-accent-primary-soft">

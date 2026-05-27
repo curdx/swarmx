@@ -14,7 +14,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { Check, Copy, FolderOpen, Plus, Sparkles, Users, Zap } from "lucide-react";
+import {
+  Check,
+  Copy,
+  FileText,
+  FolderOpen,
+  GitBranch,
+  MessageSquare,
+  Play,
+  Plus,
+  Sparkles,
+  Users,
+  Zap,
+} from "lucide-react";
 import { api } from "../api/http";
 import type {
   AgentInfo,
@@ -57,6 +69,54 @@ const ROLE_COLOR: Record<string, string> = {
 function roleColor(role: string) {
   return ROLE_COLOR[role.toLowerCase()] ?? "bg-state-idle";
 }
+
+// chat → /chat/:wsId 自己，其他 3 个跳 ?ws=<id> query 给老路径用。
+// 老 path 不动是为了不破坏 ⌘K 里 "看全部 (无 ws)" 的入口 (cmdk 不带
+// query，自然进全局视图)。
+type WsTabId = "chat" | "dag" | "replays" | "context";
+
+function WorkspaceTabBar({
+  wsId,
+  active,
+}: {
+  wsId: string;
+  active: WsTabId;
+}) {
+  const { t } = useTranslation();
+  const navigate = useNavigate();
+  const tabs: { id: WsTabId; labelKey: string; icon: typeof MessageSquare; href: string }[] = [
+    { id: "chat", labelKey: "chat.tabs.chat", icon: MessageSquare, href: `/chat/${wsId}` },
+    { id: "dag", labelKey: "chat.tabs.dag", icon: GitBranch, href: `/dag?ws=${wsId}` },
+    { id: "replays", labelKey: "chat.tabs.replays", icon: Play, href: `/replays?ws=${wsId}` },
+    { id: "context", labelKey: "chat.tabs.context", icon: FileText, href: `/context?ws=${wsId}` },
+  ];
+  return (
+    <nav className="flex shrink-0 items-center gap-1 border-b border-border-subtle px-5">
+      {tabs.map((item) => {
+        const Icon = item.icon;
+        const isActive = item.id === active;
+        return (
+          <button
+            key={item.id}
+            type="button"
+            onClick={() => navigate(item.href)}
+            className={cn(
+              "relative flex items-center gap-1.5 px-3 py-2 text-xs transition-colors",
+              isActive
+                ? "text-foreground-primary after:absolute after:inset-x-0 after:-bottom-px after:h-0.5 after:bg-accent-primary"
+                : "text-foreground-secondary hover:text-foreground-primary",
+            )}
+          >
+            <Icon className="size-3.5" />
+            {t(item.labelKey)}
+          </button>
+        );
+      })}
+    </nav>
+  );
+}
+
+export { WorkspaceTabBar };
 
 // Workspace path → { name, parent }. Name is the basename (last segment) so
 // users see the human-meaningful folder name big; parent is everything above,
@@ -600,6 +660,13 @@ export default function ChatRoute() {
             </p>
           )}
         </div>
+        {/* Secondary tab bar — Bitbucket / Linear 同款 "workspace-scoped
+            navigation"。聊天是默认 view (chat 主页本身)；点其他 tab 跳到
+            老路径但带 ?ws=<id> query 让目标页按这个 workspace 过滤数据。
+            没选 workspace 时整条 tab 隐藏 (没意义)。 */}
+        {activeWs && (
+          <WorkspaceTabBar wsId={activeWs.id} active="chat" />
+        )}
         <div className="min-h-0 flex-1 overflow-hidden">
           {/* MessagesPanel keeps its legacy inline styles; wrap to bound it. */}
           <div className="h-full">

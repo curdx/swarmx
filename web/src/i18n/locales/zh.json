@@ -129,6 +129,14 @@
     "noActiveAgents": "暂无活跃 agent · 去",
     "emptyStateTitle": "新建一个工作空间",
     "emptyStateHint": "起个名、选个项目文件夹，AI 会自己进去看一眼",
+    "tabs": {
+      "chat": "聊天",
+      "dag": "协作图",
+      "replays": "录像",
+      "context": "上下文"
+    },
+    "backToChat": "← 返回 {{name}}",
+    "globalScopeHint": "当前显示所有工作空间数据 · 从聊天里选某个工作空间可只看那个的",
     "runSpell": "运行配方",
     "noConversation": "暂无对话",
     "noWorkspaceName": "（未指定工作空间）",

@@ -42,6 +42,11 @@ export function workspaceAccentKey(path: string): string {
 }
 
 export const WORKSPACE_ACCENT_KEY_PREFIX = "workspace.accent.";
+/** Exposed as a string constant so non-React modules (WorkspaceScopeBar)
+ *  can build the read-blackboard key without importing a fn that already
+ *  takes a path. The name- / accent-key fn variants stay for callers that
+ *  have a `path` in hand. */
+export const WORKSPACE_NAME_KEY_PREFIX_VALUE = "workspace.name.";
 
 /** Wizard 给用户挑的 5 个 accent — id 持久化到 blackboard，cssVar 用于
  *  渲染时给 `style={{ background: cssVar }}` 之类的。Single source of

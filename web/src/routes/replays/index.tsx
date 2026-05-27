@@ -15,14 +15,15 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { Download, Play, RefreshCw, Search } from "lucide-react";
 import { api } from "../../api/http";
-import type { RecordingInfo } from "../../api/types";
+import type { AgentInfo, RecordingInfo } from "../../api/types";
 import { useSwarmFeed } from "../../hooks/useSwarmFeed";
 import { loadCastPreview, getCachedCastPreview } from "@/lib/castPreview";
 import { Button } from "@/components/ui/button";
+import { WorkspaceScopeBar } from "@/components/workspace/WorkspaceScopeBar";
 import { cn } from "@/lib/cn";
 
 const ROLE_BG: Record<string, string> = {
@@ -62,15 +63,30 @@ function formatDuration(ms: number | null): string {
 
 export default function ReplaysIndex() {
   const { t } = useTranslation();
+  const [searchParams] = useSearchParams();
+  const wsId = searchParams.get("ws");
   const [items, setItems] = useState<RecordingInfo[]>([]);
+  // recording 没 workspace 字段，得 cross-ref agents — listAgents 一次，
+  // 用 agent_id → workspace 反查。ws filter 用这张表过滤 recordings。
+  const [agentWorkspaceById, setAgentWorkspaceById] = useState<Map<string, string>>(
+    () => new Map(),
+  );
   const [filter, setFilter] = useState("");
   const [activeTag, setActiveTag] = useState<string>("all");
   const [error, setError] = useState<string | null>(null);
 
   const refresh = async () => {
     try {
-      const rows = await api.listRecordings();
+      const [rows, agents] = await Promise.all([
+        api.listRecordings(),
+        api.listAgents(),
+      ]);
       setItems(rows);
+      const m = new Map<string, string>();
+      for (const a of agents as AgentInfo[]) {
+        if (a.workspace) m.set(a.agent_id, a.workspace);
+      }
+      setAgentWorkspaceById(m);
       setError(null);
     } catch (e) {
       setError((e as Error).message);
@@ -99,16 +115,24 @@ export default function ReplaysIndex() {
   const filtered = useMemo(() => {
     const q = filter.trim().toLowerCase();
     return items.filter((r) => {
+      // wsId 过滤：recording 的 agent_id 找它的 workspace，比对 path 末 8
+      // 字符。陈旧的 recording (agent 已 evicted) 拿不到 workspace，wsId
+      // 模式下直接 hide 它们。
+      if (wsId) {
+        const ws = agentWorkspaceById.get(r.agent_id);
+        if (!ws || ws.slice(-8) !== wsId) return false;
+      }
       if (activeTag !== "all" && inferRole(r.agent_id) !== activeTag) return false;
       if (q && !r.agent_id.toLowerCase().includes(q) && !r.id.toLowerCase().includes(q)) {
         return false;
       }
       return true;
     });
-  }, [items, filter, activeTag]);
+  }, [items, filter, activeTag, wsId, agentWorkspaceById]);
 
   return (
     <div className="flex h-full flex-col bg-surface-primary">
+      <WorkspaceScopeBar wsId={wsId} />
       {/* Header */}
       <header className="flex h-14 shrink-0 items-center gap-3 border-b border-border-subtle bg-surface-elevated px-5">
         <span className="flex size-8 items-center justify-center rounded-md bg-accent-primary-soft">

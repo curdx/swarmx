@@ -20,12 +20,9 @@ import {
   Bell,
   Boxes,
   Bug,
-  FileText,
-  GitBranch,
   MessageSquare,
   PanelLeftClose,
   PanelLeftOpen,
-  Play,
   Settings,
   type LucideIcon,
 } from "lucide-react";
@@ -50,11 +47,14 @@ interface NavItem {
   icon: LucideIcon;
 }
 
+// nav 故意只留 4 项：chat (主入口) + notifications (跨 ws 全局响铃) +
+// settings + debug。DAG / Replays / Context 之前是顶级 nav，但用户大
+// 部分时间只关心当前 workspace 的图 / 录像 / 上下文 — 提升到 chat
+// channel header 下面的 secondary tab bar (`WorkspaceTabBar`)，进入
+// workspace 自动按 ws 过滤。"看全部历史" 的少数场景从 ⌘K 命令面板进
+// (cmdk 里 NAV 仍列全部 4 个目标路径)，主 nav 简洁优先。
 const NAV: readonly NavItem[] = [
   { to: "/chat", key: "nav.chat", icon: MessageSquare },
-  { to: "/dag", key: "nav.dag", icon: GitBranch },
-  { to: "/replays", key: "nav.replays", icon: Play },
-  { to: "/context", key: "nav.context", icon: FileText },
   { to: "/notifications", key: "nav.notifications", icon: Bell },
   { to: "/settings", key: "nav.settings", icon: Settings },
   { to: "/debug", key: "nav.debug", icon: Bug },
