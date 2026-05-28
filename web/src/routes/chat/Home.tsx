@@ -11,19 +11,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../../api/http";
-import type { AgentInfo, SwarmEvent } from "../../api/types";
+import type { AgentInfo, SwarmEvent, Workspace } from "../../api/types";
 import { useSwarmFeed } from "../../hooks/useSwarmFeed";
-import {
-  accentToCssVar,
-  WORKSPACE_ACCENT_KEY_PREFIX,
-  workspaceSlug,
-} from "../../lib/workspace";
+import { accentToCssVar } from "../../lib/workspace";
 import { CreateWizard } from "../../components/workspace/CreateWizard";
 import { Welcome } from "../../components/Welcome";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { WorkspaceList, type WorkspaceSummary } from "../workspace/Shell";
-
-const WORKSPACE_NAME_KEY_PREFIX = "workspace.name.";
 
 function splitWorkspacePath(path: string): { name: string; parent: string } {
   if (!path || path === "(no workspace)") return { name: path || "", parent: "" };
@@ -36,8 +30,7 @@ function splitWorkspacePath(path: string): { name: string; parent: string } {
 export default function ChatHome() {
   const navigate = useNavigate();
   const [agents, setAgents] = useState<AgentInfo[]>([]);
-  const [workspaceNames, setWorkspaceNames] = useState<Record<string, string>>({});
-  const [workspaceAccents, setWorkspaceAccents] = useState<Record<string, string>>({});
+  const [workspaceRows, setWorkspaceRows] = useState<Workspace[]>([]);
   const [wizardOpen, setWizardOpen] = useState(false);
 
   // CommandPalette → 新建 workspace 走 window event。
@@ -56,41 +49,9 @@ export default function ChatHome() {
     }
   };
 
-  const refreshNames = async () => {
+  const refreshWorkspaces = async () => {
     try {
-      const entries = await api.listBlackboard();
-      const nameEntries = entries.filter((e) =>
-        e.path.startsWith(WORKSPACE_NAME_KEY_PREFIX),
-      );
-      const accentEntries = entries.filter((e) =>
-        e.path.startsWith(WORKSPACE_ACCENT_KEY_PREFIX),
-      );
-      const [namePairs, accentPairs] = await Promise.all([
-        Promise.all(
-          nameEntries.map(async (e) => {
-            const slug = e.path.slice(WORKSPACE_NAME_KEY_PREFIX.length);
-            try {
-              const snap = await api.readBlackboard(e.path);
-              return [slug, snap.content] as const;
-            } catch {
-              return [slug, ""] as const;
-            }
-          }),
-        ),
-        Promise.all(
-          accentEntries.map(async (e) => {
-            const slug = e.path.slice(WORKSPACE_ACCENT_KEY_PREFIX.length);
-            try {
-              const snap = await api.readBlackboard(e.path);
-              return [slug, snap.content] as const;
-            } catch {
-              return [slug, ""] as const;
-            }
-          }),
-        ),
-      ]);
-      setWorkspaceNames(Object.fromEntries(namePairs.filter(([, v]) => v)));
-      setWorkspaceAccents(Object.fromEntries(accentPairs.filter(([, v]) => v)));
+      setWorkspaceRows(await api.listWorkspaces());
     } catch {
       /* best-effort */
     }
@@ -98,49 +59,44 @@ export default function ChatHome() {
 
   useEffect(() => {
     refreshAgents();
-    refreshNames();
+    refreshWorkspaces();
   }, []);
 
   useSwarmFeed({
     onEvent: (ev: SwarmEvent) => {
       if (ev.type === "agent_state") refreshAgents();
-      if (
-        ev.type === "blackboard_changed" &&
-        (ev.path.startsWith(WORKSPACE_NAME_KEY_PREFIX) ||
-          ev.path.startsWith(WORKSPACE_ACCENT_KEY_PREFIX))
-      ) {
-        refreshNames();
-      }
+      // workspace name / accent / membership now derived from the
+      // workspaces table + agents.workspace_id, so we don't need to
+      // listen for blackboard events here any more.
     },
     onReconnect: () => {
       refreshAgents();
-      refreshNames();
+      refreshWorkspaces();
     },
   });
 
   const workspaces = useMemo<WorkspaceSummary[]>(() => {
-    const live = agents.filter((a) => a.killed_at == null && a.shim_exit == null);
-    const byWs = new Map<string, AgentInfo[]>();
-    for (const a of live) {
-      const key = a.workspace || "(no workspace)";
-      if (!byWs.has(key)) byWs.set(key, []);
-      byWs.get(key)!.push(a);
+    const aliveByWsId = new Map<string, AgentInfo[]>();
+    for (const a of agents) {
+      if (a.killed_at != null || a.shim_exit != null) continue;
+      if (!a.workspace_id) continue;
+      const arr = aliveByWsId.get(a.workspace_id) ?? [];
+      arr.push(a);
+      aliveByWsId.set(a.workspace_id, arr);
     }
-    return Array.from(byWs.entries()).map(([path, members]) => {
-      const { name: basename, parent } = splitWorkspacePath(path);
-      const slug = workspaceSlug(path);
-      const userName = workspaceNames[slug];
-      const accentColor = accentToCssVar(workspaceAccents[slug]);
+    return workspaceRows.map<WorkspaceSummary>((w) => {
+      const { parent } = splitWorkspacePath(w.cwd);
       return {
-        path,
-        members,
-        name: userName || basename,
+        id: w.slug,
+        workspaceId: w.id,
+        path: w.cwd,
+        name: w.name,
         parent,
-        accentColor,
-        id: path.slice(-8) || "default",
+        accentColor: accentToCssVar(w.accent),
+        members: aliveByWsId.get(w.id) ?? [],
       };
     });
-  }, [agents, workspaceNames, workspaceAccents]);
+  }, [workspaceRows, agents]);
 
   // Auto-redirect once a workspace is available — landing here only makes
   // sense as a transient splash. If multiple are alive we still send the
@@ -151,6 +107,17 @@ export default function ChatHome() {
     }
   }, [workspaces, navigate]);
 
+  const handleDeleteWorkspace = async (workspaceId: string) => {
+    try {
+      await api.deleteWorkspace(workspaceId);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn("deleteWorkspace failed", err);
+      return;
+    }
+    setWorkspaceRows((prev) => prev.filter((w) => w.id !== workspaceId));
+  };
+
   return (
     <TooltipProvider delayDuration={300}>
       <div className="flex h-full min-h-0">
@@ -158,6 +125,7 @@ export default function ChatHome() {
           workspaces={workspaces}
           activeId={null}
           onOpenWizard={() => setWizardOpen(true)}
+          onDelete={handleDeleteWorkspace}
         />
         {/* 主战场就一个 — Welcome 屏。删了之前左 sidebar 大卡片 + 中
          *  间又一个 "新建工作空间" 按钮的双 CTA，sidebar 那边 empty 现
@@ -167,7 +135,10 @@ export default function ChatHome() {
         <CreateWizard
           open={wizardOpen}
           onClose={() => setWizardOpen(false)}
-          onCreated={refreshAgents}
+          onCreated={() => {
+            refreshAgents();
+            refreshWorkspaces();
+          }}
         />
       </div>
     </TooltipProvider>

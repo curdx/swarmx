@@ -5,7 +5,8 @@
 use crate::connection::Customizer;
 use crate::models::{
     AgentRecord, BlackboardOpRecord, ListMessagesOpts, MessageRecord, NewAgent, NewBlackboardOp,
-    NewMessage, NewRecording, RecordingRecord,
+    NewMessage, NewRecording, NewSpellRun, NewWorkspace, RecordingRecord, SpellRunRecord,
+    WorkspaceRecord,
 };
 use crate::schema;
 use anyhow::{Context, Result};
@@ -62,9 +63,17 @@ impl Store {
         tokio::task::spawn_blocking(move || -> Result<()> {
             let conn = pool.get()?;
             conn.execute(
-                "INSERT INTO agents (id, cli, role, workspace, spawned_at) \
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![rec.id, rec.cli, rec.role, rec.workspace, rec.spawned_at],
+                "INSERT INTO agents (id, cli, role, workspace, spawned_at, workspace_id, spell_run_id) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    rec.id,
+                    rec.cli,
+                    rec.role,
+                    rec.workspace,
+                    rec.spawned_at,
+                    rec.workspace_id,
+                    rec.spell_run_id,
+                ],
             )?;
             Ok(())
         })
@@ -121,7 +130,8 @@ impl Store {
             let conn = pool.get()?;
             let mut stmt = conn.prepare(
                 "SELECT id, cli, role, workspace, spawned_at, killed_at, \
-                        shim_ready_at, shim_exit_at, shim_exit_code \
+                        shim_ready_at, shim_exit_at, shim_exit_code, \
+                        workspace_id, spell_run_id \
                  FROM agents \
                  ORDER BY spawned_at ASC",
             )?;
@@ -136,6 +146,8 @@ impl Store {
                     shim_ready_at: row.get(6)?,
                     shim_exit_at: row.get(7)?,
                     shim_exit_code: row.get(8)?,
+                    workspace_id: row.get(9)?,
+                    spell_run_id: row.get(10)?,
                 })
             })?;
             rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
@@ -597,6 +609,195 @@ impl Store {
         })
         .await
         .context("spawn_blocking get_recording")?
+    }
+
+    // ── workspaces ───────────────────────────────────────────────────────
+
+    /// Insert a workspace. `id` is a hex-encoded random 16-byte value
+    /// generated server-side via SQLite's `randomblob` so the storage
+    /// crate stays uuid-free. `slug` is the first 8 hex chars of the same
+    /// blob — used by the frontend as the URL identifier `/chat/:slug`.
+    /// Returns the persisted row (with the generated id / slug / timestamps).
+    pub async fn create_workspace(
+        &self,
+        rec: NewWorkspace,
+        created_at: i64,
+    ) -> Result<WorkspaceRecord> {
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || -> Result<WorkspaceRecord> {
+            let conn = pool.get()?;
+            // INSERT with deterministic generation: lower(hex(randomblob(16)))
+            // = 32-char id, substr(...,1,8) = the slug. RETURNING gives us
+            // both back so the handler doesn't have to query again.
+            let mut stmt = conn.prepare(
+                "INSERT INTO workspaces (id, slug, name, cwd, accent, created_at) \
+                 VALUES (lower(hex(randomblob(16))), \
+                         substr(lower(hex(randomblob(16))), 1, 8), \
+                         ?1, ?2, ?3, ?4) \
+                 RETURNING id, slug, name, cwd, accent, created_at, deleted_at",
+            )?;
+            let mut rows = stmt.query(params![rec.name, rec.cwd, rec.accent, created_at])?;
+            let row = rows
+                .next()?
+                .ok_or_else(|| anyhow::anyhow!("INSERT workspaces RETURNING produced no row"))?;
+            Ok(WorkspaceRecord {
+                id: row.get(0)?,
+                slug: row.get(1)?,
+                name: row.get(2)?,
+                cwd: row.get(3)?,
+                accent: row.get(4)?,
+                created_at: row.get(5)?,
+                deleted_at: row.get(6)?,
+            })
+        })
+        .await
+        .context("spawn_blocking create_workspace")?
+    }
+
+    /// Return all workspaces, optionally including soft-deleted ones.
+    /// Ordered by creation time descending (newest first) so the UI's
+    /// left nav puts fresh work at the top.
+    pub async fn list_workspaces(&self, include_deleted: bool) -> Result<Vec<WorkspaceRecord>> {
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || -> Result<Vec<WorkspaceRecord>> {
+            let conn = pool.get()?;
+            let sql = if include_deleted {
+                "SELECT id, slug, name, cwd, accent, created_at, deleted_at \
+                 FROM workspaces \
+                 ORDER BY created_at DESC"
+            } else {
+                "SELECT id, slug, name, cwd, accent, created_at, deleted_at \
+                 FROM workspaces WHERE deleted_at IS NULL \
+                 ORDER BY created_at DESC"
+            };
+            let mut stmt = conn.prepare(sql)?;
+            let rows = stmt.query_map([], |row| {
+                Ok(WorkspaceRecord {
+                    id: row.get(0)?,
+                    slug: row.get(1)?,
+                    name: row.get(2)?,
+                    cwd: row.get(3)?,
+                    accent: row.get(4)?,
+                    created_at: row.get(5)?,
+                    deleted_at: row.get(6)?,
+                })
+            })?;
+            rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+        })
+        .await
+        .context("spawn_blocking list_workspaces")?
+    }
+
+    /// Look up a single workspace by its primary key. Returns `None` if
+    /// not found (including soft-deleted rows — callers that care should
+    /// inspect `deleted_at`).
+    pub async fn get_workspace_by_id(&self, id: String) -> Result<Option<WorkspaceRecord>> {
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || -> Result<Option<WorkspaceRecord>> {
+            let conn = pool.get()?;
+            let mut stmt = conn.prepare(
+                "SELECT id, slug, name, cwd, accent, created_at, deleted_at \
+                 FROM workspaces WHERE id = ?1",
+            )?;
+            let mut rows = stmt.query(params![id])?;
+            if let Some(row) = rows.next()? {
+                Ok(Some(WorkspaceRecord {
+                    id: row.get(0)?,
+                    slug: row.get(1)?,
+                    name: row.get(2)?,
+                    cwd: row.get(3)?,
+                    accent: row.get(4)?,
+                    created_at: row.get(5)?,
+                    deleted_at: row.get(6)?,
+                }))
+            } else {
+                Ok(None)
+            }
+        })
+        .await
+        .context("spawn_blocking get_workspace_by_id")?
+    }
+
+    /// Mark a workspace deleted. Idempotent — re-deleting a row leaves
+    /// the existing `deleted_at` untouched. Returns the number of rows
+    /// whose `deleted_at` actually transitioned from NULL → set.
+    pub async fn soft_delete_workspace(&self, id: String, at_ms: i64) -> Result<usize> {
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || -> Result<usize> {
+            let conn = pool.get()?;
+            let n = conn.execute(
+                "UPDATE workspaces SET deleted_at = ?2 \
+                 WHERE id = ?1 AND deleted_at IS NULL",
+                params![id, at_ms],
+            )?;
+            Ok(n)
+        })
+        .await
+        .context("spawn_blocking soft_delete_workspace")?
+    }
+
+    /// Look up the workspace_id of a given agent — the reverse direction
+    /// of `agents.workspace_id`. The spell runner uses this to inherit
+    /// the caller agent's workspace when MCP `swarm_run_spell` fires.
+    /// Returns `None` if the agent isn't found, or if its workspace_id
+    /// is NULL (pre-Step-3 rows or legacy `+ Claude` clicks).
+    pub async fn get_workspace_id_for_agent(
+        &self,
+        agent_id: String,
+    ) -> Result<Option<String>> {
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || -> Result<Option<String>> {
+            let conn = pool.get()?;
+            let mut stmt = conn.prepare(
+                "SELECT workspace_id FROM agents WHERE id = ?1",
+            )?;
+            let mut rows = stmt.query(params![agent_id])?;
+            if let Some(row) = rows.next()? {
+                let val: Option<String> = row.get(0)?;
+                Ok(val)
+            } else {
+                Ok(None)
+            }
+        })
+        .await
+        .context("spawn_blocking get_workspace_id_for_agent")?
+    }
+
+    // ── spell runs ───────────────────────────────────────────────────────
+
+    /// Record a spell run for lineage tracking. Mirrors `create_workspace`
+    /// in using SQLite's `randomblob` to mint the id, so this crate
+    /// doesn't take a uuid dependency.
+    pub async fn create_spell_run(&self, rec: NewSpellRun) -> Result<SpellRunRecord> {
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || -> Result<SpellRunRecord> {
+            let conn = pool.get()?;
+            let mut stmt = conn.prepare(
+                "INSERT INTO spell_runs (id, workspace_id, spell_name, task, caller_agent_id, started_at) \
+                 VALUES (lower(hex(randomblob(16))), ?1, ?2, ?3, ?4, ?5) \
+                 RETURNING id, workspace_id, spell_name, task, caller_agent_id, started_at",
+            )?;
+            let mut rows = stmt.query(params![
+                rec.workspace_id,
+                rec.spell_name,
+                rec.task,
+                rec.caller_agent_id,
+                rec.started_at,
+            ])?;
+            let row = rows
+                .next()?
+                .ok_or_else(|| anyhow::anyhow!("INSERT spell_runs RETURNING produced no row"))?;
+            Ok(SpellRunRecord {
+                id: row.get(0)?,
+                workspace_id: row.get(1)?,
+                spell_name: row.get(2)?,
+                task: row.get(3)?,
+                caller_agent_id: row.get(4)?,
+                started_at: row.get(5)?,
+            })
+        })
+        .await
+        .context("spawn_blocking create_spell_run")?
     }
 
     pub async fn search_blackboard(&self, query: String) -> Result<Vec<BlackboardOpRecord>> {

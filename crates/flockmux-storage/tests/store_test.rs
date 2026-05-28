@@ -36,6 +36,8 @@ async fn agent_spawn_then_list() {
             role: "explorer".into(),
             workspace: "/tmp/a".into(),
             spawned_at: ts(0),
+            workspace_id: None,
+            spell_run_id: None,
         })
         .await
         .unwrap();
@@ -58,6 +60,8 @@ async fn agent_lifecycle_updates_idempotent() {
             role: "codex".into(),
             workspace: "/tmp/b".into(),
             spawned_at: ts(0),
+            workspace_id: None,
+            spell_run_id: None,
         })
         .await
         .unwrap();
@@ -602,6 +606,8 @@ async fn store_survives_reopen() {
                 role: "x".into(),
                 workspace: "/tmp/x".into(),
                 spawned_at: ts(0),
+                workspace_id: None,
+                spell_run_id: None,
             })
             .await
             .unwrap();
@@ -624,6 +630,8 @@ async fn mark_orphan_agents_killed_only_alive_rows() {
             role: "claude".into(),
             workspace: "/tmp/x".into(),
             spawned_at: ts(0),
+            workspace_id: None,
+            spell_run_id: None,
         })
         .await
         .unwrap();
@@ -634,6 +642,8 @@ async fn mark_orphan_agents_killed_only_alive_rows() {
             role: "claude".into(),
             workspace: "/tmp/y".into(),
             spawned_at: ts(0),
+            workspace_id: None,
+            spell_run_id: None,
         })
         .await
         .unwrap();

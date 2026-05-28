@@ -4,6 +4,7 @@ import type {
   BlackboardHistoryEntry,
   BlackboardSnapshot,
   CliPluginInfo,
+  CreateWorkspaceRequest,
   MarkReadResponse,
   MessageRecord,
   RecordingInfo,
@@ -14,6 +15,7 @@ import type {
   SpawnAgentResponse,
   SpellInfo,
   UnreadCountResponse,
+  Workspace,
   WriteBlackboardRequest,
 } from "./types";
 
@@ -111,4 +113,11 @@ export const api = {
   listSpells: () => request<SpellInfo[]>("GET", "/api/spells"),
   runSpell: (req: RunSpellRequest) =>
     request<RunSpellResponse>("POST", "/api/spell/run", req),
+
+  // workspaces (workspace-as-first-class refactor)
+  listWorkspaces: () => request<Workspace[]>("GET", "/api/workspaces"),
+  createWorkspace: (req: CreateWorkspaceRequest) =>
+    request<Workspace>("POST", "/api/workspaces", req),
+  deleteWorkspace: (id: string) =>
+    request<void>("DELETE", `/api/workspaces/${id}`),
 };

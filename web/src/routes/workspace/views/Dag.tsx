@@ -339,10 +339,8 @@ export default function DagView() {
 
   const agents = useMemo(
     () =>
-      allAgents.filter(
-        (a) => (a.workspace ?? "").slice(-8) === workspace.id,
-      ),
-    [allAgents, workspace.id],
+      allAgents.filter((a) => a.workspace_id === workspace.workspaceId),
+    [allAgents, workspace.workspaceId],
   );
 
   const bbAt = useMemo(() => {

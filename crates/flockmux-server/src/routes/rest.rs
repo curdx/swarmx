@@ -12,12 +12,12 @@ use axum::{
     Json,
 };
 use flockmux_protocol::rest::{
-    AgentInfo, CliPluginInfo, RunSpellAgent, RunSpellRequest, RunSpellResponse, SpawnAgentRequest,
-    SpawnAgentResponse, SpellAgentInfo, SpellInfo,
+    AgentInfo, CliPluginInfo, CreateWorkspaceRequest, RunSpellAgent, RunSpellRequest,
+    RunSpellResponse, SpawnAgentRequest, SpawnAgentResponse, SpellAgentInfo, SpellInfo, Workspace,
 };
 use flockmux_protocol::ws_swarm::{AgentState, SwarmEvent};
 use flockmux_recorder::{Recorder, RecorderConfig};
-use flockmux_storage::{NewAgent, NewRecording};
+use flockmux_storage::{NewAgent, NewRecording, NewSpellRun, NewWorkspace};
 use serde_json::json;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -49,17 +49,45 @@ pub async fn spawn(
     State(state): State<AppState>,
     Json(req): Json<SpawnAgentRequest>,
 ) -> Result<Json<SpawnAgentResponse>, (StatusCode, Json<serde_json::Value>)> {
+    // Step 3: workspace_id is now mandatory. The frontend always passes
+    // the active workspace's id; orphan `+ Claude` clicks must route
+    // through CreateWizard first.
+    let workspace_id = req.workspace_id.ok_or_else(|| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "workspace_id required (create or pick a workspace first)"})),
+        )
+    })?;
+    let ws = state
+        .store
+        .get_workspace_by_id(workspace_id.clone())
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": e.to_string()})),
+            )
+        })?
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": format!("workspace {workspace_id} not found")})),
+            )
+        })?;
+    // PerAgent root defaults to the workspace's cwd so the per-agent
+    // subdir lands inside the user's chosen project tree. Callers can
+    // still override with `req.workspace` (e.g. tests pinning to /tmp).
     let workspace_root = req
         .workspace
         .as_deref()
         .map(PathBuf::from)
-        .unwrap_or_else(|| state.workspaces_root.clone());
+        .unwrap_or_else(|| PathBuf::from(&ws.cwd));
     // Single-agent spawn always uses per-agent subdir layout. Spells
     // are the only path that can ask for a shared workspace.
     let layout = WorkspaceLayout::PerAgent {
         root: workspace_root,
     };
-    let outcome = spawn_with_bookkeeping(&state, &req.cli, req.role, layout)
+    let outcome = spawn_with_bookkeeping(&state, &req.cli, req.role, layout, ws.id, None)
         .await
         .map_err(|(status, msg)| (status, Json(json!({"error": msg}))))?;
     Ok(Json(SpawnAgentResponse {
@@ -101,6 +129,8 @@ pub(crate) async fn spawn_with_bookkeeping(
     cli: &str,
     role: Option<String>,
     layout: WorkspaceLayout,
+    workspace_id: String,
+    spell_run_id: Option<String>,
 ) -> Result<SpawnOutcome, (StatusCode, String)> {
     let plugin: CliPlugin = state
         .plugins
@@ -157,6 +187,8 @@ pub(crate) async fn spawn_with_bookkeeping(
             role: result.slot.role.clone(),
             workspace: result.slot.workspace.clone(),
             spawned_at,
+            workspace_id: Some(workspace_id.clone()),
+            spell_run_id: spell_run_id.clone(),
         })
         .await
     {
@@ -316,6 +348,11 @@ pub async fn list_agents(State(state): State<AppState>) -> impl IntoResponse {
                 spawned_at: None,
                 depends_on,
                 handoff_signal,
+                // Step 1: AgentSlot doesn't carry workspace_id yet (Step 3
+                // wires that in). For live entries the SQLite row is the
+                // authoritative source and we backfill from it below.
+                workspace_id: None,
+                spell_run_id: None,
             },
         );
     }
@@ -328,9 +365,11 @@ pub async fn list_agents(State(state): State<AppState>) -> impl IntoResponse {
         Ok(rows) => {
             for row in rows {
                 if let Some(mut info) = live.remove(&row.id) {
-                    // Backfill the timestamps from SQLite but keep the
-                    // live lifecycle snapshot.
+                    // Backfill the timestamps + workspace lineage from
+                    // SQLite but keep the live lifecycle snapshot.
                     info.spawned_at = Some(row.spawned_at);
+                    info.workspace_id = row.workspace_id;
+                    info.spell_run_id = row.spell_run_id;
                     items.push(info);
                 } else {
                     // Historical row: depends_on is empty (subscription
@@ -349,6 +388,8 @@ pub async fn list_agents(State(state): State<AppState>) -> impl IntoResponse {
                         spawned_at: Some(row.spawned_at),
                         depends_on: Vec::new(),
                         handoff_signal,
+                        workspace_id: row.workspace_id,
+                        spell_run_id: row.spell_run_id,
                     });
                 }
             }
@@ -420,6 +461,120 @@ pub async fn wake_agent(
         Ok(_) => (StatusCode::NO_CONTENT, Json(json!({"ok": true}))),
         Err(e) => {
             tracing::warn!(?e, agent = %agent_id, "manual wake failed");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": e.to_string()})),
+            )
+        }
+    }
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Workspace endpoints (Step 2 of workspace-as-first-class rollout)
+// ────────────────────────────────────────────────────────────────────────
+
+/// `POST /api/workspaces` — create a new workspace and return the
+/// persisted row. CreateWizard calls this *before* launching the `init`
+/// spell so the spell's spawned scout already carries `workspace_id`.
+pub async fn create_workspace_handler(
+    State(state): State<AppState>,
+    Json(req): Json<CreateWorkspaceRequest>,
+) -> Result<Json<Workspace>, (StatusCode, Json<serde_json::Value>)> {
+    if req.name.trim().is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "name must be non-empty"})),
+        ));
+    }
+    if req.cwd.trim().is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "cwd must be non-empty"})),
+        ));
+    }
+    let rec = state
+        .store
+        .create_workspace(
+            NewWorkspace {
+                name: req.name,
+                cwd: req.cwd,
+                accent: req.accent,
+            },
+            now_ms(),
+        )
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": e.to_string()})),
+            )
+        })?;
+    Ok(Json(Workspace {
+        id: rec.id,
+        slug: rec.slug,
+        name: rec.name,
+        cwd: rec.cwd,
+        accent: rec.accent,
+        created_at: rec.created_at,
+        member_count: 0,
+    }))
+}
+
+/// `GET /api/workspaces` — list alive workspaces with their live member
+/// counts (alive agents whose `workspace_id` points here). Soft-deleted
+/// rows are excluded.
+pub async fn list_workspaces_handler(State(state): State<AppState>) -> impl IntoResponse {
+    let rows = match state.store.list_workspaces(false).await {
+        Ok(rs) => rs,
+        Err(e) => {
+            tracing::warn!(?e, "list_workspaces failed");
+            return Json(Vec::<Workspace>::new());
+        }
+    };
+    // Compute member_count from list_agents instead of per-workspace SQL
+    // queries — there are typically <100 agents total, so a single pass
+    // beats N+1 SELECTs and keeps the store API smaller.
+    let agents = state.store.list_agents().await.unwrap_or_default();
+    let mut counts: HashMap<String, i64> = HashMap::new();
+    for a in agents {
+        if a.killed_at.is_some() {
+            continue;
+        }
+        if let Some(ws_id) = a.workspace_id {
+            *counts.entry(ws_id).or_insert(0) += 1;
+        }
+    }
+    let items: Vec<Workspace> = rows
+        .into_iter()
+        .map(|r| Workspace {
+            member_count: counts.get(&r.id).copied().unwrap_or(0),
+            id: r.id,
+            slug: r.slug,
+            name: r.name,
+            cwd: r.cwd,
+            accent: r.accent,
+            created_at: r.created_at,
+        })
+        .collect();
+    Json(items)
+}
+
+/// `DELETE /api/workspaces/:id` — soft-delete a workspace. Live agents
+/// in the workspace are intentionally NOT killed; the row just stops
+/// showing up in `GET /api/workspaces` so the left nav loses it. Anyone
+/// still attached via the WS keeps their PTY alive, by design.
+pub async fn delete_workspace_handler(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    match state.store.soft_delete_workspace(id.clone(), now_ms()).await {
+        Ok(0) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": format!("workspace {id} not found or already deleted")})),
+        ),
+        Ok(_) => (StatusCode::NO_CONTENT, Json(json!({"ok": true}))),
+        Err(e) => {
+            tracing::warn!(?e, ws_id = %id, "soft_delete_workspace failed");
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({"error": e.to_string()})),
@@ -549,29 +704,110 @@ pub async fn run_spell(
         }
     }
 
+    // Step 3: resolve the effective workspace_id BEFORE picking the
+    // layout. Order of precedence:
+    //   1. `caller_agent_id` — set when MCP `swarm_run_spell` fires from
+    //      inside an existing agent (planner / scout). Reverse-resolves
+    //      to the caller's workspace_id so spell agents inherit it.
+    //   2. `workspace_id` — set when the UI's launcher / CreateWizard
+    //      sends a spell directly.
+    //   3. else → 400. This is the core fix for the "orphan workspace
+    //      tab" bug: a spell launch with no workspace context is now an
+    //      error instead of silently creating an unowned spawn.
+    let workspace_id: String = if let Some(caller) = req.caller_agent_id.as_ref() {
+        match state
+            .store
+            .get_workspace_id_for_agent(caller.clone())
+            .await
+        {
+            Ok(Some(ws_id)) => ws_id,
+            Ok(None) => {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({
+                        "error": format!(
+                            "caller agent `{caller}` has no workspace_id; pass workspace_id explicitly"
+                        )
+                    })),
+                ));
+            }
+            Err(e) => {
+                return Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"error": e.to_string()})),
+                ));
+            }
+        }
+    } else if let Some(ws_id) = req.workspace_id.clone() {
+        ws_id
+    } else {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": "spell requires workspace context: pass workspace_id or caller_agent_id"
+            })),
+        ));
+    };
+    // Look up the workspace row so we can default Shared layout cwd to
+    // its `cwd` when the client didn't override.
+    let workspace = state
+        .store
+        .get_workspace_by_id(workspace_id.clone())
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": e.to_string()})),
+            )
+        })?
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": format!("workspace {workspace_id} not found")})),
+            )
+        })?;
+
     // Pick the workspace layout. For shared_workspace spells we use the
     // explicit `workspace_dir` if the client sent one (M6a UX: the
-    // SpellsLauncher exposes a text input); otherwise we mint a fresh
-    // `<workspaces_root>/spell-<uuid>/` so the launch never silently
-    // falls back to per-agent isolation (which would defeat the spell's
-    // entire premise — see fullstack-feature.md, FE/BE need to see each
-    // other's commits).
+    // SpellsLauncher exposes a text input); otherwise default to the
+    // workspace's `cwd` so the spell runs in the project the user picked
+    // in CreateWizard. PerAgent spells get per-agent subdirs under
+    // `workspaces_root` as before — cwd and workspace_id are orthogonal
+    // (filesystem layer vs. UI grouping layer).
     let layout: WorkspaceLayout = if spell.manifest.shared_workspace {
         let dir = req
             .workspace_dir
             .as_deref()
             .map(PathBuf::from)
-            .unwrap_or_else(|| {
-                state
-                    .workspaces_root
-                    .join(format!("spell-{}", &Uuid::new_v4().to_string()[..8]))
-            });
+            .unwrap_or_else(|| PathBuf::from(&workspace.cwd));
         WorkspaceLayout::Shared { dir }
     } else {
         WorkspaceLayout::PerAgent {
             root: state.workspaces_root.clone(),
         }
     };
+
+    // Record the spell-run lineage row so future UI can group agents by
+    // "this is the third critic-loop run in critic-demo". Lifetime is
+    // tied to the workspace via FK; soft-deleting the workspace doesn't
+    // touch this row.
+    let spell_run = state
+        .store
+        .create_spell_run(NewSpellRun {
+            workspace_id: workspace.id.clone(),
+            spell_name: spell.manifest.name.clone(),
+            task: req.task.clone(),
+            caller_agent_id: req.caller_agent_id.clone(),
+            started_at: now_ms(),
+        })
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": e.to_string()})),
+            )
+        })?;
+    let spell_run_id = spell_run.id.clone();
 
     // Phase 1: spawn all agents up-front (no PTY input yet) so each one's
     // agent_id is known before we render any prompt. Otherwise the writer's
@@ -584,6 +820,8 @@ pub async fn run_spell(
             &resolved.cli,
             Some(resolved.role.clone()),
             layout.clone(),
+            workspace.id.clone(),
+            Some(spell_run_id.clone()),
         )
         .await
         .map_err(|(status, msg)| {

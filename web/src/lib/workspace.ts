@@ -25,30 +25,12 @@ export function projectSummaryKey(path: string): string {
   return `project.summary.${workspaceSlug(path)}`;
 }
 
-/** Per-workspace key holding the human-friendly name the user typed
- *  into the create-workspace wizard (e.g. "我的待办 App"). When absent
- *  the chat sidebar falls back to the path's basename. */
-export function workspaceNameKey(path: string): string {
-  return `workspace.name.${workspaceSlug(path)}`;
-}
+// workspaceNameKey / workspaceAccentKey / WORKSPACE_ACCENT_KEY_PREFIX /
+// WORKSPACE_NAME_KEY_PREFIX_VALUE 在 workspace-as-first-class refactor
+// 中被删了 — name 和 accent 现在直接是 workspaces 表的列，CreateWizard
+// 通过 POST /api/workspaces 写入。前端不再用 blackboard 存这两个值。
 
-/** Per-workspace accent color id chosen in the wizard. Used by chat
- *  sidebar / channel header to render a small color chip so the user
- *  can tell multiple workspaces apart at a glance (like Discord server
- *  icons or GitHub repo project labels). Value is one of ACCENT_OPTIONS'
- *  `id` string; falls back to "peach" (default accent) when missing. */
-export function workspaceAccentKey(path: string): string {
-  return `workspace.accent.${workspaceSlug(path)}`;
-}
-
-export const WORKSPACE_ACCENT_KEY_PREFIX = "workspace.accent.";
-/** Exposed as a string constant so non-React modules (WorkspaceScopeBar)
- *  can build the read-blackboard key without importing a fn that already
- *  takes a path. The name- / accent-key fn variants stay for callers that
- *  have a `path` in hand. */
-export const WORKSPACE_NAME_KEY_PREFIX_VALUE = "workspace.name.";
-
-/** Wizard 给用户挑的 5 个 accent — id 持久化到 blackboard，cssVar 用于
+/** Wizard 给用户挑的 5 个 accent — id 现在持久化到 workspaces 表，cssVar 用于
  *  渲染时给 `style={{ background: cssVar }}` 之类的。Single source of
  *  truth: wizard / chat sidebar / channel header 都从这里读，加新 accent
  *  只改这里。*/

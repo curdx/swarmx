@@ -599,7 +599,16 @@ async fn run_spell(ctx: &ToolContext, args: &Value) -> Result<String, String> {
     let task = arg_str(args, "task")?;
     let workspace_dir = args.get("workspace_dir").and_then(|v| v.as_str());
 
-    let mut payload = json!({ "name": name, "task": task });
+    // Transparently inject our own agent_id so the server can reverse-
+    // resolve our workspace_id and inherit it for every agent the spell
+    // spawns. This is the fix for the "orphan workspace tab" bug — the
+    // LLM doesn't need to know about workspace_id, the tool plumbs it
+    // for them.
+    let mut payload = json!({
+        "name": name,
+        "task": task,
+        "caller_agent_id": ctx.agent_id,
+    });
     if let Some(wd) = workspace_dir.filter(|s| !s.is_empty()) {
         payload
             .as_object_mut()

@@ -44,18 +44,20 @@ import {
   Play,
   Plus,
   Sparkles,
+  Trash2,
 } from "lucide-react";
 import { api } from "../../api/http";
-import type { AgentInfo, MessageRecord, SwarmEvent } from "../../api/types";
+import type {
+  AgentInfo,
+  MessageRecord,
+  SwarmEvent,
+  Workspace,
+} from "../../api/types";
 import { AgentDrawer } from "../../components/agent/AgentDrawer";
 import { CreateWizard } from "../../components/workspace/CreateWizard";
 import { Welcome } from "../../components/Welcome";
 import { useSwarmFeed } from "../../hooks/useSwarmFeed";
-import {
-  accentToCssVar,
-  WORKSPACE_ACCENT_KEY_PREFIX,
-  workspaceSlug,
-} from "../../lib/workspace";
+import { accentToCssVar } from "../../lib/workspace";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -66,22 +68,25 @@ import {
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/cn";
 
-const WORKSPACE_NAME_KEY_PREFIX = "workspace.name.";
-
 // ── Types ──────────────────────────────────────────────────────────────
 
 export interface WorkspaceSummary {
-  /** Stable id used in URLs — last 8 chars of `path`. */
+  /** URL slug used by `/chat/:slug`. Now = first 8 chars of the
+   *  workspaces table UUID (stable, collision-free). */
   id: string;
-  /** Full filesystem path of the workspace (canonical). */
+  /** Full workspaces.id (UUID). Used by data joins (e.g. agent
+   *  filtering, DELETE endpoint). */
+  workspaceId: string;
+  /** The workspace's cwd. */
   path: string;
-  /** Human name from the create wizard, or path basename fallback. */
+  /** Human name from CreateWizard (workspaces.name). */
   name: string;
   /** Path parent for the small mono caption under the name. */
   parent: string;
-  /** Accent color CSS var; comes from wizard or defaults to peach. */
+  /** Accent color CSS var; comes from workspaces.accent or defaults
+   *  to peach. */
   accentColor: string;
-  /** Alive agents in this workspace. */
+  /** Alive agents whose workspace_id points at this workspace. */
   members: AgentInfo[];
 }
 
@@ -139,10 +144,14 @@ export function WorkspaceList({
   workspaces,
   activeId,
   onOpenWizard,
+  onDelete,
 }: {
   workspaces: WorkspaceSummary[];
   activeId: string | null;
   onOpenWizard: () => void;
+  /** Soft-delete handler. Receives the full workspace UUID (NOT the slug)
+   *  so the parent can call `DELETE /api/workspaces/:id` directly. */
+  onDelete?: (workspaceId: string) => void;
 }) {
   const { t } = useTranslation();
   return (
@@ -178,37 +187,77 @@ export function WorkspaceList({
         {workspaces.map((ws) => {
           const active = ws.id === activeId;
           return (
-            // 用 NavLink 而不是 button+navigate — 浏览器中键 / cmd+click 自然
-            // 开新 tab，URL 在 hover 时显示在状态栏，符合 web 原生预期。
-            <NavLink
+            <div
               key={ws.id}
-              to={`/chat/${ws.id}`}
-              title={ws.path}
               className={cn(
-                "group flex items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors",
+                "group relative flex items-center rounded-md transition-colors",
                 active
-                  ? "bg-accent-primary-soft text-foreground-primary"
-                  : "text-foreground-secondary hover:bg-surface-tertiary",
+                  ? "bg-accent-primary-soft"
+                  : "hover:bg-surface-tertiary",
               )}
             >
-              <span
-                className="mt-1 size-2 shrink-0 self-start rounded-full"
-                style={{ background: ws.accentColor }}
-              />
-              <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                <span className="truncate font-heading text-[13px] font-semibold text-foreground-primary">
-                  {ws.name}
-                </span>
-                {ws.parent && (
-                  <span className="truncate font-mono text-[10px] leading-tight text-foreground-tertiary">
-                    {ws.parent}
-                  </span>
+              {/* NavLink 而不是 button+navigate — 浏览器中键 / cmd+click
+               *  自然开新 tab，URL 在 hover 时显示在状态栏。
+               *  pr-8 留出 hover 删除按钮的空间。 */}
+              <NavLink
+                to={`/chat/${ws.id}`}
+                title={ws.path}
+                className={cn(
+                  "flex flex-1 items-center gap-2 px-2 py-1.5 pr-8 text-left",
+                  active
+                    ? "text-foreground-primary"
+                    : "text-foreground-secondary",
                 )}
-              </span>
-              <span className="self-start font-caption text-[10px] font-semibold text-foreground-tertiary">
-                {ws.members.length}
-              </span>
-            </NavLink>
+              >
+                <span
+                  className="mt-1 size-2 shrink-0 self-start rounded-full"
+                  style={{ background: ws.accentColor }}
+                />
+                <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                  <span className="truncate font-heading text-[13px] font-semibold text-foreground-primary">
+                    {ws.name}
+                  </span>
+                  {ws.parent && (
+                    <span className="truncate font-mono text-[10px] leading-tight text-foreground-tertiary">
+                      {ws.parent}
+                    </span>
+                  )}
+                </span>
+                <span className="self-start font-caption text-[10px] font-semibold text-foreground-tertiary">
+                  {ws.members.length}
+                </span>
+              </NavLink>
+              {/* Hover-only 删除按钮。软删除：workspace 卡片消失，但 PTY /
+               *  agent 保留（用户可能仍在用某个 pane）。第一次点带 confirm，
+               *  防误删。 */}
+              {onDelete && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        if (
+                          window.confirm(
+                            `删除工作空间「${ws.name}」？\n（仅从列表移除，已启动的 agent 继续运行）`,
+                          )
+                        ) {
+                          onDelete(ws.workspaceId);
+                        }
+                      }}
+                      className="absolute right-1 top-1 size-6 text-foreground-tertiary opacity-0 transition-opacity group-hover:opacity-100 hover:text-state-danger"
+                      aria-label={`删除 ${ws.name}`}
+                    >
+                      <Trash2 className="size-3.5" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="right">删除工作空间</TooltipContent>
+                </Tooltip>
+              )}
+            </div>
           );
         })}
       </nav>
@@ -459,53 +508,22 @@ export default function WorkspaceShell() {
 
   // ── Shared state (was per-route before, now per-Shell) ──────────────
   const [agents, setAgents] = useState<AgentInfo[]>([]);
+  const [workspaceRows, setWorkspaceRows] = useState<Workspace[]>([]);
   const [liveMessage, setLiveMessage] = useState<MessageRecord | null>(null);
   const [liveRead, setLiveRead] = useState<
     { ids: number[]; to_agent: string; at: number } | null
   >(null);
   const [unreadByFrom, setUnreadByFrom] = useState<Record<string, number>>({});
   const [jumpUnreadTick, setJumpUnreadTick] = useState(0);
-  const [workspaceNames, setWorkspaceNames] = useState<Record<string, string>>({});
-  const [workspaceAccents, setWorkspaceAccents] = useState<Record<string, string>>({});
   const idToFromRef = useRef<Map<number, string>>(new Map());
 
-  const refreshWorkspaceNames = useCallback(async () => {
+  const refreshWorkspaces = useCallback(async () => {
     try {
-      const entries = await api.listBlackboard();
-      const nameEntries = entries.filter((e) =>
-        e.path.startsWith(WORKSPACE_NAME_KEY_PREFIX),
-      );
-      const accentEntries = entries.filter((e) =>
-        e.path.startsWith(WORKSPACE_ACCENT_KEY_PREFIX),
-      );
-      const [namePairs, accentPairs] = await Promise.all([
-        Promise.all(
-          nameEntries.map(async (e) => {
-            const slug = e.path.slice(WORKSPACE_NAME_KEY_PREFIX.length);
-            try {
-              const snap = await api.readBlackboard(e.path);
-              return [slug, snap.content] as const;
-            } catch {
-              return [slug, ""] as const;
-            }
-          }),
-        ),
-        Promise.all(
-          accentEntries.map(async (e) => {
-            const slug = e.path.slice(WORKSPACE_ACCENT_KEY_PREFIX.length);
-            try {
-              const snap = await api.readBlackboard(e.path);
-              return [slug, snap.content] as const;
-            } catch {
-              return [slug, ""] as const;
-            }
-          }),
-        ),
-      ]);
-      setWorkspaceNames(Object.fromEntries(namePairs.filter(([, v]) => v)));
-      setWorkspaceAccents(Object.fromEntries(accentPairs.filter(([, v]) => v)));
-    } catch {
-      /* best-effort */
+      const items = await api.listWorkspaces();
+      setWorkspaceRows(items);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn("listWorkspaces failed", err);
     }
   }, []);
 
@@ -540,8 +558,8 @@ export default function WorkspaceShell() {
   useEffect(() => {
     refreshAgents();
     recomputeUnread();
-    refreshWorkspaceNames();
-  }, [refreshAgents, recomputeUnread, refreshWorkspaceNames]);
+    refreshWorkspaces();
+  }, [refreshAgents, recomputeUnread, refreshWorkspaces]);
 
   const refreshTimerRef = useRef<number | null>(null);
   const scheduleRefresh = useCallback(() => {
@@ -598,46 +616,46 @@ export default function WorkspaceShell() {
           });
           break;
         case "blackboard_changed":
-          if (
-            ev.path.startsWith(WORKSPACE_NAME_KEY_PREFIX) ||
-            ev.path.startsWith(WORKSPACE_ACCENT_KEY_PREFIX)
-          ) {
-            refreshWorkspaceNames();
-          }
+          // workspace name / accent now live in the `workspaces` table,
+          // not the blackboard, so we don't react to blackboard events
+          // for that any more. Member-count changes are picked up via
+          // `agent_state` → scheduleRefresh → refreshAgents → recompute.
           break;
       }
     },
     onReconnect: () => {
       scheduleRefresh();
       recomputeUnread();
-      refreshWorkspaceNames();
+      refreshWorkspaces();
     },
   });
 
-  // ── Workspaces (alive only — exited workspaces fall off the list) ───
+  // ── Workspaces (server-side, alive only) ────────────────────────────
+  // Source of truth: GET /api/workspaces (deleted_at IS NULL only).
+  // Agents are grouped onto these via `agent.workspace_id`. The old
+  // "group by cwd path" trick is gone — that was the bug.
   const workspaces = useMemo<WorkspaceSummary[]>(() => {
-    const live = agents.filter((a) => a.killed_at == null && a.shim_exit == null);
-    const byWs = new Map<string, AgentInfo[]>();
-    for (const a of live) {
-      const key = a.workspace || "(no workspace)";
-      if (!byWs.has(key)) byWs.set(key, []);
-      byWs.get(key)!.push(a);
+    const aliveByWsId = new Map<string, AgentInfo[]>();
+    for (const a of agents) {
+      if (a.killed_at != null || a.shim_exit != null) continue;
+      if (!a.workspace_id) continue;
+      const arr = aliveByWsId.get(a.workspace_id) ?? [];
+      arr.push(a);
+      aliveByWsId.set(a.workspace_id, arr);
     }
-    return Array.from(byWs.entries()).map(([path, members]) => {
-      const { name: basename, parent } = splitWorkspacePath(path);
-      const slug = workspaceSlug(path);
-      const userName = workspaceNames[slug];
-      const accentColor = accentToCssVar(workspaceAccents[slug]);
+    return workspaceRows.map<WorkspaceSummary>((w) => {
+      const { parent } = splitWorkspacePath(w.cwd);
       return {
-        path,
-        members,
-        name: userName || basename,
+        id: w.slug,
+        workspaceId: w.id,
+        path: w.cwd,
+        name: w.name,
         parent,
-        accentColor,
-        id: path.slice(-8) || "default",
+        accentColor: accentToCssVar(w.accent),
+        members: aliveByWsId.get(w.id) ?? [],
       };
     });
-  }, [agents, workspaceNames, workspaceAccents]);
+  }, [workspaceRows, agents]);
 
   const activeWs = useMemo(
     () => workspaces.find((w) => w.id === wsId) ?? null,
@@ -653,7 +671,7 @@ export default function WorkspaceShell() {
   const workspaceAgentIds = useMemo(() => {
     if (!activeWs) return [];
     return agents
-      .filter((a) => (a.workspace || "(no workspace)") === activeWs.path)
+      .filter((a) => a.workspace_id === activeWs.workspaceId)
       .map((a) => a.agent_id);
   }, [agents, activeWs]);
 
@@ -672,6 +690,7 @@ export default function WorkspaceShell() {
   const composerOverride = useMemo(() => {
     if (!isInitOnlyWorkspace || !activeWs) return undefined;
     const wsPath = activeWs.path;
+    const wsId = activeWs.workspaceId;
     return async (body: string) => {
       const { FULLSTACK_INTERNAL_KEYS, projectSummaryKey } = await import(
         "../../lib/workspace"
@@ -698,6 +717,7 @@ export default function WorkspaceShell() {
         name: "auto-dispatch",
         task: taskParts.join(""),
         workspace_dir: wsPath,
+        workspace_id: wsId,
       });
     };
   }, [isInitOnlyWorkspace, activeWs]);
@@ -712,6 +732,30 @@ export default function WorkspaceShell() {
   const totalUnread = Object.values(activeWorkspaceUnread).reduce(
     (a, b) => a + b,
     0,
+  );
+
+  // ── Soft-delete a workspace ────────────────────────────────────────
+  const handleDeleteWorkspace = useCallback(
+    async (workspaceId: string) => {
+      try {
+        await api.deleteWorkspace(workspaceId);
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn("deleteWorkspace failed", err);
+        return;
+      }
+      // Optimistically drop it from local state — next listWorkspaces
+      // refresh would catch it anyway but UI shouldn't lag a roundtrip.
+      const remaining = workspaceRows.filter((w) => w.id !== workspaceId);
+      setWorkspaceRows(remaining);
+      // If we just deleted the active workspace, navigate to the first
+      // remaining one or back to /chat splash.
+      if (activeWs?.workspaceId === workspaceId) {
+        const next = remaining[0];
+        navigate(next ? `/chat/${next.slug}` : "/chat", { replace: true });
+      }
+    },
+    [workspaceRows, activeWs, navigate],
   );
 
   // ── ⌘1-4 global shortcut ───────────────────────────────────────────
@@ -751,6 +795,7 @@ export default function WorkspaceShell() {
             workspaces={workspaces}
             activeId={wsId ?? null}
             onOpenWizard={() => setWizardOpen(true)}
+            onDelete={handleDeleteWorkspace}
           />
           {workspaces.length === 0 ? (
             // 完全空：展示 Welcome 屏，跟 /chat 主入口体验一致。
@@ -768,7 +813,10 @@ export default function WorkspaceShell() {
           <CreateWizard
             open={wizardOpen}
             onClose={() => setWizardOpen(false)}
-            onCreated={refreshAgents}
+            onCreated={() => {
+              refreshAgents();
+              refreshWorkspaces();
+            }}
           />
         </div>
       </TooltipProvider>
@@ -796,6 +844,7 @@ export default function WorkspaceShell() {
           workspaces={workspaces}
           activeId={activeWs.id}
           onOpenWizard={() => setWizardOpen(true)}
+          onDelete={handleDeleteWorkspace}
         />
         <section className="flex min-w-0 flex-1 flex-col bg-surface-primary">
           <WorkspaceToolbar
@@ -815,7 +864,10 @@ export default function WorkspaceShell() {
         <CreateWizard
           open={wizardOpen}
           onClose={() => setWizardOpen(false)}
-          onCreated={refreshAgents}
+          onCreated={() => {
+            refreshAgents();
+            refreshWorkspaces();
+          }}
         />
       </div>
     </TooltipProvider>

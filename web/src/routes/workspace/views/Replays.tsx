@@ -93,10 +93,10 @@ export default function ReplaysView() {
   };
 
   const [items, setItems] = useState<RecordingInfo[]>([]);
-  // 录像 cross-ref：agent_id → role (给 AgentChip) + agent_id → workspace (给
-  // wsId 过滤)。Shell 已有 allAliveAgents 但不含 killed agents 的历史 ws，
-  // 录像可能属于已退出的 agent，所以这里独立 listAgents 一次。
-  const [agentWorkspaceById, setAgentWorkspaceById] = useState<Map<string, string>>(
+  // 录像 cross-ref：agent_id → role (给 AgentChip) + agent_id → workspace_id
+  // (给 ws 过滤)。Shell 已有 allAliveAgents 但不含 killed agents 的历史
+  // workspace_id，录像可能属于已退出的 agent，所以这里独立 listAgents 一次。
+  const [agentWsIdById, setAgentWsIdById] = useState<Map<string, string>>(
     () => new Map(),
   );
   const [roleLookup, setRoleLookup] = useState<Map<string, string>>(
@@ -111,13 +111,13 @@ export default function ReplaysView() {
         api.listAgents(),
       ]);
       setItems(rows);
-      const wsM = new Map<string, string>();
+      const wsIdM = new Map<string, string>();
       const roleM = new Map<string, string>();
       for (const a of agents as AgentInfo[]) {
-        if (a.workspace) wsM.set(a.agent_id, a.workspace);
+        if (a.workspace_id) wsIdM.set(a.agent_id, a.workspace_id);
         roleM.set(a.agent_id, a.role);
       }
-      setAgentWorkspaceById(wsM);
+      setAgentWsIdById(wsIdM);
       setRoleLookup(roleM);
       setError(null);
     } catch (e) {
@@ -138,10 +138,10 @@ export default function ReplaysView() {
 
   const scopedToWorkspace = useMemo(() => {
     return items.filter((r) => {
-      const ws = agentWorkspaceById.get(r.agent_id);
-      return ws && ws.slice(-8) === workspace.id;
+      const wsId = agentWsIdById.get(r.agent_id);
+      return wsId === workspace.workspaceId;
     });
-  }, [items, workspace.id, agentWorkspaceById]);
+  }, [items, workspace.workspaceId, agentWsIdById]);
 
   const tags = useMemo(() => {
     const set = new Set<string>();

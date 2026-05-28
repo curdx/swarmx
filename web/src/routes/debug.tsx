@@ -107,10 +107,29 @@ export default function DebugRoute() {
     onReconnect: scheduleRefresh,
   });
 
+  // Step 3 of the workspace refactor makes spawnAgent require a
+  // workspace_id. The legacy /debug dashboard isn't workspace-aware, so
+  // we lazily ensure a "debug-scratch" workspace exists and pin every
+  // spawn to it. Production users go through the main UI's CreateWizard.
+  const ensureDebugWorkspace = async (): Promise<string> => {
+    const all = await api.listWorkspaces();
+    const found = all.find((w) => w.name === "debug-scratch");
+    if (found) return found.id;
+    const cwd =
+      (window as { __FLOCKMUX_HOME?: string }).__FLOCKMUX_HOME ?? "/tmp";
+    const created = await api.createWorkspace({
+      name: "debug-scratch",
+      cwd,
+      accent: "peach",
+    });
+    return created.id;
+  };
+
   const spawn = async (cli: string) => {
     setSpawning(true);
     try {
-      const agent = await api.spawnAgent({ cli });
+      const workspace_id = await ensureDebugWorkspace();
+      const agent = await api.spawnAgent({ cli, workspace_id });
       setAgents((prev) => [...prev, agent]);
     } catch (err) {
       // eslint-disable-next-line no-alert

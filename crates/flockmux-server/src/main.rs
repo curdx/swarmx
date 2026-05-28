@@ -237,6 +237,15 @@ async fn main() -> Result<()> {
             get(routes::recording::list_recordings),
         )
         .route("/api/recording/:id", get(routes::recording::get_recording))
+        .route(
+            "/api/workspaces",
+            get(routes::rest::list_workspaces_handler)
+                .post(routes::rest::create_workspace_handler),
+        )
+        .route(
+            "/api/workspaces/:id",
+            delete(routes::rest::delete_workspace_handler),
+        )
         .route("/api/spells", get(routes::rest::list_spells))
         .route("/api/spell/run", post(routes::rest::run_spell))
         .route("/ws/swarm", get(routes::ws_swarm::ws_swarm))

@@ -12,6 +12,12 @@ pub struct SpawnAgentRequest {
     /// Optional workspace path. If absent, server allocates a temp dir.
     #[serde(default)]
     pub workspace: Option<String>,
+    /// Workspaces table FK. Optional in Step 1 of the rollout for compatibility;
+    /// becomes mandatory in Step 3 once the frontend always passes the
+    /// active workspace's id and orphan `+ Claude` clicks are routed through
+    /// CreateWizard. The server will error if missing post-Step-3.
+    #[serde(default)]
+    pub workspace_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -65,6 +71,18 @@ pub struct AgentInfo {
     /// dependents back to their producers.
     #[serde(default)]
     pub handoff_signal: String,
+    /// FK into the workspaces table. `None` for pre-migration rows or for
+    /// agents spawned via legacy code paths before Step 3 enforces the
+    /// field. Frontend uses this for nav grouping in place of the cwd
+    /// (`workspace`) string.
+    #[serde(default)]
+    pub workspace_id: Option<String>,
+    /// FK into the spell_runs table — set only for agents that came out of
+    /// a spell launch (the planner/scout pair from `init` and every
+    /// downstream spell). UI doesn't render this directly yet; reserved
+    /// for a future "group by spell run" toggle.
+    #[serde(default)]
+    pub spell_run_id: Option<String>,
 }
 
 // ── swarm REST DTOs (M3 #18) ─────────────────────────────────────────────
@@ -221,6 +239,20 @@ pub struct RunSpellRequest {
     /// under workspaces_root as before).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_dir: Option<String>,
+    /// Workspaces table FK the spawned agents should be associated with.
+    /// When omitted, the server tries to reverse-look-up via
+    /// `caller_agent_id`; if neither is available the request is rejected
+    /// (post-Step-3). This is what fixes the "orphan workspace tab" bug —
+    /// every spell agent inherits the caller's workspace.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_id: Option<String>,
+    /// agent_id of the caller, transparently injected by the
+    /// `swarm_run_spell` MCP tool from its `ToolContext`. Server reverse-
+    /// resolves it to the caller's `workspace_id`. Direct REST callers
+    /// (CreateWizard, top-bar launcher) leave this empty and pass
+    /// `workspace_id` instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caller_agent_id: Option<String>,
 }
 
 /// `POST /api/spell/run` response. Lists the agents the runner actually
@@ -236,4 +268,34 @@ pub struct RunSpellAgent {
     pub role: String,
     pub cli: String,
     pub agent_id: String,
+}
+
+// ── workspaces (Step 1 of workspace-as-first-class refactor) ─────────────
+
+/// One row from `GET /api/workspaces`. `member_count` is computed at list
+/// time (live agents whose `workspace_id` points here). Soft-deleted
+/// workspaces aren't included by default.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Workspace {
+    pub id: String,
+    /// First 8 chars of `id`, used as the URL slug for `/chat/:slug`.
+    pub slug: String,
+    pub name: String,
+    pub cwd: String,
+    #[serde(default)]
+    pub accent: Option<String>,
+    pub created_at: i64,
+    pub member_count: i64,
+}
+
+/// `POST /api/workspaces` payload. CreateWizard sends this before launching
+/// the `init` spell so the new workspace is persisted up-front (replaces
+/// the old blackboard `workspace.name.<slug>` / `workspace.accent.<slug>`
+/// keys).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateWorkspaceRequest {
+    pub name: String,
+    pub cwd: String,
+    #[serde(default)]
+    pub accent: Option<String>,
 }

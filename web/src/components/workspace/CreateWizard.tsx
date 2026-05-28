@@ -38,8 +38,6 @@ import { useSwarmFeed } from "../../hooks/useSwarmFeed";
 import {
   ACCENT_OPTIONS,
   PROJECT_SUMMARY_KEY_PREFIX,
-  workspaceAccentKey,
-  workspaceNameKey,
 } from "../../lib/workspace";
 import { Button } from "@/components/ui/button";
 import {
@@ -175,43 +173,22 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
           "后端未加载 `init` spell — 请重启 flockmux-server 让它发现 spells/init.md",
         );
       }
-      const resp = await api.runSpell({
+      // workspace-as-first-class refactor: workspace is created in the
+      // DB BEFORE the init spell launches. The scout that init spawns
+      // inherits the workspace_id via the spell-runner's reverse-lookup
+      // (rest.rs::run_spell with workspace_id). Name + accent are
+      // workspace table columns now, no blackboard writes needed.
+      const ws = await api.createWorkspace({
+        name: wsName,
+        cwd: cleanDirs[0],
+        accent,
+      });
+      await api.runSpell({
         name: INIT_SPELL,
         task: wsName,
         workspace_dir: cleanDirs[0],
+        workspace_id: ws.id,
       });
-      // 写 workspace.name.<slug> 让 chat sidebar 显示用户起的名字。slug 必须
-      // 用 canonical path（spawn_agent ensure_shared_workspace 调过
-      // canonicalize），所以先从 listAgents 把刚 spawn 的 scout 取回来，
-      // 用它的 workspace 字段算 slug。失败 fallback 用户输入的原始路径 —
-      // sidebar 拿不到 name 时也只是 fallback basename，不致命。
-      const scoutId = resp.agents[0]?.agent_id;
-      let canonicalPath: string = cleanDirs[0];
-      if (scoutId) {
-        try {
-          const all = await api.listAgents();
-          const sc = all.find((a) => a.agent_id === scoutId);
-          if (sc?.workspace) canonicalPath = sc.workspace;
-        } catch {
-          /* best-effort */
-        }
-      }
-      api
-        .writeBlackboard(workspaceNameKey(canonicalPath), {
-          content: wsName,
-        })
-        .catch(() => {
-          /* best-effort — sidebar fallback 到 basename，没 name 也能用 */
-        });
-      // 持久化用户挑的 accent — chat sidebar / channel header 据此给每个
-      // workspace 一个区分色，多 ws 时一眼看出谁是谁（Discord 服务器风）。
-      api
-        .writeBlackboard(workspaceAccentKey(canonicalPath), {
-          content: accent,
-        })
-        .catch(() => {
-          /* best-effort — accent 缺失就用默认色 (peach) */
-        });
     } catch (e) {
       setScan(null);
       setError((e as Error).message);
