@@ -94,6 +94,10 @@ interface Props {
    *  the chat header; we react by scrolling the first unread bubble into
    *  view and flashing it. Initial 0 is the no-op state. */
   jumpUnreadTick?: number;
+  /** 渲染在消息列表底部、composer 上方的浮层 — chat 上下文的"AI 正在
+   *  干活" inline cards 走这。父组件维护 task state machine，这里只是
+   *  视觉插槽。 */
+  taskActivityBelow?: React.ReactNode;
 }
 
 const KIND_DEFAULT = "note";
@@ -182,6 +186,7 @@ export function MessagesPanel({
   composerOverride,
   onOpenAgent,
   jumpUnreadTick = 0,
+  taskActivityBelow,
 }: Props) {
   const aliveForInference = allAliveAgents ?? activeMembers;
   const { t } = useTranslation();
@@ -806,6 +811,9 @@ export function MessagesPanel({
           ))}
         </div>
       </div>
+
+      {/* ── Task activity (chat 内联状态卡片，"AI 正在派活...") ─────── */}
+      {taskActivityBelow}
 
       {/* ── composer ─────────────────────────────────────────────────── */}
       <div className="flex shrink-0 flex-col gap-1.5 border-t border-border-subtle bg-surface-secondary px-3 py-2.5">

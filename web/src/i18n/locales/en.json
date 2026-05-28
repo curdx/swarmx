@@ -36,6 +36,15 @@
     },
     "sidebarEmpty": "No workspaces yet"
   },
+  "task": {
+    "pending": "Waiting for AI…",
+    "spawning_one": "✨ Spawning {{roles}}",
+    "spawning_other": "✨ Spawning {{count}} agents · {{roles}}",
+    "ready_one": "✓ {{roles}} ready",
+    "ready_other": "✓ {{count}} agents ready · {{roles}}",
+    "triggered": "\"{{msg}}\"",
+    "dismiss": "Dismiss"
+  },
   "tour": {
     "dialogTitle": "Quick tour",
     "dialogDesc": "Get to know flockmux in 30 seconds",

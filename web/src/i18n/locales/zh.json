@@ -36,6 +36,15 @@
     },
     "sidebarEmpty": "还没有工作空间"
   },
+  "task": {
+    "pending": "等待 AI 反应…",
+    "spawning_one": "✨ 拉起 {{roles}}",
+    "spawning_other": "✨ 拉起 {{count}} 个 agent · {{roles}}",
+    "ready_one": "✓ {{roles}} 就绪",
+    "ready_other": "✓ {{count}} 个 agent 就绪 · {{roles}}",
+    "triggered": "「{{msg}}」",
+    "dismiss": "关闭"
+  },
   "tour": {
     "dialogTitle": "新手引导",
     "dialogDesc": "30 秒认识 flockmux",
