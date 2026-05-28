@@ -411,11 +411,18 @@ fn validate_manifest(m: &SpellManifest) -> Result<()> {
     Ok(())
 }
 
-/// Substitute `{task}` and `{<role>_id}` placeholders in a system prompt.
-/// Unknown placeholders are left literal so we don't silently drop content
-/// the spell author cared about — bad data is more recoverable than missing.
-pub fn render_prompt(prompt: &str, task: &str, role_to_id: &HashMap<String, String>) -> String {
+/// Substitute `{task}`, `{workspace_id}` and `{<role>_id}` placeholders in
+/// a system prompt. Unknown placeholders are left literal so we don't
+/// silently drop content the spell author cared about — bad data is more
+/// recoverable than missing.
+pub fn render_prompt(
+    prompt: &str,
+    task: &str,
+    workspace_id: &str,
+    role_to_id: &HashMap<String, String>,
+) -> String {
     let mut out = prompt.replace("{task}", task);
+    out = out.replace("{workspace_id}", workspace_id);
     for (role, id) in role_to_id {
         let needle = format!("{{{}_id}}", role);
         out = out.replace(&needle, id);
@@ -861,6 +868,7 @@ cli = "claude"
         let rendered = render_prompt(
             "Task: {task}. Writer is {writer_id}, critic is {critic_id}.",
             "build a parser",
+            "",
             &map,
         );
         assert_eq!(
@@ -870,9 +878,21 @@ cli = "claude"
     }
 
     #[test]
+    fn render_prompt_substitutes_workspace_id() {
+        let map = HashMap::new();
+        let out = render_prompt(
+            "write ledger to {workspace_id}/task.ledger.md",
+            "",
+            "abc123",
+            &map,
+        );
+        assert_eq!(out, "write ledger to abc123/task.ledger.md");
+    }
+
+    #[test]
     fn render_prompt_leaves_unknown_placeholders_literal() {
         let map = HashMap::new();
-        let out = render_prompt("ref {unknown_id} here", "t", &map);
+        let out = render_prompt("ref {unknown_id} here", "t", "", &map);
         // We deliberately don't strip unknown {…_id} substrings — silent
         // dropping would hide spell author bugs.
         assert!(out.contains("{unknown_id}"));

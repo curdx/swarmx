@@ -17,6 +17,7 @@ use bytes::Bytes;
 use dashmap::DashMap;
 use flockmux_pty::PtyBridge;
 use parking_lot::Mutex;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -46,6 +47,11 @@ pub struct AgentSlot {
     pub cli: String,
     pub role: String,
     pub workspace: String,
+    /// In-memory pause flag. When true, the WakeCoordinator's auto-wake
+    /// path (BlackboardChanged → deliver_wake) short-circuits and does not
+    /// inject PTY bytes for this agent. Manual operator wakes bypass this.
+    /// Persisted lifetime = process lifetime; resets on server restart.
+    pub paused: Arc<AtomicBool>,
 }
 
 #[derive(Debug, Clone, Copy)]

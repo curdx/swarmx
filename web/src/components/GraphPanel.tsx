@@ -144,6 +144,19 @@ export function GraphPanel({ liveChange, agentTick }: Props) {
     }
   }
 
+  // Parent → child edges. parent_agent_id is server-derived from
+  // spell_runs.caller_agent_id; it's non-null only for sub-agents
+  // spawned via MCP swarm_run_spell from another agent. Skip the edge
+  // if the parent isn't in the live set (it exited but the child
+  // outlived it — still visually a root).
+  type SpawnEdge = { fromId: string; toId: string };
+  const spawnEdges: SpawnEdge[] = [];
+  for (const a of liveAgents) {
+    if (!a.parent_agent_id) continue;
+    if (!liveAgents.find((x) => x.agent_id === a.parent_agent_id)) continue;
+    spawnEdges.push({ fromId: a.parent_agent_id, toId: a.agent_id });
+  }
+
   // Per-CLI accent colors. Picks up the same scheme used by the pane
   // header borders so the graph feels of-a-piece with the rest of the UI.
   const cliColor = (cli: string): string => {
@@ -159,7 +172,8 @@ export function GraphPanel({ liveChange, agentTick }: Props) {
         <span style={{ ...legendDot, background: "#0ea5e9", marginLeft: 12 }} />
         codex
         <span style={legendSeparator}>•</span>
-        <span style={legendEdgeAmber}>—</span> 等待中
+        <span style={legendEdgeSlate}>—</span> 雇佣
+        <span style={legendEdgeAmber}>╌</span> 等待中
         <span style={legendEdgeGreen}>—</span> 已完成
       </p>
       <svg
@@ -191,7 +205,49 @@ export function GraphPanel({ liveChange, agentTick }: Props) {
           >
             <path d="M 0 0 L 10 5 L 0 10 z" fill="#22c55e" />
           </marker>
+          <marker
+            id="arrow-slate"
+            viewBox="0 0 10 10"
+            refX="9"
+            refY="5"
+            markerWidth="7"
+            markerHeight="7"
+            orient="auto-start-reverse"
+          >
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#94a3b8" />
+          </marker>
         </defs>
+
+        {/* Parent → child edges. Drawn FIRST (below) so depends_on
+            arrows + nodes paint on top — the spawn relationship is
+            context, the dependency arrows are the live signal. */}
+        {spawnEdges.map((e, i) => {
+          const from = positions.get(e.fromId);
+          const to = positions.get(e.toId);
+          if (!from || !to) return null;
+          // Parent → child: line goes from parent.bottom to child.top.
+          // When parent and child happen to be on the same row (rare —
+          // depends_on layout doesn't know about spawn order), nudge so
+          // the line isn't horizontal. Layout doesn't model spawn lineage
+          // so this is best-effort.
+          const x1 = from.x + nodeW / 2;
+          const y1 = from.y + nodeH;
+          const x2 = to.x + nodeW / 2;
+          const y2 = to.y;
+          return (
+            <line
+              key={`spawn-${i}`}
+              x1={x1}
+              y1={y1}
+              x2={x2}
+              y2={y2}
+              stroke="#94a3b8"
+              strokeWidth={1.5}
+              opacity={0.6}
+              markerEnd="url(#arrow-slate)"
+            />
+          );
+        })}
 
         {/* Edges first so they render under the nodes. */}
         {edges.map((e, i) => {
@@ -253,6 +309,10 @@ export function GraphPanel({ liveChange, agentTick }: Props) {
           if (!p) return null;
           const color = cliColor(a.cli);
           const idShort = a.agent_id.slice(a.agent_id.indexOf("-") + 1, a.agent_id.indexOf("-") + 9);
+          const paused = !!a.paused;
+          // Paused agents get a dashed border + a "⏸" glyph next to the
+          // role so the operator can spot them from across the room. The
+          // node fill stays the same — we're paused, not dead.
           return (
             <g key={a.agent_id}>
               <rect
@@ -264,6 +324,8 @@ export function GraphPanel({ liveChange, agentTick }: Props) {
                 fill="#1e293b"
                 stroke={color}
                 strokeWidth={1.5}
+                strokeDasharray={paused ? "4 3" : undefined}
+                opacity={paused ? 0.75 : 1}
               />
               <text
                 x={p.x + nodeW / 2}
@@ -274,6 +336,7 @@ export function GraphPanel({ liveChange, agentTick }: Props) {
                 textAnchor="middle"
                 fontFamily="inherit"
               >
+                {paused ? "⏸ " : ""}
                 {a.role || "(no role)"}
               </text>
               <text
@@ -416,9 +479,16 @@ const legendSeparator: React.CSSProperties = {
   margin: "0 8px",
 };
 
+const legendEdgeSlate: React.CSSProperties = {
+  color: "#94a3b8",
+  fontFamily: "ui-monospace, monospace",
+  marginRight: 4,
+};
+
 const legendEdgeAmber: React.CSSProperties = {
   color: "#fbbf24",
   fontFamily: "ui-monospace, monospace",
+  marginLeft: 12,
   marginRight: 4,
 };
 

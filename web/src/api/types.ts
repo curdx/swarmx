@@ -69,6 +69,14 @@ export interface AgentInfo {
    *  spell launch; null for direct `+ Claude` clicks. Reserved for a
    *  future "group by spell run" toggle. */
   spell_run_id?: string | null;
+  /** Derived server-side from spell_runs.caller_agent_id. Non-null only
+   *  for sub-agents spawned via MCP `swarm_run_spell` from another agent.
+   *  Drives the "雇佣关系" (parent → child) overlay in GraphPanel. */
+  parent_agent_id?: string | null;
+  /** In-memory pause state. True when the operator has hit "暂停" — the
+   *  WakeCoordinator skips auto-wake for this agent until resume. Manual
+   *  ⚡ wakes still work. Resets on server restart. */
+  paused?: boolean;
 }
 
 // ── M3 swarm DTOs ────────────────────────────────────────────────────────

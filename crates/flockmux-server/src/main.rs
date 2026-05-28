@@ -202,8 +202,15 @@ async fn main() -> Result<()> {
             "/api/agent",
             get(routes::rest::list_agents).post(routes::rest::spawn),
         )
+        .route("/api/worker", post(routes::rest::spawn_worker))
         .route("/api/agent/:id", delete(routes::rest::kill))
         .route("/api/agent/:id/wake", post(routes::rest::wake_agent))
+        .route("/api/agent/:id/interrupt", post(routes::rest::interrupt))
+        .route("/api/agent/:id/resume", post(routes::rest::resume))
+        .route(
+            "/api/agent/interrupt-all",
+            post(routes::rest::interrupt_all),
+        )
         .route(
             "/api/message",
             get(routes::swarm::list_messages).post(routes::swarm::send_message),
@@ -252,7 +259,7 @@ async fn main() -> Result<()> {
         .route("/ws/pty/:agent_id", get(routes::pty_ws::pty_ws))
         .layer(CorsLayer::permissive())  // localhost dev convenience
         .layer(TraceLayer::new_for_http())
-        .with_state(state);
+        .with_state(state.clone());
 
     // FLOCKMUX_PORT env override — used to stand up a parallel test
     // instance (e.g. the .app sidecar) without colliding with a dev
@@ -265,7 +272,99 @@ async fn main() -> Result<()> {
     let addr: SocketAddr = ([127, 0, 0, 1], port).into();
     info!(%addr, "flockmux-server listening (loopback only, no auth)");
     let listener = tokio::net::TcpListener::bind(addr).await?;
+
+    // Magentic-One restart resilience: for every alive workspace whose
+    // orchestrator was settled-as-killed by the orphan sweep above,
+    // re-spawn it. The orchestrator's prompt detects an existing
+    // `task.ledger.md` on the blackboard and short-circuits Phase A
+    // (no re-scan, no duplicate greeting) — so the user perceives the
+    // restart as a brief PTY blip, ledger and task progress survive.
+    //
+    // Done as tokio::spawn so it doesn't delay axum::serve. The
+    // orchestrator role is loaded in spell_registry above; if the
+    // user has deleted it or pinned to a different role, the spell
+    // run fails loudly and the user can re-create the workspace.
+    tokio::spawn({
+        let respawn_state = state.clone();
+        async move {
+            if let Err(err) = auto_respawn_orchestrators(&respawn_state).await {
+                tracing::warn!(?err, "auto-respawn orchestrators failed");
+            }
+        }
+    });
+
     axum::serve(listener, app).await?;
+    Ok(())
+}
+
+/// 遍历所有未删 workspace,对没活的 orchestrator 的 workspace 拉一个新的
+/// (走 init spell 路径)。直接调 `routes::rest::run_spell` 不绕 HTTP,因为
+/// state 已经持有所有必要句柄(spell registry / role registry / store /
+/// registry / swarm / wake / exit_keys)。
+///
+/// 调用时机:server 启动 + orphan settle 之后,axum 开始 serve 之后(用
+/// `tokio::spawn` 异步并发,不阻塞 listen)。
+async fn auto_respawn_orchestrators(state: &AppState) -> Result<()> {
+    use axum::extract::{Json as AxJson, State};
+    use flockmux_protocol::rest::RunSpellRequest;
+
+    let workspaces = state
+        .store
+        .list_workspaces(false)
+        .await
+        .context("list_workspaces")?;
+    if workspaces.is_empty() {
+        info!("auto-respawn: no workspaces, skipping");
+        return Ok(());
+    }
+
+    let agents = state.store.list_agents().await.context("list_agents")?;
+
+    let mut respawned = 0usize;
+    let mut skipped = 0usize;
+    for ws in &workspaces {
+        let has_live_orchestrator = agents.iter().any(|a| {
+            a.workspace_id.as_deref() == Some(ws.id.as_str())
+                && a.role == "orchestrator"
+                && a.killed_at.is_none()
+        });
+        if has_live_orchestrator {
+            skipped += 1;
+            continue;
+        }
+        let req = RunSpellRequest {
+            name: "init".into(),
+            task: String::new(),
+            workspace_dir: Some(ws.cwd.clone()),
+            workspace_id: Some(ws.id.clone()),
+            caller_agent_id: None,
+        };
+        match routes::rest::run_spell(State(state.clone()), AxJson(req)).await {
+            Ok(resp) => {
+                respawned += 1;
+                info!(
+                    workspace_id = %ws.id,
+                    workspace_name = %ws.name,
+                    spawned = resp.0.agents.len(),
+                    "auto-respawn: orchestrator re-spawned"
+                );
+            }
+            Err((status, body)) => {
+                tracing::warn!(
+                    workspace_id = %ws.id,
+                    %status,
+                    body = %body.0,
+                    "auto-respawn: init spell failed"
+                );
+            }
+        }
+    }
+    info!(
+        respawned,
+        skipped,
+        total = workspaces.len(),
+        "auto-respawn: complete"
+    );
     Ok(())
 }
 

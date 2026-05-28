@@ -83,6 +83,61 @@ pub struct AgentInfo {
     /// for a future "group by spell run" toggle.
     #[serde(default)]
     pub spell_run_id: Option<String>,
+    /// Derived from `spell_runs.caller_agent_id` of this agent's
+    /// `spell_run_id`. Populates the GraphPanel "雇佣关系" (parent → child)
+    /// edges. `None` for user-initiated spawns (no spell run) and for
+    /// top-level spell launches kicked off from the UI (caller_agent_id
+    /// itself is None when a human runs the spell from SpellsLauncher).
+    /// Only sub-agents spawned via MCP `swarm_run_spell` from another
+    /// agent get a non-None parent.
+    #[serde(default)]
+    pub parent_agent_id: Option<String>,
+    /// In-memory pause flag (not persisted). True means the WakeCoordinator
+    /// will skip auto-wake delivery for this agent (BlackboardChanged
+    /// events still fire for the swarm, just don't kick this agent's
+    /// PTY). Manual operator wakes (`POST .../wake`) bypass this and
+    /// still go through. Resets to false on server restart.
+    #[serde(default)]
+    pub paused: bool,
+}
+
+// ── ad-hoc worker DTOs (Magentic-One 重构) ────────────────────────────────
+
+/// `POST /api/worker` 入参。Orchestrator(或上一级 worker)通过 MCP
+/// `swarm_spawn_worker` 工具把这个 payload 发到 server。server 复用
+/// `spawn::spawn_agent` 拉起 PTY,然后 PTY bootstrap inject `system_prompt`,
+/// 同时写 `workers` 表 + `wake_subs` / `exit_keys` 注册。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SpawnWorkerRequest {
+    /// CLI plugin id, 必须是 "claude" 或 "codex"(或未来其他 cli-plugins)。
+    pub cli: String,
+    /// UI 显示的角色名,例如 "writer" / "ui-coder" / "test-runner"。
+    pub role_label: String,
+    /// 完整 system prompt,会通过 PTY bootstrap 注入给 worker。Orchestrator
+    /// 负责把任务描述、依赖、handoff 信号、终止条件都写清楚。
+    pub system_prompt: String,
+    /// worker 完成后该写入的黑板 key。留空表示无 handoff(纯执行性任务)。
+    #[serde(default)]
+    pub handoff_signal: String,
+    /// worker 要等的黑板 key 数组。WakeCoordinator 看到这些 key 被写就 wake
+    /// worker。
+    #[serde(default)]
+    pub depends_on: Vec<String>,
+    /// 谁拉起来的(orchestrator agent_id 或上一级 worker)。MCP 工具调用时
+    /// 由 `ToolContext.agent_id` 自动填充;直接 REST 调用时调用方必须填。
+    pub caller_agent_id: String,
+    /// Worker 所属 workspace。MCP 工具自动从 caller 反查;直接 REST 调用
+    /// 时必填。
+    pub workspace_id: String,
+}
+
+/// `POST /api/worker` 返回 — 新 spawn 的 PTY agent 元数据。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SpawnWorkerResponse {
+    pub agent_id: String,
+    pub cli: String,
+    pub role_label: String,
+    pub workspace: String,
 }
 
 // ── swarm REST DTOs (M3 #18) ─────────────────────────────────────────────

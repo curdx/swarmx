@@ -30,7 +30,6 @@ import {
 } from "react";
 import { useTranslation } from "react-i18next";
 import {
-  ChevronDown,
   CornerUpLeft,
   Filter,
   RefreshCw,
@@ -41,14 +40,6 @@ import {
 import { api } from "../api/http";
 import type { AgentInfo, MessageRecord } from "../api/types";
 import { Button } from "@/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { Textarea } from "@/components/ui/textarea";
 import {
   Popover,
@@ -78,8 +69,10 @@ interface Props {
    *  rendered — so each workspace is a self-contained chat room. Omitting it
    *  keeps the legacy /debug behaviour of showing every message. */
   workspaceAgentIds?: string[];
-  /** Human-readable room label shown inside the composer placeholder. */
-  workspaceLabel?: string;
+  /** 当前 workspace 的 slug(= workspaces.id 前 8 char)。用于匹配
+   *  `to_agent === "system:<slug>"` 的用户消息,让它们只在所属 workspace
+   *  显示,不串到别的房间。omit 时退化到老行为(user msg 总显示)。 */
+  workspaceSlug?: string;
   /** Override for the composer's send action. When provided, the textarea is
    *  enabled even with no recipient and pressing Enter / 发送 calls this
    *  function instead of api.sendMessage. ChatRoute wires this for
@@ -87,7 +80,6 @@ interface Props {
    *  auto-dispatch (rather than getting swallowed by a STOPped scout).
    *  Note: override receives the trimmed body — it's responsible for any
    *  side effects (running spells, persisting a user message, etc.). */
-  composerOverride?: (body: string) => Promise<void>;
   /** Click-handler when the user taps an avatar — typically opens AgentDrawer. */
   onOpenAgent?: (agentId: string) => void;
   /** Parent bumps this counter when the user clicks the "N 未读" badge in
@@ -182,8 +174,7 @@ export function MessagesPanel({
   activeMembers = [],
   allAliveAgents,
   workspaceAgentIds,
-  workspaceLabel,
-  composerOverride,
+  workspaceSlug,
   onOpenAgent,
   jumpUnreadTick = 0,
   taskActivityBelow,
@@ -278,11 +269,15 @@ export function MessagesPanel({
   const visible = useMemo(() => {
     const f = filter.toLowerCase();
     return items.filter((m) => {
-      // 负数 id = 本地 echo 的临时消息（见 send() 里 composerOverride
-      // 路径的注释），不能因为 to/from 不在 wsSet 就被过滤掉。
-      const isLocalEcho = m.id < 0;
-      if (
-        !isLocalEcho &&
+      // 用户消息(from=user)走 to=scout(concierge),命中 wsSet。
+      // user→system:<slug> 路径已经废除,但保留 filter 以兼容历史 DB 行:
+      // 老消息可能还残留这种,slug 不匹配当前 ws 直接隐藏避免串房间。
+      if (m.from_agent === USER_SENDER && m.to_agent.startsWith("system:")) {
+        const targetSlug = m.to_agent.slice("system:".length);
+        if (workspaceSlug && targetSlug !== workspaceSlug) {
+          return false;
+        }
+      } else if (
         wsSet &&
         !(wsSet.has(m.from_agent) || wsSet.has(m.to_agent))
       ) {
@@ -350,78 +345,41 @@ export function MessagesPanel({
   }, [rows.length, pendingResponders.length]);
 
   // ── send / reply / mark-read ──────────────────────────────────────────
-  // composer 默认 recipient — 取当前 ws 第一个 alive agent。用户能通过 chip
-  // 上的下拉自己改（见 selectedRecipientId state 下面 + Popover picker）。
-  const fallbackRecipient = useMemo(() => {
-    if (activeMembers.length === 0) return null;
-    return activeMembers[0];
-  }, [activeMembers]);
-
-  const [selectedRecipientId, setSelectedRecipientId] = useState<string | null>(
-    null,
-  );
-  // 切换 workspace 时 activeMembers 整组换 — 之前选的 recipient 可能已经不在
-  // 当前 ws 里了，reset 到 null 让 fallbackRecipient 接管。
-  useEffect(() => {
-    if (
-      selectedRecipientId &&
-      !activeMembers.some((m) => m.agent_id === selectedRecipientId)
-    ) {
-      setSelectedRecipientId(null);
-    }
-  }, [activeMembers, selectedRecipientId]);
-
+  // Magentic-One 重构后用户视角永远只跟"一个 AI 接待员对话":这个角色就是
+  // orchestrator。收件人解析顺序 orchestrator > 第一个 alive(为兼容老
+  // workspace 里的 scout 等历史 role 兜底)。
   const defaultRecipient = useMemo(() => {
-    if (selectedRecipientId) {
-      const pinned = activeMembers.find((m) => m.agent_id === selectedRecipientId);
-      if (pinned) return pinned;
-    }
-    return fallbackRecipient;
-  }, [activeMembers, selectedRecipientId, fallbackRecipient]);
+    if (activeMembers.length === 0) return null;
+    return (
+      activeMembers.find((m) => m.role === "orchestrator") ??
+      activeMembers.find((m) => m.role === "scout") ??
+      activeMembers[0]
+    );
+  }, [activeMembers]);
 
   const send = async () => {
     const trimmed = body.trim();
     if (!trimmed) return;
-    if (!composerOverride && !defaultRecipient) return;
+    if (!defaultRecipient) return;
     setSending(true);
     try {
-      if (composerOverride) {
-        // init-only workspace 路径：override 通常会启动 auto-dispatch spell。
-        //
-        // 关键设计选择 — 不调 api.sendMessage 持久化这条 user 消息：
-        // - sendMessage(to=scout) → 会 wake scout 一次浪费 token，且要靠
-        //   md prompt 教 scout 二次 wake 时 STOP；prompt 约束不可靠。
-        // - sendMessage(to=system) → 消息无法关联到当前 ws，
-        //   MessagesPanel 的 workspace 过滤会把它隐藏；user 发完连自己刚
-        //   说的话都看不到。
-        // 折中：构造 negative-id 的临时本地消息塞 items，filter 端 id<0
-        // 总是保留。代价是切走再回来这条消息丢失，但 auto-dispatch 已经
-        // 启动业务 agent 进群干活，user 看 planner / FE / BE 的输出就够了。
-        const localMsg: MessageRecord = {
-          id: -Date.now(),
-          from_agent: USER_SENDER,
-          to_agent: SYSTEM_SENDER,
-          kind: KIND_DEFAULT,
-          body: trimmed,
-          sent_at: Date.now(),
-          delivered_at: null,
-          read_at: null,
-          in_reply_to: inReplyTo ?? null,
-        };
-        setItems((prev) => [...prev, localMsg]);
-        await composerOverride(trimmed);
-      } else {
-        const rec = await api.sendMessage({
-          from: USER_SENDER,
-          to: defaultRecipient!.agent_id,
-          kind: KIND_DEFAULT,
-          body: trimmed,
-          in_reply_to: inReplyTo ?? undefined,
-        });
-        setItems((prev) =>
-          prev.some((m) => m.id === rec.id) ? prev : [...prev, rec],
-        );
-      }
+      const rec = await api.sendMessage({
+        from: USER_SENDER,
+        to: defaultRecipient.agent_id,
+        kind: KIND_DEFAULT,
+        body: trimmed,
+        in_reply_to: inReplyTo ?? undefined,
+      });
+      setItems((prev) =>
+        prev.some((m) => m.id === rec.id) ? prev : [...prev, rec],
+      );
+      // 主动 wake scout —— flockmux 现状是 sendMessage 只 push mailbox 不
+      // wake recipient,而 scout 已经 STOP 在那等。fire 一发 manual wake
+      // 让它去 swarm_list_messages 处理这条新消息。best-effort,失败也
+      // 不阻塞 UI(下次 BlackboardChanged / Stop hook 自然会消化)。
+      api.wakeAgent(defaultRecipient.agent_id).catch(() => {
+        /* swallow */
+      });
       setBody("");
       setInReplyTo(null);
       setError(null);
@@ -502,16 +460,13 @@ export function MessagesPanel({
   };
 
   const senders = Object.entries(unreadByFrom).filter(([, n]) => n > 0);
-  const sendDisabled =
-    sending || !body.trim() || (!composerOverride && !defaultRecipient);
-
-  const composerPlaceholder = composerOverride
-    ? t("messages.composerPlaceholderInit")
-    : defaultRecipient
-      ? t("messages.composerPlaceholder", {
-          room: workspaceLabel ?? defaultRecipient.role,
-        })
-      : t("messages.composerPlaceholderEmpty");
+  const sendDisabled = sending || !body.trim() || !defaultRecipient;
+  // 所有 workspace 用同一句 placeholder —— 用户视角永远是"跟 AI 说话",
+  // 不再区分 init-only / 普通 ws。messages.composerPlaceholder i18n key
+  // 保留兼容,但 init-only 那条 init-specific 的话术不再用。
+  const composerPlaceholder = defaultRecipient
+    ? t("messages.composerPlaceholder")
+    : t("messages.composerPlaceholderEmpty");
 
   return (
     <div className="flex h-full flex-col bg-surface-primary">
@@ -809,6 +764,10 @@ export function MessagesPanel({
               replyHint={t("messages.responding", { id: trigger.id })}
             />
           ))}
+          {/* 之前这里有"<agent> 等你回话"的 ghost line — 删了。
+              球在用户手里是默认状态,composer 在那儿本身就是邀请,
+              再加文字提示反而冗余、翻译尴尬。awaitingAgents 仍然
+              算出来供成员列表等其它地方用。 */}
         </div>
       </div>
 
@@ -831,58 +790,10 @@ export function MessagesPanel({
           </div>
         )}
         <div className="flex items-end gap-2">
-          {defaultRecipient && !composerOverride && (
-            // composerOverride 路径下 to= 是定死的（system + 触发 auto-dispatch），
-            // 给 picker 选别人没意义，所以这种模式下隐藏 chip。其他情况下点
-            // chip 弹出 DropdownMenu 列出当前 ws 所有 alive 成员，选谁就发给谁。
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <button
-                  type="button"
-                  className="inline-flex items-center gap-1.5 self-start rounded-full bg-surface-tertiary py-1 pl-1 pr-2 font-caption text-[10px] text-foreground-secondary outline-none hover:bg-surface-secondary focus-visible:ring-2 focus-visible:ring-accent-primary"
-                  title={defaultRecipient.agent_id}
-                  aria-label={t("messages.changeRecipient")}
-                >
-                  <AgentChip
-                    agentId={defaultRecipient.agent_id}
-                    role={defaultRecipient.role}
-                    variant="avatar-only"
-                    size="xs"
-                  />
-                  <span>
-                    {t("messages.to")} {defaultRecipient.role}
-                  </span>
-                  <ChevronDown className="size-3 text-foreground-tertiary" />
-                </button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="start" side="top" className="w-56">
-                <DropdownMenuLabel className="text-[10px] font-semibold uppercase tracking-wider text-foreground-tertiary">
-                  {t("messages.recipientPicker")}
-                </DropdownMenuLabel>
-                <DropdownMenuSeparator />
-                {activeMembers.map((m) => {
-                  const isActive = m.agent_id === defaultRecipient.agent_id;
-                  return (
-                    <DropdownMenuItem
-                      key={m.agent_id}
-                      onSelect={() => setSelectedRecipientId(m.agent_id)}
-                      className="flex items-center gap-2"
-                    >
-                      <AgentChip
-                        agentId={m.agent_id}
-                        role={m.role}
-                        size="xs"
-                        className="flex-1"
-                      />
-                      {isActive && (
-                        <span className="text-[10px] text-accent-primary">✓</span>
-                      )}
-                    </DropdownMenuItem>
-                  );
-                })}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          )}
+          {/* picker(发给 XX ▼ + 换一个发送对象)已经去掉 —— 用户视角是
+              "跟一个 AI 接待员对话",所有消息默认发给 scout(它会自己
+              判断闲聊/转发/派活)。需要直接 ping 某个业务 agent 的高级
+              场景未来通过 @mention 实现。 */}
           <Textarea
             ref={composerRef}
             value={body}
@@ -892,7 +803,7 @@ export function MessagesPanel({
             }}
             onKeyDown={onComposerKey}
             placeholder={composerPlaceholder}
-            disabled={!composerOverride && !defaultRecipient}
+            disabled={!defaultRecipient}
             rows={1}
             className="min-w-0 flex-1 resize-none rounded-2xl px-3 py-2 font-body text-[13px] leading-snug"
           />

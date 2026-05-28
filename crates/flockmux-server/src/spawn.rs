@@ -252,6 +252,7 @@ pub fn spawn_agent(
         cli: plugin.id.clone(),
         role: role.unwrap_or_else(|| plugin.id.clone()),
         workspace: workspace.to_string_lossy().into_owned(),
+        paused: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     };
 
     Ok(AgentSpawn { agent_id, slot })

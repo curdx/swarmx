@@ -5,8 +5,8 @@
 use crate::connection::Customizer;
 use crate::models::{
     AgentRecord, BlackboardOpRecord, ListMessagesOpts, MessageRecord, NewAgent, NewBlackboardOp,
-    NewMessage, NewRecording, NewSpellRun, NewWorkspace, RecordingRecord, SpellRunRecord,
-    WorkspaceRecord,
+    NewMessage, NewRecording, NewSpellRun, NewWorker, NewWorkspace, RecordingRecord,
+    SpellRunRecord, WorkerRecord, WorkspaceRecord,
 };
 use crate::schema;
 use anyhow::{Context, Result};
@@ -798,6 +798,132 @@ impl Store {
         })
         .await
         .context("spawn_blocking create_spell_run")?
+    }
+
+    /// 注册一个 orchestrator 派出来的 ad-hoc worker。注意 agent_id 必须
+    /// 先在 `agents` 表存在(`record_agent_spawn` 先跑)— 这里只补 worker
+    /// metadata。
+    pub async fn record_worker(&self, rec: NewWorker) -> Result<()> {
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let conn = pool.get()?;
+            conn.execute(
+                "INSERT INTO workers (agent_id, parent_agent_id, role_label, system_prompt, \
+                 handoff_signal, depends_on_json, spawned_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    rec.agent_id,
+                    rec.parent_agent_id,
+                    rec.role_label,
+                    rec.system_prompt,
+                    if rec.handoff_signal.is_empty() {
+                        None
+                    } else {
+                        Some(rec.handoff_signal)
+                    },
+                    if rec.depends_on_json.is_empty() || rec.depends_on_json == "[]" {
+                        None
+                    } else {
+                        Some(rec.depends_on_json)
+                    },
+                    rec.spawned_at,
+                ],
+            )?;
+            Ok(())
+        })
+        .await
+        .context("spawn_blocking record_worker")?
+    }
+
+    /// Batch lookup workers by their agent_id. Returns a map keyed by
+    /// agent_id; missing ids are absent from the map. Used by `list_agents`
+    /// to derive `parent_agent_id` + `role_label` in one round-trip.
+    pub async fn list_workers_by_ids(
+        &self,
+        ids: Vec<String>,
+    ) -> Result<std::collections::HashMap<String, WorkerRecord>> {
+        if ids.is_empty() {
+            return Ok(std::collections::HashMap::new());
+        }
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(
+            move || -> Result<std::collections::HashMap<String, WorkerRecord>> {
+                let conn = pool.get()?;
+                let placeholders =
+                    std::iter::repeat("?").take(ids.len()).collect::<Vec<_>>().join(",");
+                let sql = format!(
+                    "SELECT agent_id, parent_agent_id, role_label, system_prompt, \
+                            handoff_signal, depends_on_json, spawned_at \
+                     FROM workers WHERE agent_id IN ({placeholders})"
+                );
+                let mut stmt = conn.prepare(&sql)?;
+                let rows = stmt.query_map(rusqlite::params_from_iter(ids.iter()), |row| {
+                    let handoff: Option<String> = row.get(4)?;
+                    let deps: Option<String> = row.get(5)?;
+                    Ok(WorkerRecord {
+                        agent_id: row.get(0)?,
+                        parent_agent_id: row.get(1)?,
+                        role_label: row.get(2)?,
+                        system_prompt: row.get(3)?,
+                        handoff_signal: handoff.unwrap_or_default(),
+                        depends_on_json: deps.unwrap_or_else(|| "[]".to_string()),
+                        spawned_at: row.get(6)?,
+                    })
+                })?;
+                let mut out = std::collections::HashMap::with_capacity(ids.len());
+                for rec in rows {
+                    let rec = rec?;
+                    out.insert(rec.agent_id.clone(), rec);
+                }
+                Ok(out)
+            },
+        )
+        .await
+        .context("spawn_blocking list_workers_by_ids")?
+    }
+
+    /// Batch lookup spell_runs by id. Returns a map keyed by id; missing ids
+    /// are simply absent from the result (callers handle the None case).
+    /// Used by `list_agents` to derive each agent's `parent_agent_id` from
+    /// its `spell_run.caller_agent_id` in one round-trip instead of N+1.
+    pub async fn list_spell_runs_by_ids(
+        &self,
+        ids: Vec<String>,
+    ) -> Result<std::collections::HashMap<String, SpellRunRecord>> {
+        if ids.is_empty() {
+            return Ok(std::collections::HashMap::new());
+        }
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(
+            move || -> Result<std::collections::HashMap<String, SpellRunRecord>> {
+                let conn = pool.get()?;
+                let placeholders =
+                    std::iter::repeat("?").take(ids.len()).collect::<Vec<_>>().join(",");
+                let sql = format!(
+                    "SELECT id, workspace_id, spell_name, task, caller_agent_id, started_at \
+                     FROM spell_runs WHERE id IN ({placeholders})"
+                );
+                let mut stmt = conn.prepare(&sql)?;
+                let rows = stmt.query_map(rusqlite::params_from_iter(ids.iter()), |row| {
+                    Ok(SpellRunRecord {
+                        id: row.get(0)?,
+                        workspace_id: row.get(1)?,
+                        spell_name: row.get(2)?,
+                        task: row.get(3)?,
+                        caller_agent_id: row.get(4)?,
+                        started_at: row.get(5)?,
+                    })
+                })?;
+                let mut out = std::collections::HashMap::with_capacity(ids.len());
+                for rec in rows {
+                    let rec = rec?;
+                    out.insert(rec.id.clone(), rec);
+                }
+                Ok(out)
+            },
+        )
+        .await
+        .context("spawn_blocking list_spell_runs_by_ids")?
     }
 
     pub async fn search_blackboard(&self, query: String) -> Result<Vec<BlackboardOpRecord>> {

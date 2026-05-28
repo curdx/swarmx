@@ -190,8 +190,8 @@
     "tabs": {
       "chat": "聊天",
       "dag": "协作图",
-      "replays": "录像",
-      "context": "上下文"
+      "ledger": "工作台账",
+      "replays": "录像"
     },
     "backToChat": "← 返回 {{name}}",
     "globalScopeHint": "当前显示所有工作空间数据 · 从聊天里选某个工作空间可只看那个的",
@@ -207,11 +207,11 @@
     "jumpUnread": "跳转到第一条未读",
     "members": "成员",
     "selectWorkspace": "选中一个工作空间查看成员",
-    "wake": "手动唤醒",
+    "wake": "唤醒",
     "online": "在线",
     "starting": "启动中",
-    "shimExit": "shim 退出",
-    "exited": "已退出"
+    "shimExit": "已下线",
+    "exited": "已结束"
   },
   "dag": {
     "title": "协作图",
@@ -230,7 +230,14 @@
     "openDrawer": "打开 Agent Drawer",
     "ready": "READY",
     "killed": "已杀",
-    "startingShort": "启动中"
+    "startingShort": "启动中",
+    "spawn": "雇佣",
+    "interruptAll": "全停",
+    "resumeAll": "全恢复",
+    "pausedCount": "{{count}} 已暂停",
+    "interruptedToast": "已暂停 {{count}} 个 agent",
+    "resumedToast": "已恢复 {{count}} 个 agent",
+    "paused": "已暂停"
   },
   "replays": {
     "title": "录像",
@@ -313,6 +320,7 @@
     "sendMessage": "发送消息",
     "wake": "唤醒",
     "pause": "暂停",
+    "resume": "恢复",
     "restart": "重启",
     "notImplemented": "暂未实现",
     "tabs": {
@@ -392,11 +400,11 @@
     "markRead": "标记为已读",
     "replying": "正在回复 #{{id}}",
     "cancelReply": "取消回复",
-    "composerPlaceholder": "在 {{room}} 发消息…",
+    "composerPlaceholder": "和 AI 说点啥…",
     "composerPlaceholderEmpty": "选中工作空间后开始对话…",
-    "composerPlaceholderInit": "告诉 AI 你想做什么（按 Enter 开始）…",
-    "responding": "正在响应 #{{id}}",
-    "respondingTo": "{{role}} 正在响应",
+    "composerPlaceholderInit": "和 AI 说点啥…",
+    "responding": "回复 #{{id}} 中",
+    "respondingTo": "{{role}} 在回复",
     "you": "我",
     "broadcast": "全员",
     "to": "发给",

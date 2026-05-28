@@ -111,6 +111,23 @@ pub async fn register_wake_subs(subs: &WakeSubs, agent_id: String, keys: Vec<Str
     w.insert(agent_id, keys);
 }
 
+/// Append a single key to `agent_id`'s subscription list, creating the
+/// entry if it doesn't exist. Idempotent — a duplicate key is silently
+/// dropped. Used by `spawn_worker` to make the spawning agent (= the
+/// Magentic-One orchestrator) subscribe to the new worker's
+/// `handoff_signal` without clobbering any subscriptions the
+/// orchestrator already had from prior spawns.
+pub async fn append_wake_sub(subs: &WakeSubs, agent_id: String, key: String) {
+    if key.is_empty() {
+        return;
+    }
+    let mut w = subs.write().await;
+    let entry = w.entry(agent_id).or_default();
+    if !entry.contains(&key) {
+        entry.push(key);
+    }
+}
+
 /// Removes an agent's subscription. Called from the kill handler so
 /// blackboard writes to dead agents' depended-on keys don't try to wake
 /// a registry slot that has been dropped.
@@ -519,6 +536,20 @@ impl WakeCoordinator {
     }
 
     async fn deliver_wake(&self, target: &str, key: &str) {
+        // M-pause: if the operator paused this agent, swallow auto-wakes.
+        // The mailbox is intentionally NOT written either — paused means
+        // "leave me alone, don't accumulate noise that I'll have to
+        // hand-trim on resume." On resume the operator's deliver_manual_wake
+        // call will write a single fresh wake entry pointing the agent at
+        // the blackboard, which is more useful than N stale per-key
+        // entries from this paused window. Manual wakes bypass this gate
+        // (they go through deliver_manual_wake, not deliver_wake).
+        if let Some(slot) = self.registry.get(target) {
+            if slot.lock().paused.load(std::sync::atomic::Ordering::Relaxed) {
+                tracing::debug!(target, key, "wake skipped: agent is paused");
+                return;
+            }
+        }
         let now = now_ms();
         // 1) Mailbox: source of truth. If this fails the wake mechanism
         //    is broken for this delivery — we'd be hoping the agent's

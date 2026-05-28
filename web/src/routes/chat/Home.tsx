@@ -108,6 +108,31 @@ export default function ChatHome() {
   }, [workspaces, navigate]);
 
   const handleDeleteWorkspace = async (workspaceId: string) => {
+    // Kill any live agents that belonged to this workspace BEFORE we
+    // soft-delete the row. Otherwise the agents linger as orphan PTYs
+    // attached to a workspace that no longer exists in the UI, eating
+    // tokens with no way to address them. Per-agent failures don't
+    // abort the batch — a half-dead PTY shouldn't block deletion.
+    try {
+      const all = await api.listAgents();
+      const live = all.filter(
+        (a) =>
+          a.workspace_id === workspaceId &&
+          a.killed_at == null &&
+          a.shim_exit == null,
+      );
+      await Promise.all(
+        live.map((a) =>
+          api.killAgent(a.agent_id).catch((e) => {
+            // eslint-disable-next-line no-console
+            console.warn("killAgent failed", a.agent_id, e);
+          }),
+        ),
+      );
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn("listAgents before delete failed", err);
+    }
     try {
       await api.deleteWorkspace(workspaceId);
     } catch (err) {
@@ -135,9 +160,14 @@ export default function ChatHome() {
         <CreateWizard
           open={wizardOpen}
           onClose={() => setWizardOpen(false)}
-          onCreated={() => {
+          onCreated={(ws) => {
             refreshAgents();
             refreshWorkspaces();
+            // Drop the user into the workspace they just created — the
+            // /chat root only renders the Welcome screen, so without this
+            // the new workspace exists in the sidebar but the main pane
+            // stays on the marketing pitch until they manually click it.
+            if (ws) navigate(`/chat/${ws.slug}`);
           }}
         />
       </div>

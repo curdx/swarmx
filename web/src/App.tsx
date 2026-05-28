@@ -6,8 +6,8 @@
  *   /chat/:wsId                        WorkspaceShell — common chrome
  *     index                              ChatView
  *     dag                                DagView
+ *     ledger                             LedgerView (Magentic-One 双台账)
  *     replays                            ReplaysView
- *     context                            ContextView
  *
  * Fullscreen / outside-shell routes:
  *   /chat/:wsId/replays/:recId         ReplayPlayer (dark, chromeless,
@@ -29,7 +29,7 @@ import WorkspaceShell from "./routes/workspace/Shell";
 import ChatView from "./routes/workspace/views/Chat";
 import DagView from "./routes/workspace/views/Dag";
 import ReplaysView from "./routes/workspace/views/Replays";
-import ContextView from "./routes/workspace/views/Context";
+import LedgerView from "./routes/workspace/views/Ledger";
 import ReplayPlayer from "./routes/replays/player";
 import SettingsRoute from "./routes/settings";
 import NotificationsRoute from "./routes/notifications";
@@ -44,8 +44,10 @@ export default function App() {
           <Route path="/chat/:wsId" element={<WorkspaceShell />}>
             <Route index element={<ChatView />} />
             <Route path="dag" element={<DagView />} />
+            <Route path="ledger" element={<LedgerView />} />
             <Route path="replays" element={<ReplaysView />} />
-            <Route path="context" element={<ContextView />} />
+            {/* `context` 路径保留(老书签) — redirect 到新 ledger 视图。 */}
+            <Route path="context" element={<Navigate to="../ledger" replace />} />
           </Route>
           <Route path="/notifications" element={<NotificationsRoute />} />
           <Route path="/settings" element={<SettingsRoute />} />

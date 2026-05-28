@@ -10,7 +10,7 @@
  * composer override) via useWorkspaceContext().
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "../../../api/http";
 import type { AgentInfo } from "../../../api/types";
@@ -28,16 +28,128 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { Users, Zap } from "lucide-react";
+import { Radio, Users, Zap } from "lucide-react";
 import { cn } from "@/lib/cn";
-import { roleColorClass as roleColor } from "@/lib/agent";
+import {
+  roleColorClass as roleColor,
+  inferAgentStatus,
+  agentStatusLabel,
+  agentStatusDotClass,
+  agentStatusIsTyping,
+} from "@/lib/agent";
+import type {
+  BlackboardEntry,
+  BlackboardSnapshot,
+  MessageRecord,
+  SwarmEvent,
+} from "../../../api/types";
+import { useSwarmFeed } from "../../../hooks/useSwarmFeed";
 import { useWorkspaceContext } from "../Shell";
 
-function statusDot(a: AgentInfo, t: (k: string) => string) {
-  if (a.killed_at) return { className: "bg-state-idle", label: t("chat.exited") };
-  if (a.shim_exit != null) return { className: "bg-state-idle", label: t("chat.shimExit") };
-  if (!a.shim_ready) return { className: "bg-state-wake", label: t("chat.starting") };
-  return { className: "bg-state-success", label: t("chat.online") };
+/** Pull every `<workspace_id>/<role>.progress.md` breadcrumb the workers
+ *  in this workspace have written, newest first. Same source the Ledger
+ *  "近况" card uses — but here we render a slim version inline in the
+ *  chat sidebar so users don't have to switch tabs to know a worker is
+ *  alive during npm install / build / etc. */
+function useBreadcrumbs(workspaceId: string) {
+  const [rows, setRows] = useState<
+    { role: string; content: string; at: number }[]
+  >([]);
+  const reload = useCallback(async () => {
+    try {
+      const all = (await api.listBlackboard()) as BlackboardEntry[];
+      const prefix = `${workspaceId}/`;
+      const suffix = ".progress.md";
+      const candidates = all.filter(
+        (e) => e.path.startsWith(prefix) && e.path.endsWith(suffix),
+      );
+      const snaps = await Promise.all(
+        candidates.map(async (e) => {
+          try {
+            const snap = (await api.readBlackboard(e.path)) as BlackboardSnapshot | null;
+            if (!snap) return null;
+            const role = e.path.slice(prefix.length, -suffix.length);
+            return { role, content: snap.content.trim(), at: snap.at };
+          } catch {
+            return null;
+          }
+        }),
+      );
+      const out = snaps.filter(
+        (s): s is { role: string; content: string; at: number } => s !== null,
+      );
+      out.sort((a, b) => b.at - a.at);
+      setRows(out);
+    } catch {
+      setRows([]);
+    }
+  }, [workspaceId]);
+  useEffect(() => {
+    reload();
+  }, [reload]);
+  const lastIdRef = useRef<number>(0);
+  useSwarmFeed({
+    onEvent: (ev: SwarmEvent) => {
+      if (ev.type !== "blackboard_changed") return;
+      if (ev.id === lastIdRef.current) return;
+      if (!ev.path.startsWith(`${workspaceId}/`)) return;
+      if (!ev.path.endsWith(".progress.md")) return;
+      lastIdRef.current = ev.id;
+      reload();
+    },
+    onReconnect: () => reload(),
+  });
+  return rows;
+}
+
+function fmtBreadcrumbAgo(at: number, now: number): string {
+  const sec = Math.max(0, Math.floor((now - at) / 1000));
+  if (sec < 60) return `${sec}s 前`;
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min}m 前`;
+  const hr = Math.floor(min / 60);
+  return `${hr}h 前`;
+}
+
+/** 成员列表一行的"AI 当前在干啥"视觉。微信式简洁:
+ *  - typing 动画(··· 闪烁)  → responding / working
+ *  - 绿点                 → idle / awaiting_user (默认 "在线")
+ *  - 灰点 + "已结束"       → exited
+ *  - 灰点 + "已暂停"       → paused
+ *  - 黄点 + "启动中"       → shim 还没 ready */
+function statusDot(
+  a: AgentInfo,
+  messages: MessageRecord[],
+  t: (k: string) => string,
+) {
+  if (a.killed_at)
+    return { typing: false, className: "bg-state-idle", label: t("chat.exited") };
+  if (a.shim_exit != null)
+    return { typing: false, className: "bg-state-idle", label: t("chat.shimExit") };
+  if (!a.shim_ready)
+    return { typing: false, className: "bg-state-wake", label: t("chat.starting") };
+  const status = inferAgentStatus(a, messages);
+  return {
+    typing: agentStatusIsTyping(status),
+    className: agentStatusDotClass(status),
+    label: agentStatusLabel(status),
+  };
+}
+
+/** 三点 typing 动画 —— 跟微信"对方正在输入"风格一致。三个圆点错相位
+ *  bounce,纯 CSS,不依赖外部库。 */
+function TypingDots() {
+  return (
+    <span
+      className="inline-flex items-center gap-0.5"
+      aria-label="AI 正在输入"
+      title="AI 正在输入"
+    >
+      <span className="inline-block size-1.5 animate-bounce rounded-full bg-accent-primary [animation-delay:-0.3s]" />
+      <span className="inline-block size-1.5 animate-bounce rounded-full bg-accent-primary [animation-delay:-0.15s]" />
+      <span className="inline-block size-1.5 animate-bounce rounded-full bg-accent-primary" />
+    </span>
+  );
 }
 
 // pending task 兜底超时 — 60s 内没看到任何 AI 反应就放弃 (网络/agent 死)。
@@ -61,7 +173,6 @@ export default function ChatView() {
     unreadByFrom: activeWorkspaceUnread,
     jumpUnreadTick,
     openAgent,
-    composerOverride,
     // unreadByFrom in OutletContext is workspace-filtered; the right-side
     // members list wants raw agent-id → count so it can show the small
     // red badge per row. We re-derive it by indexing into the filtered
@@ -89,6 +200,57 @@ export default function ChatView() {
   useEffect(() => {
     for (const a of allAliveAgents) knownAgentIdsRef.current.add(a.agent_id);
   }, [allAliveAgents]);
+
+  // 轻量 messages cache —— 给成员列表的语义状态推导喂数据。MessagesPanel
+  // 也自己拉一份(它需要展示 200 条 + filter + 排序),这里只需要"最近一条
+  // inbound/outbound per agent"这点信息,但写两套缓存不值,直接 fetch 一次
+  // + liveMessage append。每次切 workspace 重新拉(workspace.id 变化)。
+  const [recentMessages, setRecentMessages] = useState<MessageRecord[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .listMessages({ limit: 200 })
+      .then((rows) => {
+        if (!cancelled) setRecentMessages(rows);
+      })
+      .catch(() => {
+        /* best-effort — statusDot falls back to "online" */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [workspace.id]);
+  useEffect(() => {
+    if (!liveMessage) return;
+    setRecentMessages((prev) =>
+      prev.some((m) => m.id === liveMessage.id) ? prev : [...prev, liveMessage],
+    );
+  }, [liveMessage]);
+  // worker 心跳 — orchestrator 让每个 worker 每完成一步覆写
+  // `<workspace_id>/<role>.progress.md`,我们订阅这些 key 实时显示在右栏。
+  // 同样的数据 Ledger 视图也用,但 chat 这边给个 slim 列表,用户不用切 tab。
+  const breadcrumbsRaw = useBreadcrumbs(workspace.workspaceId);
+
+  // 每 5s tick 让 statusDot 重新评估时间窗(responding/working 都有时间窗,
+  // 没消息进来时也要让它们自然衰减成 idle/awaiting)。
+  const [statusTick, setStatusTick] = useState(0);
+  useEffect(() => {
+    const i = window.setInterval(() => setStatusTick((t) => t + 1), 5000);
+    return () => window.clearInterval(i);
+  }, []);
+  void statusTick; // referenced via re-render
+
+  // Re-resolve "XX 秒前" labels on each statusTick so the side panel
+  // stays current even when no new event lands.
+  const breadcrumbs = useMemo(
+    () =>
+      breadcrumbsRaw.map((b) => ({
+        ...b,
+        ago: fmtBreadcrumbAgo(b.at, Date.now()),
+      })),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional tick dep
+    [breadcrumbsRaw, statusTick],
+  );
 
   const dismissTask = useCallback((id: string) => {
     setTasks((prev) => prev.filter((tsk) => tsk.id !== id));
@@ -218,8 +380,7 @@ export default function ChatView() {
           activeMembers={activeMembers}
           allAliveAgents={allAliveAgents}
           workspaceAgentIds={workspaceAgentIds}
-          workspaceLabel={workspace.name}
-          composerOverride={composerOverride}
+          workspaceSlug={workspace.id}
           jumpUnreadTick={jumpUnreadTick}
           onOpenAgent={openAgent}
           taskActivityBelow={
@@ -245,7 +406,7 @@ export default function ChatView() {
             </p>
           )}
           {activeMembers.map((a) => {
-            const dot = statusDot(a, t);
+            const dot = statusDot(a, recentMessages, t);
             const unread = activeWorkspaceUnread[a.agent_id] ?? 0;
             return (
               <div
@@ -270,10 +431,23 @@ export default function ChatView() {
                     <span className="truncate font-heading text-sm text-foreground-primary">
                       {a.role}
                     </span>
-                    <span
-                      className={cn("size-1.5 rounded-full", dot.className)}
-                      title={dot.label}
-                    />
+                    {dot.typing ? (
+                      <TypingDots />
+                    ) : (
+                      <>
+                        {dot.className && (
+                          <span
+                            className={cn("size-1.5 rounded-full", dot.className)}
+                            title={dot.label || undefined}
+                          />
+                        )}
+                        {dot.label && (
+                          <span className="font-caption text-[10px] text-foreground-tertiary">
+                            {dot.label}
+                          </span>
+                        )}
+                      </>
+                    )}
                   </div>
                   <div className="truncate font-mono text-[10px] text-foreground-tertiary">
                     {a.cli} · {a.agent_id.slice(-8)}
@@ -307,6 +481,39 @@ export default function ChatView() {
             );
           })}
         </div>
+        {breadcrumbs.length > 0 && (
+          <div className="shrink-0 border-t border-border-subtle">
+            <div className="flex items-center gap-2 px-4 pt-3 pb-2">
+              <Radio className="size-3.5 text-accent-primary" />
+              <span className="font-heading text-[11px] font-semibold uppercase tracking-wider text-foreground-tertiary">
+                {t("chat.breadcrumbsTitle", "近况")}
+              </span>
+              <span className="ml-auto font-caption text-[10px] text-foreground-tertiary">
+                {breadcrumbs.length}
+              </span>
+            </div>
+            <ul className="flex max-h-[35vh] flex-col gap-1.5 overflow-y-auto px-2 pb-3">
+              {breadcrumbs.map((b) => (
+                <li
+                  key={b.role}
+                  className="rounded-md bg-surface-tertiary px-3 py-2"
+                >
+                  <div className="flex items-baseline gap-2">
+                    <span className="shrink-0 font-mono text-[10px] font-semibold text-accent-primary">
+                      {b.role}
+                    </span>
+                    <span className="ml-auto shrink-0 font-caption text-[9px] text-foreground-tertiary">
+                      {b.ago}
+                    </span>
+                  </div>
+                  <p className="mt-0.5 break-words font-body text-[11px] leading-snug text-foreground-primary">
+                    {b.content}
+                  </p>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
       </aside>
     </div>
   );

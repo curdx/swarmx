@@ -190,8 +190,8 @@
     "tabs": {
       "chat": "Chat",
       "dag": "Flow",
-      "replays": "Replays",
-      "context": "Context"
+      "ledger": "Ledger",
+      "replays": "Replays"
     },
     "backToChat": "← Back to {{name}}",
     "globalScopeHint": "Showing data from every workspace · pick one in chat to scope this view",
@@ -230,7 +230,14 @@
     "openDrawer": "Open Agent Drawer",
     "ready": "READY",
     "killed": "killed",
-    "startingShort": "starting"
+    "startingShort": "starting",
+    "spawn": "spawn",
+    "interruptAll": "Pause all",
+    "resumeAll": "Resume all",
+    "pausedCount": "{{count}} paused",
+    "interruptedToast": "Paused {{count}} agent(s)",
+    "resumedToast": "Resumed {{count}} agent(s)",
+    "paused": "Paused"
   },
   "replays": {
     "title": "Replays",
@@ -313,6 +320,7 @@
     "sendMessage": "Send message",
     "wake": "Wake",
     "pause": "Pause",
+    "resume": "Resume",
     "restart": "Restart",
     "notImplemented": "Not implemented yet",
     "tabs": {
@@ -392,11 +400,11 @@
     "markRead": "Mark read",
     "replying": "Replying to #{{id}}",
     "cancelReply": "Cancel reply",
-    "composerPlaceholder": "Message {{room}}…",
-    "composerPlaceholderEmpty": "Pick a workspace to start the conversation…",
-    "composerPlaceholderInit": "Tell AI what you want done (press Enter to start)…",
-    "responding": "Responding to #{{id}}",
-    "respondingTo": "{{role}} is responding",
+    "composerPlaceholder": "Say something to the AI…",
+    "composerPlaceholderEmpty": "Pick a workspace to start…",
+    "composerPlaceholderInit": "Say something to the AI…",
+    "responding": "replying to #{{id}}",
+    "respondingTo": "{{role}} is typing",
     "you": "You",
     "broadcast": "Everyone",
     "to": "To",

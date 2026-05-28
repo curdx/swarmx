@@ -16,6 +16,7 @@ import {
   Background,
   Controls,
   Handle,
+  MarkerType,
   MiniMap,
   Position,
   ReactFlow,
@@ -31,6 +32,8 @@ import {
   Activity,
   Layers,
   Maximize2,
+  Pause,
+  Play,
   X,
   Zap,
 } from "lucide-react";
@@ -87,6 +90,26 @@ function deriveEdges(
   return out;
 }
 
+interface SpawnEdge {
+  parentId: string;
+  childId: string;
+}
+
+/** Parent → child edges derived from `parent_agent_id` (server fills this in
+ *  from spell_runs.caller_agent_id). Only emitted when the parent is also in
+ *  the displayed set — orphaned children (parent already exited) render as
+ *  roots, which matches the layout's "no incoming = top" behavior. */
+function deriveSpawnEdges(agents: AgentInfo[]): SpawnEdge[] {
+  const idSet = new Set(agents.map((a) => a.agent_id));
+  const out: SpawnEdge[] = [];
+  for (const a of agents) {
+    if (!a.parent_agent_id) continue;
+    if (!idSet.has(a.parent_agent_id)) continue;
+    out.push({ parentId: a.parent_agent_id, childId: a.agent_id });
+  }
+  return out;
+}
+
 const NODE_W = 200;
 const NODE_H = 80;
 
@@ -117,6 +140,10 @@ function AgentNode({ data }: NodeProps<Node<AgentNodeData>>) {
   const a = data.info;
   const role = a.role;
   const live = a.killed_at == null && a.shim_exit == null;
+  const paused = !!a.paused;
+  // Paused nodes get a dashed border + a pause glyph so operators can
+  // spot them at a glance. Dim the whole card slightly so an unpaused
+  // sibling visually takes priority.
   return (
     <div
       className={cn(
@@ -124,9 +151,10 @@ function AgentNode({ data }: NodeProps<Node<AgentNodeData>>) {
         data.selected
           ? "border-accent-primary shadow-lg"
           : "border-border-subtle",
+        paused && !data.selected && "border-dashed opacity-75",
       )}
     >
-      <Handle type="target" position={Position.Left} className="!bg-foreground-tertiary" />
+      <Handle type="target" position={Position.Top} className="!bg-foreground-tertiary" />
       <div className="flex items-center gap-2">
         <span
           className={cn(
@@ -139,6 +167,12 @@ function AgentNode({ data }: NodeProps<Node<AgentNodeData>>) {
         <span className="flex-1 truncate font-heading text-sm font-semibold text-foreground-primary">
           {role}
         </span>
+        {paused && (
+          <Pause
+            className="size-3 text-foreground-tertiary"
+            aria-label="paused"
+          />
+        )}
         <span
           className={cn(
             "size-2 rounded-full",
@@ -158,7 +192,7 @@ function AgentNode({ data }: NodeProps<Node<AgentNodeData>>) {
           → {a.handoff_signal}
         </div>
       )}
-      <Handle type="source" position={Position.Right} className="!bg-foreground-tertiary" />
+      <Handle type="source" position={Position.Bottom} className="!bg-foreground-tertiary" />
     </div>
   );
 }
@@ -180,9 +214,10 @@ function Canvas({ agents, bbAt, selectedId, onSelect, showMinimap }: CanvasProps
   );
 
   const edges = useMemo<Edge[]>(() => {
-    const derived = deriveEdges(live, bbAt);
-    return derived.map((e, i) => ({
-      id: `e-${i}-${e.producerId}-${e.dependentId}`,
+    const handoff = deriveEdges(live, bbAt);
+    const spawn = deriveSpawnEdges(live);
+    const handoffEdges: Edge[] = handoff.map((e, i) => ({
+      id: `h-${i}-${e.producerId}-${e.dependentId}`,
       source: e.producerId,
       target: e.dependentId,
       label: e.key,
@@ -199,6 +234,24 @@ function Canvas({ agents, bbAt, selectedId, onSelect, showMinimap }: CanvasProps
       },
       labelBgStyle: { fill: "#FAFAF7" },
     }));
+    // Spawn edges render BEFORE handoff in the array — ReactFlow paints in
+    // array order, so handoff arrows (the live signal) overlay parent
+    // lineage (context). Solid slate, no label, light arrowhead. Use a
+    // dedicated id namespace ("s-") so a re-render that changes only
+    // handoff data doesn't disturb spawn edges.
+    const spawnEdges: Edge[] = spawn.map((e, i) => ({
+      id: `s-${i}-${e.parentId}-${e.childId}`,
+      source: e.parentId,
+      target: e.childId,
+      // No animation, no label — spawn lineage is static context.
+      style: {
+        stroke: "#94a3b8",
+        strokeWidth: 1.25,
+        opacity: 0.55,
+      },
+      markerEnd: { type: MarkerType.ArrowClosed, color: "#94a3b8" },
+    }));
+    return [...spawnEdges, ...handoffEdges];
   }, [live, bbAt]);
 
   const nodes = useMemo<Node[]>(() => {
@@ -215,7 +268,11 @@ function Canvas({ agents, bbAt, selectedId, onSelect, showMinimap }: CanvasProps
   useEffect(() => {
     const t = window.setTimeout(() => {
       try {
-        flow.fitView({ padding: 0.15, duration: 200 });
+        // Cap auto-fit zoom at 1.0 so a workspace with a single agent
+        // doesn't blow up the node to fill the entire pane. Multi-agent
+        // graphs still fit naturally; users can manually zoom past 1.0
+        // via the controls (ReactFlow.maxZoom below still allows up to 2x).
+        flow.fitView({ padding: 0.2, duration: 200, maxZoom: 1 });
       } catch {
         /* fitView throws on empty graph */
       }
@@ -231,7 +288,8 @@ function Canvas({ agents, bbAt, selectedId, onSelect, showMinimap }: CanvasProps
       onNodeClick={(_, n) => onSelect(n.id)}
       onPaneClick={() => onSelect(null)}
       fitView
-      maxZoom={4}
+      fitViewOptions={{ padding: 0.2, maxZoom: 1 }}
+      maxZoom={2}
       proOptions={{ hideAttribution: true }}
       nodesDraggable
       nodesConnectable={false}
@@ -373,6 +431,70 @@ export default function DagView() {
     [agents, selectedId],
   );
 
+  const pausedCount = useMemo(
+    () => liveAgents.filter((a) => a.paused).length,
+    [liveAgents],
+  );
+
+  // workspace-level "pause all live agents". Fire-and-forget — refresh()
+  // will pick up the new paused state via the swarm feed (paused agents
+  // don't emit a swarm event, but the next agent_state / blackboard
+  // event will retrigger refresh; we also nudge it manually here).
+  const [busy, setBusy] = useState(false);
+  const onInterruptAll = useCallback(async () => {
+    if (busy || liveAgents.length === 0) return;
+    setBusy(true);
+    try {
+      await api.interruptAllInWorkspace(workspace.workspaceId);
+      await refresh();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }, [busy, liveAgents.length, refresh, workspace.workspaceId]);
+
+  // Resume every paused agent in the active workspace. No batch endpoint —
+  // resume is per-agent because each one synthesizes a manual wake; ≤ a
+  // handful of agents per spell so the loop is cheap.
+  const onResumeAll = useCallback(async () => {
+    if (busy) return;
+    const paused = liveAgents.filter((a) => a.paused);
+    if (paused.length === 0) return;
+    setBusy(true);
+    try {
+      await Promise.all(
+        paused.map((a) =>
+          api.resumeAgent(a.agent_id).catch((e) => {
+            // Soft-fail per agent — don't abort the batch.
+            // eslint-disable-next-line no-console
+            console.warn("resume failed", a.agent_id, e);
+          }),
+        ),
+      );
+      await refresh();
+    } finally {
+      setBusy(false);
+    }
+  }, [busy, liveAgents, refresh]);
+
+  const onTogglePauseSelected = useCallback(async () => {
+    if (!selected || busy) return;
+    setBusy(true);
+    try {
+      if (selected.paused) {
+        await api.resumeAgent(selected.agent_id);
+      } else {
+        await api.interruptAgent(selected.agent_id);
+      }
+      await refresh();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }, [busy, refresh, selected]);
+
   return (
     <div className="flex min-h-0 flex-1">
       <aside className="flex w-[200px] shrink-0 flex-col gap-5 border-r border-border-subtle bg-surface-secondary p-4">
@@ -400,6 +522,20 @@ export default function DagView() {
                 />
               </svg>
               <span className="text-foreground-secondary">{t("dag.waiting")}</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <svg width="36" height="10">
+                <line
+                  x1="0"
+                  y1="5"
+                  x2="36"
+                  y2="5"
+                  stroke="#94a3b8"
+                  strokeWidth="1.25"
+                  opacity="0.7"
+                />
+              </svg>
+              <span className="text-foreground-secondary">{t("dag.spawn")}</span>
             </div>
           </div>
         </section>
@@ -469,6 +605,43 @@ export default function DagView() {
         {error && (
           <div className="absolute top-4 left-4 z-10 rounded-md border border-state-danger/40 bg-status-danger-soft px-3 py-2 text-xs text-state-danger">
             {error}
+          </div>
+        )}
+        {liveAgents.length > 0 && (
+          <div className="absolute top-4 right-4 z-10 flex items-center gap-2">
+            {pausedCount > 0 && (
+              <span className="rounded-full bg-surface-elevated px-2 py-0.5 font-caption text-[10px] text-foreground-tertiary">
+                {t("dag.pausedCount", { count: pausedCount })}
+              </span>
+            )}
+            <button
+              type="button"
+              onClick={onInterruptAll}
+              disabled={busy || liveAgents.length === pausedCount}
+              className={cn(
+                "flex h-8 items-center gap-1.5 rounded-md border border-border-subtle bg-surface-elevated px-2.5 text-xs text-foreground-secondary shadow-sm transition-colors",
+                "hover:bg-surface-tertiary",
+                "disabled:cursor-not-allowed disabled:opacity-50",
+              )}
+              title={t("dag.interruptAll")}
+            >
+              <Pause className="size-3.5" />
+              {t("dag.interruptAll")}
+            </button>
+            <button
+              type="button"
+              onClick={onResumeAll}
+              disabled={busy || pausedCount === 0}
+              className={cn(
+                "flex h-8 items-center gap-1.5 rounded-md border border-border-subtle bg-surface-elevated px-2.5 text-xs text-foreground-secondary shadow-sm transition-colors",
+                "hover:bg-surface-tertiary",
+                "disabled:cursor-not-allowed disabled:opacity-50",
+              )}
+              title={t("dag.resumeAll")}
+            >
+              <Play className="size-3.5" />
+              {t("dag.resumeAll")}
+            </button>
           </div>
         )}
         {liveAgents.length === 0 ? (
@@ -559,13 +732,36 @@ export default function DagView() {
               >
                 {t("dag.openDrawer")}
               </Link>
-              <button
-                onClick={() => api.wakeAgent(selected.agent_id).catch(() => {})}
-                className="flex h-9 items-center justify-center gap-1.5 rounded-md border border-border-subtle bg-surface-elevated text-xs text-foreground-secondary hover:bg-surface-tertiary"
-              >
-                <Zap className="size-3.5" />
-                {t("agent.wake")}
-              </button>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => api.wakeAgent(selected.agent_id).catch(() => {})}
+                  className="flex h-9 flex-1 items-center justify-center gap-1.5 rounded-md border border-border-subtle bg-surface-elevated text-xs text-foreground-secondary hover:bg-surface-tertiary"
+                >
+                  <Zap className="size-3.5" />
+                  {t("agent.wake")}
+                </button>
+                <button
+                  onClick={onTogglePauseSelected}
+                  disabled={busy}
+                  className={cn(
+                    "flex h-9 flex-1 items-center justify-center gap-1.5 rounded-md border border-border-subtle bg-surface-elevated text-xs text-foreground-secondary hover:bg-surface-tertiary",
+                    "disabled:cursor-not-allowed disabled:opacity-50",
+                  )}
+                  title={selected.paused ? t("agent.resume") : t("agent.pause")}
+                >
+                  {selected.paused ? (
+                    <>
+                      <Play className="size-3.5" />
+                      {t("agent.resume")}
+                    </>
+                  ) : (
+                    <>
+                      <Pause className="size-3.5" />
+                      {t("agent.pause")}
+                    </>
+                  )}
+                </button>
+              </div>
             </div>
           </>
         )}

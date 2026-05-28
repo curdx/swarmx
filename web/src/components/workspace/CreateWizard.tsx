@@ -33,7 +33,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { api } from "../../api/http";
-import type { SpellInfo, SwarmEvent } from "../../api/types";
+import type { SpellInfo, SwarmEvent, Workspace } from "../../api/types";
 import { useSwarmFeed } from "../../hooks/useSwarmFeed";
 import {
   ACCENT_OPTIONS,
@@ -85,11 +85,17 @@ async function pickDirectoryViaTauri(): Promise<string | null> {
 interface Props {
   open: boolean;
   onClose: () => void;
-  onCreated?: () => void;
+  /** Called when scan finishes (or times out). Receives the workspace
+   *  that was just created so the parent can navigate the user into it
+   *  — wizard itself is layer-agnostic and does not pull react-router.
+   *  May be undefined if `createWorkspace` failed before the row was
+   *  persisted; parents should fall back to a plain refresh in that case. */
+  onCreated?: (workspace?: Workspace) => void;
 }
 
 interface ScanState {
   startedAt: number;
+  workspace: Workspace;
 }
 
 export function CreateWizard({ open, onClose, onCreated }: Props) {
@@ -110,8 +116,9 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
 
   const finishScan = useRef(() => {});
   finishScan.current = () => {
+    const ws = scanRef.current?.workspace;
     setScan(null);
-    onCreated?.();
+    onCreated?.(ws);
     onClose();
     // reset 用户输入，让下次打开是空的
     setName("");
@@ -166,7 +173,6 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
     setError(null);
     const startedAt = Date.now();
     const wsName = name.trim();
-    setScan({ startedAt });
     try {
       if (!hasInitSpell) {
         throw new Error(
@@ -183,6 +189,10 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
         cwd: cleanDirs[0],
         accent,
       });
+      // Stash the created workspace on scan state so finishScan can hand
+      // it back to the parent for routing into the new chat URL — without
+      // this the parent only knew "something was created, refresh."
+      setScan({ startedAt, workspace: ws });
       await api.runSpell({
         name: INIT_SPELL,
         task: wsName,

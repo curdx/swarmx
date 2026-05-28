@@ -16,7 +16,7 @@ mod store;
 
 pub use models::{
     AgentRecord, BlackboardOpRecord, ListMessagesOpts, MessageRecord, NewAgent, NewBlackboardOp,
-    NewMessage, NewRecording, NewSpellRun, NewWorkspace, RecordingRecord, SpellRunRecord,
-    WorkspaceRecord,
+    NewMessage, NewRecording, NewSpellRun, NewWorker, NewWorkspace, RecordingRecord,
+    SpellRunRecord, WorkerRecord, WorkspaceRecord,
 };
 pub use store::Store;

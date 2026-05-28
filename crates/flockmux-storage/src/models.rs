@@ -77,6 +77,31 @@ pub struct NewSpellRun {
     pub started_at: i64,
 }
 
+/// New ad-hoc worker (insert payload for [`crate::Store::record_worker`]).
+/// Magentic-One 重构后业务 agent 不再来自 spell+role,而是 orchestrator 在
+/// runtime 用自定义 prompt 拉的临时工。这张表把"谁拉的、什么活、等啥信号"
+/// 记下来,DAG / wake-coordinator / 回放都靠它。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NewWorker {
+    /// PTY agent_id(同时是 agents 表主键)。
+    pub agent_id: String,
+    /// 拉起这个 worker 的 orchestrator(或上一级 worker)的 agent_id。
+    pub parent_agent_id: String,
+    /// 仅 UI 显示用的 role 名字,例如 "writer" / "ui-coder" / "test-runner"。
+    pub role_label: String,
+    /// 注入给 worker 的完整 system prompt,留档便于回放。
+    pub system_prompt: String,
+    /// 完成后该写的黑板 key;无 handoff 留空字符串。
+    pub handoff_signal: String,
+    /// JSON 序列化的 string array,等待的黑板 key。空数组 = 无依赖。
+    pub depends_on_json: String,
+    pub spawned_at: i64,
+}
+
+/// 同 NewWorker,加上 spawned_at(已经在 NewWorker 里)— 用一个 struct
+/// 简化,后续如果加可选字段再分。
+pub type WorkerRecord = NewWorker;
+
 /// Full spell_runs row.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SpellRunRecord {

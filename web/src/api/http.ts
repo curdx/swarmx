@@ -72,6 +72,27 @@ export const api = {
   // body 写"manual wake from operator"。挡在 M6d-6 quiet gate 后面，
   // agent 正在 stream 时只投 mailbox 不戳 PTY。
   wakeAgent: (id: string) => request<void>("POST", `/api/agent/${id}/wake`),
+  // 不杀 PTY 的暂停:发 Ctrl-C 取消当前 turn + 设 paused flag。WakeCoordinator
+  // 跳过这个 agent 的自动唤醒,manual ⚡ 仍然能用。
+  interruptAgent: (id: string) =>
+    request<{ ok: boolean; agent_id: string; paused: boolean }>(
+      "POST",
+      `/api/agent/${id}/interrupt`,
+    ),
+  resumeAgent: (id: string) =>
+    request<{ ok: boolean; agent_id: string; paused: boolean }>(
+      "POST",
+      `/api/agent/${id}/resume`,
+    ),
+  // workspace 级"全停"。后端遍历 registry 找匹配 workspace_id 的 live agent,
+  // 逐个 interrupt。返回 { interrupted, agent_ids, failed }。
+  interruptAllInWorkspace: (workspaceId: string) =>
+    request<{
+      ok: boolean;
+      interrupted: number;
+      agent_ids: string[];
+      failed: Array<{ agent_id: string; error: string }>;
+    }>("POST", `/api/agent/interrupt-all${qs({ workspace_id: workspaceId })}`),
 
   // M3 swarm
   listMessages: (q: ListMessagesQuery = {}) =>

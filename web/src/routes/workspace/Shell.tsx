@@ -36,8 +36,8 @@ import {
 import { useTranslation } from "react-i18next";
 import {
   Check,
+  ClipboardList,
   Copy,
-  FileText,
   FolderOpen,
   GitBranch,
   MessageSquare,
@@ -114,10 +114,6 @@ export interface ShellOutletContext {
   jumpUnreadTick: number;
   /** Open the right-side AgentDrawer (writes ?agent=<id> into URL). */
   openAgent: (agentId: string) => void;
-  /** "init-only" workspace heuristic + composer override for the first
-   *  human message → triggers auto-dispatch instead of going to STOPped
-   *  scout. Lives in Shell because it depends on workspace path + slug. */
-  composerOverride?: (body: string) => Promise<void>;
   /** Imperative refresh handle child views can call after mutations
    *  (e.g. wake-agent button → listAgents() to update spinner state). */
   refreshAgents: () => void;
@@ -242,7 +238,7 @@ export function WorkspaceList({
                         e.stopPropagation();
                         if (
                           window.confirm(
-                            `删除工作空间「${ws.name}」？\n（仅从列表移除，已启动的 agent 继续运行）`,
+                            `删除工作空间「${ws.name}」？\n（该 workspace 下的所有 agent 会一并停止）`,
                           )
                         ) {
                           onDelete(ws.workspaceId);
@@ -298,8 +294,8 @@ function buildTabs(wsId: string): TabDef[] {
   return [
     { to: `/chat/${wsId}`, labelKey: "chat.tabs.chat", icon: MessageSquare, shortcut: 1 },
     { to: `/chat/${wsId}/dag`, labelKey: "chat.tabs.dag", icon: GitBranch, shortcut: 2 },
-    { to: `/chat/${wsId}/replays`, labelKey: "chat.tabs.replays", icon: Play, shortcut: 3 },
-    { to: `/chat/${wsId}/context`, labelKey: "chat.tabs.context", icon: FileText, shortcut: 4 },
+    { to: `/chat/${wsId}/ledger`, labelKey: "chat.tabs.ledger", icon: ClipboardList, shortcut: 3 },
+    { to: `/chat/${wsId}/replays`, labelKey: "chat.tabs.replays", icon: Play, shortcut: 4 },
   ];
 }
 
@@ -675,53 +671,6 @@ export default function WorkspaceShell() {
       .map((a) => a.agent_id);
   }, [agents, activeWs]);
 
-  const isInitOnlyWorkspace = useMemo(() => {
-    if (!activeWs || workspaceAgentIds.length === 0) return false;
-    return workspaceAgentIds.every((id) => {
-      const a = agents.find((x) => x.agent_id === id);
-      return a?.role === "scout";
-    });
-  }, [activeWs, workspaceAgentIds, agents]);
-
-  // composerOverride for init-only workspaces — lifted from chat.tsx.
-  // Loaded lazily so import cost doesn't hit /chat/:wsId/dag etc. that
-  // don't use it. Kept inline (not its own file) because it's only ~30
-  // lines and reads three workspace-scoped things.
-  const composerOverride = useMemo(() => {
-    if (!isInitOnlyWorkspace || !activeWs) return undefined;
-    const wsPath = activeWs.path;
-    const wsId = activeWs.workspaceId;
-    return async (body: string) => {
-      const { FULLSTACK_INTERNAL_KEYS, projectSummaryKey } = await import(
-        "../../lib/workspace"
-      );
-      await Promise.all(
-        FULLSTACK_INTERNAL_KEYS.map((k) =>
-          api.writeBlackboard(k, { content: "" }).catch(() => {
-            /* best-effort */
-          }),
-        ),
-      );
-      let summary: string | null = null;
-      try {
-        const snap = await api.readBlackboard(projectSummaryKey(wsPath));
-        summary = snap?.content ?? null;
-      } catch {
-        /* fall back to scout-less prompt */
-      }
-      const taskParts = [body, `\n[workspace_dir: ${wsPath}]`];
-      if (summary) {
-        taskParts.push(`\n[项目摘要 / project summary]\n${summary}`);
-      }
-      await api.runSpell({
-        name: "auto-dispatch",
-        task: taskParts.join(""),
-        workspace_dir: wsPath,
-        workspace_id: wsId,
-      });
-    };
-  }, [isInitOnlyWorkspace, activeWs]);
-
   const activeWorkspaceUnread = useMemo(() => {
     if (!activeWs) return {} as Record<string, number>;
     const wsSet = new Set(workspaceAgentIds);
@@ -737,6 +686,31 @@ export default function WorkspaceShell() {
   // ── Soft-delete a workspace ────────────────────────────────────────
   const handleDeleteWorkspace = useCallback(
     async (workspaceId: string) => {
+      // Kill any live agents belonging to this workspace before deleting
+      // the row, otherwise their PTYs survive and keep burning tokens
+      // with no UI handle to address them. Per-agent failure is logged
+      // but doesn't abort the batch (a half-dead PTY shouldn't block
+      // the user from removing the workspace).
+      try {
+        const all = await api.listAgents();
+        const live = all.filter(
+          (a) =>
+            a.workspace_id === workspaceId &&
+            a.killed_at == null &&
+            a.shim_exit == null,
+        );
+        await Promise.all(
+          live.map((a) =>
+            api.killAgent(a.agent_id).catch((e) => {
+              // eslint-disable-next-line no-console
+              console.warn("killAgent failed", a.agent_id, e);
+            }),
+          ),
+        );
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn("listAgents before delete failed", err);
+      }
       try {
         await api.deleteWorkspace(workspaceId);
       } catch (err) {
@@ -813,9 +787,13 @@ export default function WorkspaceShell() {
           <CreateWizard
             open={wizardOpen}
             onClose={() => setWizardOpen(false)}
-            onCreated={() => {
+            onCreated={(ws) => {
               refreshAgents();
               refreshWorkspaces();
+              // Navigate into the brand-new workspace's chat URL — Shell
+              // re-routes itself on slug change so user sees the new
+              // members + Toolbar without manually picking from sidebar.
+              if (ws) navigate(`/chat/${ws.slug}`);
             }}
           />
         </div>
@@ -833,7 +811,6 @@ export default function WorkspaceShell() {
     unreadByFrom: activeWorkspaceUnread,
     jumpUnreadTick,
     openAgent,
-    composerOverride,
     refreshAgents,
   };
 

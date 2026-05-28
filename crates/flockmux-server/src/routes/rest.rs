@@ -6,18 +6,19 @@ use crate::spawn::{spawn_agent, WorkspaceLayout};
 use crate::spells;
 use crate::AppState;
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
     Json,
 };
 use flockmux_protocol::rest::{
     AgentInfo, CliPluginInfo, CreateWorkspaceRequest, RunSpellAgent, RunSpellRequest,
-    RunSpellResponse, SpawnAgentRequest, SpawnAgentResponse, SpellAgentInfo, SpellInfo, Workspace,
+    RunSpellResponse, SpawnAgentRequest, SpawnAgentResponse, SpawnWorkerRequest,
+    SpawnWorkerResponse, SpellAgentInfo, SpellInfo, Workspace,
 };
 use flockmux_protocol::ws_swarm::{AgentState, SwarmEvent};
 use flockmux_recorder::{Recorder, RecorderConfig};
-use flockmux_storage::{NewAgent, NewRecording, NewSpellRun, NewWorkspace};
+use flockmux_storage::{NewAgent, NewRecording, NewSpellRun, NewWorker, NewWorkspace};
 use serde_json::json;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -335,6 +336,7 @@ pub async fn list_agents(State(state): State<AppState>) -> impl IntoResponse {
         let lc = *slot.lifecycle.lock();
         let depends_on = depends_for(&id);
         let handoff_signal = handoff_for(&slot.role);
+        let paused = slot.paused.load(std::sync::atomic::Ordering::Relaxed);
         live.insert(
             id.clone(),
             AgentInfo {
@@ -353,6 +355,10 @@ pub async fn list_agents(State(state): State<AppState>) -> impl IntoResponse {
                 // authoritative source and we backfill from it below.
                 workspace_id: None,
                 spell_run_id: None,
+                // parent_agent_id is derived from the spell_runs table after
+                // the SQLite union below — fills in once spell_run_id is set.
+                parent_agent_id: None,
+                paused,
             },
         );
     }
@@ -390,6 +396,8 @@ pub async fn list_agents(State(state): State<AppState>) -> impl IntoResponse {
                         handoff_signal,
                         workspace_id: row.workspace_id,
                         spell_run_id: row.spell_run_id,
+                        parent_agent_id: None,
+                        paused: false,
                     });
                 }
             }
@@ -401,6 +409,27 @@ pub async fn list_agents(State(state): State<AppState>) -> impl IntoResponse {
     // Any live entries that weren't in the store (shouldn't happen, but
     // be defensive) get appended at the end.
     items.extend(live.into_values());
+
+    // Derive parent_agent_id from workers.parent_agent_id (Magentic-One
+    // 重构后业务 agent 全部走 workers 表)。orchestrator 本身不在 workers
+    // 表里 — 它是 init spell 拉的,parent 为 None(树根),符合"用户的
+    // 助手"语义。一次批量 IN 查询,N+1 不允许。
+    let worker_ids: Vec<String> = items.iter().map(|it| it.agent_id.clone()).collect();
+    if !worker_ids.is_empty() {
+        match state.store.list_workers_by_ids(worker_ids).await {
+            Ok(by_id) => {
+                for it in items.iter_mut() {
+                    if let Some(w) = by_id.get(&it.agent_id) {
+                        it.parent_agent_id = Some(w.parent_agent_id.clone());
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!(?e, "list_agents: list_workers_by_ids failed; parent edges omitted");
+            }
+        }
+    }
+
     Json(items)
 }
 
@@ -467,6 +496,363 @@ pub async fn wake_agent(
             )
         }
     }
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Spawn ad-hoc worker (Magentic-One 重构): orchestrator 通过 MCP
+// swarm_spawn_worker 拉一个临时 worker。绕过 spell + role,worker 的
+// prompt / handoff_signal / depends_on 全部来自请求体,server 复用
+// spawn_with_bookkeeping 完整拉 PTY,然后:
+//   1. workers 表写一行(留档 + DAG parent 派生)
+//   2. WakeCoordinator 注册 wake_subs + exit_keys
+//   3. 后台等 ShimReady 后注入 system_prompt(跟 run_spell 同款 paste+\r)
+// 跟 run_spell 的区别只是"不解析 spell / 不查 role registry / 不挂 spell_run"。
+// ────────────────────────────────────────────────────────────────────────
+
+pub async fn spawn_worker(
+    State(state): State<AppState>,
+    Json(req): Json<SpawnWorkerRequest>,
+) -> Result<Json<SpawnWorkerResponse>, (StatusCode, Json<serde_json::Value>)> {
+    if req.cli.trim().is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "missing cli"})),
+        ));
+    }
+    if req.role_label.trim().is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "missing role_label"})),
+        ));
+    }
+    if req.system_prompt.trim().is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "missing system_prompt"})),
+        ));
+    }
+    if req.workspace_id.trim().is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "missing workspace_id"})),
+        ));
+    }
+    if req.caller_agent_id.trim().is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "missing caller_agent_id"})),
+        ));
+    }
+
+    // Resolve workspace cwd. spawn_worker only supports Shared layout
+    // because the orchestrator-and-workers model assumes everyone works
+    // in the same monorepo / project dir (跟 fullstack-feature 一致)。
+    let ws = state
+        .store
+        .get_workspace_by_id(req.workspace_id.clone())
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": format!("workspace lookup failed: {e}")})),
+            )
+        })?
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": format!("unknown workspace_id: {}", req.workspace_id)})),
+            )
+        })?;
+    let layout = WorkspaceLayout::Shared {
+        dir: PathBuf::from(&ws.cwd),
+    };
+
+    let out = spawn_with_bookkeeping(
+        &state,
+        &req.cli,
+        Some(req.role_label.clone()),
+        layout,
+        req.workspace_id.clone(),
+        None, // ad-hoc workers don't belong to a spell run
+    )
+    .await
+    .map_err(|(status, msg)| (status, Json(json!({"error": msg}))))?;
+
+    // M6b: register wake subscription + exit-key BEFORE deferred bootstrap
+    // inject (same ordering as run_spell — guards against fast producers).
+    crate::wake::register_wake_subs(
+        &state.wake_subs,
+        out.agent_id.clone(),
+        req.depends_on.clone(),
+    )
+    .await;
+    crate::wake::register_exit_key(
+        &state.exit_keys,
+        out.agent_id.clone(),
+        req.role_label.clone(),
+        req.handoff_signal.clone(),
+        now_ms(),
+    )
+    .await;
+
+    // Magentic-One closes the loop here: the orchestrator (the spawning
+    // agent) needs to be woken when this worker writes its handoff_signal,
+    // so it can read the artifact, update Progress Ledger, and decide
+    // what's next. `register_wake_subs` above already covers what the
+    // *worker* waits on, but not what the *spawner* waits on. Without
+    // this append the worker writes ui.done → blackboard event fires →
+    // no subscriber → orchestrator sleeps forever. Append-not-overwrite
+    // so the orchestrator can have many workers in flight at once.
+    if !req.handoff_signal.is_empty() && !req.caller_agent_id.is_empty() {
+        crate::wake::append_wake_sub(
+            &state.wake_subs,
+            req.caller_agent_id.clone(),
+            req.handoff_signal.clone(),
+        )
+        .await;
+    }
+
+    // Persist worker metadata. Failure is non-fatal (PTY is already live),
+    // but the DAG view will miss the parent edge until next listAgents
+    // refresh after a successful retry.
+    let depends_on_json =
+        serde_json::to_string(&req.depends_on).unwrap_or_else(|_| "[]".to_string());
+    if let Err(e) = state
+        .store
+        .record_worker(NewWorker {
+            agent_id: out.agent_id.clone(),
+            parent_agent_id: req.caller_agent_id.clone(),
+            role_label: req.role_label.clone(),
+            system_prompt: req.system_prompt.clone(),
+            handoff_signal: req.handoff_signal.clone(),
+            depends_on_json,
+            spawned_at: now_ms(),
+        })
+        .await
+    {
+        tracing::warn!(?e, agent = %out.agent_id, "record_worker failed");
+    }
+
+    // Bootstrap inject — copied near-verbatim from run_spell. Same race
+    // semantics (ShimReady or already_ready short-circuit), same 2500ms
+    // MCP-settle window, same paste + 150ms + \r submit pattern.
+    let prompt = req.system_prompt.clone();
+    let agent_id = out.agent_id.clone();
+    let mut rx = out.lifecycle_rx.resubscribe();
+    let registry = state.registry.clone();
+    let agent_for_log = agent_id.clone();
+    tokio::spawn(async move {
+        let already_ready = registry
+            .get(&agent_id)
+            .map(|s| s.lock().lifecycle.lock().shim_ready)
+            .unwrap_or(false);
+        if !already_ready {
+            let bootstrap = async {
+                loop {
+                    match rx.recv().await {
+                        Ok(LifecycleEvent::ShimReady) => return Ok(()),
+                        Ok(LifecycleEvent::ShimExit(code)) => {
+                            return Err(format!("worker exited before ShimReady (code={code})"));
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                            return Err("lifecycle channel closed".into());
+                        }
+                    }
+                }
+            };
+            match tokio::time::timeout(std::time::Duration::from_secs(30), bootstrap).await {
+                Ok(Ok(())) => {}
+                Ok(Err(msg)) => {
+                    tracing::warn!(agent = %agent_for_log, msg = %msg, "worker bootstrap aborted");
+                    return;
+                }
+                Err(_) => {
+                    tracing::warn!(agent = %agent_for_log, "worker bootstrap timed out waiting for ShimReady");
+                    return;
+                }
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
+        let slot_lock = match registry.get(&agent_for_log) {
+            Some(s) => s,
+            None => {
+                tracing::warn!(agent = %agent_for_log, "worker slot vanished before bootstrap");
+                return;
+            }
+        };
+        let input_tx = slot_lock.lock().input_tx.clone();
+        let body = prompt.into_bytes();
+        let body_len = body.len();
+        if let Err(err) = input_tx.send(bytes::Bytes::from(body)).await {
+            tracing::warn!(agent = %agent_for_log, ?err, "worker PTY paste send failed");
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        if let Err(err) = input_tx.send(bytes::Bytes::from_static(b"\r")).await {
+            tracing::warn!(agent = %agent_for_log, ?err, "worker PTY submit send failed");
+            return;
+        }
+        tracing::info!(
+            agent = %agent_for_log,
+            bytes = body_len,
+            "worker bootstrap prompt injected"
+        );
+    });
+
+    Ok(Json(SpawnWorkerResponse {
+        agent_id: out.agent_id,
+        cli: out.cli,
+        role_label: req.role_label,
+        workspace: out.workspace,
+    }))
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Interrupt / resume (M-pause): operator-controlled pause without tearing
+// down the PTY. Cancels the in-flight turn via Ctrl-C (\x03) and flips a
+// pause flag that gates the WakeCoordinator's auto-wake path. The PTY,
+// blackboard subscription, mailbox, and recording all stay live. Resume
+// flips the flag back and delivers one manual wake so any backlog of
+// blackboard writes from the paused window gets a fresh look.
+// ────────────────────────────────────────────────────────────────────────
+
+async fn interrupt_one_inner(state: &AppState, agent_id: &str) -> Result<(), String> {
+    let slot = state
+        .registry
+        .get(agent_id)
+        .ok_or_else(|| format!("agent {agent_id} not found"))?;
+    let input_tx = {
+        let guard = slot.lock();
+        // Set paused FIRST so any in-flight BlackboardChanged event the
+        // wake coordinator is currently processing for this agent will
+        // see paused=true before we even send the Ctrl-C. The Ordering
+        // is Relaxed both here and at the load site — we don't need
+        // cross-thread sync beyond visibility.
+        guard.paused.store(true, std::sync::atomic::Ordering::Relaxed);
+        guard.input_tx.clone()
+    };
+    // Best-effort Ctrl-C. If the PTY is already dead (shim_exit fired
+    // but registry slot hasn't been removed yet) the send returns Err —
+    // we keep paused=true anyway so a re-spawn-into-same-slot scenario
+    // can't accidentally start auto-waking again.
+    if let Err(e) = input_tx.send(bytes::Bytes::from_static(b"\x03")).await {
+        tracing::warn!(?e, agent = %agent_id, "interrupt Ctrl-C send failed (PTY may be dead); paused flag still set");
+    }
+    Ok(())
+}
+
+/// `POST /api/agent/:id/interrupt` — cancel current turn + pause auto-wake.
+pub async fn interrupt(
+    State(state): State<AppState>,
+    Path(agent_id): Path<String>,
+) -> impl IntoResponse {
+    match interrupt_one_inner(&state, &agent_id).await {
+        Ok(_) => (
+            StatusCode::OK,
+            Json(json!({"ok": true, "agent_id": agent_id, "paused": true})),
+        ),
+        Err(msg) => (StatusCode::NOT_FOUND, Json(json!({"error": msg}))),
+    }
+}
+
+/// `POST /api/agent/:id/resume` — clear paused flag + deliver one manual
+/// wake to consume any backlog the agent missed while paused. We always
+/// deliver the wake (even if the mailbox was empty) so the agent's next
+/// Stop hook fire reliably triggers wake-check; this is symmetric with the
+/// ⚡ button behavior in `wake_agent`.
+pub async fn resume(
+    State(state): State<AppState>,
+    Path(agent_id): Path<String>,
+) -> impl IntoResponse {
+    let slot = match state.registry.get(&agent_id) {
+        Some(s) => s,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": format!("agent {agent_id} not found")})),
+            )
+        }
+    };
+    slot.lock()
+        .paused
+        .store(false, std::sync::atomic::Ordering::Relaxed);
+    if let Err(e) = crate::wake::deliver_manual_wake(&state.swarm, &state.registry, &agent_id).await
+    {
+        tracing::warn!(?e, agent = %agent_id, "resume: manual wake failed (paused already cleared)");
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": e.to_string(), "paused": false})),
+        );
+    }
+    (
+        StatusCode::OK,
+        Json(json!({"ok": true, "agent_id": agent_id, "paused": false})),
+    )
+}
+
+/// `POST /api/agent/interrupt-all?workspace_id=<id>` — interrupt every live
+/// agent in a workspace. Live = present in the in-memory registry; killed
+/// agents (SQLite-only) are ignored. `workspace_id` is matched against the
+/// SQLite-stored value, which means agents spawned via legacy paths
+/// without a workspace_id (pre-Step-3) won't be affected — they'd need
+/// to be interrupted individually. If `workspace_id` is omitted, errors
+/// (we never want to mass-interrupt the entire process).
+pub async fn interrupt_all(
+    State(state): State<AppState>,
+    Query(q): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
+    let workspace_id = match q.get("workspace_id").map(|s| s.trim()).filter(|s| !s.is_empty()) {
+        Some(w) => w.to_string(),
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": "missing required query param 'workspace_id'"})),
+            )
+        }
+    };
+
+    // Resolve which live agents belong to this workspace. The registry
+    // slot doesn't carry workspace_id yet (Step 3 of the workspace
+    // rollout); we cross-reference SQLite to find matching agent ids.
+    let rows = match state.store.list_agents().await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(?e, "interrupt_all: list_agents store call failed");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": e.to_string()})),
+            );
+        }
+    };
+    let target_ids: Vec<String> = rows
+        .into_iter()
+        .filter(|row| row.killed_at.is_none())
+        .filter(|row| row.workspace_id.as_deref() == Some(workspace_id.as_str()))
+        .map(|row| row.id)
+        .collect();
+
+    let mut interrupted: Vec<String> = Vec::new();
+    let mut failed: Vec<serde_json::Value> = Vec::new();
+    for id in target_ids {
+        match interrupt_one_inner(&state, &id).await {
+            Ok(_) => interrupted.push(id),
+            Err(msg) => {
+                // Agent may have exited between list_agents and now —
+                // skip and report, don't abort the whole batch.
+                failed.push(json!({"agent_id": id, "error": msg}));
+            }
+        }
+    }
+    (
+        StatusCode::OK,
+        Json(json!({
+            "ok": true,
+            "interrupted": interrupted.len(),
+            "agent_ids": interrupted,
+            "failed": failed,
+        })),
+    )
 }
 
 // ────────────────────────────────────────────────────────────────────────
@@ -882,7 +1268,7 @@ pub async fn run_spell(
         if raw_prompt.trim().is_empty() {
             continue;
         }
-        let prompt = spells::render_prompt(raw_prompt, &req.task, &role_to_id);
+        let prompt = spells::render_prompt(raw_prompt, &req.task, &workspace_id, &role_to_id);
         let agent_id = out.agent_id.clone();
         let mut rx = out.lifecycle_rx.resubscribe();
         let registry = state.registry.clone();

@@ -139,6 +139,22 @@ export function AgentDrawer({ agentId, onClose }: Props) {
   });
 
   const wake = () => api.wakeAgent(agentId).catch(() => {});
+  // Pause toggles between interrupt (active → paused) and resume
+  // (paused → active). Both refresh the local AgentInfo so the button
+  // label flips immediately without waiting for the swarm feed.
+  const togglePause = async () => {
+    try {
+      if (info?.paused) {
+        await api.resumeAgent(agentId);
+      } else {
+        await api.interruptAgent(agentId);
+      }
+      await refreshInfo();
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn("toggle pause failed", e);
+    }
+  };
 
   return (
     <Sheet
@@ -166,6 +182,7 @@ export function AgentDrawer({ agentId, onClose }: Props) {
           agentId={agentId}
           now={now}
           onWake={wake}
+          onTogglePause={togglePause}
         />
         <TabBar tab={tab} onChange={setTab} />
         <div className="min-h-0 flex-1 overflow-hidden">
@@ -195,11 +212,13 @@ function Header({
   agentId,
   now,
   onWake,
+  onTogglePause,
 }: {
   info: AgentInfo | null;
   agentId: string;
   now: number;
   onWake: () => void;
+  onTogglePause: () => void;
 }) {
   const { t } = useTranslation();
   const role = info?.role ?? "—";
@@ -275,9 +294,24 @@ function Header({
           <Zap className="size-3" />
           {t("agent.wake")}
         </Button>
-        <Button size="sm" variant="outline" disabled title={t("agent.notImplemented")}>
-          <Pause className="size-3" />
-          {t("agent.pause")}
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={onTogglePause}
+          disabled={!live}
+          title={info?.paused ? t("agent.resume") : t("agent.pause")}
+        >
+          {info?.paused ? (
+            <>
+              <Play className="size-3" />
+              {t("agent.resume")}
+            </>
+          ) : (
+            <>
+              <Pause className="size-3" />
+              {t("agent.pause")}
+            </>
+          )}
         </Button>
         <Button size="sm" variant="outline" disabled title={t("agent.notImplemented")}>
           <RotateCcw className="size-3" />
