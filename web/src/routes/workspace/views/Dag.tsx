@@ -92,7 +92,7 @@ const NODE_H = 80;
 
 function layout(nodes: Node[], edges: Edge[]) {
   const g = new dagre.graphlib.Graph();
-  g.setGraph({ rankdir: "LR", nodesep: 40, ranksep: 80 });
+  g.setGraph({ rankdir: "TB", nodesep: 60, ranksep: 80 });
   g.setDefaultEdgeLabel(() => ({}));
   for (const n of nodes) g.setNode(n.id, { width: NODE_W, height: NODE_H });
   for (const e of edges) g.setEdge(e.source, e.target);
@@ -102,8 +102,8 @@ function layout(nodes: Node[], edges: Edge[]) {
     return {
       ...n,
       position: { x: p.x - NODE_W / 2, y: p.y - NODE_H / 2 },
-      sourcePosition: Position.Right,
-      targetPosition: Position.Left,
+      sourcePosition: Position.Bottom,
+      targetPosition: Position.Top,
     };
   });
 }
