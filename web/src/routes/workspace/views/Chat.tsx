@@ -416,7 +416,11 @@ export default function ChatView() {
         />
       </section>
 
-      <aside className="flex w-[340px] shrink-0 flex-col border-l border-border-subtle bg-surface-elevated">
+      {/* surface-secondary (not -elevated) so this rail matches the left
+          workspace rail — both side rails read as panels, keeping the
+          3-column layout balanced instead of the right one blending into
+          the white center canvas. No-op in dark (both resolve slate-800). */}
+      <aside className="flex w-[340px] shrink-0 flex-col border-l border-border-subtle bg-surface-secondary">
         <div className="flex h-12 shrink-0 items-center gap-2 border-b border-border-subtle px-4">
           <Users className="size-4 text-foreground-tertiary" />
           <h2 className="font-heading text-xs font-semibold uppercase tracking-wider text-foreground-tertiary">
@@ -472,7 +476,7 @@ export default function ChatView() {
                     // 金边告诉用户"这个是主理人,长期在线"。没有 ring
                     // 的就是临时 worker — 干完一件事就会消失。
                     isOrchestrator &&
-                      "ring-2 ring-accent-primary ring-offset-2 ring-offset-surface-elevated",
+                      "ring-2 ring-accent-primary ring-offset-2 ring-offset-surface-secondary",
                   )}
                   title={a.role}
                 >

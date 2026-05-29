@@ -485,7 +485,12 @@ export function MessagesPanel({
   return (
     <div className="flex h-full flex-col bg-surface-primary">
       {/* ── slim top bar ─────────────────────────────────────────────── */}
-      <div className="flex shrink-0 items-center gap-1 border-b border-border-subtle px-3 py-1.5">
+      {/* No own border-b: the WorkspaceToolbar's divider directly above is
+          the canonical header separator. A second hairline 36px below it
+          just bracketed a near-empty action strip into a redundant band.
+          Dropping it lets these chat-thread actions (search / by-sender /
+          refresh) read as one quiet toolbar under the tabs. */}
+      <div className="flex shrink-0 items-center gap-1 px-3 py-1">
         {filterOpen ? (
           <div className="flex h-7 min-w-0 flex-1 items-center gap-2 rounded-md bg-surface-tertiary px-2.5">
             <Search className="size-3.5 text-foreground-tertiary" />
@@ -698,7 +703,7 @@ export function MessagesPanel({
                         "group/bubble relative rounded-2xl px-3 py-1.5 transition-colors",
                         isUser
                           ? "bg-accent-primary text-foreground-on-accent rounded-br-sm"
-                          : "bg-surface-elevated border border-border-subtle text-foreground-primary rounded-bl-sm",
+                          : "bg-surface-secondary border border-border-subtle text-foreground-primary rounded-bl-sm",
                         isUnread && "border-l-2 border-l-state-busy",
                         highlighted &&
                           "ring-2 ring-accent-primary ring-offset-1 ring-offset-surface-primary",
@@ -897,7 +902,7 @@ function PendingBubble({
             </span>
           </span>
           <div
-            className="rounded-2xl rounded-bl-sm border border-border-subtle bg-surface-elevated px-3 py-2"
+            className="rounded-2xl rounded-bl-sm border border-border-subtle bg-surface-secondary px-3 py-2"
             title={replyHint}
           >
             <span className="flex items-center gap-1">
