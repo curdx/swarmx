@@ -16,6 +16,7 @@ import type {
   SpellInfo,
   UnreadCountResponse,
   Workspace,
+  WorkspaceRoot,
   WriteBlackboardRequest,
 } from "./types";
 
@@ -176,4 +177,23 @@ export const api = {
     request<Workspace>("POST", "/api/workspaces", req),
   deleteWorkspace: (id: string) =>
     request<void>("DELETE", `/api/workspaces/${id}`),
+  // attached dependency-source roots (post-create management)
+  addWorkspaceRoot: (id: string, root: WorkspaceRoot) =>
+    request<WorkspaceRoot>("POST", `/api/workspaces/${id}/roots`, root),
+  /** Remove a root node (by its server id); the backend cascade-deletes any
+   *  children mounted under it. */
+  deleteWorkspaceRoot: (id: string, rootId: string) =>
+    request<{ deleted: number }>(
+      "DELETE",
+      `/api/workspaces/${id}/roots?id=${encodeURIComponent(rootId)}`,
+    ),
+  /** Candidate local source deps parsed from a project's manifests
+   *  (package.json file:/link:, Cargo path, go.mod replace, uv sources).
+   *  `projectPath` scopes the scan to a specific project dir; defaults to the
+   *  primary cwd when omitted. */
+  rootSuggestions: (id: string, projectPath?: string) =>
+    request<WorkspaceRoot[]>(
+      "GET",
+      `/api/workspaces/${id}/root-suggestions${projectPath ? `?path=${encodeURIComponent(projectPath)}` : ""}`,
+    ),
 };

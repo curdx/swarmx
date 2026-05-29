@@ -94,6 +94,7 @@ export default function ChatHome() {
         parent,
         accentColor: accentToCssVar(w.accent),
         members: aliveByWsId.get(w.id) ?? [],
+        roots: w.roots ?? [],
       };
     });
   }, [workspaceRows, agents]);
@@ -151,6 +152,7 @@ export default function ChatHome() {
           activeId={null}
           onOpenWizard={() => setWizardOpen(true)}
           onDelete={handleDeleteWorkspace}
+          onRootsChanged={refreshWorkspaces}
         />
         {/* 主战场就一个 — Welcome 屏。删了之前左 sidebar 大卡片 + 中
          *  间又一个 "新建工作空间" 按钮的双 CTA，sidebar 那边 empty 现
@@ -162,12 +164,12 @@ export default function ChatHome() {
           onClose={() => setWizardOpen(false)}
           onCreated={(ws) => {
             refreshAgents();
-            refreshWorkspaces();
-            // Drop the user into the workspace they just created — the
-            // /chat root only renders the Welcome screen, so without this
-            // the new workspace exists in the sidebar but the main pane
-            // stays on the marketing pitch until they manually click it.
-            if (ws) navigate(`/chat/${ws.slug}`);
+            // Await the refetch before navigating so the destination Shell
+            // already has the new slug in its workspace list (otherwise its
+            // not-found redirect bounces back to the first workspace).
+            void refreshWorkspaces().then(() => {
+              if (ws) navigate(`/chat/${ws.slug}`);
+            });
           }}
         />
       </div>

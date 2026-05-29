@@ -191,6 +191,24 @@ export interface RunSpellResponse {
 
 // ── workspaces (workspace-as-first-class refactor) ───────────────────────
 
+/** An attached dependency-source root folder. The workspace's primary
+ *  project dir is `Workspace.cwd`; these are extra source roots agents may
+ *  read directly (so they don't have to decompile/guess a dependency).
+ *  `role` is "dependency" | "tool" today (kept open as string). */
+export interface WorkspaceRoot {
+  /** Server-assigned id. Omitted on create/add payloads (server fills it). */
+  id?: string;
+  path: string;
+  /** "project" (a top-level peer project) | "dependency" | "tool". */
+  role: string;
+  label?: string | null;
+  /** Logical-tree parent: another root's id, or null/undefined for a
+   *  top-level node. Decoupled from physical path — a node's `path` can live
+   *  anywhere; parent_id only expresses the "depends on / belongs under"
+   *  relationship the user chose. */
+  parent_id?: string | null;
+}
+
 export interface Workspace {
   id: string;
   /** First 8 chars of `id`. Used as the URL slug `/chat/:slug`. */
@@ -202,12 +220,16 @@ export interface Workspace {
   /** Live agents whose `workspace_id` points here. Computed server-side
    *  at list time; not persisted. */
   member_count: number;
+  /** Attached dependency-source roots (excludes the primary `cwd`). */
+  roots?: WorkspaceRoot[];
 }
 
 export interface CreateWorkspaceRequest {
   name: string;
   cwd: string;
   accent?: string;
+  /** Attached dependency-source roots to persist alongside the workspace. */
+  roots?: WorkspaceRoot[];
 }
 
 // ── M3 recording DTOs ────────────────────────────────────────────────────

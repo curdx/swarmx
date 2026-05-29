@@ -35,22 +35,26 @@ import {
 } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import {
-  Check,
+  ChevronDown,
+  ChevronRight,
   ClipboardList,
-  Copy,
+  Folder,
   FolderOpen,
+  FolderPlus,
   GitBranch,
   MessageSquare,
   Play,
   Plus,
   Trash2,
+  X,
 } from "lucide-react";
-import { api } from "../../api/http";
+import { api, ApiError } from "../../api/http";
 import type {
   AgentInfo,
   MessageRecord,
   SwarmEvent,
   Workspace,
+  WorkspaceRoot,
 } from "../../api/types";
 import { AgentDrawer } from "../../components/agent/AgentDrawer";
 import { CreateWizard } from "../../components/workspace/CreateWizard";
@@ -60,6 +64,7 @@ import { useSwarmFeed } from "../../hooks/useSwarmFeed";
 import { accentToCssVar } from "../../lib/workspace";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   Dialog,
   DialogContent,
@@ -95,6 +100,9 @@ export interface WorkspaceSummary {
   accentColor: string;
   /** Alive agents whose workspace_id points at this workspace. */
   members: AgentInfo[];
+  /** Attached dependency-source roots (excludes the primary `path`).
+   *  Rendered as the workspace's file-tree children in the sidebar. */
+  roots: WorkspaceRoot[];
 }
 
 /** Threaded down to children via <Outlet context={...}/>. Anything a child
@@ -141,6 +149,151 @@ function splitWorkspacePath(path: string): { name: string; parent: string } {
   return { name: trimmed.slice(idx + 1) || trimmed, parent: trimmed.slice(0, idx) };
 }
 
+/** Tiny coloured tag on an attached source root: blue for a code dependency,
+ *  violet for a tool/utility project. Two distinct hues so the two kinds of
+ *  attachment are scannable at a glance in the tree. */
+function RoleChip({ role, label }: { role: string; label: string }) {
+  const isTool = role === "tool";
+  return (
+    <span
+      className={cn(
+        "shrink-0 rounded px-1 py-px font-caption text-[9px] font-medium uppercase tracking-wide",
+        isTool
+          ? "bg-accent-purple-soft text-accent-purple"
+          : "bg-accent-primary-soft text-accent-primary",
+      )}
+    >
+      {label}
+    </span>
+  );
+}
+
+// ── Workspace root tree (logical, parent_id based) ─────────────────────
+
+interface RootNode {
+  root: WorkspaceRoot;
+  name: string;
+  parent: string;
+  children: RootNode[];
+}
+
+/** Build the logical forest shown UNDER a workspace row: source roots mounted
+ *  on the primary project (role≠"project", parent_id=null) first, then the
+ *  top-level peer projects (role="project", parent_id=null), each recursively
+ *  carrying its own mounted children (parent_id = that node's id). The tree is
+ *  logical — a node's `path` can live anywhere; nesting follows parent_id. */
+function buildWorkspaceRootForest(ws: WorkspaceSummary): RootNode[] {
+  const make = (r: WorkspaceRoot): RootNode => {
+    const { name, parent } = splitWorkspacePath(r.path);
+    return {
+      root: r,
+      name,
+      parent,
+      children: r.id
+        ? ws.roots.filter((c) => c.parent_id === r.id).map(make)
+        : [],
+    };
+  };
+  const topLevel = ws.roots.filter((r) => (r.parent_id ?? null) === null);
+  const deps = topLevel.filter((r) => r.role !== "project").map(make);
+  const projects = topLevel.filter((r) => r.role === "project").map(make);
+  return [...deps, ...projects];
+}
+
+/** Recursive renderer for the sidebar root tree. Display-only — all edits go
+ *  through ManageRootsDialog. Peer projects render bolder (with a folder icon)
+ *  and are collapsible; source mounts carry a role chip. */
+function RootTree({
+  nodes,
+  collapsed,
+  toggle,
+}: {
+  nodes: RootNode[];
+  collapsed: Set<string>;
+  toggle: (id: string) => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <>
+      {nodes.map((node) => {
+        const isProject = node.root.role === "project";
+        const hasKids = node.children.length > 0;
+        const nodeId = node.root.id ?? node.root.path;
+        const open = !collapsed.has(nodeId);
+        return (
+          <div key={nodeId} className="flex flex-col">
+            <div
+              className="flex items-center gap-1 rounded px-1 py-1 hover:bg-surface-tertiary"
+              title={node.root.path}
+            >
+              {hasKids ? (
+                <button
+                  type="button"
+                  onClick={() => toggle(nodeId)}
+                  className="flex size-4 shrink-0 items-center justify-center text-foreground-tertiary hover:text-foreground-primary"
+                  aria-label={open ? t("chat.collapse") : t("chat.expand")}
+                >
+                  {open ? (
+                    <ChevronDown className="size-3" />
+                  ) : (
+                    <ChevronRight className="size-3" />
+                  )}
+                </button>
+              ) : (
+                <span className="size-4 shrink-0" aria-hidden />
+              )}
+              <Folder
+                className={cn(
+                  "size-3.5 shrink-0",
+                  isProject
+                    ? "text-foreground-secondary"
+                    : "text-foreground-tertiary",
+                )}
+              />
+              <span className="flex min-w-0 flex-1 flex-col">
+                <span
+                  className={cn(
+                    "truncate font-mono text-[11px]",
+                    isProject
+                      ? "font-semibold text-foreground-primary"
+                      : "text-foreground-secondary",
+                  )}
+                >
+                  {node.name}
+                </span>
+                {node.parent && (
+                  <span className="truncate font-mono text-[9px] leading-tight text-foreground-tertiary">
+                    {node.parent}
+                  </span>
+                )}
+              </span>
+              {!isProject && (
+                <RoleChip
+                  role={node.root.role}
+                  label={
+                    node.root.role === "tool"
+                      ? t("chat.roleTool")
+                      : t("chat.roleDependency")
+                  }
+                />
+              )}
+            </div>
+            {hasKids && open && (
+              <div className="ml-[0.6rem] flex flex-col border-l border-border-subtle pl-1.5">
+                <RootTree
+                  nodes={node.children}
+                  collapsed={collapsed}
+                  toggle={toggle}
+                />
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </>
+  );
+}
+
 // ── Workspaces list (left sidebar, also re-used by /chat home) ─────────
 
 export function WorkspaceList({
@@ -148,6 +301,7 @@ export function WorkspaceList({
   activeId,
   onOpenWizard,
   onDelete,
+  onRootsChanged,
 }: {
   workspaces: WorkspaceSummary[];
   activeId: string | null;
@@ -155,6 +309,9 @@ export function WorkspaceList({
   /** Soft-delete handler. Receives the full workspace UUID (NOT the slug)
    *  so the parent can call `DELETE /api/workspaces/:id` directly. */
   onDelete?: (workspaceId: string) => void;
+  /** Called after attached roots are added/removed so the parent refetches
+   *  workspaces (keeps the sidebar tree in sync). */
+  onRootsChanged?: () => void;
 }) {
   const { t } = useTranslation();
   // App-native delete confirm — replaces window.confirm() (which looked like
@@ -163,6 +320,19 @@ export function WorkspaceList({
   const [pendingDelete, setPendingDelete] = useState<WorkspaceSummary | null>(
     null,
   );
+  // Workspace whose attached-source roots are being managed (Dialog open).
+  const [manageRoots, setManageRoots] = useState<WorkspaceSummary | null>(null);
+  // Workspace ids whose attached-source subtree is collapsed. Default is
+  // expanded (a fresh id is absent from the set), so newly-attached deps are
+  // visible without a click.
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const toggleCollapsed = (id: string) =>
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
   return (
     <aside className="flex w-[264px] shrink-0 flex-col gap-3 border-r border-border-subtle bg-surface-secondary px-2 py-3">
       <div className="flex items-center justify-between px-2">
@@ -195,72 +365,133 @@ export function WorkspaceList({
         )}
         {workspaces.map((ws) => {
           const active = ws.id === activeId;
+          const hasRoots = ws.roots.length > 0;
+          const expanded = hasRoots && !collapsed.has(ws.id);
           return (
-            <div
-              key={ws.id}
-              className={cn(
-                "group relative flex items-center rounded-md transition-colors",
-                active
-                  ? "bg-accent-primary-soft"
-                  : "hover:bg-surface-tertiary",
-              )}
-            >
-              {/* NavLink 而不是 button+navigate — 浏览器中键 / cmd+click
-               *  自然开新 tab，URL 在 hover 时显示在状态栏。
-               *  pr-8 留出 hover 删除按钮的空间。 */}
-              <NavLink
-                to={`/chat/${ws.id}`}
-                title={ws.path}
+            <div key={ws.id} className="flex flex-col">
+              {/* ── primary project row ─────────────────────────────── */}
+              <div
                 className={cn(
-                  "flex flex-1 items-center gap-2 px-2 py-1.5 pr-8 text-left",
+                  "group relative flex items-center rounded-md transition-colors",
                   active
-                    ? "text-foreground-primary"
-                    : "text-foreground-secondary",
+                    ? "bg-accent-primary-soft"
+                    : "hover:bg-surface-tertiary",
                 )}
               >
-                <span
-                  className="mt-1 size-2 shrink-0 self-start rounded-full"
-                  style={{ background: ws.accentColor }}
-                />
-                <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                  <span className="truncate font-heading text-[13px] font-semibold text-foreground-primary">
-                    {ws.name}
-                  </span>
-                  {ws.parent && (
-                    <span className="truncate font-mono text-[10px] leading-tight text-foreground-tertiary">
-                      {ws.parent}
-                    </span>
+                {/* disclosure chevron — only when the workspace has
+                 *  attached source roots; otherwise a same-width spacer so
+                 *  every workspace name lines up. */}
+                {hasRoots ? (
+                  <button
+                    type="button"
+                    onClick={() => toggleCollapsed(ws.id)}
+                    className="flex size-5 shrink-0 items-center justify-center self-start rounded text-foreground-tertiary hover:text-foreground-primary"
+                    style={{ marginTop: "0.4rem" }}
+                    aria-label={expanded ? t("chat.collapse") : t("chat.expand")}
+                    aria-expanded={expanded}
+                  >
+                    {expanded ? (
+                      <ChevronDown className="size-3.5" />
+                    ) : (
+                      <ChevronRight className="size-3.5" />
+                    )}
+                  </button>
+                ) : (
+                  <span className="size-5 shrink-0" aria-hidden />
+                )}
+                {/* NavLink 而不是 button+navigate — 浏览器中键 / cmd+click
+                 *  自然开新 tab，URL 在 hover 时显示在状态栏。
+                 *  pr-8 留出 hover 删除按钮的空间。 */}
+                <NavLink
+                  to={`/chat/${ws.id}`}
+                  title={ws.path}
+                  className={cn(
+                    "flex flex-1 items-center gap-2 py-1.5 pr-8 text-left",
+                    active
+                      ? "text-foreground-primary"
+                      : "text-foreground-secondary",
                   )}
-                </span>
-                <span className="self-start font-caption text-[10px] font-semibold text-foreground-tertiary">
-                  {ws.members.length}
-                </span>
-              </NavLink>
-              {/* Hover-only 删除按钮。软删除：workspace 卡片消失，但 PTY /
-               *  agent 保留（用户可能仍在用某个 pane）。第一次点带 confirm，
-               *  防误删。 */}
-              {onDelete && (
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      onClick={(e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        setPendingDelete(ws);
-                      }}
-                      className="absolute right-1 top-1 size-6 text-foreground-tertiary opacity-0 transition-opacity group-hover:opacity-100 hover:text-state-danger"
-                      aria-label={t("chat.deleteWorkspace", { name: ws.name })}
-                    >
-                      <Trash2 className="size-3.5" />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent side="right">
-                    {t("chat.deleteWorkspaceTooltip")}
-                  </TooltipContent>
-                </Tooltip>
+                >
+                  <span
+                    className="mt-1 size-2 shrink-0 self-start rounded-full"
+                    style={{ background: ws.accentColor }}
+                  />
+                  <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                    <span className="truncate font-heading text-[13px] font-semibold text-foreground-primary">
+                      {ws.name}
+                    </span>
+                    {ws.parent && (
+                      <span className="truncate font-mono text-[10px] leading-tight text-foreground-tertiary">
+                        {ws.parent}
+                      </span>
+                    )}
+                  </span>
+                  <span className="self-start font-caption text-[10px] font-semibold text-foreground-tertiary">
+                    {ws.members.length}
+                  </span>
+                </NavLink>
+                {/* Hover-only 管理挂载源码按钮（事后增删依赖/工具源码根）。 */}
+                {onRootsChanged && (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setManageRoots(ws);
+                        }}
+                        className="absolute right-7 top-1 size-6 text-foreground-tertiary opacity-0 transition-opacity group-hover:opacity-100 hover:text-foreground-primary"
+                        aria-label={t("chat.manageRoots", { name: ws.name })}
+                      >
+                        <FolderPlus className="size-3.5" />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent side="right">
+                      {t("chat.manageRootsTooltip")}
+                    </TooltipContent>
+                  </Tooltip>
+                )}
+                {/* Hover-only 删除按钮。软删除：workspace 卡片消失，但 PTY /
+                 *  agent 保留（用户可能仍在用某个 pane）。第一次点带 confirm，
+                 *  防误删。 */}
+                {onDelete && (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setPendingDelete(ws);
+                        }}
+                        className="absolute right-1 top-1 size-6 text-foreground-tertiary opacity-0 transition-opacity group-hover:opacity-100 hover:text-state-danger"
+                        aria-label={t("chat.deleteWorkspace", { name: ws.name })}
+                      >
+                        <Trash2 className="size-3.5" />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent side="right">
+                      {t("chat.deleteWorkspaceTooltip")}
+                    </TooltipContent>
+                  </Tooltip>
+                )}
+              </div>
+
+              {/* ── logical tree: deps under the primary project + peer
+               *  projects + arbitrary nesting (parent_id based) ────────── */}
+              {expanded && (
+                <div className="ml-[0.9rem] flex flex-col border-l border-border-subtle pl-1.5 pt-0.5">
+                  <RootTree
+                    nodes={buildWorkspaceRootForest(ws)}
+                    collapsed={collapsed}
+                    toggle={toggleCollapsed}
+                  />
+                </div>
               )}
             </div>
           );
@@ -313,7 +544,327 @@ export function WorkspaceList({
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Manage attached source roots — add/remove deps post-create. */}
+      {manageRoots && (
+        <ManageRootsDialog
+          workspace={manageRoots}
+          onClose={() => setManageRoots(null)}
+          onChanged={() => onRootsChanged?.()}
+        />
+      )}
     </aside>
+  );
+}
+
+/** Add / remove a workspace's attached dependency-source roots after
+ *  creation. Lists current roots (with remove), shows manifest-derived
+ *  suggestions as one-click chips, and a manual path + role add row. Each
+ *  mutation optimistically updates the local list AND calls `onChanged` so
+ *  the sidebar tree refetches. */
+function ManageRootsDialog({
+  workspace,
+  onClose,
+  onChanged,
+}: {
+  workspace: WorkspaceSummary;
+  onClose: () => void;
+  onChanged: () => void;
+}) {
+  const { t } = useTranslation();
+  const [roots, setRoots] = useState<WorkspaceRoot[]>(workspace.roots);
+  const [suggestions, setSuggestions] = useState<WorkspaceRoot[]>([]);
+  const [path, setPath] = useState("");
+  // What to add: a top-level peer "project", or a "dependency"/"tool" source
+  // mount placed under a chosen parent project.
+  const [role, setRole] = useState("dependency");
+  // Parent project for a source mount: "" = the primary project (cwd), else a
+  // peer project's id. Ignored when role==="project" (peers are top-level).
+  const [parentId, setParentId] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Projects that can be a mount parent: the primary (cwd) + every peer
+  // project root. Value "" denotes the primary (parent_id=null on the wire).
+  const projectOptions = useMemo(
+    () => [
+      { id: "", name: `${workspace.name}` },
+      ...roots
+        .filter((r) => r.role === "project" && r.id)
+        .map((r) => ({ id: r.id!, name: splitWorkspacePath(r.path).name })),
+    ],
+    [roots, workspace.name],
+  );
+  const parentPath =
+    parentId === ""
+      ? workspace.path
+      : (roots.find((r) => r.id === parentId)?.path ?? workspace.path);
+
+  // Suggestions are scoped to the chosen parent project's manifests; refetch
+  // when the parent changes. Skipped while adding a peer project.
+  useEffect(() => {
+    if (role === "project") {
+      setSuggestions([]);
+      return;
+    }
+    let alive = true;
+    api
+      .rootSuggestions(workspace.workspaceId, parentPath)
+      .then((s) => {
+        if (alive)
+          setSuggestions(s.filter((x) => !roots.some((r) => r.path === x.path)));
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+    // roots/parentPath read but not deps — only refetch on parent/role change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspace.workspaceId, parentId, role]);
+
+  const add = async (
+    p: string,
+    r: string,
+    pid: string | null,
+    label?: string | null,
+  ) => {
+    const trimmed = p.trim();
+    if (!trimmed || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const added = await api.addWorkspaceRoot(workspace.workspaceId, {
+        path: trimmed,
+        role: r,
+        label: label ?? undefined,
+        parent_id: pid ?? undefined,
+      });
+      setRoots((prev) => [...prev, added]);
+      setSuggestions((prev) => prev.filter((s) => s.path !== added.path));
+      setPath("");
+      onChanged();
+    } catch (e) {
+      setError(e instanceof ApiError ? e.detail : (e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Remove a node + (optimistically) its whole subtree; backend cascades.
+  const remove = async (id: string) => {
+    if (busy || !id) return;
+    const doomed = new Set([id]);
+    for (let grew = true; grew; ) {
+      grew = false;
+      for (const r of roots) {
+        if (r.id && r.parent_id && doomed.has(r.parent_id) && !doomed.has(r.id)) {
+          doomed.add(r.id);
+          grew = true;
+        }
+      }
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await api.deleteWorkspaceRoot(workspace.workspaceId, id);
+      setRoots((prev) => prev.filter((x) => !(x.id && doomed.has(x.id))));
+      onChanged();
+    } catch (e) {
+      setError(e instanceof ApiError ? e.detail : (e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const forest = buildWorkspaceRootForest({ ...workspace, roots });
+  const renderNodes = (nodes: RootNode[], depth: number): ReactNode =>
+    nodes.map((node) => (
+      <div key={node.root.id ?? node.root.path} className="flex flex-col">
+        <div
+          className="flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-surface-tertiary"
+          style={{ marginLeft: depth * 14 }}
+          title={node.root.path}
+        >
+          <Folder
+            className={cn(
+              "size-3.5 shrink-0",
+              node.root.role === "project"
+                ? "text-foreground-secondary"
+                : "text-foreground-tertiary",
+            )}
+          />
+          <span className="flex min-w-0 flex-1 flex-col">
+            <span
+              className={cn(
+                "truncate font-mono text-[12px]",
+                node.root.role === "project"
+                  ? "font-semibold text-foreground-primary"
+                  : "text-foreground-secondary",
+              )}
+            >
+              {node.name}
+            </span>
+            <span className="truncate font-mono text-[10px] leading-tight text-foreground-tertiary">
+              {node.parent}
+            </span>
+          </span>
+          {node.root.role === "project" ? (
+            <RoleChip role="project" label={t("chat.roleProject")} />
+          ) : (
+            <RoleChip
+              role={node.root.role}
+              label={
+                node.root.role === "tool"
+                  ? t("chat.roleTool")
+                  : t("chat.roleDependency")
+              }
+            />
+          )}
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            disabled={busy}
+            onClick={() => node.root.id && remove(node.root.id)}
+            className="size-6 shrink-0 text-foreground-tertiary hover:text-state-danger"
+            aria-label={t("common.delete")}
+          >
+            <X className="size-3.5" />
+          </Button>
+        </div>
+        {node.children.length > 0 && renderNodes(node.children, depth + 1)}
+      </div>
+    ));
+
+  return (
+    <Dialog
+      open
+      onOpenChange={(next) => {
+        if (!next) onClose();
+      }}
+    >
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>
+            {t("chat.manageRoots", { name: workspace.name })}
+          </DialogTitle>
+          <DialogDescription>{t("chat.manageRootsHint")}</DialogDescription>
+        </DialogHeader>
+
+        {/* current tree: primary (non-removable) + peer projects + mounts */}
+        <div className="flex flex-col gap-0.5">
+          <div className="flex items-center gap-2 rounded-md px-2 py-1.5">
+            <FolderOpen className="size-3.5 shrink-0 text-accent-primary" />
+            <span className="flex min-w-0 flex-1 flex-col">
+              <span className="truncate font-mono text-[12px] font-semibold text-foreground-primary">
+                {workspace.name}
+              </span>
+              <span className="truncate font-mono text-[10px] leading-tight text-foreground-tertiary">
+                {workspace.path}
+              </span>
+            </span>
+            <span className="shrink-0 font-caption text-[9px] uppercase tracking-wide text-foreground-tertiary">
+              {t("chat.primaryProject")}
+            </span>
+          </div>
+          {forest.length === 0 ? (
+            <p className="px-2 py-1 font-caption text-[11px] text-foreground-tertiary">
+              {t("chat.noRoots")}
+            </p>
+          ) : (
+            renderNodes(forest, 1)
+          )}
+        </div>
+
+        {/* manifest-derived suggestions (scoped to the chosen parent) */}
+        {role !== "project" && suggestions.length > 0 && (
+          <div className="flex flex-col gap-1.5">
+            <span className="px-1 font-caption text-[10px] font-semibold uppercase tracking-wide text-foreground-tertiary">
+              {t("chat.suggestedRoots")}
+            </span>
+            <div className="flex flex-wrap gap-1.5">
+              {suggestions.map((s) => {
+                const { name: base } = splitWorkspacePath(s.path);
+                return (
+                  <button
+                    key={s.path}
+                    type="button"
+                    disabled={busy}
+                    onClick={() =>
+                      add(s.path, role, parentId || null, s.label)
+                    }
+                    title={s.path}
+                    className="flex items-center gap-1 rounded-full border border-border-subtle bg-surface-secondary px-2 py-0.5 font-mono text-[11px] text-foreground-secondary transition-colors hover:bg-surface-tertiary disabled:opacity-50"
+                  >
+                    <Plus className="size-3" />
+                    {base}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* add row: type (+ parent project when a source) + path */}
+        <div className="flex flex-col gap-2 border-t border-border-subtle pt-3">
+          <div className="flex items-center gap-2">
+            <select
+              value={role}
+              onChange={(e) => setRole(e.target.value)}
+              className="h-8 shrink-0 rounded-md border border-border-subtle bg-surface-primary px-2 text-xs text-foreground-secondary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent-primary"
+            >
+              <option value="project">{t("chat.roleProject")}</option>
+              <option value="dependency">{t("wizard.roleDependency")}</option>
+              <option value="tool">{t("wizard.roleTool")}</option>
+            </select>
+            {role !== "project" && (
+              <>
+                <span className="shrink-0 font-caption text-[11px] text-foreground-tertiary">
+                  {t("chat.mountUnder")}
+                </span>
+                <select
+                  value={parentId}
+                  onChange={(e) => setParentId(e.target.value)}
+                  className="h-8 min-w-0 flex-1 rounded-md border border-border-subtle bg-surface-primary px-2 text-xs text-foreground-secondary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent-primary"
+                >
+                  {projectOptions.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
+              </>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <Input
+              value={path}
+              onChange={(e) => setPath(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter")
+                  add(path, role, role === "project" ? null : parentId || null);
+              }}
+              placeholder={t("chat.rootPathPlaceholder")}
+              className="h-8 flex-1 font-mono text-xs"
+            />
+            <Button
+              type="button"
+              size="sm"
+              disabled={busy || !path.trim()}
+              onClick={() =>
+                add(path, role, role === "project" ? null : parentId || null)
+              }
+              className="h-8"
+            >
+              {t("chat.addRoot")}
+            </Button>
+          </div>
+        </div>
+        {error && (
+          <p className="font-caption text-[11px] text-state-danger">{error}</p>
+        )}
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -362,39 +913,6 @@ function WorkspaceToolbar({
     typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
   const modKey = isMac ? "⌘" : "Ctrl";
 
-  const [copied, setCopied] = useState(false);
-  const copyTimerRef = useRef<number | null>(null);
-  const handleCopy = useCallback(() => {
-    const text = workspace.path;
-    const finish = () => {
-      setCopied(true);
-      if (copyTimerRef.current != null) window.clearTimeout(copyTimerRef.current);
-      copyTimerRef.current = window.setTimeout(() => setCopied(false), 1400);
-    };
-    if (navigator.clipboard?.writeText) {
-      navigator.clipboard.writeText(text).then(finish, () => {});
-    } else {
-      const ta = document.createElement("textarea");
-      ta.value = text;
-      ta.style.position = "fixed";
-      ta.style.opacity = "0";
-      document.body.appendChild(ta);
-      ta.select();
-      try {
-        document.execCommand("copy");
-        finish();
-      } finally {
-        document.body.removeChild(ta);
-      }
-    }
-  }, [workspace.path]);
-  useEffect(
-    () => () => {
-      if (copyTimerRef.current != null) window.clearTimeout(copyTimerRef.current);
-    },
-    [],
-  );
-
   return (
     <nav className="flex h-10 shrink-0 items-center gap-1 border-b border-border-subtle px-3">
       {tabs.map((tab) => {
@@ -429,7 +947,7 @@ function WorkspaceToolbar({
         <Tooltip>
           <TooltipTrigger asChild>
             <span
-              className="flex h-6 shrink-0 items-center gap-1 rounded-full bg-status-running-soft px-2 font-caption text-[10px] font-semibold uppercase tracking-wide text-status-running"
+              className="flex h-5 shrink-0 items-center gap-1 rounded-full bg-status-running-soft px-2 font-caption text-[10px] font-semibold uppercase tracking-wide text-status-running"
               title={t("chat.memberCount", { count: agentCount })}
             >
               <span
@@ -450,45 +968,13 @@ function WorkspaceToolbar({
           type="button"
           onClick={onJumpUnread}
           title={t("chat.jumpUnread")}
-          className="shrink-0 cursor-pointer"
+          className="flex shrink-0 cursor-pointer items-center"
         >
           <Badge className="rounded-full px-2 py-0.5 text-[10px] transition-transform hover:scale-105">
             {t("chat.unread", { count: totalUnread })}
           </Badge>
         </button>
       )}
-
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            onClick={handleCopy}
-            // 复制按钮兼充"workspace 路径在哪"的提示：hover 时整行 path
-            // 由 native title tooltip 展示，比之前两行 header 单独 print
-            // 路径节省空间又不丢信息。
-            className="size-7 shrink-0 text-foreground-tertiary opacity-60 transition-opacity hover:bg-surface-tertiary hover:text-foreground-primary hover:opacity-100"
-            aria-label={copied ? t("chat.pathCopied") : t("chat.copyPath")}
-          >
-            {copied ? (
-              <Check className="size-3.5 text-state-success" />
-            ) : (
-              <Copy className="size-3.5" />
-            )}
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent side="bottom">
-          <div className="flex max-w-xs flex-col gap-0.5">
-            <span className="font-semibold">
-              {copied ? t("chat.pathCopied") : t("chat.copyPath")}
-            </span>
-            <span className="break-all font-mono text-[10px] text-foreground-tertiary">
-              {workspace.path}
-            </span>
-          </div>
-        </TooltipContent>
-      </Tooltip>
     </nav>
   );
 }
@@ -696,6 +1182,7 @@ export default function WorkspaceShell() {
         parent,
         accentColor: accentToCssVar(w.accent),
         members: aliveByWsId.get(w.id) ?? [],
+        roots: w.roots ?? [],
       };
     });
   }, [workspaceRows, agents]);
@@ -831,6 +1318,7 @@ export default function WorkspaceShell() {
             activeId={wsId ?? null}
             onOpenWizard={() => setWizardOpen(true)}
             onDelete={handleDeleteWorkspace}
+            onRootsChanged={refreshWorkspaces}
           />
           {workspaces.length === 0 ? (
             // 完全空：展示 Welcome 屏，跟 /chat 主入口体验一致。
@@ -850,11 +1338,12 @@ export default function WorkspaceShell() {
             onClose={() => setWizardOpen(false)}
             onCreated={(ws) => {
               refreshAgents();
-              refreshWorkspaces();
-              // Navigate into the brand-new workspace's chat URL — Shell
-              // re-routes itself on slug change so user sees the new
-              // members + Toolbar without manually picking from sidebar.
-              if (ws) navigate(`/chat/${ws.slug}`);
+              // Await the workspace refetch BEFORE navigating — otherwise the
+              // new slug isn't in `workspaces` yet and the not-found redirect
+              // effect bounces us straight back to the previous workspace.
+              void refreshWorkspaces().then(() => {
+                if (ws) navigate(`/chat/${ws.slug}`);
+              });
             }}
           />
         </div>
@@ -883,6 +1372,7 @@ export default function WorkspaceShell() {
           activeId={activeWs.id}
           onOpenWizard={() => setWizardOpen(true)}
           onDelete={handleDeleteWorkspace}
+          onRootsChanged={refreshWorkspaces}
         />
         <section className="flex min-w-0 flex-1 flex-col bg-surface-primary">
           <WorkspaceToolbar
@@ -908,9 +1398,14 @@ export default function WorkspaceShell() {
         <CreateWizard
           open={wizardOpen}
           onClose={() => setWizardOpen(false)}
-          onCreated={() => {
+          onCreated={(ws) => {
             refreshAgents();
-            refreshWorkspaces();
+            // Await the workspace refetch BEFORE navigating — otherwise the
+            // new slug isn't in `workspaces` yet and the not-found redirect
+            // effect bounces us straight back to the previous workspace.
+            void refreshWorkspaces().then(() => {
+              if (ws) navigate(`/chat/${ws.slug}`);
+            });
           }}
         />
       </div>

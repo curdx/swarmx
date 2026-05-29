@@ -26,6 +26,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   Check,
+  Folder,
   FolderOpen,
   FolderPlus,
   Loader2,
@@ -98,11 +99,22 @@ interface ScanState {
   workspace: Workspace;
 }
 
+/** One folder row in the wizard. Index 0 = primary project; the rest are
+ *  attached source roots, where `role` ("dependency" | "tool") is meaningful. */
+interface DirEntry {
+  path: string;
+  role: string;
+}
+
 export function CreateWizard({ open, onClose, onCreated }: Props) {
   const { t } = useTranslation();
   const [name, setName] = useState("");
   const [accent, setAccent] = useState<string>("peach");
-  const [dirs, setDirs] = useState<string[]>([""]);
+  // The first entry is the PRIMARY project (workspace cwd, where the
+  // orchestrator runs). Subsequent entries are ATTACHED source roots — a
+  // dependency / tool project whose source the agents read directly instead
+  // of decompiling. `role` only applies to entries after the first.
+  const [dirs, setDirs] = useState<DirEntry[]>([{ path: "", role: "dependency" }]);
   const [spells, setSpells] = useState<SpellInfo[]>([]);
   const [scan, setScan] = useState<ScanState | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -122,7 +134,7 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
     onClose();
     // reset 用户输入，让下次打开是空的
     setName("");
-    setDirs([""]);
+    setDirs([{ path: "", role: "dependency" }]);
     setError(null);
   };
 
@@ -164,7 +176,13 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
     return () => window.clearTimeout(timer);
   }, [scan]);
 
-  const cleanDirs = useMemo(() => dirs.map((d) => d.trim()).filter(Boolean), [dirs]);
+  const cleanDirs = useMemo(
+    () =>
+      dirs
+        .map((d) => ({ path: d.path.trim(), role: d.role }))
+        .filter((d) => d.path),
+    [dirs],
+  );
   const canSubmit = name.trim().length > 0 && cleanDirs.length > 0 && !scan;
   const hasInitSpell = spells.some((s) => s.name === INIT_SPELL);
 
@@ -187,8 +205,10 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
       // workspace table columns now, no blackboard writes needed.
       created = await api.createWorkspace({
         name: wsName,
-        cwd: cleanDirs[0],
+        cwd: cleanDirs[0].path,
         accent,
+        // Entries after the first are attached dependency-source roots.
+        roots: cleanDirs.slice(1).map((d) => ({ path: d.path, role: d.role })),
       });
       // Stash the created workspace on scan state so finishScan can hand
       // it back to the parent for routing into the new chat URL — without
@@ -197,7 +217,7 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
       await api.runSpell({
         name: INIT_SPELL,
         task: wsName,
-        workspace_dir: cleanDirs[0],
+        workspace_dir: cleanDirs[0].path,
         workspace_id: created.id,
       });
     } catch (e) {
@@ -320,91 +340,133 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
                 hint={t("wizard.step2Hint")}
               />
               <div className="flex flex-col gap-2">
-                {dirs.map((d, i) => (
-                  <div
-                    key={i}
-                    className="flex items-center gap-3 rounded-lg border border-border-subtle bg-surface-elevated px-3.5 py-3 shadow-sm"
-                  >
-                    <span
-                      className={cn(
-                        "flex size-9 shrink-0 items-center justify-center rounded-md font-mono text-xs font-bold text-foreground-on-accent",
-                        i === 0
-                          ? "bg-agent-frontend"
-                          : i === 1
-                            ? "bg-agent-backend"
-                            : "bg-agent-test",
-                      )}
+                {dirs.map((d, i) => {
+                  const isPrimary = i === 0;
+                  return (
+                    <div
+                      key={i}
+                      className="flex items-center gap-3 rounded-lg border border-border-subtle bg-surface-elevated px-3.5 py-3 shadow-sm"
                     >
-                      {i + 1}
-                    </span>
-                    <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-                      <Input
-                        value={d}
-                        onChange={(e) =>
-                          setDirs((prev) =>
-                            prev.map((x, j) => (j === i ? e.target.value : x)),
-                          )
+                      {/* Primary = accent folder; attached source = violet
+                       *  folder. Icon (not a number) tells the two kinds
+                       *  apart at a glance. */}
+                      <span
+                        className={cn(
+                          "flex size-9 shrink-0 items-center justify-center rounded-md text-foreground-on-accent",
+                          isPrimary ? "bg-accent-primary" : "bg-accent-purple",
+                        )}
+                        title={
+                          isPrimary
+                            ? t("wizard.primaryLabel")
+                            : t("wizard.attachedLabel")
                         }
-                        placeholder={
-                          i === 0
-                            ? IS_TAURI
-                              ? t("wizard.dirPlaceholder1Tauri")
-                              : t("wizard.dirPlaceholder1")
-                            : t("wizard.dirPlaceholderMore")
-                        }
-                        className="h-8 border-none bg-transparent px-0 font-mono text-sm shadow-none focus-visible:ring-0"
-                      />
-                      {d.trim() && (
+                      >
+                        {isPrimary ? (
+                          <FolderOpen className="size-4" />
+                        ) : (
+                          <Folder className="size-4" />
+                        )}
+                      </span>
+                      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                        <Input
+                          value={d.path}
+                          onChange={(e) =>
+                            setDirs((prev) =>
+                              prev.map((x, j) =>
+                                j === i ? { ...x, path: e.target.value } : x,
+                              ),
+                            )
+                          }
+                          placeholder={
+                            isPrimary
+                              ? IS_TAURI
+                                ? t("wizard.dirPlaceholder1Tauri")
+                                : t("wizard.dirPlaceholder1")
+                              : t("wizard.dirPlaceholderMore")
+                          }
+                          className="h-8 border-none bg-transparent px-0 font-mono text-sm shadow-none focus-visible:ring-0"
+                        />
                         <span className="font-caption text-[10px] text-foreground-tertiary">
-                          {t("wizard.dirHint")}
+                          {isPrimary
+                            ? t("wizard.primaryLabel")
+                            : d.role === "project"
+                              ? t("wizard.projectHint")
+                              : t("wizard.attachedHint")}
                         </span>
+                      </div>
+                      {/* role picker — peer project / dependency / tool */}
+                      {!isPrimary && (
+                        <select
+                          value={d.role}
+                          onChange={(e) =>
+                            setDirs((prev) =>
+                              prev.map((x, j) =>
+                                j === i ? { ...x, role: e.target.value } : x,
+                              ),
+                            )
+                          }
+                          title={t("wizard.attachedLabel")}
+                          className="h-8 shrink-0 rounded-md border border-border-subtle bg-surface-primary px-2 text-xs text-foreground-secondary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent-primary"
+                        >
+                          <option value="project">
+                            {t("wizard.roleProject")}
+                          </option>
+                          <option value="dependency">
+                            {t("wizard.roleDependency")}
+                          </option>
+                          <option value="tool">{t("wizard.roleTool")}</option>
+                        </select>
                       )}
-                    </div>
-                    {/* Picker button — Tauri 下打开原生文件夹 dialog；
-                     *  浏览器 dev / preview 模式下 disabled + tooltip 解
-                     *  释。之前直接 hide，用户根本不知道桌面 app 能直接
-                     *  选，audit 时被点出来"看不到选择按钮"。*/}
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={!IS_TAURI}
-                      onClick={async () => {
-                        if (!IS_TAURI) return;
-                        const picked = await pickDirectoryViaTauri();
-                        if (picked) {
-                          setDirs((prev) =>
-                            prev.map((x, j) => (j === i ? picked : x)),
-                          );
+                      {/* Picker button — Tauri 下打开原生文件夹 dialog；
+                       *  浏览器 dev / preview 模式下 disabled + tooltip 解
+                       *  释。之前直接 hide，用户根本不知道桌面 app 能直接
+                       *  选，audit 时被点出来"看不到选择按钮"。*/}
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={!IS_TAURI}
+                        onClick={async () => {
+                          if (!IS_TAURI) return;
+                          const picked = await pickDirectoryViaTauri();
+                          if (picked) {
+                            setDirs((prev) =>
+                              prev.map((x, j) =>
+                                j === i ? { ...x, path: picked } : x,
+                              ),
+                            );
+                          }
+                        }}
+                        title={
+                          IS_TAURI
+                            ? t("wizard.pickFolder")
+                            : t("wizard.pickFolderUnavailable")
                         }
-                      }}
-                      title={
-                        IS_TAURI
-                          ? t("wizard.pickFolder")
-                          : t("wizard.pickFolderUnavailable")
-                      }
-                      className="h-8 shrink-0 gap-1.5 px-2.5 text-xs"
-                    >
-                      <FolderOpen className="size-3.5" />
-                      {t("wizard.pickFolderShort")}
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      onClick={() =>
-                        setDirs((prev) => prev.filter((_, j) => j !== i))
-                      }
-                      disabled={dirs.length === 1}
-                      title={t("wizard.removeDir")}
-                      className="size-7 text-foreground-tertiary"
-                    >
-                      <Trash2 className="size-3.5" />
-                    </Button>
-                  </div>
-                ))}
+                        className="h-8 shrink-0 gap-1.5 px-2.5 text-xs"
+                      >
+                        <FolderOpen className="size-3.5" />
+                        {t("wizard.pickFolderShort")}
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() =>
+                          setDirs((prev) => prev.filter((_, j) => j !== i))
+                        }
+                        disabled={dirs.length === 1}
+                        title={t("wizard.removeDir")}
+                        className="size-7 text-foreground-tertiary"
+                      >
+                        <Trash2 className="size-3.5" />
+                      </Button>
+                    </div>
+                  );
+                })}
                 <Button
                   type="button"
                   variant="outline"
-                  onClick={() => setDirs((prev) => [...prev, ""])}
+                  onClick={() =>
+                    setDirs((prev) => [...prev, { path: "", role: "dependency" }])
+                  }
                   className="h-auto justify-center gap-2 rounded-lg border-[1.5px] border-dashed border-border-strong bg-transparent py-3 text-xs text-foreground-secondary hover:bg-surface-tertiary"
                 >
                   <span className="flex size-7 items-center justify-center rounded-md bg-accent-primary-soft text-accent-primary-deep">
