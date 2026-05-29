@@ -153,14 +153,22 @@ function splitWorkspacePath(path: string): { name: string; parent: string } {
  *  violet for a tool/utility project. Two distinct hues so the two kinds of
  *  attachment are scannable at a glance in the tree. */
 function RoleChip({ role, label }: { role: string; label: string }) {
-  const isTool = role === "tool";
+  // Four distinct tints so node kinds are scannable at a glance: the primary
+  // project is the loud solid accent; peer projects soft-blue; tools violet;
+  // dependencies a quiet neutral (the most common kind, kept low-key).
+  const cls =
+    role === "main"
+      ? "bg-accent-primary text-foreground-on-accent"
+      : role === "project"
+        ? "bg-accent-primary-soft text-accent-primary"
+        : role === "tool"
+          ? "bg-accent-purple-soft text-accent-purple"
+          : "bg-surface-tertiary text-foreground-secondary";
   return (
     <span
       className={cn(
         "shrink-0 rounded px-1 py-px font-caption text-[9px] font-medium uppercase tracking-wide",
-        isTool
-          ? "bg-accent-purple-soft text-accent-purple"
-          : "bg-accent-primary-soft text-accent-primary",
+        cls,
       )}
     >
       {label}
@@ -175,13 +183,18 @@ interface RootNode {
   name: string;
   parent: string;
   children: RootNode[];
+  /** The synthetic node standing for the workspace's primary project (cwd).
+   *  Not a workspace_roots row (no server id); never removable. */
+  isMain?: boolean;
 }
 
-/** Build the logical forest shown UNDER a workspace row: source roots mounted
- *  on the primary project (role≠"project", parent_id=null) first, then the
- *  top-level peer projects (role="project", parent_id=null), each recursively
- *  carrying its own mounted children (parent_id = that node's id). The tree is
- *  logical — a node's `path` can live anywhere; nesting follows parent_id. */
+/** Build the logical forest shown UNDER a workspace row. The PRIMARY project
+ *  (the cwd) is an explicit synthetic node first, carrying its mounted source
+ *  roots (role≠"project", parent_id=null) as children — so the real project
+ *  folder (e.g. `backend`) is visible and its deps clearly hang under IT, not
+ *  under the workspace. Then the top-level peer projects, each recursively
+ *  carrying its own mounts (parent_id = that node's id). Logical tree — a
+ *  node's `path` can live anywhere; nesting follows parent_id. */
 function buildWorkspaceRootForest(ws: WorkspaceSummary): RootNode[] {
   const make = (r: WorkspaceRoot): RootNode => {
     const { name, parent } = splitWorkspacePath(r.path);
@@ -195,9 +208,17 @@ function buildWorkspaceRootForest(ws: WorkspaceSummary): RootNode[] {
     };
   };
   const topLevel = ws.roots.filter((r) => (r.parent_id ?? null) === null);
-  const deps = topLevel.filter((r) => r.role !== "project").map(make);
-  const projects = topLevel.filter((r) => r.role === "project").map(make);
-  return [...deps, ...projects];
+  const mainDeps = topLevel.filter((r) => r.role !== "project").map(make);
+  const peers = topLevel.filter((r) => r.role === "project").map(make);
+  const { name, parent } = splitWorkspacePath(ws.path);
+  const mainNode: RootNode = {
+    root: { path: ws.path, role: "project", parent_id: null },
+    name,
+    parent,
+    children: mainDeps,
+    isMain: true,
+  };
+  return [mainNode, ...peers];
 }
 
 /** Recursive renderer for the sidebar root tree. Display-only — all edits go
@@ -242,14 +263,18 @@ function RootTree({
               ) : (
                 <span className="size-4 shrink-0" aria-hidden />
               )}
-              <Folder
-                className={cn(
-                  "size-3.5 shrink-0",
-                  isProject
-                    ? "text-foreground-secondary"
-                    : "text-foreground-tertiary",
-                )}
-              />
+              {node.isMain ? (
+                <FolderOpen className="size-3.5 shrink-0 text-accent-primary" />
+              ) : (
+                <Folder
+                  className={cn(
+                    "size-3.5 shrink-0",
+                    isProject
+                      ? "text-foreground-secondary"
+                      : "text-foreground-tertiary",
+                  )}
+                />
+              )}
               <span className="flex min-w-0 flex-1 flex-col">
                 <span
                   className={cn(
@@ -267,16 +292,18 @@ function RootTree({
                   </span>
                 )}
               </span>
-              {!isProject && (
-                <RoleChip
-                  role={node.root.role}
-                  label={
-                    node.root.role === "tool"
-                      ? t("chat.roleTool")
-                      : t("chat.roleDependency")
-                  }
-                />
-              )}
+              <RoleChip
+                role={node.isMain ? "main" : node.root.role}
+                label={
+                  node.isMain
+                    ? t("chat.primaryProject")
+                    : node.root.role === "project"
+                      ? t("chat.roleProject")
+                      : node.root.role === "tool"
+                        ? t("chat.roleTool")
+                        : t("chat.roleDependency")
+                }
+              />
             </div>
             {hasKids && open && (
               <div className="ml-[0.6rem] flex flex-col border-l border-border-subtle pl-1.5">
@@ -420,7 +447,10 @@ export function WorkspaceList({
                     <span className="truncate font-heading text-[13px] font-semibold text-foreground-primary">
                       {ws.name}
                     </span>
-                    {ws.parent && (
+                    {ws.parent && !hasRoots && (
+                      // When the tree is shown, the explicit primary-project
+                      // node already carries the folder + path, so the row
+                      // drops the redundant parent caption.
                       <span className="truncate font-mono text-[10px] leading-tight text-foreground-tertiary">
                         {ws.parent}
                       </span>
@@ -588,12 +618,13 @@ function ManageRootsDialog({
   // project root. Value "" denotes the primary (parent_id=null on the wire).
   const projectOptions = useMemo(
     () => [
-      { id: "", name: `${workspace.name}` },
+      // Primary = the cwd's folder name, matching the tree's primary node.
+      { id: "", name: splitWorkspacePath(workspace.path).name },
       ...roots
         .filter((r) => r.role === "project" && r.id)
         .map((r) => ({ id: r.id!, name: splitWorkspacePath(r.path).name })),
     ],
-    [roots, workspace.name],
+    [roots, workspace.path],
   );
   const parentPath =
     parentId === ""
@@ -685,14 +716,18 @@ function ManageRootsDialog({
           style={{ marginLeft: depth * 14 }}
           title={node.root.path}
         >
-          <Folder
-            className={cn(
-              "size-3.5 shrink-0",
-              node.root.role === "project"
-                ? "text-foreground-secondary"
-                : "text-foreground-tertiary",
-            )}
-          />
+          {node.isMain ? (
+            <FolderOpen className="size-3.5 shrink-0 text-accent-primary" />
+          ) : (
+            <Folder
+              className={cn(
+                "size-3.5 shrink-0",
+                node.root.role === "project"
+                  ? "text-foreground-secondary"
+                  : "text-foreground-tertiary",
+              )}
+            />
+          )}
           <span className="flex min-w-0 flex-1 flex-col">
             <span
               className={cn(
@@ -708,29 +743,32 @@ function ManageRootsDialog({
               {node.parent}
             </span>
           </span>
-          {node.root.role === "project" ? (
-            <RoleChip role="project" label={t("chat.roleProject")} />
-          ) : (
-            <RoleChip
-              role={node.root.role}
-              label={
-                node.root.role === "tool"
-                  ? t("chat.roleTool")
-                  : t("chat.roleDependency")
-              }
-            />
+          <RoleChip
+            role={node.isMain ? "main" : node.root.role}
+            label={
+              node.isMain
+                ? t("chat.primaryProject")
+                : node.root.role === "project"
+                  ? t("chat.roleProject")
+                  : node.root.role === "tool"
+                    ? t("chat.roleTool")
+                    : t("chat.roleDependency")
+            }
+          />
+          {/* primary project is the workspace cwd — not removable here. */}
+          {!node.isMain && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              disabled={busy}
+              onClick={() => node.root.id && remove(node.root.id)}
+              className="size-6 shrink-0 text-foreground-tertiary hover:text-state-danger"
+              aria-label={t("common.delete")}
+            >
+              <X className="size-3.5" />
+            </Button>
           )}
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            disabled={busy}
-            onClick={() => node.root.id && remove(node.root.id)}
-            className="size-6 shrink-0 text-foreground-tertiary hover:text-state-danger"
-            aria-label={t("common.delete")}
-          >
-            <X className="size-3.5" />
-          </Button>
         </div>
         {node.children.length > 0 && renderNodes(node.children, depth + 1)}
       </div>
@@ -751,28 +789,14 @@ function ManageRootsDialog({
           <DialogDescription>{t("chat.manageRootsHint")}</DialogDescription>
         </DialogHeader>
 
-        {/* current tree: primary (non-removable) + peer projects + mounts */}
+        {/* current tree: primary project node (non-removable) + peer
+         *  projects + their mounts. The primary is the first forest node. */}
         <div className="flex flex-col gap-0.5">
-          <div className="flex items-center gap-2 rounded-md px-2 py-1.5">
-            <FolderOpen className="size-3.5 shrink-0 text-accent-primary" />
-            <span className="flex min-w-0 flex-1 flex-col">
-              <span className="truncate font-mono text-[12px] font-semibold text-foreground-primary">
-                {workspace.name}
-              </span>
-              <span className="truncate font-mono text-[10px] leading-tight text-foreground-tertiary">
-                {workspace.path}
-              </span>
-            </span>
-            <span className="shrink-0 font-caption text-[9px] uppercase tracking-wide text-foreground-tertiary">
-              {t("chat.primaryProject")}
-            </span>
-          </div>
-          {forest.length === 0 ? (
+          {renderNodes(forest, 0)}
+          {roots.length === 0 && (
             <p className="px-2 py-1 font-caption text-[11px] text-foreground-tertiary">
               {t("chat.noRoots")}
             </p>
-          ) : (
-            renderNodes(forest, 1)
           )}
         </div>
 
