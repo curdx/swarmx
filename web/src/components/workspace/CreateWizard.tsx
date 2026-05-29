@@ -101,20 +101,34 @@ interface ScanState {
 
 /** One folder row in the wizard. Index 0 = primary project; the rest are
  *  attached source roots, where `role` ("dependency" | "tool") is meaningful. */
+/** One folder row in the wizard tree. Row id 0 is the PRIMARY project
+ *  (workspace cwd). Other rows are roots: role "project" = a top-level peer
+ *  project; "dependency"/"tool" = a source mount whose `parent` is the row id
+ *  of the project it hangs under (0 = the primary). `parent`/`role` are
+ *  ignored for row 0. */
 interface DirEntry {
+  id: number;
   path: string;
   role: string;
+  parent: number;
+}
+
+/** Last path segment, for compact display in the parent-project dropdown. */
+function baseName(p: string): string {
+  return p.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || p;
 }
 
 export function CreateWizard({ open, onClose, onCreated }: Props) {
   const { t } = useTranslation();
   const [name, setName] = useState("");
   const [accent, setAccent] = useState<string>("peach");
-  // The first entry is the PRIMARY project (workspace cwd, where the
-  // orchestrator runs). Subsequent entries are ATTACHED source roots — a
-  // dependency / tool project whose source the agents read directly instead
-  // of decompiling. `role` only applies to entries after the first.
-  const [dirs, setDirs] = useState<DirEntry[]>([{ path: "", role: "dependency" }]);
+  // Row 0 = primary project (cwd). Other rows form a logical tree via
+  // `parent` (row id). `nextRowId` hands out stable ids so a dependency can
+  // reference the peer-project row it mounts under even across reorders.
+  const [dirs, setDirs] = useState<DirEntry[]>([
+    { id: 0, path: "", role: "main", parent: 0 },
+  ]);
+  const nextRowId = useRef(1);
   const [spells, setSpells] = useState<SpellInfo[]>([]);
   const [scan, setScan] = useState<ScanState | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -134,7 +148,8 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
     onClose();
     // reset 用户输入，让下次打开是空的
     setName("");
-    setDirs([{ path: "", role: "dependency" }]);
+    setDirs([{ id: 0, path: "", role: "main", parent: 0 }]);
+    nextRowId.current = 1;
     setError(null);
   };
 
@@ -177,13 +192,11 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
   }, [scan]);
 
   const cleanDirs = useMemo(
-    () =>
-      dirs
-        .map((d) => ({ path: d.path.trim(), role: d.role }))
-        .filter((d) => d.path),
+    () => dirs.map((d) => ({ ...d, path: d.path.trim() })).filter((d) => d.path),
     [dirs],
   );
-  const canSubmit = name.trim().length > 0 && cleanDirs.length > 0 && !scan;
+  const mainPath = (dirs[0]?.path ?? "").trim();
+  const canSubmit = name.trim().length > 0 && mainPath.length > 0 && !scan;
   const hasInitSpell = spells.some((s) => s.name === INIT_SPELL);
 
   const submit = async () => {
@@ -203,13 +216,48 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
       // inherits the workspace_id via the spell-runner's reverse-lookup
       // (rest.rs::run_spell with workspace_id). Name + accent are
       // workspace table columns now, no blackboard writes needed.
+      // Create the bare workspace first (cwd = primary). The tree of roots is
+      // then materialised with follow-up POSTs in topological order: peer
+      // projects first (so we learn their server ids), then dependency/tool
+      // mounts pointing at the right parent. This reuses the plain /roots
+      // endpoint instead of teaching the create handler about client temp ids.
       created = await api.createWorkspace({
         name: wsName,
-        cwd: cleanDirs[0].path,
+        cwd: mainPath,
         accent,
-        // Entries after the first are attached dependency-source roots.
-        roots: cleanDirs.slice(1).map((d) => ({ path: d.path, role: d.role })),
       });
+      // rowId → server root id, for resolving a dependency's parent project.
+      const realId = new Map<number, string>();
+      const rootRows = cleanDirs.filter((d) => d.id !== 0);
+      // 1) peer projects (top-level, parent_id = null)
+      for (const d of rootRows.filter((r) => r.role === "project")) {
+        try {
+          const added = await api.addWorkspaceRoot(created.id, {
+            path: d.path,
+            role: "project",
+          });
+          if (added.id) realId.set(d.id, added.id);
+        } catch (err) {
+          // eslint-disable-next-line no-console
+          console.warn("[wizard] add project root failed", d.path, err);
+        }
+      }
+      // 2) dependency / tool mounts under the primary (parent 0 → null) or a
+      //    peer project (→ that peer's server id; falls back to primary if the
+      //    referenced peer never got created).
+      for (const d of rootRows.filter((r) => r.role !== "project")) {
+        const parentId = d.parent !== 0 ? realId.get(d.parent) : undefined;
+        try {
+          await api.addWorkspaceRoot(created.id, {
+            path: d.path,
+            role: d.role,
+            parent_id: parentId,
+          });
+        } catch (err) {
+          // eslint-disable-next-line no-console
+          console.warn("[wizard] add source root failed", d.path, err);
+        }
+      }
       // Stash the created workspace on scan state so finishScan can hand
       // it back to the parent for routing into the new chat URL — without
       // this the parent only knew "something was created, refresh."
@@ -217,7 +265,7 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
       await api.runSpell({
         name: INIT_SPELL,
         task: wsName,
-        workspace_dir: cleanDirs[0].path,
+        workspace_dir: mainPath,
         workspace_id: created.id,
       });
     } catch (e) {
@@ -342,18 +390,28 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
               <div className="flex flex-col gap-2">
                 {dirs.map((d, i) => {
                   const isPrimary = i === 0;
+                  const isProject = d.role === "project";
+                  // Projects this row's source mount can hang under: the
+                  // primary (value 0) + every other peer-project row.
+                  const parentOptions = dirs.filter(
+                    (x) => x.role === "project" && x.path.trim() && x.id !== d.id,
+                  );
                   return (
                     <div
-                      key={i}
-                      className="flex items-center gap-3 rounded-lg border border-border-subtle bg-surface-elevated px-3.5 py-3 shadow-sm"
+                      key={d.id}
+                      className="flex items-start gap-3 rounded-lg border border-border-subtle bg-surface-elevated px-3.5 py-3 shadow-sm"
                     >
-                      {/* Primary = accent folder; attached source = violet
-                       *  folder. Icon (not a number) tells the two kinds
-                       *  apart at a glance. */}
+                      {/* Icon (not a number) tells the kinds apart: primary =
+                       *  accent open folder, peer project = violet open folder,
+                       *  source mount = grey folder. */}
                       <span
                         className={cn(
-                          "flex size-9 shrink-0 items-center justify-center rounded-md text-foreground-on-accent",
-                          isPrimary ? "bg-accent-primary" : "bg-accent-purple",
+                          "mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-md",
+                          isPrimary
+                            ? "bg-accent-primary text-foreground-on-accent"
+                            : isProject
+                              ? "bg-accent-purple text-foreground-on-accent"
+                              : "bg-surface-tertiary text-foreground-tertiary",
                         )}
                         title={
                           isPrimary
@@ -361,13 +419,13 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
                             : t("wizard.attachedLabel")
                         }
                       >
-                        {isPrimary ? (
+                        {isPrimary || isProject ? (
                           <FolderOpen className="size-4" />
                         ) : (
                           <Folder className="size-4" />
                         )}
                       </span>
-                      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                      <div className="flex min-w-0 flex-1 flex-col gap-1.5">
                         <Input
                           value={d.path}
                           onChange={(e) =>
@@ -386,37 +444,70 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
                           }
                           className="h-8 border-none bg-transparent px-0 font-mono text-sm shadow-none focus-visible:ring-0"
                         />
+                        {/* role + (for a source mount) parent-project picker */}
+                        {!isPrimary && (
+                          <div className="flex flex-wrap items-center gap-2">
+                            <select
+                              value={d.role}
+                              onChange={(e) =>
+                                setDirs((prev) =>
+                                  prev.map((x, j) =>
+                                    j === i ? { ...x, role: e.target.value } : x,
+                                  ),
+                                )
+                              }
+                              title={t("wizard.attachedLabel")}
+                              className="h-7 shrink-0 rounded-md border border-border-subtle bg-surface-primary px-2 text-xs text-foreground-secondary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent-primary"
+                            >
+                              <option value="project">
+                                {t("wizard.roleProject")}
+                              </option>
+                              <option value="dependency">
+                                {t("wizard.roleDependency")}
+                              </option>
+                              <option value="tool">
+                                {t("wizard.roleTool")}
+                              </option>
+                            </select>
+                            {!isProject && (
+                              <>
+                                <span className="shrink-0 font-caption text-[11px] text-foreground-tertiary">
+                                  {t("chat.mountUnder")}
+                                </span>
+                                <select
+                                  value={String(d.parent)}
+                                  onChange={(e) =>
+                                    setDirs((prev) =>
+                                      prev.map((x, j) =>
+                                        j === i
+                                          ? { ...x, parent: Number(e.target.value) }
+                                          : x,
+                                      ),
+                                    )
+                                  }
+                                  className="h-7 min-w-0 max-w-[12rem] rounded-md border border-border-subtle bg-surface-primary px-2 text-xs text-foreground-secondary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent-primary"
+                                >
+                                  <option value="0">
+                                    {name.trim() || t("chat.primaryProject")}
+                                  </option>
+                                  {parentOptions.map((p) => (
+                                    <option key={p.id} value={String(p.id)}>
+                                      {baseName(p.path)}
+                                    </option>
+                                  ))}
+                                </select>
+                              </>
+                            )}
+                          </div>
+                        )}
                         <span className="font-caption text-[10px] text-foreground-tertiary">
                           {isPrimary
                             ? t("wizard.primaryLabel")
-                            : d.role === "project"
+                            : isProject
                               ? t("wizard.projectHint")
                               : t("wizard.attachedHint")}
                         </span>
                       </div>
-                      {/* role picker — peer project / dependency / tool */}
-                      {!isPrimary && (
-                        <select
-                          value={d.role}
-                          onChange={(e) =>
-                            setDirs((prev) =>
-                              prev.map((x, j) =>
-                                j === i ? { ...x, role: e.target.value } : x,
-                              ),
-                            )
-                          }
-                          title={t("wizard.attachedLabel")}
-                          className="h-8 shrink-0 rounded-md border border-border-subtle bg-surface-primary px-2 text-xs text-foreground-secondary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent-primary"
-                        >
-                          <option value="project">
-                            {t("wizard.roleProject")}
-                          </option>
-                          <option value="dependency">
-                            {t("wizard.roleDependency")}
-                          </option>
-                          <option value="tool">{t("wizard.roleTool")}</option>
-                        </select>
-                      )}
                       {/* Picker button — Tauri 下打开原生文件夹 dialog；
                        *  浏览器 dev / preview 模式下 disabled + tooltip 解
                        *  释。之前直接 hide，用户根本不知道桌面 app 能直接
@@ -441,7 +532,7 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
                             ? t("wizard.pickFolder")
                             : t("wizard.pickFolderUnavailable")
                         }
-                        className="h-8 shrink-0 gap-1.5 px-2.5 text-xs"
+                        className="mt-0.5 h-8 shrink-0 gap-1.5 px-2.5 text-xs"
                       >
                         <FolderOpen className="size-3.5" />
                         {t("wizard.pickFolderShort")}
@@ -452,9 +543,9 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
                         onClick={() =>
                           setDirs((prev) => prev.filter((_, j) => j !== i))
                         }
-                        disabled={dirs.length === 1}
+                        disabled={isPrimary}
                         title={t("wizard.removeDir")}
-                        className="size-7 text-foreground-tertiary"
+                        className="mt-0.5 size-7 text-foreground-tertiary"
                       >
                         <Trash2 className="size-3.5" />
                       </Button>
@@ -465,7 +556,15 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
                   type="button"
                   variant="outline"
                   onClick={() =>
-                    setDirs((prev) => [...prev, { path: "", role: "dependency" }])
+                    setDirs((prev) => [
+                      ...prev,
+                      {
+                        id: nextRowId.current++,
+                        path: "",
+                        role: "dependency",
+                        parent: 0,
+                      },
+                    ])
                   }
                   className="h-auto justify-center gap-2 rounded-lg border-[1.5px] border-dashed border-border-strong bg-transparent py-3 text-xs text-foreground-secondary hover:bg-surface-tertiary"
                 >
