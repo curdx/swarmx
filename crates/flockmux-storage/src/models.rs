@@ -65,6 +65,32 @@ pub struct WorkspaceRecord {
     pub deleted_at: Option<i64>,
 }
 
+/// Insert payload for an attached workspace root (a node in the workspace's
+/// user-defined logical tree). `parent_id` points at another workspace_roots
+/// row (or `None`); the tree is logical, not physical (see migration 0007).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NewWorkspaceRoot {
+    pub workspace_id: String,
+    pub path: String,
+    pub role: String,
+    pub label: Option<String>,
+    #[serde(default)]
+    pub parent_id: Option<String>,
+}
+
+/// Full workspace_roots row.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceRootRecord {
+    pub id: String,
+    pub workspace_id: String,
+    pub path: String,
+    pub role: String,
+    pub label: Option<String>,
+    #[serde(default)]
+    pub parent_id: Option<String>,
+    pub created_at: i64,
+}
+
 /// New spell-run lineage record (insert payload for
 /// [`crate::Store::create_spell_run`]).
 #[derive(Debug, Clone, Serialize, Deserialize)]

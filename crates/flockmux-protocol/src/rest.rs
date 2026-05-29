@@ -327,6 +327,31 @@ pub struct RunSpellAgent {
 
 // ── workspaces (Step 1 of workspace-as-first-class refactor) ─────────────
 
+/// One node in a workspace's user-defined LOGICAL tree. The PRIMARY project
+/// dir lives in `Workspace.cwd` (the implicit root); these rows are all OTHER
+/// nodes. Semantics depend on `(role, parent_id)`:
+/// - role="project", parent_id=None → a top-level PEER project (sibling of the
+///   primary), physical path anywhere.
+/// - role="dependency"|"tool", parent_id=None → a source mount under the
+///   PRIMARY (cwd) project.
+/// - any role, parent_id=Some(other root's id) → a child of that node (e.g. a
+///   lib mounted under a peer project). Physical path is arbitrary / unrelated
+///   to the parent's path — that decoupling is the whole point.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceRoot {
+    /// Server-assigned id; clients omit it on create/add (filled from the DB).
+    #[serde(default)]
+    pub id: String,
+    pub path: String,
+    pub role: String, // "project" | "dependency" | "tool"
+    #[serde(default)]
+    pub label: Option<String>,
+    /// Logical parent (another WorkspaceRoot's `id`) or `None` for a top-level
+    /// node. Decoupled from physical path nesting.
+    #[serde(default)]
+    pub parent_id: Option<String>,
+}
+
 /// One row from `GET /api/workspaces`. `member_count` is computed at list
 /// time (live agents whose `workspace_id` points here). Soft-deleted
 /// workspaces aren't included by default.
@@ -341,6 +366,10 @@ pub struct Workspace {
     pub accent: Option<String>,
     pub created_at: i64,
     pub member_count: i64,
+    /// Attached dependency-source roots (empty when none). The primary
+    /// project dir stays in `cwd` and is NOT duplicated here.
+    #[serde(default)]
+    pub roots: Vec<WorkspaceRoot>,
 }
 
 /// `POST /api/workspaces` payload. CreateWizard sends this before launching
@@ -353,4 +382,8 @@ pub struct CreateWorkspaceRequest {
     pub cwd: String,
     #[serde(default)]
     pub accent: Option<String>,
+    /// Dependency-source root folders to attach at creation time. Empty by
+    /// default. The primary project dir goes in `cwd`, not here.
+    #[serde(default)]
+    pub roots: Vec<WorkspaceRoot>,
 }

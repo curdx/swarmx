@@ -254,6 +254,15 @@ async fn main() -> Result<()> {
             "/api/workspaces/:id",
             delete(routes::rest::delete_workspace_handler),
         )
+        .route(
+            "/api/workspaces/:id/roots",
+            post(routes::rest::add_workspace_root_handler)
+                .delete(routes::rest::delete_workspace_root_handler),
+        )
+        .route(
+            "/api/workspaces/:id/root-suggestions",
+            get(routes::rest::suggest_workspace_roots_handler),
+        )
         .route("/api/spells", get(routes::rest::list_spells))
         .route("/api/spell/run", post(routes::rest::run_spell))
         .route("/ws/swarm", get(routes::ws_swarm::ws_swarm))

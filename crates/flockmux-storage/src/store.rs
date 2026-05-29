@@ -5,8 +5,8 @@
 use crate::connection::Customizer;
 use crate::models::{
     AgentRecord, BlackboardOpRecord, ListMessagesOpts, MessageRecord, NewAgent, NewBlackboardOp,
-    NewMessage, NewRecording, NewSpellRun, NewWorker, NewWorkspace, RecordingRecord,
-    SpellRunRecord, WorkerRecord, WorkspaceRecord,
+    NewMessage, NewRecording, NewSpellRun, NewWorker, NewWorkspace, NewWorkspaceRoot,
+    RecordingRecord, SpellRunRecord, WorkerRecord, WorkspaceRecord, WorkspaceRootRecord,
 };
 use crate::schema;
 use anyhow::{Context, Result};
@@ -773,6 +773,218 @@ impl Store {
         })
         .await
         .context("spawn_blocking get_workspace_id_for_agent")?
+    }
+
+    /// Attach a dependency-source root folder to a workspace. `id` is minted
+    /// server-side via `lower(hex(randomblob(16)))` (same uuid-free trick as
+    /// `create_workspace`). Returns the persisted row. The workspace's primary
+    /// project dir lives in `workspaces.cwd`; this table only holds the extra
+    /// attached roots.
+    pub async fn add_workspace_root(
+        &self,
+        rec: NewWorkspaceRoot,
+        created_at: i64,
+    ) -> Result<WorkspaceRootRecord> {
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || -> Result<WorkspaceRootRecord> {
+            let conn = pool.get()?;
+            let mut stmt = conn.prepare(
+                "INSERT INTO workspace_roots \
+                     (id, workspace_id, path, role, label, parent_id, created_at) \
+                 VALUES (lower(hex(randomblob(16))), ?1, ?2, ?3, ?4, ?5, ?6) \
+                 RETURNING id, workspace_id, path, role, label, parent_id, created_at",
+            )?;
+            let mut rows = stmt.query(params![
+                rec.workspace_id,
+                rec.path,
+                rec.role,
+                rec.label,
+                rec.parent_id,
+                created_at,
+            ])?;
+            let row = rows
+                .next()?
+                .ok_or_else(|| anyhow::anyhow!("INSERT workspace_roots RETURNING produced no row"))?;
+            Ok(WorkspaceRootRecord {
+                id: row.get(0)?,
+                workspace_id: row.get(1)?,
+                path: row.get(2)?,
+                role: row.get(3)?,
+                label: row.get(4)?,
+                parent_id: row.get(5)?,
+                created_at: row.get(6)?,
+            })
+        })
+        .await
+        .context("spawn_blocking add_workspace_root")?
+    }
+
+    /// Return every attached root across all workspaces, ordered by
+    /// `created_at` ASC. The list handler groups these by `workspace_id` in a
+    /// single pass so it can attach roots to each workspace without N+1.
+    pub async fn list_all_workspace_roots(&self) -> Result<Vec<WorkspaceRootRecord>> {
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || -> Result<Vec<WorkspaceRootRecord>> {
+            let conn = pool.get()?;
+            let mut stmt = conn.prepare(
+                "SELECT id, workspace_id, path, role, label, parent_id, created_at \
+                 FROM workspace_roots \
+                 ORDER BY created_at ASC",
+            )?;
+            let rows = stmt.query_map([], |row| {
+                Ok(WorkspaceRootRecord {
+                    id: row.get(0)?,
+                    workspace_id: row.get(1)?,
+                    path: row.get(2)?,
+                    role: row.get(3)?,
+                    label: row.get(4)?,
+                    parent_id: row.get(5)?,
+                    created_at: row.get(6)?,
+                })
+            })?;
+            rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+        })
+        .await
+        .context("spawn_blocking list_all_workspace_roots")?
+    }
+
+    /// Return the attached roots for a single workspace, ordered by
+    /// `created_at` ASC.
+    pub async fn list_workspace_roots(
+        &self,
+        workspace_id: String,
+    ) -> Result<Vec<WorkspaceRootRecord>> {
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || -> Result<Vec<WorkspaceRootRecord>> {
+            let conn = pool.get()?;
+            let mut stmt = conn.prepare(
+                "SELECT id, workspace_id, path, role, label, parent_id, created_at \
+                 FROM workspace_roots WHERE workspace_id = ?1 \
+                 ORDER BY created_at ASC",
+            )?;
+            let rows = stmt.query_map(params![workspace_id], |row| {
+                Ok(WorkspaceRootRecord {
+                    id: row.get(0)?,
+                    workspace_id: row.get(1)?,
+                    path: row.get(2)?,
+                    role: row.get(3)?,
+                    label: row.get(4)?,
+                    parent_id: row.get(5)?,
+                    created_at: row.get(6)?,
+                })
+            })?;
+            rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+        })
+        .await
+        .context("spawn_blocking list_workspace_roots")?
+    }
+
+    /// Look up a single workspace root by its primary key. Returns `None` if
+    /// not found. Used to validate a `parent_id` belongs to the same
+    /// workspace before attaching a child node under it.
+    pub async fn get_workspace_root(
+        &self,
+        id: String,
+    ) -> Result<Option<WorkspaceRootRecord>> {
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || -> Result<Option<WorkspaceRootRecord>> {
+            let conn = pool.get()?;
+            let mut stmt = conn.prepare(
+                "SELECT id, workspace_id, path, role, label, parent_id, created_at \
+                 FROM workspace_roots WHERE id = ?1",
+            )?;
+            let mut rows = stmt.query(params![id])?;
+            if let Some(row) = rows.next()? {
+                Ok(Some(WorkspaceRootRecord {
+                    id: row.get(0)?,
+                    workspace_id: row.get(1)?,
+                    path: row.get(2)?,
+                    role: row.get(3)?,
+                    label: row.get(4)?,
+                    parent_id: row.get(5)?,
+                    created_at: row.get(6)?,
+                }))
+            } else {
+                Ok(None)
+            }
+        })
+        .await
+        .context("spawn_blocking get_workspace_root")?
+    }
+
+    /// Detach a node from a workspace's logical tree by its `id`, CASCADING
+    /// to all of its descendants (any row whose `parent_id` chain leads back
+    /// to `id`). Returns the total number of rows deleted (0 if nothing
+    /// matched the `(workspace_id, id)` pair). The caller refreshes the
+    /// workspace's managed context block afterwards.
+    ///
+    /// SQLite has no recursive cascade on a self-referencing FK, so we
+    /// collect the descendant set in memory first (BFS over `parent_id`),
+    /// then issue a single bulk `DELETE ... WHERE id IN (...)` — all inside
+    /// one `spawn_blocking` on the same connection.
+    pub async fn delete_workspace_root(
+        &self,
+        workspace_id: String,
+        id: String,
+    ) -> Result<usize> {
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || -> Result<usize> {
+            let conn = pool.get()?;
+            // Load every (id, parent_id) edge for this workspace once so we
+            // can walk the tree without N round-trips.
+            let mut stmt = conn.prepare(
+                "SELECT id, parent_id FROM workspace_roots WHERE workspace_id = ?1",
+            )?;
+            let edges: Vec<(String, Option<String>)> = stmt
+                .query_map(params![workspace_id], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            drop(stmt);
+
+            // The target must exist in this workspace; if not, nothing to do.
+            if !edges.iter().any(|(rid, _)| *rid == id) {
+                return Ok(0);
+            }
+
+            // BFS: start with {id}; repeatedly pull in rows whose parent_id is
+            // already in the collected set, until no new ids appear.
+            let mut collected: std::collections::HashSet<String> =
+                std::collections::HashSet::new();
+            collected.insert(id.clone());
+            loop {
+                let mut added = false;
+                for (rid, parent) in &edges {
+                    if let Some(p) = parent {
+                        if collected.contains(p) && !collected.contains(rid) {
+                            collected.insert(rid.clone());
+                            added = true;
+                        }
+                    }
+                }
+                if !added {
+                    break;
+                }
+            }
+
+            // Single bulk delete scoped to this workspace.
+            let ids: Vec<String> = collected.into_iter().collect();
+            let placeholders =
+                std::iter::repeat("?").take(ids.len()).collect::<Vec<_>>().join(",");
+            let sql = format!(
+                "DELETE FROM workspace_roots \
+                 WHERE workspace_id = ? AND id IN ({placeholders})"
+            );
+            let mut bound: Vec<rusqlite::types::Value> = Vec::with_capacity(ids.len() + 1);
+            bound.push(workspace_id.into());
+            for i in ids {
+                bound.push(i.into());
+            }
+            let n = conn.execute(&sql, rusqlite::params_from_iter(bound.iter()))?;
+            Ok(n)
+        })
+        .await
+        .context("spawn_blocking delete_workspace_root")?
     }
 
     // ── spell runs ───────────────────────────────────────────────────────

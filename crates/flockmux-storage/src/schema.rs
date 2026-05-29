@@ -13,6 +13,8 @@ const MIGRATION_0002: &str = include_str!("../migrations/0002_pty_recordings.sql
 const MIGRATION_0003: &str = include_str!("../migrations/0003_in_reply_to.sql");
 const MIGRATION_0004: &str = include_str!("../migrations/0004_workspaces.sql");
 const MIGRATION_0005: &str = include_str!("../migrations/0005_workers.sql");
+const MIGRATION_0006: &str = include_str!("../migrations/0006_workspace_roots.sql");
+const MIGRATION_0007: &str = include_str!("../migrations/0007_workspace_root_parent.sql");
 
 pub(crate) fn run_migrations(conn: &mut Connection) -> Result<()> {
     let current = current_version(conn).unwrap_or(0);
@@ -32,6 +34,12 @@ pub(crate) fn run_migrations(conn: &mut Connection) -> Result<()> {
     }
     if current < 5 {
         apply(conn, 5, MIGRATION_0005).context("apply migration 0005")?;
+    }
+    if current < 6 {
+        apply(conn, 6, MIGRATION_0006).context("apply migration 0006")?;
+    }
+    if current < 7 {
+        apply(conn, 7, MIGRATION_0007).context("apply migration 0007")?;
     }
     Ok(())
 }

@@ -14,11 +14,13 @@ use axum::{
 use flockmux_protocol::rest::{
     AgentInfo, CliPluginInfo, CreateWorkspaceRequest, RunSpellAgent, RunSpellRequest,
     RunSpellResponse, SpawnAgentRequest, SpawnAgentResponse, SpawnWorkerRequest,
-    SpawnWorkerResponse, SpellAgentInfo, SpellInfo, Workspace,
+    SpawnWorkerResponse, SpellAgentInfo, SpellInfo, Workspace, WorkspaceRoot,
 };
 use flockmux_protocol::ws_swarm::{AgentState, SwarmEvent};
 use flockmux_recorder::{Recorder, RecorderConfig};
-use flockmux_storage::{NewAgent, NewRecording, NewSpellRun, NewWorker, NewWorkspace};
+use flockmux_storage::{
+    NewAgent, NewRecording, NewSpellRun, NewWorker, NewWorkspace, NewWorkspaceRoot,
+};
 use serde_json::json;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -933,6 +935,70 @@ pub async fn create_workspace_handler(
                 Json(json!({"error": e.to_string()})),
             )
         })?;
+
+    // Attach any dependency-source roots the wizard sent. Each is validated
+    // the same way as the primary cwd above (exists + is a dir → 4xx), then
+    // persisted. The workspace row already exists at this point; a failed root
+    // insert returns 500 without rolling back the workspace (acceptable — the
+    // user can re-attach the root). Empty/whitespace paths are skipped.
+    let mut roots: Vec<WorkspaceRoot> = Vec::new();
+    for root in req.roots {
+        let p = root.path.trim();
+        if p.is_empty() {
+            continue;
+        }
+        let path = std::path::Path::new(p);
+        if !path.exists() {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": format!("dependency directory does not exist: {}", p)})),
+            ));
+        }
+        if !path.is_dir() {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": format!("dependency path is not a directory: {}", p)})),
+            ));
+        }
+        // The wizard only ever creates the primary + peers + under-primary
+        // deps, so every root it sends is a top-level node (parent_id=None).
+        // Any client-supplied id is ignored — the server mints it.
+        let saved = state
+            .store
+            .add_workspace_root(
+                NewWorkspaceRoot {
+                    workspace_id: rec.id.clone(),
+                    path: p.to_string(),
+                    role: root.role,
+                    label: root.label,
+                    parent_id: None,
+                },
+                now_ms(),
+            )
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"error": e.to_string()})),
+                )
+            })?;
+        roots.push(WorkspaceRoot {
+            id: saved.id,
+            path: saved.path,
+            role: saved.role,
+            label: saved.label,
+            parent_id: saved.parent_id,
+        });
+    }
+
+    // If any tree nodes were attached, write a flockmux-managed context block
+    // into the primary project dir so the spawned orchestrator (claude →
+    // CLAUDE.md, codex → AGENTS.md) reads the attached source directly instead
+    // of decompiling/guessing. Best-effort; never fatal.
+    if !roots.is_empty() {
+        write_workspace_deps_context(rec.cwd.trim(), &rec.name, &roots);
+    }
+
     Ok(Json(Workspace {
         id: rec.id,
         slug: rec.slug,
@@ -941,7 +1007,132 @@ pub async fn create_workspace_handler(
         accent: rec.accent,
         created_at: rec.created_at,
         member_count: 0,
+        roots,
     }))
+}
+
+/// Write/refresh a flockmux-managed "workspace structure" block into the
+/// workspace's CLAUDE.md and AGENTS.md so the orchestrator reads the attached
+/// source directly (best practice: a per-project context file) instead of
+/// decompiling/guessing. The block renders the workspace's user-defined
+/// LOGICAL tree: the primary project (`cwd` + `name`) plus every attached
+/// node, nested by `parent_id`. Idempotent: the block is delimited by
+/// HTML-comment markers and replaced in place on re-write; any user content
+/// outside the markers is preserved. When `roots` is empty the managed block
+/// is STRIPPED instead of written (the inverse path — used when the last
+/// attached node is removed), leaving any surrounding user content intact.
+/// Best-effort — failures are logged, never fatal.
+fn write_workspace_deps_context(cwd: &str, name: &str, roots: &[WorkspaceRoot]) {
+    use std::fmt::Write as _;
+    const START: &str = "<!-- flockmux:deps:start -->";
+    const END: &str = "<!-- flockmux:deps:end -->";
+
+    // No roots left → strip the managed block (and trailing blank lines)
+    // from each context file if present. We never create a file here; only
+    // existing files with a managed block are rewritten.
+    if roots.is_empty() {
+        for fname in ["CLAUDE.md", "AGENTS.md"] {
+            let path = std::path::Path::new(cwd).join(fname);
+            let existing = match std::fs::read_to_string(&path) {
+                Ok(s) => s,
+                Err(_) => continue, // file doesn't exist / unreadable — nothing to strip
+            };
+            if let (Some(s), Some(e)) = (existing.find(START), existing.find(END)) {
+                let end_full = e + END.len();
+                // Drop the block plus any trailing newlines that followed it
+                // so we don't leave a dangling blank gap behind.
+                let after = existing[end_full..].trim_start_matches(['\n', '\r']);
+                let before = &existing[..s];
+                // If the block was the only content, `before` is empty / blank
+                // and the file becomes empty — that's fine per spec.
+                let stripped = if after.is_empty() {
+                    before.trim_end().to_string()
+                } else {
+                    format!("{}{}", before, after)
+                };
+                if let Err(e) = std::fs::write(&path, stripped) {
+                    tracing::warn!(?e, file = %path.display(), "failed stripping workspace deps context");
+                } else {
+                    tracing::info!(file = %path.display(), "stripped workspace deps context (no roots left)");
+                }
+            }
+        }
+        return;
+    }
+
+    // Render the prefix label for one tree node by role.
+    fn node_label(role: &str) -> &'static str {
+        match role {
+            "project" => "项目",
+            "tool" => "[工具]",
+            _ => "[依赖]",
+        }
+    }
+    // Emit `node` (and recurse into its children) at the given depth. Children
+    // are the roots whose parent_id == node.id, in slice order (already sorted
+    // by created_at by the caller). `depth` controls the 2-space indent.
+    fn emit_node(block: &mut String, node: &WorkspaceRoot, roots: &[WorkspaceRoot], depth: usize) {
+        let indent = "  ".repeat(depth);
+        let label = node_label(&node.role);
+        let name = node.label.as_deref().unwrap_or("");
+        let _ = if name.is_empty() {
+            writeln!(block, "{indent}- {label} `{}`", node.path)
+        } else {
+            writeln!(block, "{indent}- {label} {name} `{}`", node.path)
+        };
+        for child in roots.iter().filter(|r| r.parent_id.as_deref() == Some(node.id.as_str())) {
+            emit_node(block, child, roots, depth + 1);
+        }
+    }
+
+    let mut block = String::new();
+    let _ = writeln!(block, "{START}");
+    let _ = writeln!(block, "## 工作空间结构 (flockmux managed)");
+    let _ = writeln!(block);
+    let _ = writeln!(
+        block,
+        "下面是本工作空间的项目与它们挂载的依赖源码（树中父子表示\"依赖/归属\"，物理\
+         路径见每行）。开发时直接阅读/按需修改这些源码——不要反编译 jar/包、不要凭\
+         猜测。改动跨项目的共享库时注意它可能被多处使用。"
+    );
+    let _ = writeln!(block);
+
+    // The PRIMARY project = (cwd, name, role="project"), implicit root.
+    // Its children = roots with parent_id=None && role!="project".
+    // Top-level peer projects = roots with parent_id=None && role=="project".
+    let _ = writeln!(block, "- 项目 {name} `{cwd}`   (primary)");
+    for r in roots
+        .iter()
+        .filter(|r| r.parent_id.is_none() && r.role != "project")
+    {
+        emit_node(&mut block, r, roots, 1);
+    }
+    for r in roots
+        .iter()
+        .filter(|r| r.parent_id.is_none() && r.role == "project")
+    {
+        emit_node(&mut block, r, roots, 0);
+    }
+    let _ = write!(block, "{END}");
+
+    for fname in ["CLAUDE.md", "AGENTS.md"] {
+        let path = std::path::Path::new(cwd).join(fname);
+        let existing = std::fs::read_to_string(&path).unwrap_or_default();
+        let next = if let (Some(s), Some(e)) = (existing.find(START), existing.find(END)) {
+            // replace existing managed block in place
+            let end_full = e + END.len();
+            format!("{}{}{}", &existing[..s], block, &existing[end_full..])
+        } else if existing.trim().is_empty() {
+            block.clone()
+        } else {
+            format!("{}\n\n{}\n", existing.trim_end(), block)
+        };
+        if let Err(e) = std::fs::write(&path, next) {
+            tracing::warn!(?e, file = %path.display(), "failed writing workspace deps context");
+        } else {
+            tracing::info!(file = %path.display(), roots = roots.len(), "wrote workspace deps context");
+        }
+    }
 }
 
 /// `GET /api/workspaces` — list alive workspaces with their live member
@@ -968,10 +1159,24 @@ pub async fn list_workspaces_handler(State(state): State<AppState>) -> impl Into
             *counts.entry(ws_id).or_insert(0) += 1;
         }
     }
+    // Fetch every attached root in one shot and group by workspace_id (rows
+    // come back ordered by created_at ASC, so each group preserves attach
+    // order). Same single-pass rationale as member_count above — avoids N+1.
+    let mut roots_by_ws: HashMap<String, Vec<WorkspaceRoot>> = HashMap::new();
+    for r in state.store.list_all_workspace_roots().await.unwrap_or_default() {
+        roots_by_ws.entry(r.workspace_id).or_default().push(WorkspaceRoot {
+            id: r.id,
+            path: r.path,
+            role: r.role,
+            label: r.label,
+            parent_id: r.parent_id,
+        });
+    }
     let items: Vec<Workspace> = rows
         .into_iter()
         .map(|r| Workspace {
             member_count: counts.get(&r.id).copied().unwrap_or(0),
+            roots: roots_by_ws.remove(&r.id).unwrap_or_default(),
             id: r.id,
             slug: r.slug,
             name: r.name,
@@ -1005,6 +1210,422 @@ pub async fn delete_workspace_handler(
             )
         }
     }
+}
+
+/// Re-derive and rewrite the workspace's flockmux-managed deps context
+/// block from the current set of attached roots. Call this after any
+/// add/delete so CLAUDE.md / AGENTS.md stay in sync (and the block is
+/// stripped once the last root is removed). Best-effort: store errors are
+/// logged and swallowed — the membership change already committed and the
+/// context file is advisory, never load-bearing.
+async fn refresh_workspace_deps_context(state: &AppState, workspace_id: &str) {
+    let ws = match state.store.get_workspace_by_id(workspace_id.to_string()).await {
+        Ok(Some(ws)) => ws,
+        Ok(None) => return,
+        Err(e) => {
+            tracing::warn!(?e, ws_id = %workspace_id, "refresh deps context: get_workspace_by_id failed");
+            return;
+        }
+    };
+    // Don't touch the context file of a soft-deleted workspace.
+    if ws.deleted_at.is_some() {
+        return;
+    }
+    let roots: Vec<WorkspaceRoot> = match state
+        .store
+        .list_workspace_roots(workspace_id.to_string())
+        .await
+    {
+        Ok(rows) => rows
+            .into_iter()
+            .map(|r| WorkspaceRoot {
+                id: r.id,
+                path: r.path,
+                role: r.role,
+                label: r.label,
+                parent_id: r.parent_id,
+            })
+            .collect(),
+        Err(e) => {
+            tracing::warn!(?e, ws_id = %workspace_id, "refresh deps context: list_workspace_roots failed");
+            return;
+        }
+    };
+    write_workspace_deps_context(ws.cwd.trim(), &ws.name, &roots);
+}
+
+/// `POST /api/workspaces/:id/roots` — attach a dependency-source root to an
+/// existing workspace. Mirrors the per-root validation in
+/// `create_workspace_handler` (exists + is a dir → 4xx) and rejects
+/// duplicates already attached to this workspace. On success the managed
+/// context block in CLAUDE.md / AGENTS.md is refreshed.
+pub async fn add_workspace_root_handler(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(req): Json<WorkspaceRoot>,
+) -> Result<Json<WorkspaceRoot>, (StatusCode, Json<serde_json::Value>)> {
+    // 404 if the workspace is missing or soft-deleted.
+    let ws = state
+        .store
+        .get_workspace_by_id(id.clone())
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": e.to_string()})),
+            )
+        })?
+        .filter(|ws| ws.deleted_at.is_none())
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": format!("workspace {id} not found")})),
+            )
+        })?;
+
+    let path = req.path.trim();
+    if path.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "dependency path must be non-empty"})),
+        ));
+    }
+    {
+        let p = std::path::Path::new(path);
+        if !p.exists() {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": format!("dependency directory does not exist: {}", path)})),
+            ));
+        }
+        if !p.is_dir() {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": format!("dependency path is not a directory: {}", path)})),
+            ));
+        }
+    }
+
+    // Reject a duplicate already attached to this workspace.
+    let existing = state
+        .store
+        .list_workspace_roots(ws.id.clone())
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": e.to_string()})),
+            )
+        })?;
+    if existing.iter().any(|r| r.path == path) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": format!("dependency already attached: {}", path)})),
+        ));
+    }
+
+    // If a parent was supplied, it must be an existing node in THIS
+    // workspace's tree. A parent in another workspace (or a stale id) is a
+    // client bug — 400. A genuinely-missing id is a 404.
+    let parent_id = match req.parent_id.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(pid) => {
+            let parent = state
+                .store
+                .get_workspace_root(pid.to_string())
+                .await
+                .map_err(|e| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({"error": e.to_string()})),
+                    )
+                })?
+                .ok_or_else(|| {
+                    (
+                        StatusCode::NOT_FOUND,
+                        Json(json!({"error": format!("parent root {pid} not found")})),
+                    )
+                })?;
+            if parent.workspace_id != ws.id {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({"error": format!(
+                        "parent root {pid} belongs to a different workspace"
+                    )})),
+                ));
+            }
+            Some(pid.to_string())
+        }
+        None => None,
+    };
+
+    let saved = state
+        .store
+        .add_workspace_root(
+            NewWorkspaceRoot {
+                workspace_id: ws.id.clone(),
+                path: path.to_string(),
+                role: req.role,
+                label: req.label,
+                parent_id,
+            },
+            now_ms(),
+        )
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": e.to_string()})),
+            )
+        })?;
+
+    refresh_workspace_deps_context(&state, &id).await;
+
+    Ok(Json(WorkspaceRoot {
+        id: saved.id,
+        path: saved.path,
+        role: saved.role,
+        label: saved.label,
+        parent_id: saved.parent_id,
+    }))
+}
+
+/// `DELETE /api/workspaces/:id/roots?id=<root_id>` — detach a node from the
+/// workspace's logical tree, CASCADING to all of its descendants. The node id
+/// rides in the query string (DELETE has no body in the frontend's fetch).
+/// Refreshes the managed context block afterwards (stripping it if this
+/// removed the last node).
+pub async fn delete_workspace_root_handler(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let root_id = match params.get("id").map(|s| s.trim()).filter(|s| !s.is_empty()) {
+        Some(p) => p.to_string(),
+        None => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": "missing required query param 'id'"})),
+            ))
+        }
+    };
+
+    let n = state
+        .store
+        .delete_workspace_root(id.clone(), root_id)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": e.to_string()})),
+            )
+        })?;
+
+    refresh_workspace_deps_context(&state, &id).await;
+
+    Ok(Json(json!({"deleted": n})))
+}
+
+/// `GET /api/workspaces/:id/root-suggestions[?path=<dir>]` — scan a project
+/// dir for manifest-declared LOCAL PATH dependencies (package.json file:/link:,
+/// Cargo.toml path deps, go.mod replace directives, pyproject.toml uv sources)
+/// and return them as attachable root suggestions. `?path=` selects which dir
+/// to scan (e.g. a peer project's dir when adding a child under it); it
+/// defaults to the workspace's primary `cwd`. Best-effort: parse errors and
+/// missing files are swallowed — this only ever feeds an optional picker.
+/// Excludes the scanned dir itself and any path already attached anywhere in
+/// the workspace.
+pub async fn suggest_workspace_roots_handler(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Json<Vec<WorkspaceRoot>> {
+    let ws = match state.store.get_workspace_by_id(id.clone()).await {
+        Ok(Some(ws)) => ws,
+        _ => return Json(Vec::new()),
+    };
+    // Scan the dir named by ?path= (a specific node's project dir) or fall
+    // back to the workspace's primary cwd.
+    let scan_dir = params
+        .get("path")
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| ws.cwd.trim())
+        .to_string();
+    let cwd = std::path::Path::new(&scan_dir);
+
+    // Canonical cwd (used to exclude the project itself from suggestions).
+    let cwd_canon = std::fs::canonicalize(cwd).ok();
+
+    // Canonical set of already-attached roots — suggestions never repeat
+    // what's mounted. We canonicalize each so a `./foo` vs `/abs/foo`
+    // mismatch still dedups.
+    let mut already: std::collections::HashSet<std::path::PathBuf> =
+        std::collections::HashSet::new();
+    if let Ok(rows) = state.store.list_workspace_roots(id.clone()).await {
+        for r in rows {
+            if let Ok(c) = std::fs::canonicalize(&r.path) {
+                already.insert(c);
+            }
+        }
+    }
+
+    // (relative-or-abs path string from the manifest, label) pairs.
+    let mut candidates: Vec<(String, String)> = Vec::new();
+
+    // package.json — dependencies / devDependencies values starting with
+    // `file:` or `link:` point at a local path.
+    if let Ok(txt) = std::fs::read_to_string(cwd.join("package.json")) {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&txt) {
+            for section in ["dependencies", "devDependencies"] {
+                if let Some(map) = v.get(section).and_then(|s| s.as_object()) {
+                    for (name, val) in map {
+                        if let Some(spec) = val.as_str() {
+                            for prefix in ["file:", "link:"] {
+                                if let Some(rest) = spec.strip_prefix(prefix) {
+                                    candidates.push((rest.to_string(), name.clone()));
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Cargo.toml — line scan for inline `path = "..."` (covers both
+    // `name = { path = "..." }` and a `path = "..."` line inside a
+    // `[dependencies.name]` table). Label is best-effort: the crate name
+    // to the left of `=` if present, else the path basename.
+    if let Ok(txt) = std::fs::read_to_string(cwd.join("Cargo.toml")) {
+        for line in txt.lines() {
+            let trimmed = line.trim();
+            if let Some(rel) = extract_quoted_after(trimmed, "path") {
+                let name = trimmed
+                    .split('=')
+                    .next()
+                    .map(|s| s.trim().trim_matches(['{', ' ']))
+                    .filter(|s| !s.is_empty() && !s.starts_with('['))
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| basename_of(&rel));
+                candidates.push((rel, name));
+            }
+        }
+    }
+
+    // go.mod — `replace <module> => <target> [version]` where the target is
+    // a local path (./ ../ or absolute). Label = path basename.
+    if let Ok(txt) = std::fs::read_to_string(cwd.join("go.mod")) {
+        for line in txt.lines() {
+            let trimmed = line.trim();
+            let body = trimmed.strip_prefix("replace ").unwrap_or(trimmed);
+            if let Some((_, rhs)) = body.split_once("=>") {
+                if let Some(target) = rhs.split_whitespace().next() {
+                    if target.starts_with("./")
+                        || target.starts_with("../")
+                        || target.starts_with('/')
+                    {
+                        candidates.push((target.to_string(), basename_of(target)));
+                    }
+                }
+            }
+        }
+    }
+
+    // pyproject.toml — under `[tool.uv.sources]`, lines of the form
+    // `name = { path = "..." }`. Label = name (else basename).
+    if let Ok(txt) = std::fs::read_to_string(cwd.join("pyproject.toml")) {
+        let mut in_uv_sources = false;
+        for line in txt.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with('[') {
+                in_uv_sources = trimmed == "[tool.uv.sources]";
+                continue;
+            }
+            if in_uv_sources {
+                if let Some(rel) = extract_quoted_after(trimmed, "path") {
+                    let name = trimmed
+                        .split('=')
+                        .next()
+                        .map(|s| s.trim())
+                        .filter(|s| !s.is_empty())
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| basename_of(&rel));
+                    candidates.push((rel, name));
+                }
+            }
+        }
+    }
+
+    // Resolve each candidate relative to cwd, canonicalize, keep only
+    // existing dirs, drop the cwd itself + already-attached + dupes.
+    let mut seen: std::collections::HashSet<std::path::PathBuf> =
+        std::collections::HashSet::new();
+    let mut out: Vec<WorkspaceRoot> = Vec::new();
+    for (rel, label) in candidates {
+        let raw = std::path::Path::new(&rel);
+        let joined = if raw.is_absolute() {
+            raw.to_path_buf()
+        } else {
+            cwd.join(raw)
+        };
+        let canon = match std::fs::canonicalize(&joined) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        if !canon.is_dir() {
+            continue;
+        }
+        if Some(&canon) == cwd_canon.as_ref() {
+            continue;
+        }
+        if already.contains(&canon) {
+            continue;
+        }
+        if !seen.insert(canon.clone()) {
+            continue;
+        }
+        out.push(WorkspaceRoot {
+            id: String::new(),
+            path: canon.to_string_lossy().into_owned(),
+            role: "dependency".to_string(),
+            label: Some(label),
+            parent_id: None,
+        });
+    }
+
+    Json(out)
+}
+
+/// Pull the first `"..."`-quoted value that follows `<key>` (optionally with
+/// `=`) on a single manifest line, e.g. `extract_quoted_after("foo = { path
+/// = \"../bar\" }", "path")` → `Some("../bar")`. Returns `None` if the key or
+/// a quoted value isn't present. Deliberately simple — these are best-effort
+/// suggestion parsers, not a TOML implementation.
+fn extract_quoted_after(line: &str, key: &str) -> Option<String> {
+    let idx = line.find(key)?;
+    let after_key = &line[idx + key.len()..];
+    // Require an `=` between the key and the opening quote so we don't match
+    // e.g. a `paths = [...]` array as a single path.
+    let eq = after_key.find('=')?;
+    let after_eq = &after_key[eq + 1..];
+    let start = after_eq.find('"')? + 1;
+    let rest = &after_eq[start..];
+    let end = rest.find('"')?;
+    let val = &rest[..end];
+    if val.is_empty() {
+        None
+    } else {
+        Some(val.to_string())
+    }
+}
+
+/// Last path component of a path string, used as a fallback dependency label.
+fn basename_of(p: &str) -> String {
+    std::path::Path::new(p)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| p.to_string())
 }
 
 // ────────────────────────────────────────────────────────────────────────
