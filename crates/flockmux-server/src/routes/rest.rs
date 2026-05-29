@@ -1557,6 +1557,78 @@ pub async fn suggest_workspace_roots_handler(
         }
     }
 
+    // pom.xml — Maven deps are jar coordinates (groupId/artifactId/version),
+    // not local paths, so we can't read a path out of the manifest. Instead we
+    // LOCATE local Maven projects on disk whose own `artifactId` matches a
+    // declared dependency, covering the two common local layouts. Only runs
+    // when the scanned dir actually has a pom.xml. Candidates are pushed as
+    // absolute paths so they flow through the same canonicalize/exclude/dedup
+    // pipeline below as every other ecosystem.
+    if let Ok(pom) = std::fs::read_to_string(cwd.join("pom.xml")) {
+        // (1) Multi-module reactor: each <module>REL</module> is a local
+        // subdir scanDir/REL. Suggest it if scanDir/REL/pom.xml exists. Label
+        // = the module's own artifactId if cheaply available, else REL.
+        for rel in xml_tag_values(&pom, "module") {
+            let module_dir = cwd.join(&rel);
+            let module_pom = module_dir.join("pom.xml");
+            if module_pom.is_file() {
+                let label = std::fs::read_to_string(&module_pom)
+                    .ok()
+                    .and_then(|m| own_artifact_id(&m))
+                    .unwrap_or(rel);
+                candidates.push((module_dir.to_string_lossy().into_owned(), label));
+            }
+        }
+
+        // (2) Sibling projects checked out next to this one. Collect every
+        // <artifactId> referenced anywhere in the scanned pom (over-collecting
+        // our own/parent/plugin ids is fine — they just won't match a real
+        // sibling project, or if they do the user simply won't click). Then
+        // scan the parent dir's immediate children for Maven projects whose
+        // OWN artifactId is in that referenced set.
+        let referenced: std::collections::HashSet<String> =
+            xml_tag_values(&pom, "artifactId").into_iter().collect();
+        if !referenced.is_empty() {
+            if let Some(parent) = cwd.parent() {
+                if let Ok(entries) = std::fs::read_dir(parent) {
+                    // Bound the scan so a huge parent dir can't blow up the
+                    // request — only the first 200 child dirs are considered.
+                    for entry in entries.flatten().take(200) {
+                        let child = entry.path();
+                        if !child.is_dir() {
+                            continue;
+                        }
+                        let name = entry.file_name();
+                        let name = name.to_string_lossy();
+                        // Skip the scanned dir itself, hidden dirs, and the
+                        // usual build/vendor noise.
+                        if name.starts_with('.')
+                            || name == "target"
+                            || name == "node_modules"
+                        {
+                            continue;
+                        }
+                        // The scanned dir itself is among these children but is
+                        // excluded downstream by the cwd_canon check, so we
+                        // needn't special-case it here.
+                        let child_pom = child.join("pom.xml");
+                        if !child_pom.is_file() {
+                            continue;
+                        }
+                        if let Ok(child_xml) = std::fs::read_to_string(&child_pom) {
+                            if let Some(aid) = own_artifact_id(&child_xml) {
+                                if referenced.contains(&aid) {
+                                    candidates
+                                        .push((child.to_string_lossy().into_owned(), aid));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // Resolve each candidate relative to cwd, canonicalize, keep only
     // existing dirs, drop the cwd itself + already-attached + dupes.
     let mut seen: std::collections::HashSet<std::path::PathBuf> =
@@ -1626,6 +1698,41 @@ fn basename_of(p: &str) -> String {
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| p.to_string())
+}
+
+/// Crude XML scan: return the trimmed inner text of every `<tag>...</tag>`
+/// occurrence in `xml`. Used for Maven pom.xml `<artifactId>` and `<module>`
+/// extraction. Deliberately not a real XML parser — these are best-effort
+/// suggestion inputs, so namespaces, comments, and attributes are ignored.
+fn xml_tag_values(xml: &str, tag: &str) -> Vec<String> {
+    let open = format!("<{tag}>");
+    let close = format!("</{tag}>");
+    let mut out = Vec::new();
+    let mut rest = xml;
+    while let Some(start) = rest.find(&open) {
+        let after = &rest[start + open.len()..];
+        let Some(end) = after.find(&close) else { break };
+        let val = after[..end].trim();
+        if !val.is_empty() {
+            out.push(val.to_string());
+        }
+        rest = &after[end + close.len()..];
+    }
+    out
+}
+
+/// Extract a Maven pom's OWN `artifactId` (not its parent's). A `<parent>`
+/// block carries its own `<artifactId>`; to skip it we start searching after
+/// the first `</parent>` (if any), else from the start, then take the first
+/// `<artifactId>...</artifactId>`.
+fn own_artifact_id(xml: &str) -> Option<String> {
+    let search_from = xml
+        .find("</parent>")
+        .map(|i| i + "</parent>".len())
+        .unwrap_or(0);
+    xml_tag_values(&xml[search_from..], "artifactId")
+        .into_iter()
+        .next()
 }
 
 // ────────────────────────────────────────────────────────────────────────
