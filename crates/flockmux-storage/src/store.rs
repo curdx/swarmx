@@ -12,9 +12,45 @@ use crate::schema;
 use anyhow::{Context, Result};
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
-use rusqlite::params;
+use rusqlite::{params, Connection, Error as SqliteError, ErrorCode};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+
+/// True if `e` is a `SQLITE_BUSY` / `SQLITE_LOCKED` failure — the only
+/// errors `with_busy_retry` re-runs on.
+fn is_busy(e: &SqliteError) -> bool {
+    matches!(
+        e,
+        SqliteError::SqliteFailure(f, _)
+            if matches!(f.code, ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked)
+    )
+}
+
+/// Run a DB op, re-running it on SQLITE_BUSY / SQLITE_LOCKED that `busy_timeout`
+/// didn't absorb (WAL checkpoint / snapshot edge cases). Safe to retry: a BUSY
+/// is returned BEFORE the statement/transaction takes effect, so no partial
+/// write is left behind. Up to 5 attempts, backoff 10/20/40/80 ms.
+///
+/// Owns the pool checkout (a fresh connection per attempt) so the `op` closure
+/// receives a `&mut Connection` and never touches `pool.get()` directly.
+fn with_busy_retry<T>(
+    pool: &Pool<SqliteConnectionManager>,
+    mut op: impl FnMut(&mut Connection) -> rusqlite::Result<T>,
+) -> Result<T> {
+    const MAX_ATTEMPTS: u32 = 5;
+    let mut attempt: u32 = 0;
+    loop {
+        let mut conn = pool.get()?;
+        match op(&mut conn) {
+            Ok(v) => return Ok(v),
+            Err(e) if is_busy(&e) && attempt + 1 < MAX_ATTEMPTS => {
+                std::thread::sleep(std::time::Duration::from_millis(10u64 << attempt));
+                attempt += 1;
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
+}
 
 /// Thread-safe handle to the SQLite store. Cheap to clone — wraps an `Arc`
 /// over the r2d2 pool.
@@ -60,8 +96,7 @@ impl Store {
 
     pub async fn record_agent_spawn(&self, rec: NewAgent) -> Result<()> {
         let pool = self.pool.clone();
-        tokio::task::spawn_blocking(move || -> Result<()> {
-            let conn = pool.get()?;
+        tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<()> {
             conn.execute(
                 "INSERT INTO agents (id, cli, role, workspace, spawned_at, workspace_id, spell_run_id) \
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -76,58 +111,54 @@ impl Store {
                 ],
             )?;
             Ok(())
-        })
+        }))
         .await
         .context("spawn_blocking record_agent_spawn")?
     }
 
     pub async fn record_agent_kill(&self, id: String, at_ms: i64) -> Result<()> {
         let pool = self.pool.clone();
-        tokio::task::spawn_blocking(move || -> Result<()> {
-            let conn = pool.get()?;
+        tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<()> {
             conn.execute(
                 "UPDATE agents SET killed_at = ?2 WHERE id = ?1 AND killed_at IS NULL",
                 params![id, at_ms],
             )?;
             Ok(())
-        })
+        }))
         .await
         .context("spawn_blocking record_agent_kill")?
     }
 
     pub async fn record_shim_ready(&self, id: String, at_ms: i64) -> Result<()> {
         let pool = self.pool.clone();
-        tokio::task::spawn_blocking(move || -> Result<()> {
-            let conn = pool.get()?;
+        tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<()> {
             conn.execute(
                 "UPDATE agents SET shim_ready_at = ?2 WHERE id = ?1 AND shim_ready_at IS NULL",
                 params![id, at_ms],
             )?;
             Ok(())
-        })
+        }))
         .await
         .context("spawn_blocking record_shim_ready")?
     }
 
     pub async fn record_shim_exit(&self, id: String, code: i32, at_ms: i64) -> Result<()> {
         let pool = self.pool.clone();
-        tokio::task::spawn_blocking(move || -> Result<()> {
-            let conn = pool.get()?;
+        tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<()> {
             conn.execute(
                 "UPDATE agents SET shim_exit_at = ?2, shim_exit_code = ?3 \
                  WHERE id = ?1 AND shim_exit_at IS NULL",
                 params![id, at_ms, code],
             )?;
             Ok(())
-        })
+        }))
         .await
         .context("spawn_blocking record_shim_exit")?
     }
 
     pub async fn list_agents(&self) -> Result<Vec<AgentRecord>> {
         let pool = self.pool.clone();
-        tokio::task::spawn_blocking(move || -> Result<Vec<AgentRecord>> {
-            let conn = pool.get()?;
+        tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<Vec<AgentRecord>> {
             let mut stmt = conn.prepare(
                 "SELECT id, cli, role, workspace, spawned_at, killed_at, \
                         shim_ready_at, shim_exit_at, shim_exit_code, \
@@ -150,8 +181,8 @@ impl Store {
                     spell_run_id: row.get(10)?,
                 })
             })?;
-            rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
-        })
+            rows.collect::<rusqlite::Result<Vec<_>>>()
+        }))
         .await
         .context("spawn_blocking list_agents")?
     }
@@ -160,8 +191,7 @@ impl Store {
 
     pub async fn insert_message(&self, msg: NewMessage) -> Result<MessageRecord> {
         let pool = self.pool.clone();
-        tokio::task::spawn_blocking(move || -> Result<MessageRecord> {
-            let conn = pool.get()?;
+        tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<MessageRecord> {
             conn.execute(
                 "INSERT INTO messages (from_agent, to_agent, kind, body, sent_at, in_reply_to) \
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
@@ -175,26 +205,27 @@ impl Store {
                 ],
             )?;
             let id = conn.last_insert_rowid();
+            // Clone (don't move) out of the captured `msg`: the retry closure
+            // is `FnMut`, so it may run more than once and can't consume it.
             Ok(MessageRecord {
                 id,
-                from_agent: msg.from_agent,
-                to_agent: msg.to_agent,
-                kind: msg.kind,
-                body: msg.body,
+                from_agent: msg.from_agent.clone(),
+                to_agent: msg.to_agent.clone(),
+                kind: msg.kind.clone(),
+                body: msg.body.clone(),
                 sent_at: msg.sent_at,
                 delivered_at: None,
                 read_at: None,
                 in_reply_to: msg.in_reply_to,
             })
-        })
+        }))
         .await
         .context("spawn_blocking insert_message")?
     }
 
     pub async fn list_messages(&self, opts: ListMessagesOpts) -> Result<Vec<MessageRecord>> {
         let pool = self.pool.clone();
-        tokio::task::spawn_blocking(move || -> Result<Vec<MessageRecord>> {
-            let conn = pool.get()?;
+        tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<Vec<MessageRecord>> {
             // Build WHERE dynamically. We bind via positional params so we
             // can keep the cap on injection surface tight (always-string
             // values, never interpolated).
@@ -240,16 +271,15 @@ impl Store {
                     in_reply_to: row.get(8)?,
                 })
             })?;
-            rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
-        })
+            rows.collect::<rusqlite::Result<Vec<_>>>()
+        }))
         .await
         .context("spawn_blocking list_messages")?
     }
 
     pub async fn search_messages(&self, query: String) -> Result<Vec<MessageRecord>> {
         let pool = self.pool.clone();
-        tokio::task::spawn_blocking(move || -> Result<Vec<MessageRecord>> {
-            let conn = pool.get()?;
+        tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<Vec<MessageRecord>> {
             // Join messages_fts → messages on rowid; order by FTS rank.
             let mut stmt = conn.prepare(
                 "SELECT m.id, m.from_agent, m.to_agent, m.kind, m.body, m.sent_at, \
@@ -273,8 +303,8 @@ impl Store {
                     in_reply_to: row.get(8)?,
                 })
             })?;
-            rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
-        })
+            rows.collect::<rusqlite::Result<Vec<_>>>()
+        }))
         .await
         .context("spawn_blocking search_messages")?
     }
@@ -284,8 +314,7 @@ impl Store {
             return Ok(());
         }
         let pool = self.pool.clone();
-        tokio::task::spawn_blocking(move || -> Result<()> {
-            let mut conn = pool.get()?;
+        tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<()> {
             let tx = conn.transaction()?;
             {
                 let mut stmt = tx.prepare(
@@ -298,7 +327,7 @@ impl Store {
             }
             tx.commit()?;
             Ok(())
-        })
+        }))
         .await
         .context("spawn_blocking mark_delivered")?
     }
@@ -317,8 +346,7 @@ impl Store {
             return Ok(Vec::new());
         }
         let pool = self.pool.clone();
-        tokio::task::spawn_blocking(move || -> Result<Vec<i64>> {
-            let mut conn = pool.get()?;
+        tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<Vec<i64>> {
             let tx = conn.transaction()?;
             let mut marked = Vec::with_capacity(ids.len());
             {
@@ -336,7 +364,7 @@ impl Store {
             }
             tx.commit()?;
             Ok(marked)
-        })
+        }))
         .await
         .context("spawn_blocking mark_read")?
     }
@@ -344,15 +372,14 @@ impl Store {
     /// Count messages for `to_agent` that have not yet been read.
     pub async fn count_unread(&self, to_agent: String) -> Result<i64> {
         let pool = self.pool.clone();
-        tokio::task::spawn_blocking(move || -> Result<i64> {
-            let conn = pool.get()?;
+        tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<i64> {
             let n: i64 = conn.query_row(
                 "SELECT COUNT(*) FROM messages WHERE to_agent = ?1 AND read_at IS NULL",
                 params![to_agent],
                 |row| row.get(0),
             )?;
             Ok(n)
-        })
+        }))
         .await
         .context("spawn_blocking count_unread")?
     }
@@ -370,8 +397,7 @@ impl Store {
     /// once.
     pub async fn consume_wakes(&self, to_agent: String, at_ms: i64) -> Result<Vec<i64>> {
         let pool = self.pool.clone();
-        tokio::task::spawn_blocking(move || -> Result<Vec<i64>> {
-            let mut conn = pool.get()?;
+        tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<Vec<i64>> {
             let tx = conn.transaction()?;
             let marked: Vec<i64> = {
                 let mut stmt = tx.prepare(
@@ -385,7 +411,7 @@ impl Store {
             };
             tx.commit()?;
             Ok(marked)
-        })
+        }))
         .await
         .context("spawn_blocking consume_wakes")?
     }
@@ -394,24 +420,25 @@ impl Store {
 
     pub async fn insert_blackboard_op(&self, op: NewBlackboardOp) -> Result<BlackboardOpRecord> {
         let pool = self.pool.clone();
-        tokio::task::spawn_blocking(move || -> Result<BlackboardOpRecord> {
-            let conn = pool.get()?;
+        tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<BlackboardOpRecord> {
             conn.execute(
                 "INSERT INTO blackboard_ops (agent_id, op, path, content, sha256, at) \
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 params![op.agent_id, op.op, op.path, op.content, op.sha256, op.at],
             )?;
             let id = conn.last_insert_rowid();
+            // Clone (don't move) out of the captured `op`: the retry closure
+            // is `FnMut`, so it may run more than once and can't consume it.
             Ok(BlackboardOpRecord {
                 id,
-                agent_id: op.agent_id,
-                op: op.op,
-                path: op.path,
-                content: op.content,
-                sha256: op.sha256,
+                agent_id: op.agent_id.clone(),
+                op: op.op.clone(),
+                path: op.path.clone(),
+                content: op.content.clone(),
+                sha256: op.sha256.clone(),
                 at: op.at,
             })
-        })
+        }))
         .await
         .context("spawn_blocking insert_blackboard_op")?
     }
@@ -423,8 +450,7 @@ impl Store {
         path: Option<String>,
     ) -> Result<Vec<BlackboardOpRecord>> {
         let pool = self.pool.clone();
-        tokio::task::spawn_blocking(move || -> Result<Vec<BlackboardOpRecord>> {
-            let conn = pool.get()?;
+        tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<Vec<BlackboardOpRecord>> {
             let (sql, bound): (&str, Vec<rusqlite::types::Value>) = match &path {
                 Some(p) => (
                     "SELECT id, agent_id, op, path, content, sha256, at \
@@ -455,8 +481,8 @@ impl Store {
                     at: row.get(6)?,
                 })
             })?;
-            rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
-        })
+            rows.collect::<rusqlite::Result<Vec<_>>>()
+        }))
         .await
         .context("spawn_blocking list_blackboard_ops")?
     }
@@ -465,15 +491,14 @@ impl Store {
 
     pub async fn record_recording_start(&self, rec: NewRecording) -> Result<()> {
         let pool = self.pool.clone();
-        tokio::task::spawn_blocking(move || -> Result<()> {
-            let conn = pool.get()?;
+        tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<()> {
             conn.execute(
                 "INSERT INTO pty_recordings (id, agent_id, path, started_at, cols, rows) \
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 params![rec.id, rec.agent_id, rec.path, rec.started_at, rec.cols, rec.rows],
             )?;
             Ok(())
-        })
+        }))
         .await
         .context("spawn_blocking record_recording_start")?
     }
@@ -486,8 +511,7 @@ impl Store {
         last_seq: i64,
     ) -> Result<()> {
         let pool = self.pool.clone();
-        tokio::task::spawn_blocking(move || -> Result<()> {
-            let conn = pool.get()?;
+        tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<()> {
             conn.execute(
                 "UPDATE pty_recordings \
                  SET finalized_at = ?2, duration_ms = ?3, last_seq = ?4 \
@@ -495,7 +519,7 @@ impl Store {
                 params![id, finalized_at, duration_ms, last_seq],
             )?;
             Ok(())
-        })
+        }))
         .await
         .context("spawn_blocking record_recording_finalize")?
     }
@@ -508,14 +532,13 @@ impl Store {
     /// non-existent PTY and shows "WS closed (code 1005)" forever.
     pub async fn mark_orphan_agents_killed(&self, at_ms: i64) -> Result<usize> {
         let pool = self.pool.clone();
-        tokio::task::spawn_blocking(move || -> Result<usize> {
-            let conn = pool.get()?;
+        tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<usize> {
             let n = conn.execute(
                 "UPDATE agents SET killed_at = ?1 WHERE killed_at IS NULL",
                 params![at_ms],
             )?;
             Ok(n)
-        })
+        }))
         .await
         .context("spawn_blocking mark_orphan_agents_killed")?
     }
@@ -535,8 +558,7 @@ impl Store {
     /// clobbered.
     pub async fn mark_orphan_recordings_finalized(&self, at_ms: i64) -> Result<usize> {
         let pool = self.pool.clone();
-        tokio::task::spawn_blocking(move || -> Result<usize> {
-            let conn = pool.get()?;
+        tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<usize> {
             let n = conn.execute(
                 "UPDATE pty_recordings \
                  SET finalized_at = ?1, \
@@ -548,15 +570,14 @@ impl Store {
                 params![at_ms],
             )?;
             Ok(n)
-        })
+        }))
         .await
         .context("spawn_blocking mark_orphan_recordings_finalized")?
     }
 
     pub async fn list_recordings(&self, agent_id: Option<String>) -> Result<Vec<RecordingRecord>> {
         let pool = self.pool.clone();
-        tokio::task::spawn_blocking(move || -> Result<Vec<RecordingRecord>> {
-            let conn = pool.get()?;
+        tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<Vec<RecordingRecord>> {
             let (sql, bound): (&str, Vec<rusqlite::types::Value>) = match &agent_id {
                 Some(a) => (
                     "SELECT id, agent_id, path, started_at, finalized_at, duration_ms, \
@@ -587,16 +608,15 @@ impl Store {
                     last_seq: row.get(8)?,
                 })
             })?;
-            rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
-        })
+            rows.collect::<rusqlite::Result<Vec<_>>>()
+        }))
         .await
         .context("spawn_blocking list_recordings")?
     }
 
     pub async fn get_recording(&self, id: String) -> Result<Option<RecordingRecord>> {
         let pool = self.pool.clone();
-        tokio::task::spawn_blocking(move || -> Result<Option<RecordingRecord>> {
-            let conn = pool.get()?;
+        tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<Option<RecordingRecord>> {
             let mut stmt = conn.prepare(
                 "SELECT id, agent_id, path, started_at, finalized_at, duration_ms, \
                         cols, rows, last_seq \
@@ -618,7 +638,7 @@ impl Store {
             } else {
                 Ok(None)
             }
-        })
+        }))
         .await
         .context("spawn_blocking get_recording")?
     }
@@ -636,8 +656,7 @@ impl Store {
         created_at: i64,
     ) -> Result<WorkspaceRecord> {
         let pool = self.pool.clone();
-        tokio::task::spawn_blocking(move || -> Result<WorkspaceRecord> {
-            let conn = pool.get()?;
+        tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<WorkspaceRecord> {
             // INSERT with deterministic generation: lower(hex(randomblob(16)))
             // = 32-char id, substr(...,1,8) = the slug. RETURNING gives us
             // both back so the handler doesn't have to query again.
@@ -649,9 +668,7 @@ impl Store {
                  RETURNING id, slug, name, cwd, accent, created_at, deleted_at",
             )?;
             let mut rows = stmt.query(params![rec.name, rec.cwd, rec.accent, created_at])?;
-            let row = rows
-                .next()?
-                .ok_or_else(|| anyhow::anyhow!("INSERT workspaces RETURNING produced no row"))?;
+            let row = rows.next()?.ok_or(rusqlite::Error::QueryReturnedNoRows)?;
             Ok(WorkspaceRecord {
                 id: row.get(0)?,
                 slug: row.get(1)?,
@@ -661,7 +678,7 @@ impl Store {
                 created_at: row.get(5)?,
                 deleted_at: row.get(6)?,
             })
-        })
+        }))
         .await
         .context("spawn_blocking create_workspace")?
     }
@@ -671,8 +688,7 @@ impl Store {
     /// left nav puts fresh work at the top.
     pub async fn list_workspaces(&self, include_deleted: bool) -> Result<Vec<WorkspaceRecord>> {
         let pool = self.pool.clone();
-        tokio::task::spawn_blocking(move || -> Result<Vec<WorkspaceRecord>> {
-            let conn = pool.get()?;
+        tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<Vec<WorkspaceRecord>> {
             let sql = if include_deleted {
                 "SELECT id, slug, name, cwd, accent, created_at, deleted_at \
                  FROM workspaces \
@@ -694,8 +710,8 @@ impl Store {
                     deleted_at: row.get(6)?,
                 })
             })?;
-            rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
-        })
+            rows.collect::<rusqlite::Result<Vec<_>>>()
+        }))
         .await
         .context("spawn_blocking list_workspaces")?
     }
@@ -705,8 +721,7 @@ impl Store {
     /// inspect `deleted_at`).
     pub async fn get_workspace_by_id(&self, id: String) -> Result<Option<WorkspaceRecord>> {
         let pool = self.pool.clone();
-        tokio::task::spawn_blocking(move || -> Result<Option<WorkspaceRecord>> {
-            let conn = pool.get()?;
+        tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<Option<WorkspaceRecord>> {
             let mut stmt = conn.prepare(
                 "SELECT id, slug, name, cwd, accent, created_at, deleted_at \
                  FROM workspaces WHERE id = ?1",
@@ -725,7 +740,7 @@ impl Store {
             } else {
                 Ok(None)
             }
-        })
+        }))
         .await
         .context("spawn_blocking get_workspace_by_id")?
     }
@@ -735,15 +750,14 @@ impl Store {
     /// whose `deleted_at` actually transitioned from NULL → set.
     pub async fn soft_delete_workspace(&self, id: String, at_ms: i64) -> Result<usize> {
         let pool = self.pool.clone();
-        tokio::task::spawn_blocking(move || -> Result<usize> {
-            let conn = pool.get()?;
+        tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<usize> {
             let n = conn.execute(
                 "UPDATE workspaces SET deleted_at = ?2 \
                  WHERE id = ?1 AND deleted_at IS NULL",
                 params![id, at_ms],
             )?;
             Ok(n)
-        })
+        }))
         .await
         .context("spawn_blocking soft_delete_workspace")?
     }
@@ -758,8 +772,7 @@ impl Store {
         agent_id: String,
     ) -> Result<Option<String>> {
         let pool = self.pool.clone();
-        tokio::task::spawn_blocking(move || -> Result<Option<String>> {
-            let conn = pool.get()?;
+        tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<Option<String>> {
             let mut stmt = conn.prepare(
                 "SELECT workspace_id FROM agents WHERE id = ?1",
             )?;
@@ -770,7 +783,7 @@ impl Store {
             } else {
                 Ok(None)
             }
-        })
+        }))
         .await
         .context("spawn_blocking get_workspace_id_for_agent")?
     }
@@ -786,8 +799,7 @@ impl Store {
         created_at: i64,
     ) -> Result<WorkspaceRootRecord> {
         let pool = self.pool.clone();
-        tokio::task::spawn_blocking(move || -> Result<WorkspaceRootRecord> {
-            let conn = pool.get()?;
+        tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<WorkspaceRootRecord> {
             let mut stmt = conn.prepare(
                 "INSERT INTO workspace_roots \
                      (id, workspace_id, path, role, label, parent_id, created_at) \
@@ -802,9 +814,7 @@ impl Store {
                 rec.parent_id,
                 created_at,
             ])?;
-            let row = rows
-                .next()?
-                .ok_or_else(|| anyhow::anyhow!("INSERT workspace_roots RETURNING produced no row"))?;
+            let row = rows.next()?.ok_or(rusqlite::Error::QueryReturnedNoRows)?;
             Ok(WorkspaceRootRecord {
                 id: row.get(0)?,
                 workspace_id: row.get(1)?,
@@ -814,7 +824,7 @@ impl Store {
                 parent_id: row.get(5)?,
                 created_at: row.get(6)?,
             })
-        })
+        }))
         .await
         .context("spawn_blocking add_workspace_root")?
     }
@@ -824,8 +834,7 @@ impl Store {
     /// single pass so it can attach roots to each workspace without N+1.
     pub async fn list_all_workspace_roots(&self) -> Result<Vec<WorkspaceRootRecord>> {
         let pool = self.pool.clone();
-        tokio::task::spawn_blocking(move || -> Result<Vec<WorkspaceRootRecord>> {
-            let conn = pool.get()?;
+        tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<Vec<WorkspaceRootRecord>> {
             let mut stmt = conn.prepare(
                 "SELECT id, workspace_id, path, role, label, parent_id, created_at \
                  FROM workspace_roots \
@@ -842,8 +851,8 @@ impl Store {
                     created_at: row.get(6)?,
                 })
             })?;
-            rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
-        })
+            rows.collect::<rusqlite::Result<Vec<_>>>()
+        }))
         .await
         .context("spawn_blocking list_all_workspace_roots")?
     }
@@ -855,8 +864,7 @@ impl Store {
         workspace_id: String,
     ) -> Result<Vec<WorkspaceRootRecord>> {
         let pool = self.pool.clone();
-        tokio::task::spawn_blocking(move || -> Result<Vec<WorkspaceRootRecord>> {
-            let conn = pool.get()?;
+        tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<Vec<WorkspaceRootRecord>> {
             let mut stmt = conn.prepare(
                 "SELECT id, workspace_id, path, role, label, parent_id, created_at \
                  FROM workspace_roots WHERE workspace_id = ?1 \
@@ -873,8 +881,8 @@ impl Store {
                     created_at: row.get(6)?,
                 })
             })?;
-            rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
-        })
+            rows.collect::<rusqlite::Result<Vec<_>>>()
+        }))
         .await
         .context("spawn_blocking list_workspace_roots")?
     }
@@ -887,8 +895,7 @@ impl Store {
         id: String,
     ) -> Result<Option<WorkspaceRootRecord>> {
         let pool = self.pool.clone();
-        tokio::task::spawn_blocking(move || -> Result<Option<WorkspaceRootRecord>> {
-            let conn = pool.get()?;
+        tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<Option<WorkspaceRootRecord>> {
             let mut stmt = conn.prepare(
                 "SELECT id, workspace_id, path, role, label, parent_id, created_at \
                  FROM workspace_roots WHERE id = ?1",
@@ -907,7 +914,7 @@ impl Store {
             } else {
                 Ok(None)
             }
-        })
+        }))
         .await
         .context("spawn_blocking get_workspace_root")?
     }
@@ -928,8 +935,7 @@ impl Store {
         id: String,
     ) -> Result<usize> {
         let pool = self.pool.clone();
-        tokio::task::spawn_blocking(move || -> Result<usize> {
-            let conn = pool.get()?;
+        tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<usize> {
             // Load every (id, parent_id) edge for this workspace once so we
             // can walk the tree without N round-trips.
             let mut stmt = conn.prepare(
@@ -976,13 +982,15 @@ impl Store {
                  WHERE workspace_id = ? AND id IN ({placeholders})"
             );
             let mut bound: Vec<rusqlite::types::Value> = Vec::with_capacity(ids.len() + 1);
-            bound.push(workspace_id.into());
+            // Clone (don't move) the captured `workspace_id`: the retry closure
+            // is `FnMut` and may run more than once.
+            bound.push(workspace_id.clone().into());
             for i in ids {
                 bound.push(i.into());
             }
             let n = conn.execute(&sql, rusqlite::params_from_iter(bound.iter()))?;
             Ok(n)
-        })
+        }))
         .await
         .context("spawn_blocking delete_workspace_root")?
     }
@@ -994,8 +1002,7 @@ impl Store {
     /// doesn't take a uuid dependency.
     pub async fn create_spell_run(&self, rec: NewSpellRun) -> Result<SpellRunRecord> {
         let pool = self.pool.clone();
-        tokio::task::spawn_blocking(move || -> Result<SpellRunRecord> {
-            let conn = pool.get()?;
+        tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<SpellRunRecord> {
             let mut stmt = conn.prepare(
                 "INSERT INTO spell_runs (id, workspace_id, spell_name, task, caller_agent_id, started_at) \
                  VALUES (lower(hex(randomblob(16))), ?1, ?2, ?3, ?4, ?5) \
@@ -1008,9 +1015,7 @@ impl Store {
                 rec.caller_agent_id,
                 rec.started_at,
             ])?;
-            let row = rows
-                .next()?
-                .ok_or_else(|| anyhow::anyhow!("INSERT spell_runs RETURNING produced no row"))?;
+            let row = rows.next()?.ok_or(rusqlite::Error::QueryReturnedNoRows)?;
             Ok(SpellRunRecord {
                 id: row.get(0)?,
                 workspace_id: row.get(1)?,
@@ -1019,7 +1024,7 @@ impl Store {
                 caller_agent_id: row.get(4)?,
                 started_at: row.get(5)?,
             })
-        })
+        }))
         .await
         .context("spawn_blocking create_spell_run")?
     }
@@ -1029,8 +1034,19 @@ impl Store {
     /// metadata。
     pub async fn record_worker(&self, rec: NewWorker) -> Result<()> {
         let pool = self.pool.clone();
-        tokio::task::spawn_blocking(move || -> Result<()> {
-            let conn = pool.get()?;
+        tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<()> {
+            // Clone (don't move) the optional columns out of the captured `rec`:
+            // the retry closure is `FnMut` and may run more than once.
+            let handoff_signal = if rec.handoff_signal.is_empty() {
+                None
+            } else {
+                Some(rec.handoff_signal.clone())
+            };
+            let depends_on_json = if rec.depends_on_json.is_empty() || rec.depends_on_json == "[]" {
+                None
+            } else {
+                Some(rec.depends_on_json.clone())
+            };
             conn.execute(
                 "INSERT INTO workers (agent_id, parent_agent_id, role_label, system_prompt, \
                  handoff_signal, depends_on_json, spawned_at) \
@@ -1040,21 +1056,13 @@ impl Store {
                     rec.parent_agent_id,
                     rec.role_label,
                     rec.system_prompt,
-                    if rec.handoff_signal.is_empty() {
-                        None
-                    } else {
-                        Some(rec.handoff_signal)
-                    },
-                    if rec.depends_on_json.is_empty() || rec.depends_on_json == "[]" {
-                        None
-                    } else {
-                        Some(rec.depends_on_json)
-                    },
+                    handoff_signal,
+                    depends_on_json,
                     rec.spawned_at,
                 ],
             )?;
             Ok(())
-        })
+        }))
         .await
         .context("spawn_blocking record_worker")?
     }
@@ -1070,38 +1078,40 @@ impl Store {
             return Ok(std::collections::HashMap::new());
         }
         let pool = self.pool.clone();
-        tokio::task::spawn_blocking(
-            move || -> Result<std::collections::HashMap<String, WorkerRecord>> {
-                let conn = pool.get()?;
-                let placeholders =
-                    std::iter::repeat("?").take(ids.len()).collect::<Vec<_>>().join(",");
-                let sql = format!(
-                    "SELECT agent_id, parent_agent_id, role_label, system_prompt, \
-                            handoff_signal, depends_on_json, spawned_at \
-                     FROM workers WHERE agent_id IN ({placeholders})"
-                );
-                let mut stmt = conn.prepare(&sql)?;
-                let rows = stmt.query_map(rusqlite::params_from_iter(ids.iter()), |row| {
-                    let handoff: Option<String> = row.get(4)?;
-                    let deps: Option<String> = row.get(5)?;
-                    Ok(WorkerRecord {
-                        agent_id: row.get(0)?,
-                        parent_agent_id: row.get(1)?,
-                        role_label: row.get(2)?,
-                        system_prompt: row.get(3)?,
-                        handoff_signal: handoff.unwrap_or_default(),
-                        depends_on_json: deps.unwrap_or_else(|| "[]".to_string()),
-                        spawned_at: row.get(6)?,
-                    })
-                })?;
-                let mut out = std::collections::HashMap::with_capacity(ids.len());
-                for rec in rows {
-                    let rec = rec?;
-                    out.insert(rec.agent_id.clone(), rec);
-                }
-                Ok(out)
-            },
-        )
+        tokio::task::spawn_blocking(move || {
+            with_busy_retry(
+                &pool,
+                |conn| -> rusqlite::Result<std::collections::HashMap<String, WorkerRecord>> {
+                    let placeholders =
+                        std::iter::repeat("?").take(ids.len()).collect::<Vec<_>>().join(",");
+                    let sql = format!(
+                        "SELECT agent_id, parent_agent_id, role_label, system_prompt, \
+                                handoff_signal, depends_on_json, spawned_at \
+                         FROM workers WHERE agent_id IN ({placeholders})"
+                    );
+                    let mut stmt = conn.prepare(&sql)?;
+                    let rows = stmt.query_map(rusqlite::params_from_iter(ids.iter()), |row| {
+                        let handoff: Option<String> = row.get(4)?;
+                        let deps: Option<String> = row.get(5)?;
+                        Ok(WorkerRecord {
+                            agent_id: row.get(0)?,
+                            parent_agent_id: row.get(1)?,
+                            role_label: row.get(2)?,
+                            system_prompt: row.get(3)?,
+                            handoff_signal: handoff.unwrap_or_default(),
+                            depends_on_json: deps.unwrap_or_else(|| "[]".to_string()),
+                            spawned_at: row.get(6)?,
+                        })
+                    })?;
+                    let mut out = std::collections::HashMap::with_capacity(ids.len());
+                    for rec in rows {
+                        let rec = rec?;
+                        out.insert(rec.agent_id.clone(), rec);
+                    }
+                    Ok(out)
+                },
+            )
+        })
         .await
         .context("spawn_blocking list_workers_by_ids")?
     }
@@ -1118,42 +1128,43 @@ impl Store {
             return Ok(std::collections::HashMap::new());
         }
         let pool = self.pool.clone();
-        tokio::task::spawn_blocking(
-            move || -> Result<std::collections::HashMap<String, SpellRunRecord>> {
-                let conn = pool.get()?;
-                let placeholders =
-                    std::iter::repeat("?").take(ids.len()).collect::<Vec<_>>().join(",");
-                let sql = format!(
-                    "SELECT id, workspace_id, spell_name, task, caller_agent_id, started_at \
-                     FROM spell_runs WHERE id IN ({placeholders})"
-                );
-                let mut stmt = conn.prepare(&sql)?;
-                let rows = stmt.query_map(rusqlite::params_from_iter(ids.iter()), |row| {
-                    Ok(SpellRunRecord {
-                        id: row.get(0)?,
-                        workspace_id: row.get(1)?,
-                        spell_name: row.get(2)?,
-                        task: row.get(3)?,
-                        caller_agent_id: row.get(4)?,
-                        started_at: row.get(5)?,
-                    })
-                })?;
-                let mut out = std::collections::HashMap::with_capacity(ids.len());
-                for rec in rows {
-                    let rec = rec?;
-                    out.insert(rec.id.clone(), rec);
-                }
-                Ok(out)
-            },
-        )
+        tokio::task::spawn_blocking(move || {
+            with_busy_retry(
+                &pool,
+                |conn| -> rusqlite::Result<std::collections::HashMap<String, SpellRunRecord>> {
+                    let placeholders =
+                        std::iter::repeat("?").take(ids.len()).collect::<Vec<_>>().join(",");
+                    let sql = format!(
+                        "SELECT id, workspace_id, spell_name, task, caller_agent_id, started_at \
+                         FROM spell_runs WHERE id IN ({placeholders})"
+                    );
+                    let mut stmt = conn.prepare(&sql)?;
+                    let rows = stmt.query_map(rusqlite::params_from_iter(ids.iter()), |row| {
+                        Ok(SpellRunRecord {
+                            id: row.get(0)?,
+                            workspace_id: row.get(1)?,
+                            spell_name: row.get(2)?,
+                            task: row.get(3)?,
+                            caller_agent_id: row.get(4)?,
+                            started_at: row.get(5)?,
+                        })
+                    })?;
+                    let mut out = std::collections::HashMap::with_capacity(ids.len());
+                    for rec in rows {
+                        let rec = rec?;
+                        out.insert(rec.id.clone(), rec);
+                    }
+                    Ok(out)
+                },
+            )
+        })
         .await
         .context("spawn_blocking list_spell_runs_by_ids")?
     }
 
     pub async fn search_blackboard(&self, query: String) -> Result<Vec<BlackboardOpRecord>> {
         let pool = self.pool.clone();
-        tokio::task::spawn_blocking(move || -> Result<Vec<BlackboardOpRecord>> {
-            let conn = pool.get()?;
+        tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<Vec<BlackboardOpRecord>> {
             let mut stmt = conn.prepare(
                 "SELECT b.id, b.agent_id, b.op, b.path, b.content, b.sha256, b.at \
                  FROM blackboard_fts \
@@ -1173,8 +1184,8 @@ impl Store {
                     at: row.get(6)?,
                 })
             })?;
-            rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
-        })
+            rows.collect::<rusqlite::Result<Vec<_>>>()
+        }))
         .await
         .context("spawn_blocking search_blackboard")?
     }
