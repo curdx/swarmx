@@ -686,7 +686,7 @@ export function MessagesPanel({
                   key={m.id}
                   className={cn(
                     "flex flex-col items-end",
-                    showHeader && !isFirstRow && "mt-3",
+                    !isFirstRow && (showHeader ? "mt-3" : "mt-2"),
                   )}
                 >
                   {showDividerBefore && <TimeDivider ms={m.sent_at} />}
@@ -751,7 +751,7 @@ export function MessagesPanel({
                 key={m.id}
                 className={cn(
                   "flex flex-col",
-                  showHeader && !isFirstRow && "mt-3",
+                  !isFirstRow && (showHeader ? "mt-3" : "mt-2"),
                 )}
               >
                 {showDividerBefore && <TimeDivider ms={m.sent_at} />}
