@@ -276,7 +276,7 @@ c. **Decision tree**:
    | Worker shipped its handoff_signal as expected | Mark step done in Task Ledger. If downstream step has all deps met, spawn next worker(s). |
    | Worker shipped something wrong / incomplete | Spawn a `fixer` worker with corrective prompt, OR re-spawn same role with revised prompt. |
    | Worker is stuck (no movement >5min) | Send it a `swarm_send_message` nudge with specific question. Don't immediately kill. |
-   | All Acceptance criteria met | Send user the final "全部搞定" message with file paths / commands. Mark task complete in Task Ledger. |
+   | All Acceptance criteria met | Send user the final "全部搞定" message with file paths / commands. Mark task complete in Task Ledger. **Set Progress Ledger `Status: all_done`** — this is the terminal marker the server reads to skip re-spawning a finished workspace on restart (no wasted LLM turn). |
    | Worker reported a blocker that needs user input | Forward to user via `swarm_send_message` with a clear question. |
 
 d. **Update both ledgers** with new state.

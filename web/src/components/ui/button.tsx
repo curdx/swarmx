@@ -41,20 +41,28 @@ const buttonVariants = cva(
   }
 )
 
-function Button({
-  className,
-  variant = "default",
-  size = "default",
-  asChild = false,
-  ...props
-}: React.ComponentProps<"button"> &
-  VariantProps<typeof buttonVariants> & {
-    asChild?: boolean
-  }) {
+// NOTE: React.forwardRef is REQUIRED here. The project pins React 18.3.1,
+// where a plain function component silently drops any `ref` passed to it
+// (React 19's ref-as-prop does not apply). Radix `asChild` wrappers
+// (TooltipTrigger, DialogClose, …) clone this element with a composed ref,
+// and MessagesPanel keeps a `composerRef` on the Textarea sibling — without
+// forwardRef those refs resolve to null and React logs "Function components
+// cannot be given refs" on every render. Keep forwardRef until React 19.
+const Button = React.forwardRef<
+  HTMLButtonElement,
+  React.ComponentProps<"button"> &
+    VariantProps<typeof buttonVariants> & {
+      asChild?: boolean
+    }
+>(function Button(
+  { className, variant = "default", size = "default", asChild = false, ...props },
+  ref,
+) {
   const Comp = asChild ? Slot.Root : "button"
 
   return (
     <Comp
+      ref={ref}
       data-slot="button"
       data-variant={variant}
       data-size={size}
@@ -62,6 +70,7 @@ function Button({
       {...props}
     />
   )
-}
+})
+Button.displayName = "Button"
 
 export { Button, buttonVariants }

@@ -86,6 +86,12 @@
     "live": "live",
     "off": "off"
   },
+  "error": {
+    "title": "这个视图出错了",
+    "body": "其它部分仍可正常使用。可以重试，或刷新整个页面。",
+    "retry": "重试",
+    "reload": "刷新页面"
+  },
   "settings": {
     "title": "设置",
     "subtitle": "本地配置 · localStorage · 一处即生效",
@@ -207,6 +213,13 @@
     "jumpUnread": "跳转到第一条未读",
     "members": "成员",
     "selectWorkspace": "选中一个工作空间查看成员",
+    "noMembers": "该工作空间还没有 AI 成员",
+    "reviveOrchestrator": "唤醒主理人",
+    "reviving": "唤醒中…",
+    "deleteWorkspace": "删除 {{name}}",
+    "deleteWorkspaceTooltip": "删除工作空间",
+    "deleteConfirmTitle": "删除工作空间「{{name}}」？",
+    "deleteConfirmBody": "该 workspace 下的所有 agent 会一并停止，此操作不可撤销。",
     "wake": "唤醒",
     "online": "在线",
     "starting": "启动中",
@@ -378,6 +391,13 @@
     "pickFolderUnavailable": "在桌面 app 内可直接选文件夹；浏览器调试模式请手动粘路径",
     "accentLabel": "标识色",
     "accentTitle": "标识色：{{name}}",
+    "accentColors": {
+      "blue": "蓝",
+      "cyan": "青",
+      "violet": "紫",
+      "green": "绿",
+      "orange": "橙"
+    },
     "defaultInfo": "点开始后 AI 会先看一眼你的项目",
     "cancel": "取消",
     "create": "开始",
@@ -401,7 +421,7 @@
     "replying": "正在回复 #{{id}}",
     "cancelReply": "取消回复",
     "composerPlaceholder": "和 AI 说点啥…",
-    "composerPlaceholderEmpty": "选中工作空间后开始对话…",
+    "composerPlaceholderEmpty": "该工作空间还没有 AI 成员…",
     "composerPlaceholderInit": "和 AI 说点啥…",
     "responding": "回复 #{{id}} 中",
     "respondingTo": "{{role}} 在回复",

@@ -24,14 +24,13 @@ import {
   Activity,
   Bell,
   Bug,
-  FileText,
+  ClipboardList,
   GitBranch,
   MessageSquare,
   Moon,
   Play,
   Plus,
   Settings as SettingsIcon,
-  Sparkles,
   Sun,
   SunMoon,
   Zap,
@@ -60,11 +59,16 @@ const NAV = [
   { labelKey: "nav.debug", href: "/debug", icon: Bug, hintKey: "cmdk.navHint.debug" },
 ] as const;
 
+// Keep in sync with buildTabs() in routes/workspace/Shell.tsx — same order,
+// same ⌘1-4 mapping (index + 1). The "context" view was replaced by "ledger"
+// in the context→ledger migration; the palette wasn't updated, so ⌘ hints
+// were off-by-one (replays showed ⌘3 while ⌘3 actually opens the ledger) and
+// the ledger view was unreachable from ⌘K. Fixed here.
 const WORKSPACE_VIEWS = [
   { id: "chat", labelKey: "chat.tabs.chat", icon: MessageSquare, suffix: "" },
   { id: "dag", labelKey: "chat.tabs.dag", icon: GitBranch, suffix: "/dag" },
+  { id: "ledger", labelKey: "chat.tabs.ledger", icon: ClipboardList, suffix: "/ledger" },
   { id: "replays", labelKey: "chat.tabs.replays", icon: Play, suffix: "/replays" },
-  { id: "context", labelKey: "chat.tabs.context", icon: FileText, suffix: "/context" },
 ] as const;
 
 // Keep in sync with SECTIONS in routes/settings.tsx; surfaced here so
@@ -269,17 +273,8 @@ export function CommandPalette() {
             <span>{t("cmdk.newWorkspace")}</span>
             <CommandShortcut>{t("cmdk.openWizard")}</CommandShortcut>
           </CommandItem>
-          <CommandItem
-            value="run spell"
-            onSelect={() => {
-              window.dispatchEvent(new CustomEvent("flockmux:open-wizard"));
-              go("/chat");
-            }}
-          >
-            <Sparkles />
-            <span>{t("cmdk.runSpell")}</span>
-            <CommandShortcut>{t("cmdk.openWizard")}</CommandShortcut>
-          </CommandItem>
+          {/* 旧"运行配方"项删了 —— 它和"新建工作空间"打开的是同一个创建
+              向导（已无 spell 选择器），重复入口徒增困惑。 */}
         </CommandGroup>
 
         <CommandGroup heading={t("cmdk.groups.settings")}>

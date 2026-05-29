@@ -94,17 +94,21 @@ const TABS = [
 
 type TabId = (typeof TABS)[number]["id"];
 
+// Bucket a message into error / completed / state / message.
+//
+// The old version did a bare `body.includes("error" | "failed")`, so any
+// success summary that merely MENTIONED the word — "0 errors", "error
+// handling done", "build passed, no errors" — got filed under 异常/Errors
+// with a red alarm icon. That false positive was the worst kind: it makes a
+// finished task look broken. We now grade the signal:
+//   1. a hard failure glyph (❌ ✗ panic traceback) always wins;
+//   2. otherwise an explicit success marker (✅ passed 完成 通过 …) means
+//      completed — even if the body also says "error" somewhere;
+//   3. only a *soft* failure word with NO success marker counts as an error.
 function classifyMessage(
   m: MessageRecord,
   t: TFunction,
 ): { kind: NotifKind; title: string } {
-  const body = m.body.toLowerCase();
-  if (body.includes("error") || body.includes("failed") || body.includes("✗")) {
-    return { kind: "error", title: t("notifications.kinds.errorTitle") };
-  }
-  if (body.includes("✅") || body.includes("passed") || body.includes("done")) {
-    return { kind: "completed", title: t("notifications.kinds.completedTitle") };
-  }
   if (m.kind === "wake") {
     return {
       kind: "state",
@@ -114,7 +118,66 @@ function classifyMessage(
       }),
     };
   }
+  const body = m.body.toLowerCase();
+  const error = () => ({
+    kind: "error" as NotifKind,
+    title: t("notifications.kinds.errorTitle"),
+  });
+  const completed = () => ({
+    kind: "completed" as NotifKind,
+    title: t("notifications.kinds.completedTitle"),
+  });
+
+  // Classifying free-form agent summaries by keyword is a tar pit — every
+  // naive substring trips on its own negation/noun form. So we grade in
+  // precedence order, each rule written to dodge the trap that bit the last:
+  //
+  // 1. HARD failure glyphs — never appear in a success handoff.
+  if (/❌|✗|panic|traceback|stack trace|崩溃|报错/.test(body)) return error();
+
+  // 2. NEGATED completion = a real failure verdict (未通过 / 没做好 / not
+  //    passed). The negative-lookahead excludes the NOUN form 未完成数 /
+  //    未完成项 — "remaining incomplete count" is a feature label, not a
+  //    failed task (this is what mis-flagged a working todo-app summary).
+  if (
+    /(?:未|不|没|未能|没能)\s*(?:通过|完成|做好|做完|跑通|搞定|交付)(?!\s*(?:数|项|度|数量|个|列表|待办))/.test(
+      body,
+    ) ||
+    /not\s+passed|did\s*n'?t\s+pass/.test(body)
+  ) {
+    return error();
+  }
+
+  // 3. Clear completion. Success WINS over a soft failure mention here, so a
+  //    summary that merely says "0 errors" or CI config "失败时 upload report"
+  //    (on-failure, not an actual failure) stays green instead of alarming.
+  if (
+    /✅|✔|全绿|搞定|完成|通过|做好|做完|全齐|跑通|已交付|交付完|passed|ready/.test(
+      body,
+    )
+  ) {
+    return completed();
+  }
+
+  // 4. Soft failure words that survived to here = an actual failure. Exclude
+  //    the conditional "失败时/失败后…" (describing failure handling) and bare
+  //    "error" (0 errors / error handling) which are not failures themselves.
+  if (
+    /失败(?!\s*(?:时|后|则|会|就|重试|的话|时候))|failed|failure|exception/.test(
+      body,
+    )
+  ) {
+    return error();
+  }
+
   return { kind: "message", title: `${m.from_agent} → ${m.to_agent}` };
+}
+
+/** Worker heartbeats (`<wsId>/<role>.progress.md`) are written on every
+ *  milestone — dozens per task. They're already surfaced in the Ledger 近况
+ *  pane; as notifications they bury the real messages. Skip them here. */
+function isNoisyBlackboard(path: string): boolean {
+  return path.endsWith(".progress.md");
 }
 
 export default function NotificationsRoute() {
@@ -140,14 +203,16 @@ export default function NotificationsRoute() {
           at: m.sent_at,
         };
       });
-      const fromBb: Notif[] = (bb as BlackboardEntry[]).map((e) => ({
-        id: `bb-${e.path}-${e.at}`,
-        kind: "blackboard",
-        agent: "blackboard",
-        title: `${e.op} ${e.path}`,
-        body: `sha256 ${e.sha256.slice(0, 8)}`,
-        at: e.at,
-      }));
+      const fromBb: Notif[] = (bb as BlackboardEntry[])
+        .filter((e) => !isNoisyBlackboard(e.path))
+        .map((e) => ({
+          id: `bb-${e.path}-${e.at}`,
+          kind: "blackboard" as const,
+          agent: "blackboard",
+          title: `${e.op} ${e.path}`,
+          body: `sha256 ${e.sha256.slice(0, 8)}`,
+          at: e.at,
+        }));
       const all = [...fromMsg, ...fromBb].sort((a, b) => b.at - a.at);
       setItems(all);
     } catch {
@@ -185,6 +250,7 @@ export default function NotificationsRoute() {
             at: ev.sent_at,
           };
         } else if (ev.type === "blackboard_changed") {
+          if (isNoisyBlackboard(ev.path)) return prev;
           next = {
             id: `bb-${ev.path}-${ev.at}`,
             kind: "blackboard",

@@ -21,6 +21,30 @@ import type {
 
 import { HTTP_BASE } from "../lib/apiBase";
 
+/** Thrown by `request()` on any non-2xx response. Carries the HTTP `status`
+ *  (so callers can special-case 404 → empty-state instead of a red error)
+ *  and a `detail` string that is the server's `{ error }` envelope unwrapped
+ *  (or the raw body text when not JSON). `.message` keeps the
+ *  `METHOD path → status: detail` form for dev-facing logs. */
+export class ApiError extends Error {
+  status: number;
+  detail: string;
+  constructor(status: number, detail: string, message: string) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.detail = detail;
+  }
+}
+
+/** Percent-encode each path segment but keep the `/` separators intact —
+ *  blackboard keys are slash-delimited (`<wsId>/task.ledger.md`). Using a
+ *  bare `encodeURI` left reserved delimiters (`? # &`) unescaped, so a key
+ *  containing them got silently truncated into a bogus query/fragment. */
+function encodePath(path: string): string {
+  return path.split("/").map(encodeURIComponent).join("/");
+}
+
 async function request<T>(
   method: string,
   path: string,
@@ -32,13 +56,24 @@ async function request<T>(
     body: body ? JSON.stringify(body) : undefined,
   });
   if (!res.ok) {
-    let detail = "";
+    // Read the body stream EXACTLY ONCE. The old code did `res.json()` then
+    // `res.text()` in the catch — but `res.json()` already consumes the
+    // stream, so on a non-JSON error body (empty 404, HTML 5xx from a proxy)
+    // the `res.text()` retry threw "body stream already read" and the real
+    // status code was lost. Read text first, then try to parse.
+    const raw = await res.text().catch(() => "");
+    let detail = raw;
     try {
-      detail = JSON.stringify(await res.json());
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed.error === "string") detail = parsed.error;
     } catch {
-      detail = await res.text();
+      /* not JSON — keep raw text */
     }
-    throw new Error(`${method} ${path} → ${res.status}: ${detail}`);
+    throw new ApiError(
+      res.status,
+      detail,
+      `${method} ${path} → ${res.status}: ${detail || res.statusText}`,
+    );
   }
   // 204 No Content
   if (res.status === 204) return undefined as T;
@@ -106,17 +141,17 @@ export const api = {
   listBlackboard: () =>
     request<BlackboardEntry[]>("GET", "/api/blackboard"),
   readBlackboard: (path: string) =>
-    request<BlackboardSnapshot>("GET", `/api/blackboard/${encodeURI(path)}`),
+    request<BlackboardSnapshot>("GET", `/api/blackboard/${encodePath(path)}`),
   writeBlackboard: (path: string, req: WriteBlackboardRequest) =>
     request<{ id: number; path: string; sha256: string; at: number }>(
       "PUT",
-      `/api/blackboard/${encodeURI(path)}`,
+      `/api/blackboard/${encodePath(path)}`,
       req,
     ),
   listBlackboardHistory: (path: string, limit = 50, includeContent = false) =>
     request<BlackboardHistoryEntry[]>(
       "GET",
-      `/api/blackboard-history/${encodeURI(path)}${qs({ limit, include_content: includeContent })}`,
+      `/api/blackboard-history/${encodePath(path)}${qs({ limit, include_content: includeContent })}`,
     ),
 
   // M3 recordings

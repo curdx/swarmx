@@ -86,6 +86,12 @@
     "live": "live",
     "off": "off"
   },
+  "error": {
+    "title": "This view hit an error",
+    "body": "The rest of the app still works. Retry, or reload the page.",
+    "retry": "Retry",
+    "reload": "Reload page"
+  },
   "settings": {
     "title": "Settings",
     "subtitle": "Local config · localStorage · takes effect immediately",
@@ -207,6 +213,13 @@
     "jumpUnread": "Jump to first unread",
     "members": "Members",
     "selectWorkspace": "Pick a workspace to see its members",
+    "noMembers": "No AI members in this workspace yet",
+    "reviveOrchestrator": "Wake orchestrator",
+    "reviving": "Waking…",
+    "deleteWorkspace": "Delete {{name}}",
+    "deleteWorkspaceTooltip": "Delete workspace",
+    "deleteConfirmTitle": "Delete workspace “{{name}}”?",
+    "deleteConfirmBody": "Every agent in this workspace will be stopped. This can't be undone.",
     "wake": "Manual wake",
     "online": "online",
     "starting": "starting",
@@ -378,6 +391,13 @@
     "pickFolderUnavailable": "Available inside the desktop app; paste the path manually in browser-dev mode",
     "accentLabel": "Color",
     "accentTitle": "Accent color: {{name}}",
+    "accentColors": {
+      "blue": "Blue",
+      "cyan": "Cyan",
+      "violet": "Violet",
+      "green": "Green",
+      "orange": "Orange"
+    },
     "defaultInfo": "After you hit Start, AI scouts your project first",
     "cancel": "Cancel",
     "create": "Start",
@@ -401,7 +421,7 @@
     "replying": "Replying to #{{id}}",
     "cancelReply": "Cancel reply",
     "composerPlaceholder": "Say something to the AI…",
-    "composerPlaceholderEmpty": "Pick a workspace to start…",
+    "composerPlaceholderEmpty": "No AI members in this workspace yet…",
     "composerPlaceholderInit": "Say something to the AI…",
     "responding": "replying to #{{id}}",
     "respondingTo": "{{role}} is typing",

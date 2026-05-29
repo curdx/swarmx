@@ -34,12 +34,18 @@ export function projectSummaryKey(path: string): string {
  *  渲染时给 `style={{ background: cssVar }}` 之类的。Single source of
  *  truth: wizard / chat sidebar / channel header 都从这里读，加新 accent
  *  只改这里。*/
+// `id` is the value persisted to workspaces.accent — DO NOT rename it (would
+// orphan existing rows' colors). `nameKey` is what the picker shows the user:
+// the ids are legacy role names (frontend/backend/test/critic) and even
+// "peach" actually renders blue, so labelling swatches by id confused users
+// ("why is my workspace color called backend?"). nameKey points at the real
+// hue instead. cssVar resolves the actual color.
 export const ACCENT_OPTIONS = [
-  { id: "peach", cssVar: "var(--color-accent-primary)" },
-  { id: "frontend", cssVar: "var(--color-agent-frontend)" },
-  { id: "backend", cssVar: "var(--color-agent-backend)" },
-  { id: "test", cssVar: "var(--color-agent-test)" },
-  { id: "critic", cssVar: "var(--color-agent-critic)" },
+  { id: "peach", cssVar: "var(--color-accent-primary)", nameKey: "wizard.accentColors.blue" },
+  { id: "frontend", cssVar: "var(--color-agent-frontend)", nameKey: "wizard.accentColors.cyan" },
+  { id: "backend", cssVar: "var(--color-agent-backend)", nameKey: "wizard.accentColors.violet" },
+  { id: "test", cssVar: "var(--color-agent-test)", nameKey: "wizard.accentColors.green" },
+  { id: "critic", cssVar: "var(--color-agent-critic)", nameKey: "wizard.accentColors.orange" },
 ] as const;
 
 export type AccentId = (typeof ACCENT_OPTIONS)[number]["id"];

@@ -523,15 +523,27 @@ impl Store {
     /// Finalize any recording rows left in the "live" state — i.e. the
     /// previous server died (crash, SIGKILL, container restart) before its
     /// recorder task could call `record_recording_finalize`. Without this,
-    /// the panel shows orphans as "● live" forever. We mark `finalized_at`
-    /// so the row visibly settles; `duration_ms` and `last_seq` stay NULL
-    /// since we cannot recover them accurately from a half-flushed .cast.
+    /// the panel shows orphans as "● live" forever.
+    ///
+    /// We also backfill `duration_ms` from the wall-clock span
+    /// (`finalized_at - started_at`). It's not the exact .cast playback
+    /// length (the file may be half-flushed), but it's a sane approximation
+    /// — far better than leaving it NULL, which rendered every restart-orphan
+    /// recording with no duration in the Replays list. `last_seq` stays NULL
+    /// (the reattach path treats NULL as "replay from head"). Only fill rows
+    /// that don't already have a duration so a genuinely-finalized row isn't
+    /// clobbered.
     pub async fn mark_orphan_recordings_finalized(&self, at_ms: i64) -> Result<usize> {
         let pool = self.pool.clone();
         tokio::task::spawn_blocking(move || -> Result<usize> {
             let conn = pool.get()?;
             let n = conn.execute(
-                "UPDATE pty_recordings SET finalized_at = ?1 \
+                "UPDATE pty_recordings \
+                 SET finalized_at = ?1, \
+                     duration_ms = CASE \
+                       WHEN duration_ms IS NOT NULL THEN duration_ms \
+                       WHEN ?1 > started_at THEN ?1 - started_at \
+                       ELSE 0 END \
                  WHERE finalized_at IS NULL",
                 params![at_ms],
             )?;

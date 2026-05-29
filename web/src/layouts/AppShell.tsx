@@ -27,6 +27,7 @@ import { useEffect } from "react";
 import { Boxes, Search, Settings } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { CommandPalette } from "@/components/CommandPalette";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { NotificationPopover } from "@/components/NotificationPopover";
 import { useNotificationBadge } from "@/hooks/useNotificationBadge";
 import {
@@ -149,7 +150,12 @@ export function AppShell() {
           </Tooltip>
         </header>
         <main className="min-h-0 flex-1 overflow-hidden">
-          <Outlet />
+          {/* Contain a render throw to the content area — the header (and its
+              ⌘K / bell / settings) stays usable, and the route key resets the
+              boundary so navigating away clears a stuck error. */}
+          <ErrorBoundary resetKey={location.pathname}>
+            <Outlet />
+          </ErrorBoundary>
         </main>
         <CommandPalette />
       </div>

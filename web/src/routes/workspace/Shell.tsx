@@ -43,7 +43,6 @@ import {
   MessageSquare,
   Play,
   Plus,
-  Sparkles,
   Trash2,
 } from "lucide-react";
 import { api } from "../../api/http";
@@ -55,11 +54,19 @@ import type {
 } from "../../api/types";
 import { AgentDrawer } from "../../components/agent/AgentDrawer";
 import { CreateWizard } from "../../components/workspace/CreateWizard";
+import { ErrorBoundary } from "../../components/ErrorBoundary";
 import { Welcome } from "../../components/Welcome";
 import { useSwarmFeed } from "../../hooks/useSwarmFeed";
 import { accentToCssVar } from "../../lib/workspace";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   Tooltip,
   TooltipContent,
@@ -150,6 +157,12 @@ export function WorkspaceList({
   onDelete?: (workspaceId: string) => void;
 }) {
   const { t } = useTranslation();
+  // App-native delete confirm — replaces window.confirm() (which looked like
+  // an OS popup, out of place in this UI, and behaves inconsistently inside
+  // the Tauri shell). Holds the workspace pending deletion; null = closed.
+  const [pendingDelete, setPendingDelete] = useState<WorkspaceSummary | null>(
+    null,
+  );
   return (
     <aside className="flex w-[264px] shrink-0 flex-col gap-3 border-r border-border-subtle bg-surface-secondary px-2 py-3">
       <div className="flex items-center justify-between px-2">
@@ -236,37 +249,70 @@ export function WorkspaceList({
                       onClick={(e) => {
                         e.preventDefault();
                         e.stopPropagation();
-                        if (
-                          window.confirm(
-                            `删除工作空间「${ws.name}」？\n（该 workspace 下的所有 agent 会一并停止）`,
-                          )
-                        ) {
-                          onDelete(ws.workspaceId);
-                        }
+                        setPendingDelete(ws);
                       }}
                       className="absolute right-1 top-1 size-6 text-foreground-tertiary opacity-0 transition-opacity group-hover:opacity-100 hover:text-state-danger"
-                      aria-label={`删除 ${ws.name}`}
+                      aria-label={t("chat.deleteWorkspace", { name: ws.name })}
                     >
                       <Trash2 className="size-3.5" />
                     </Button>
                   </TooltipTrigger>
-                  <TooltipContent side="right">删除工作空间</TooltipContent>
+                  <TooltipContent side="right">
+                    {t("chat.deleteWorkspaceTooltip")}
+                  </TooltipContent>
                 </Tooltip>
               )}
             </div>
           );
         })}
       </nav>
-      {/* "运行配方" 在空状态下 hide — 没工作空间运行什么配方？建完第
-       *  一个 ws 才出现底部 CTA。 */}
+      {/* 底部主 CTA = 新建工作空间。点开就是创建向导（没有 spell 选择器了
+       *  —— Magentic-One 模型下每个 workspace 就是一个 orchestrator 临时
+       *  派 worker），所以不再叫"运行配方"，名实相符直接叫"新建工作空间"。
+       *  空状态下 hide：sidebar 顶部 heading 旁的小 + 已经够建第一个。 */}
       {workspaces.length > 0 && (
         <div className="mt-auto px-2 pt-3">
           <Button onClick={onOpenWizard} className="w-full">
-            <Sparkles className="size-4" />
-            {t("chat.runSpell")}
+            <Plus className="size-4" />
+            {t("chat.newWorkspace")}
           </Button>
         </div>
       )}
+
+      {/* Delete confirm — app-native Dialog instead of window.confirm(). */}
+      <Dialog
+        open={pendingDelete != null}
+        onOpenChange={(next) => {
+          if (!next) setPendingDelete(null);
+        }}
+      >
+        <DialogContent showCloseButton={false} className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>
+              {t("chat.deleteConfirmTitle", { name: pendingDelete?.name ?? "" })}
+            </DialogTitle>
+            <DialogDescription>
+              {t("chat.deleteConfirmBody")}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="outline" onClick={() => setPendingDelete(null)}>
+              {t("common.cancel")}
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                const target = pendingDelete;
+                setPendingDelete(null);
+                if (target) onDelete?.(target.workspaceId);
+              }}
+            >
+              <Trash2 className="size-3.5" />
+              {t("common.delete")}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </aside>
   );
 }
@@ -470,6 +516,7 @@ export default function WorkspaceShell() {
   const { t } = useTranslation();
   const { wsId } = useParams<{ wsId: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
 
   // Right-side AgentDrawer state lives in URL (?agent=<id>) so the user
@@ -754,14 +801,28 @@ export default function WorkspaceShell() {
     return () => window.removeEventListener("keydown", onKey);
   }, [activeWs, navigate]);
 
-  // ── Render ─────────────────────────────────────────────────────────
-  if (!activeWs) {
-    // wsId 在 URL 但 listAgents 还没回 / 已经 evicted。先用 fallback：
-    // 渲染 sidebar + "找不到工作空间" 提示 + 跳到第一个可用 ws (如果有)。
-    if (workspaces.length > 0 && wsId && !workspaces.some((w) => w.id === wsId)) {
-      // workspace id 不存在 → 静默跳到第一个
+  // ── Redirect a stale / unknown wsId to the first workspace ──────────
+  // MUST be an effect, not render-phase. Calling navigate() while rendering
+  // triggers React's "Cannot update a component (BrowserRouter) while
+  // rendering a different component (WorkspaceShell)" warning and is unsafe
+  // under React 18 concurrent rendering. This fires when a bookmark / refresh
+  // points at a workspace that was since deleted while others still exist.
+  useEffect(() => {
+    if (
+      !activeWs &&
+      workspaces.length > 0 &&
+      wsId &&
+      !workspaces.some((w) => w.id === wsId)
+    ) {
       navigate(`/chat/${workspaces[0].id}`, { replace: true });
     }
+  }, [activeWs, workspaces, wsId, navigate]);
+
+  // ── Render ─────────────────────────────────────────────────────────
+  if (!activeWs) {
+    // wsId 在 URL 但 listAgents 还没回 / 已经 evicted。渲染 sidebar +
+    // "找不到工作空间" 提示；真正的跳转由上面的 useEffect 负责（render
+    // 阶段不能 navigate）。
     return (
       <TooltipProvider delayDuration={300}>
         <div className="flex h-full min-h-0">
@@ -831,7 +892,13 @@ export default function WorkspaceShell() {
             onJumpUnread={() => setJumpUnreadTick((v) => v + 1)}
           />
           <ViewTransition>
-            <Outlet context={ctx} />
+            {/* View-level boundary: a crash in one tab (malformed ledger
+                markdown, ReactFlow state, …) shows a contained fallback while
+                the sidebar + tab bar stay intact. Keyed by wsId+view so a
+                tab switch clears a held error. */}
+            <ErrorBoundary resetKey={`${activeWs.id}:${location.pathname}`}>
+              <Outlet context={ctx} />
+            </ErrorBoundary>
           </ViewTransition>
         </section>
 

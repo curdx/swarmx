@@ -32,7 +32,7 @@ import {
   Plus,
   Trash2,
 } from "lucide-react";
-import { api } from "../../api/http";
+import { api, ApiError } from "../../api/http";
 import type { SpellInfo, SwarmEvent, Workspace } from "../../api/types";
 import { useSwarmFeed } from "../../hooks/useSwarmFeed";
 import {
@@ -173,6 +173,7 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
     setError(null);
     const startedAt = Date.now();
     const wsName = name.trim();
+    let created: Workspace | null = null;
     try {
       if (!hasInitSpell) {
         throw new Error(
@@ -184,7 +185,7 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
       // inherits the workspace_id via the spell-runner's reverse-lookup
       // (rest.rs::run_spell with workspace_id). Name + accent are
       // workspace table columns now, no blackboard writes needed.
-      const ws = await api.createWorkspace({
+      created = await api.createWorkspace({
         name: wsName,
         cwd: cleanDirs[0],
         accent,
@@ -192,16 +193,27 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
       // Stash the created workspace on scan state so finishScan can hand
       // it back to the parent for routing into the new chat URL — without
       // this the parent only knew "something was created, refresh."
-      setScan({ startedAt, workspace: ws });
+      setScan({ startedAt, workspace: created });
       await api.runSpell({
         name: INIT_SPELL,
         task: wsName,
         workspace_dir: cleanDirs[0],
-        workspace_id: ws.id,
+        workspace_id: created.id,
       });
     } catch (e) {
       setScan(null);
-      setError((e as Error).message);
+      // Roll back a half-created workspace: if createWorkspace succeeded but
+      // runSpell failed (e.g. the cwd doesn't exist), the workspace row is
+      // already persisted. Without this the user is left with a dead,
+      // 0-member "ghost" workspace pointing at a bad path that they'd have to
+      // delete by hand. (The backend also validates the cwd up-front now, but
+      // this guards every other runSpell failure too.)
+      if (created) {
+        api.deleteWorkspace(created.id).catch(() => {});
+      }
+      // Show the server's plain error string, not the `METHOD path → status`
+      // wrapper — friendlier for "目录不存在" style validation failures.
+      setError(e instanceof ApiError ? e.detail : (e as Error).message);
     }
   };
 
@@ -276,22 +288,25 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
                     {t("wizard.accentLabel")}
                   </span>
                   <div className="flex items-center gap-1.5">
-                    {ACCENT_OPTIONS.map((opt) => (
-                      <button
-                        key={opt.id}
-                        type="button"
-                        onClick={() => setAccent(opt.id)}
-                        className={cn(
-                          "size-6 rounded-full transition-transform",
-                          accent === opt.id
-                            ? "ring-2 ring-foreground-primary ring-offset-2"
-                            : "hover:scale-110",
-                        )}
-                        style={{ background: opt.cssVar }}
-                        title={t("wizard.accentTitle", { name: opt.id })}
-                        aria-label={`accent ${opt.id}`}
-                      />
-                    ))}
+                    {ACCENT_OPTIONS.map((opt) => {
+                      const colorName = t(opt.nameKey);
+                      return (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          onClick={() => setAccent(opt.id)}
+                          className={cn(
+                            "size-6 rounded-full transition-transform",
+                            accent === opt.id
+                              ? "ring-2 ring-foreground-primary ring-offset-2"
+                              : "hover:scale-110",
+                          )}
+                          style={{ background: opt.cssVar }}
+                          title={t("wizard.accentTitle", { name: colorName })}
+                          aria-label={t("wizard.accentTitle", { name: colorName })}
+                        />
+                      );
+                    })}
                   </div>
                 </div>
               </div>

@@ -95,13 +95,18 @@ export function NotificationPopover({ hasUnseen, onSeen }: Props) {
         body: m.body,
         at: m.sent_at,
       }));
-      const fromBb: Item[] = bb.slice(0, 20).map((e) => ({
-        id: `bb-${e.path}-${e.at}`,
-        kind: "blackboard",
-        title: e.path,
-        body: `${e.op} · ${e.sha256.slice(0, 8)}`,
-        at: e.at,
-      }));
+      const fromBb: Item[] = bb
+        // Skip worker heartbeats (`<wsId>/<role>.progress.md`) — they're
+        // written on every milestone and would drown out real messages.
+        .filter((e) => !e.path.endsWith(".progress.md"))
+        .slice(0, 20)
+        .map((e) => ({
+          id: `bb-${e.path}-${e.at}`,
+          kind: "blackboard" as const,
+          title: e.path,
+          body: `${e.op} · ${e.sha256.slice(0, 8)}`,
+          at: e.at,
+        }));
       const merged = [...fromMsgs, ...fromBb]
         .sort((a, b) => b.at - a.at)
         .slice(0, MAX_ITEMS);
@@ -135,6 +140,7 @@ export function NotificationPopover({ hasUnseen, onSeen }: Props) {
           at: ev.sent_at,
         };
       } else if (ev.type === "blackboard_changed") {
+        if (ev.path.endsWith(".progress.md")) return; // skip heartbeats
         next = {
           id: `bb-${ev.path}-${ev.at}`,
           kind: "blackboard",
@@ -160,11 +166,14 @@ export function NotificationPopover({ hasUnseen, onSeen }: Props) {
       if (item.kind === "message" && item.agent) {
         navigate(`/chat/${wsId}?agent=${encodeURIComponent(item.agent)}`);
       } else {
-        navigate(`/chat/${wsId}/context`);
+        navigate(`/chat/${wsId}/ledger`);
       }
-    } else if (item.kind === "blackboard") {
-      // blackboard 事件不绑 ws → 跳 /chat 让用户挑
-      navigate("/chat");
+    } else {
+      // No resolvable workspace (e.g. a message from an agent that spawned
+      // AFTER the popover last refreshed its agent→workspace map, or a
+      // workspace-less blackboard event). Fall back to the full notification
+      // center instead of a dead no-op click.
+      navigate("/notifications");
     }
   };
 

@@ -173,11 +173,38 @@ export default function ChatView() {
     unreadByFrom: activeWorkspaceUnread,
     jumpUnreadTick,
     openAgent,
+    refreshAgents,
     // unreadByFrom in OutletContext is workspace-filtered; the right-side
     // members list wants raw agent-id → count so it can show the small
     // red badge per row. We re-derive it by indexing into the filtered
     // map (same keys, just used differently).
   } = useWorkspaceContext();
+
+  // ── Revive orchestrator for a member-less workspace ──────────────────
+  // A finished workspace isn't auto-respawned on server boot (that would burn
+  // an LLM turn re-concluding "done"). So a returning user can land on a
+  // 0-member room. This button runs the `init` spell on demand to bring the
+  // orchestrator back; its bootstrap detects the existing ledger and
+  // short-circuits, so it just becomes available to chat with again.
+  const [reviving, setReviving] = useState(false);
+  const reviveOrchestrator = useCallback(async () => {
+    if (reviving) return;
+    setReviving(true);
+    try {
+      await api.runSpell({
+        name: "init",
+        task: "",
+        workspace_dir: workspace.path,
+        workspace_id: workspace.workspaceId,
+      });
+      refreshAgents();
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn("revive orchestrator failed", e);
+    } finally {
+      setReviving(false);
+    }
+  }, [reviving, workspace.path, workspace.workspaceId, refreshAgents]);
 
   // ── Task activity state machine ──────────────────────────────────
   // 解决业界说的 "doomscrolling gap" — 用户发完消息后 5-30 秒 UI 黑盒。
@@ -401,9 +428,21 @@ export default function ChatView() {
         </div>
         <div className="flex-1 overflow-y-auto px-2 py-2">
           {activeMembers.length === 0 && (
-            <p className="px-3 py-2 font-caption text-xs text-foreground-tertiary">
-              {t("chat.selectWorkspace")}
-            </p>
+            <div className="flex flex-col items-start gap-2 px-3 py-2">
+              <p className="font-caption text-xs text-foreground-tertiary">
+                {t("chat.noMembers")}
+              </p>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={reviveOrchestrator}
+                disabled={reviving}
+                className="gap-1.5"
+              >
+                <Zap className="size-3.5" />
+                {reviving ? t("chat.reviving") : t("chat.reviveOrchestrator")}
+              </Button>
+            </div>
           )}
           {(() => {
             // orchestrator 永远置顶。它是用户在 workspace 里唯一的常驻

@@ -333,6 +333,32 @@ async fn auto_respawn_orchestrators(state: &AppState) -> Result<()> {
             skipped += 1;
             continue;
         }
+
+        // Don't respawn into a directory that no longer exists — the init
+        // spell's "create shared workspace" step would just fail and log
+        // noise. The workspace row stays (user can delete it from the UI).
+        if !std::path::Path::new(&ws.cwd).is_dir() {
+            skipped += 1;
+            info!(workspace_id = %ws.id, "auto-respawn: cwd missing, skipping");
+            continue;
+        }
+
+        // Don't respawn a FINISHED workspace on boot. Re-spawning runs the
+        // init spell, which injects a bootstrap prompt and burns a full LLM
+        // turn — for a completed task that just re-concludes "nothing to do",
+        // wasting subscription budget on every server restart. The progress
+        // ledger carries an `all_done` marker once the orchestrator wrapped
+        // up; if we see it, leave the workspace member-less. The UI's
+        // 0-member chat state offers a "wake orchestrator" button that runs
+        // init on demand when the user actually returns to the project.
+        let progress_key = format!("{}/progress.ledger.md", ws.id);
+        if let Ok(Some(content)) = state.swarm.read_blackboard(&progress_key).await {
+            if content.contains("all_done") {
+                skipped += 1;
+                info!(workspace_id = %ws.id, "auto-respawn: task all_done, skipping (revive on demand)");
+                continue;
+            }
+        }
         let req = RunSpellRequest {
             name: "init".into(),
             task: String::new(),

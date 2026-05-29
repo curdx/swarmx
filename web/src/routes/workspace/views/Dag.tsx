@@ -291,7 +291,11 @@ function Canvas({ agents, bbAt, selectedId, onSelect, showMinimap }: CanvasProps
       fitViewOptions={{ padding: 0.2, maxZoom: 1 }}
       maxZoom={2}
       proOptions={{ hideAttribution: true }}
-      nodesDraggable
+      // Layout is dagre-computed every render; there's no onNodesChange to
+      // persist a manual drag, so dragging used to just snap back — a broken
+      // affordance. The node a11y description already says "节点不可移动",
+      // so disable dragging to match intent (selection via click still works).
+      nodesDraggable={false}
       nodesConnectable={false}
       ariaLabelConfig={{
         "node.a11yDescription.default":

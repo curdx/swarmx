@@ -491,6 +491,7 @@ export function MessagesPanel({
             <Search className="size-3.5 text-foreground-tertiary" />
             <input
               autoFocus
+              name="message-filter"
               value={filter}
               onChange={(e) => setFilter(e.target.value)}
               placeholder={t("messages.filter")}
@@ -810,6 +811,7 @@ export function MessagesPanel({
               场景未来通过 @mention 实现。 */}
           <Textarea
             ref={composerRef}
+            name="composer"
             value={body}
             onChange={(e) => {
               setBody(e.target.value);

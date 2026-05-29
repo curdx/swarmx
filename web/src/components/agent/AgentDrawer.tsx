@@ -44,9 +44,7 @@ import {
   MessageSquare,
   Pause,
   Play,
-  RotateCcw,
   Terminal as TerminalIcon,
-  Wrench,
   Zap,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -72,13 +70,16 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/cn";
 import { roleColorClass as roleColor } from "@/lib/agent";
 
-type TabId = "terminal" | "recordings" | "messages" | "tools" | "context";
+type TabId = "terminal" | "recordings" | "messages" | "context";
 
+// The "工具/Tools" tab was removed — it had no data source (the shim doesn't
+// emit tool_call SwarmEvents yet) and rendered an internal "WIP / Phase D"
+// roadmap note to users. Dropping it also fixes the 5-tab overflow that
+// clipped the last tab in the 540px drawer. Re-add when tool_call events land.
 const TABS: { id: TabId; labelKey: string; icon: typeof TerminalIcon }[] = [
   { id: "terminal", labelKey: "agent.tabs.terminal", icon: TerminalIcon },
   { id: "recordings", labelKey: "agent.tabs.recordings", icon: Play },
   { id: "messages", labelKey: "agent.tabs.messages", icon: MessageSquare },
-  { id: "tools", labelKey: "agent.tabs.tools", icon: Wrench },
   { id: "context", labelKey: "agent.tabs.context", icon: FileText },
 ];
 
@@ -175,7 +176,7 @@ export function AgentDrawer({ agentId, onClose }: Props) {
       >
         <SheetHeader className="sr-only">
           <SheetTitle>{`Agent drawer · ${info?.role ?? agentId}`}</SheetTitle>
-          <SheetDescription>{`PTY 终端 / 录像 / 消息 / 工具 / 上下文 for agent ${agentId}`}</SheetDescription>
+          <SheetDescription>{`PTY 终端 / 录像 / 消息 / 上下文 for agent ${agentId}`}</SheetDescription>
         </SheetHeader>
         <Header
           info={info}
@@ -194,7 +195,6 @@ export function AgentDrawer({ agentId, onClose }: Props) {
             <RecordingsTab agentId={agentId} wsId={info?.workspace ? info.workspace.slice(-8) : null} />
           )}
           {tab === "messages" && <MessagesTab agentId={agentId} />}
-          {tab === "tools" && <ToolsTab />}
           {tab === "context" && (
             <ContextTab agentId={agentId} wsId={info?.workspace ? info.workspace.slice(-8) : null} />
           )}
@@ -313,10 +313,8 @@ function Header({
             </>
           )}
         </Button>
-        <Button size="sm" variant="outline" disabled title={t("agent.notImplemented")}>
-          <RotateCcw className="size-3" />
-          {t("agent.restart")}
-        </Button>
+        {/* "重启" 按钮删了 —— 它一直 disabled 标"暂未实现"，给用户露出一个
+            按不动的死按钮。等真支持重启再加回来。 */}
       </div>
     </header>
   );
@@ -332,7 +330,7 @@ function TabBar({ tab, onChange }: { tab: TabId; onChange: (t: TabId) => void })
       onValueChange={(v) => onChange(v as TabId)}
       className="shrink-0"
     >
-      <TabsList className="h-auto w-full justify-start rounded-none border-b border-border-subtle bg-transparent p-0 px-5">
+      <TabsList className="h-auto w-full justify-start overflow-x-auto rounded-none border-b border-border-subtle bg-transparent p-0 px-5">
         {TABS.map((item) => {
           const Icon = item.icon;
           return (
@@ -545,23 +543,6 @@ function MessagesTab({ agentId }: { agentId: string }) {
   );
 }
 
-// ── Tab: Tools (placeholder) ─────────────────────────────────────────────
-
-function ToolsTab() {
-  const { t } = useTranslation();
-  return (
-    <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center text-foreground-tertiary">
-      <Wrench className="size-10 opacity-40" />
-      <div>
-        <p className="font-heading text-sm font-semibold text-foreground-secondary">
-          {t("agent.toolsWip")}
-        </p>
-        <p className="mt-1 max-w-xs font-caption text-xs">{t("agent.toolsWipHint")}</p>
-      </div>
-    </div>
-  );
-}
-
 // ── Tab: Context ─────────────────────────────────────────────────────────
 
 function ContextTab({
@@ -663,13 +644,9 @@ function StatBar({ info, now }: { info: AgentInfo | null; now: number }) {
             ? t("agent.stat.ago", { delta: formatDelta(now - spawnedAt) })
             : "—",
         },
-        // TURN / TOKEN / TOOLS are placeholders — the server doesn't expose
-        // these yet. Pencil mock has them prominently so we keep slots
-        // visible (— shows where real data will land) instead of dropping
-        // them and re-flowing the bar later.
-        { label: t("agent.stat.turn"), value: "—" },
-        { label: t("agent.stat.token"), value: "—" },
-        { label: t("agent.stat.tools"), value: "—" },
+        // TURN / TOKEN / TOOLS slots were dropped — the server exposes no such
+        // metrics yet, so they rendered a permanent "—" that read as broken.
+        // Re-add once the shim emits per-turn telemetry.
         {
           label: t("agent.stat.pty"),
           value: live ? t("agent.stat.live") : t("agent.stat.off"),

@@ -896,6 +896,26 @@ pub async fn create_workspace_handler(
             Json(json!({"error": "cwd must be non-empty"})),
         ));
     }
+    // Validate the cwd BEFORE persisting the row. Otherwise we'd create the
+    // workspace, then the `init` spell's "create shared workspace" step fails
+    // because the directory can't be entered — leaving the user with a dead,
+    // 0-member ghost workspace pointing at a bad path. A 4xx here keeps the DB
+    // clean and surfaces a plain "doesn't exist" message instead of a 500.
+    {
+        let path = std::path::Path::new(req.cwd.trim());
+        if !path.exists() {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": format!("directory does not exist: {}", req.cwd.trim())})),
+            ));
+        }
+        if !path.is_dir() {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": format!("not a directory: {}", req.cwd.trim())})),
+            ));
+        }
+    }
     let rec = state
         .store
         .create_workspace(

@@ -20,7 +20,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useTranslation } from "react-i18next";
 import { ClipboardList, RefreshCw, Activity, Radio } from "lucide-react";
-import { api } from "../../../api/http";
+import { api, ApiError } from "../../../api/http";
 import type { BlackboardEntry, BlackboardSnapshot, SwarmEvent } from "../../../api/types";
 import { useSwarmFeed } from "../../../hooks/useSwarmFeed";
 import { Button } from "@/components/ui/button";
@@ -80,18 +80,18 @@ export default function LedgerView() {
         if (snap) {
           setter({ content: snap.content, at: snap.at, error: null });
         } else {
-          setter({
-            content: "",
-            at: null,
-            error: null, // 没写过不算错,显示空态
-          });
+          setter({ content: "", at: null, error: null });
         }
       } catch (e) {
-        setter({
-          content: "",
-          at: null,
-          error: (e as Error).message,
-        });
+        // A never-written ledger key 404s — that's the normal "empty" state
+        // for a fresh workspace, NOT an error. readBlackboard throws (it goes
+        // through request() which rejects on non-2xx), so we map 404 → empty
+        // here. Anything else (500, network) is a real error worth surfacing.
+        if (e instanceof ApiError && e.status === 404) {
+          setter({ content: "", at: null, error: null });
+        } else {
+          setter({ content: "", at: null, error: (e as Error).message });
+        }
       }
     },
     [],
