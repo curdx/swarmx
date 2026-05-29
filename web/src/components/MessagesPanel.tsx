@@ -307,6 +307,28 @@ export function MessagesPanel({
   }, [items, filter, wsSet, workspaceSlug]);
   const rows = useMemo(() => buildRows(visible), [visible]);
 
+  // First agent→user unread message + total count. Drives the Slack-style
+  // "N 条新消息" divider that replaces the old per-message amber left
+  // border (which read as a cheap hack and made a many-unread thread noisy).
+  // The divider is inserted once, before the first unread; everything below
+  // it is implicitly new, so individual messages don't need their own mark.
+  const { firstUnreadId, unreadCount } = useMemo(() => {
+    let firstId: number | null = null;
+    let count = 0;
+    for (const m of visible) {
+      const isUnreadAgent =
+        m.from_agent !== USER_SENDER &&
+        m.from_agent !== SYSTEM_SENDER &&
+        m.read_at === null &&
+        m.to_agent === USER_SENDER;
+      if (isUnreadAgent) {
+        if (firstId === null) firstId = m.id;
+        count += 1;
+      }
+    }
+    return { firstUnreadId: firstId, unreadCount: count };
+  }, [visible]);
+
   // ── pending responder inference (UI/F.2-A) ────────────────────────────
   // Tick every 5s so PENDING_TIMEOUT_MS naturally retires stale indicators
   // even when no new events arrive on /ws/swarm.
@@ -610,8 +632,20 @@ export function MessagesPanel({
             const isSystem = m.from_agent === SYSTEM_SENDER;
             const role = resolveRole(m.from_agent, roleLookup);
             const isUnread =
-              !isUser && m.read_at === null && m.to_agent === USER_SENDER;
+              !isUser &&
+              !isSystem &&
+              m.read_at === null &&
+              m.to_agent === USER_SENDER;
             const highlighted = highlightId === m.id;
+            const isFirstRow = rows[0].msg.id === m.id;
+            // Slack-style "new messages" divider, rendered once before the
+            // first unread agent turn instead of marking each one.
+            const newDivider =
+              m.id === firstUnreadId && unreadCount > 0 ? (
+                <NewMessagesDivider
+                  label={t("messages.newMessages", { count: unreadCount })}
+                />
+              ) : null;
 
             // System messages: centered hairline note, no bubble.
             if (isSystem) {
@@ -624,9 +658,8 @@ export function MessagesPanel({
                   }}
                   className="my-1.5 flex flex-col items-center gap-0.5"
                 >
-                  {showDividerBefore && (
-                    <TimeDivider ms={m.sent_at} />
-                  )}
+                  {showDividerBefore && <TimeDivider ms={m.sent_at} />}
+                  {newDivider}
                   <span
                     className={cn(
                       "selectable rounded-full bg-surface-tertiary px-3 py-0.5 font-caption text-[10px] text-foreground-tertiary",
@@ -640,27 +673,94 @@ export function MessagesPanel({
               );
             }
 
+            // ── User turn: right-aligned, solid accent bubble ────────────
+            // Accent-blue + white text (iMessage/Linear convention). The
+            // earlier neutral-grey experiment failed: two pale grey bubbles on
+            // a white canvas read as muddy and low-contrast. A confident accent
+            // fill makes "mine vs theirs" unmistakable at a glance and is the
+            // higher-contrast, more polished choice — colour is reinforced by
+            // alignment + "我" label + tail shape, never the only signal.
+            if (isUser) {
+              return (
+                <div
+                  key={m.id}
+                  className={cn(
+                    "flex flex-col items-end",
+                    showHeader && !isFirstRow && "mt-3",
+                  )}
+                >
+                  {showDividerBefore && <TimeDivider ms={m.sent_at} />}
+                  {newDivider}
+                  <div className="flex max-w-[80%] flex-col items-end">
+                    {showHeader && (
+                      <span className="mb-0.5 px-1 font-heading text-[11px] font-semibold text-foreground-tertiary">
+                        {t("messages.you")}
+                      </span>
+                    )}
+                    <div
+                      ref={(el) => {
+                        if (el) rowRefs.current.set(m.id, el);
+                        else rowRefs.current.delete(m.id);
+                      }}
+                      className={cn(
+                        "group/bubble relative rounded-2xl rounded-br-sm bg-accent-primary px-3 py-1.5 text-foreground-on-accent shadow-sm transition-colors",
+                        highlighted &&
+                          "ring-2 ring-accent-primary ring-offset-1 ring-offset-surface-primary",
+                      )}
+                      title={`#${m.id} · ${m.kind} · ${formatFullStamp(m.sent_at)}`}
+                    >
+                      {m.in_reply_to != null && (
+                        <button
+                          onClick={() => jumpToParent(m.in_reply_to!)}
+                          className="mb-1 flex items-center gap-0.5 rounded bg-white/15 px-1 py-0.5 text-[10px] text-foreground-on-accent/85 hover:bg-white/25"
+                          title={t("messages.jumpParent")}
+                        >
+                          <CornerUpLeft className="size-2.5" />#{m.in_reply_to}
+                        </button>
+                      )}
+                      <p className="selectable whitespace-pre-wrap break-words font-body text-[13px] leading-snug">
+                        {m.body}
+                      </p>
+                      <span className="float-right ml-2 mt-0.5 inline-block font-caption text-[10px] tabular-nums text-foreground-on-accent/70">
+                        {formatClock(m.sent_at)}
+                      </span>
+                      <div className="pointer-events-none absolute -top-3 left-0 flex items-center gap-1 opacity-0 transition-opacity group-hover/bubble:pointer-events-auto group-hover/bubble:opacity-100">
+                        <button
+                          onClick={() => startReply(m)}
+                          className="rounded-full border border-border-subtle bg-surface-elevated px-2 py-0.5 text-[10px] text-foreground-secondary shadow-sm hover:bg-surface-tertiary"
+                          title={t("messages.reply")}
+                        >
+                          {t("messages.reply")}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            }
+
+            // ── Agent turn: left-aligned, light contained bubble ─────────
+            // Messenger pairing with the user's neutral bubble — agent gets a
+            // light surface-secondary bubble + hairline border + bottom-left
+            // tail. Authorship by alignment + bubble shade + a role header
+            // sitting ABOVE the bubble (mirrors the user's "我" label). Unread
+            // is the in-header dot + the once-per-thread "new messages"
+            // divider — never a per-row coloured border.
             return (
               <div
                 key={m.id}
                 className={cn(
                   "flex flex-col",
-                  isUser ? "items-end" : "items-start",
-                  showHeader && rows[0].msg.id !== m.id && "mt-2",
+                  showHeader && !isFirstRow && "mt-3",
                 )}
               >
                 {showDividerBefore && <TimeDivider ms={m.sent_at} />}
-
-                <div
-                  className={cn(
-                    "flex max-w-[78%] gap-2",
-                    isUser ? "flex-row-reverse" : "flex-row",
-                  )}
-                >
-                  {/* avatar column — 28px reserved even when hidden so
-                      collapsed messages stay aligned with their header */}
-                  <div className="w-7 shrink-0">
-                    {showHeader && !isUser && (
+                {newDivider}
+                <div className="group/msg flex gap-3">
+                  {/* 28px gutter: role avatar on the group head, a hover-only
+                      timestamp on collapsed follow-ups (Slack pattern). */}
+                  <div className="flex w-7 shrink-0 justify-center">
+                    {showHeader ? (
                       <button
                         type="button"
                         onClick={() => onOpenAgent?.(m.from_agent)}
@@ -672,25 +772,28 @@ export function MessagesPanel({
                       >
                         {role.charAt(0).toUpperCase()}
                       </button>
+                    ) : (
+                      <span className="mt-1 select-none font-caption text-[9px] leading-none tabular-nums text-foreground-tertiary opacity-0 transition-opacity group-hover/msg:opacity-100">
+                        {formatClock(m.sent_at)}
+                      </span>
                     )}
                   </div>
 
-                  <div
-                    className={cn(
-                      "flex min-w-0 flex-col",
-                      isUser ? "items-end" : "items-start",
-                    )}
-                  >
+                  <div className="flex min-w-0 max-w-2xl flex-col items-start">
                     {showHeader && (
-                      <div
-                        className={cn(
-                          "mb-0.5 flex items-baseline gap-1.5 px-0.5",
-                          isUser && "flex-row-reverse",
-                        )}
-                      >
-                        <span className="font-heading text-[11px] font-semibold text-foreground-secondary">
-                          {isUser ? t("messages.you") : role}
+                      <div className="mb-0.5 flex items-baseline gap-2 px-0.5">
+                        <span className="font-heading text-[13px] font-semibold text-foreground-primary">
+                          {role}
                         </span>
+                        <span className="font-caption text-[10px] tabular-nums text-foreground-tertiary">
+                          {formatClock(m.sent_at)}
+                        </span>
+                        {isUnread && (
+                          <span
+                            className="size-1.5 rounded-full bg-accent-primary"
+                            aria-hidden
+                          />
+                        )}
                       </div>
                     )}
 
@@ -700,11 +803,7 @@ export function MessagesPanel({
                         else rowRefs.current.delete(m.id);
                       }}
                       className={cn(
-                        "group/bubble relative rounded-2xl px-3 py-1.5 transition-colors",
-                        isUser
-                          ? "bg-accent-primary text-foreground-on-accent rounded-br-sm"
-                          : "bg-surface-secondary border border-border-subtle text-foreground-primary rounded-bl-sm",
-                        isUnread && "border-l-2 border-l-state-busy",
+                        "group/bubble relative min-w-0 rounded-2xl rounded-bl-sm border border-border-subtle bg-surface-secondary px-3 py-2 shadow-sm transition-colors",
                         highlighted &&
                           "ring-2 ring-accent-primary ring-offset-1 ring-offset-surface-primary",
                       )}
@@ -713,42 +812,18 @@ export function MessagesPanel({
                       {m.in_reply_to != null && (
                         <button
                           onClick={() => jumpToParent(m.in_reply_to!)}
-                          className={cn(
-                            "mb-1 flex items-center gap-0.5 rounded px-1 py-0.5 text-[10px]",
-                            isUser
-                              ? "bg-accent-primary-deep text-foreground-on-accent/80 hover:bg-accent-primary-deep/80"
-                              : "bg-surface-tertiary text-foreground-tertiary hover:bg-surface-secondary",
-                          )}
+                          className="mb-1 flex items-center gap-0.5 rounded bg-surface-tertiary px-1 py-0.5 text-[10px] text-foreground-tertiary hover:bg-surface-secondary"
                           title={t("messages.jumpParent")}
                         >
                           <CornerUpLeft className="size-2.5" />#{m.in_reply_to}
                         </button>
                       )}
-
-                      <p className="selectable whitespace-pre-wrap break-words font-body text-[13px] leading-snug">
+                      <p className="selectable whitespace-pre-wrap break-words font-body text-[13px] leading-relaxed text-foreground-primary">
                         {m.body}
                       </p>
 
-                      <span
-                        className={cn(
-                          "ml-2 mt-0.5 inline-block font-caption text-[10px] tabular-nums",
-                          isUser
-                            ? "text-foreground-on-accent/70 float-right"
-                            : "text-foreground-tertiary float-right",
-                        )}
-                      >
-                        {formatClock(m.sent_at)}
-                      </span>
-
-                      {/* hover-only actions — sit outside the bubble so they
-                          don't shift content; positioned above for user
-                          messages (right-aligned) and below for agents. */}
-                      <div
-                        className={cn(
-                          "pointer-events-none absolute -top-3 flex items-center gap-1 opacity-0 transition-opacity group-hover/bubble:pointer-events-auto group-hover/bubble:opacity-100",
-                          isUser ? "left-0" : "right-0",
-                        )}
-                      >
+                      {/* hover-only actions — top-right of the turn */}
+                      <div className="pointer-events-none absolute -top-2 right-0 flex items-center gap-1 opacity-0 transition-opacity group-hover/bubble:pointer-events-auto group-hover/bubble:opacity-100">
                         <button
                           onClick={() => startReply(m)}
                           className="rounded-full border border-border-subtle bg-surface-elevated px-2 py-0.5 text-[10px] text-foreground-secondary shadow-sm hover:bg-surface-tertiary"
@@ -866,6 +941,26 @@ function TimeDivider({ ms }: { ms: number }) {
   );
 }
 
+/** Slack-style "new messages" separator inserted once, before the first
+ *  unread agent turn. Accent-tinted so it reads as "everything below is
+ *  new" — the per-message amber border it replaces was both noisy (every
+ *  unread row striped) and read as an AI-generated hack. */
+function NewMessagesDivider({ label }: { label: string }) {
+  return (
+    <div
+      className="my-3 flex w-full items-center gap-2"
+      role="separator"
+      aria-label={label}
+    >
+      <span className="h-px flex-1 bg-accent-primary/30" />
+      <span className="rounded-full bg-accent-primary-soft px-2.5 py-0.5 font-caption text-[10px] font-semibold uppercase tracking-wide text-accent-primary">
+        {label}
+      </span>
+      <span className="h-px flex-1 bg-accent-primary/30" />
+    </div>
+  );
+}
+
 /** "X is responding…" placeholder bubble shown while an agent has received a
  *  message but hasn't yet emitted a reply. Pure UI inference for now —
  *  upgraded to real server-side AgentState::Thinking events in UI/F.2-B. */
@@ -881,37 +976,33 @@ function PendingBubble({
   replyHint: string;
 }) {
   return (
-    <div className="mt-2 flex flex-col items-start">
-      <div className="flex max-w-[78%] gap-2">
-        <div className="w-7 shrink-0">
-          <div
-            className={cn(
-              "flex size-7 items-center justify-center rounded-full text-xs font-medium text-foreground-on-accent shadow-sm",
-              roleColor(role),
-            )}
-            title={`${role} · ${replyHint}`}
-          >
-            {role.charAt(0).toUpperCase()}
-          </div>
+    <div className="mt-3 flex gap-3">
+      <div className="flex w-7 shrink-0 justify-center">
+        <div
+          className={cn(
+            "flex size-7 items-center justify-center rounded-full text-xs font-medium text-foreground-on-accent shadow-sm",
+            roleColor(role),
+          )}
+          title={`${role} · ${replyHint}`}
+        >
+          {role.charAt(0).toUpperCase()}
         </div>
-        <div className="flex min-w-0 flex-col items-start">
-          <span className="mb-0.5 flex items-center gap-1.5 px-0.5 font-heading text-[11px] font-semibold text-foreground-secondary">
-            {role}
-            <span className="font-caption text-[10px] font-normal text-foreground-tertiary">
-              {label} · ↩#{triggerId}
-            </span>
+      </div>
+      <div className="flex min-w-0 flex-col items-start">
+        <span className="mb-0.5 flex items-baseline gap-2 px-0.5 font-heading text-[13px] font-semibold text-foreground-primary">
+          {role}
+          <span className="font-caption text-[10px] font-normal text-foreground-tertiary">
+            {label} · ↩#{triggerId}
           </span>
-          <div
-            className="rounded-2xl rounded-bl-sm border border-border-subtle bg-surface-secondary px-3 py-2"
-            title={replyHint}
-          >
-            <span className="flex items-center gap-1">
-              <PendingDot delayMs={0} />
-              <PendingDot delayMs={150} />
-              <PendingDot delayMs={300} />
-            </span>
-          </div>
-        </div>
+        </span>
+        <span
+          className="flex items-center gap-1 rounded-2xl rounded-bl-sm border border-border-subtle bg-surface-secondary px-3 py-2 shadow-sm"
+          title={replyHint}
+        >
+          <PendingDot delayMs={0} />
+          <PendingDot delayMs={150} />
+          <PendingDot delayMs={300} />
+        </span>
       </div>
     </div>
   );
