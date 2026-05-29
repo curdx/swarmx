@@ -300,18 +300,9 @@ pub(crate) async fn spawn_with_bookkeeping(
 }
 
 pub async fn list_agents(State(state): State<AppState>) -> impl IntoResponse {
-    // Snapshot the wake-sub map ONCE before iterating agents so a churn
-    // of register/unregister calls mid-listing doesn't make some agents
-    // show their deps while others don't. The read lock is released
-    // before we await on the store.
-    let depends_snapshot: std::collections::HashMap<String, Vec<String>> = {
-        let map = state.wake_subs.read().await;
-        map.clone()
-    };
-    // Same idea for the role registry: clone the (role → handoff_signal)
-    // mapping locally so we don't keep the registry borrow open through
-    // async boundaries. Empty handoff_signal means the role doesn't
-    // produce a key (planner, writer/critic/editor in critic-loop).
+    // Role-registry handoff lookup. Empty handoff_signal means the role
+    // doesn't produce a key (orchestrator, etc.). Cloned locally so we
+    // don't hold the registry borrow across async boundaries.
     let role_handoff: std::collections::HashMap<String, String> = state
         .roles
         .list()
@@ -322,9 +313,16 @@ pub async fn list_agents(State(state): State<AppState>) -> impl IntoResponse {
     let handoff_for = |role: &str| -> String {
         role_handoff.get(role).cloned().unwrap_or_default()
     };
-    let depends_for = |agent_id: &str| -> Vec<String> {
-        depends_snapshot.get(agent_id).cloned().unwrap_or_default()
-    };
+    // depends_on used to come from `wake_subs`, but that table is the
+    // INTERNAL "wake me when this key lands" registration — Magentic-One's
+    // append_wake_sub bug-#48 fix made the orchestrator subscribe to every
+    // worker's handoff_signal, which then leaked into the DAG as a fake
+    // "orchestrator depends on worker" edge. Two different concepts had
+    // ended up sharing one field. Task-graph depends_on is now read
+    // strictly from the `workers` row backfill below; orchestrator (not
+    // in workers table) gets empty deps and renders as a DAG root, which
+    // matches the user's mental model.
+    let depends_for = |_agent_id: &str| -> Vec<String> { Vec::new() };
 
     // Build a snapshot of the live in-memory registry first — for live
     // agents the in-memory `Lifecycle` is the source of truth (it tracks
@@ -421,6 +419,26 @@ pub async fn list_agents(State(state): State<AppState>) -> impl IntoResponse {
                 for it in items.iter_mut() {
                     if let Some(w) = by_id.get(&it.agent_id) {
                         it.parent_agent_id = Some(w.parent_agent_id.clone());
+                        // Magentic-One workers carry their handoff_signal +
+                        // depends_on on the `workers` row, NOT on a role
+                        // manifest (their role_label is ad-hoc, picked by
+                        // the orchestrator). Backfill both so the DAG view
+                        // can render the dashed waiting edges — without
+                        // this, AgentInfo.handoff_signal stays empty (the
+                        // role lookup above misses), depends_on stays
+                        // empty (only live registry knew it), and
+                        // deriveEdges falls back to "no producer" → no
+                        // dashed line ever drawn.
+                        if it.handoff_signal.is_empty() && !w.handoff_signal.is_empty() {
+                            it.handoff_signal = w.handoff_signal.clone();
+                        }
+                        if it.depends_on.is_empty() && !w.depends_on_json.is_empty() {
+                            if let Ok(parsed) =
+                                serde_json::from_str::<Vec<String>>(&w.depends_on_json)
+                            {
+                                it.depends_on = parsed;
+                            }
+                        }
                     }
                 }
             }

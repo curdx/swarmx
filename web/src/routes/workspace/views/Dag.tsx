@@ -418,12 +418,15 @@ export default function DagView() {
     return ["all", ...Array.from(s).sort()];
   }, [liveAgents]);
 
+  // 成员列表 / role filter 都只关心还活着的 agent — DAG canvas 也只画
+  // alive 节点,两边语义一致避免列表里灰着的 agent 让人误以为"画里少了"。
+  // 历史死亡 agent 走 Recordings 视图复盘,不该在 live 操作面板里干扰视线。
   const filteredAgents = useMemo(
     () =>
       roleFilter === "all"
-        ? agents
-        : agents.filter((a) => a.role.toLowerCase() === roleFilter),
-    [agents, roleFilter],
+        ? liveAgents
+        : liveAgents.filter((a) => a.role.toLowerCase() === roleFilter),
+    [liveAgents, roleFilter],
   );
 
   const selected = useMemo(
@@ -699,11 +702,16 @@ export default function DagView() {
               <dd className="font-mono text-foreground-primary">{selected.cli}</dd>
               <dt className="text-foreground-tertiary">{t("dag.status")}</dt>
               <dd className="text-foreground-primary">
-                {selected.shim_ready
-                  ? t("dag.ready")
-                  : selected.killed_at
-                    ? t("dag.killed")
-                    : t("dag.startingShort")}
+                {/* 优先级:dead > paused > ready > starting。shim_ready
+                 *  在 spawn 时被置 true,killed 不会复位,所以不能让
+                 *  shim_ready 优先,否则死 agent 永远 READY。 */}
+                {selected.killed_at != null || selected.shim_exit != null
+                  ? t("dag.killed")
+                  : selected.paused
+                    ? t("chat.paused", "已暂停")
+                    : selected.shim_ready
+                      ? t("dag.ready")
+                      : t("dag.startingShort")}
               </dd>
               <dt className="text-foreground-tertiary">{t("dag.handoff")}</dt>
               <dd className="break-all font-mono text-state-success">

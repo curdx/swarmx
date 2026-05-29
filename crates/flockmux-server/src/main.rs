@@ -193,6 +193,7 @@ async fn main() -> Result<()> {
         state.registry.clone(),
         wake_subs,
         exit_keys,
+        state.store.clone(),
     );
     info!("wake coordinator started");
 

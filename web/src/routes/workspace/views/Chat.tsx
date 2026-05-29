@@ -405,9 +405,20 @@ export default function ChatView() {
               {t("chat.selectWorkspace")}
             </p>
           )}
-          {activeMembers.map((a) => {
+          {(() => {
+            // orchestrator 永远置顶。它是用户在 workspace 里唯一的常驻
+            // 对接人 (Magentic-One PM 角色),worker 完工后用户应该回头
+            // 找它继续 — 视觉上必须立刻可分辨。其他 agent 按原顺序。
+            const sorted = [...activeMembers].sort((a, b) => {
+              const ao = a.role === "orchestrator" ? 0 : 1;
+              const bo = b.role === "orchestrator" ? 0 : 1;
+              return ao - bo;
+            });
+            return sorted;
+          })().map((a) => {
             const dot = statusDot(a, recentMessages, t);
             const unread = activeWorkspaceUnread[a.agent_id] ?? 0;
+            const isOrchestrator = a.role === "orchestrator";
             return (
               <div
                 key={a.agent_id}
@@ -416,7 +427,16 @@ export default function ChatView() {
                   "flex cursor-pointer items-center gap-3 rounded-md px-3 py-2 hover:bg-surface-tertiary",
                 )}
               >
-                <Avatar className="size-8 shrink-0" title={a.role}>
+                <Avatar
+                  className={cn(
+                    "size-8 shrink-0",
+                    // 金边告诉用户"这个是主理人,长期在线"。没有 ring
+                    // 的就是临时 worker — 干完一件事就会消失。
+                    isOrchestrator &&
+                      "ring-2 ring-accent-primary ring-offset-2 ring-offset-surface-elevated",
+                  )}
+                  title={a.role}
+                >
                   <AvatarFallback
                     className={cn(
                       "text-xs font-medium text-foreground-on-accent",
@@ -431,6 +451,11 @@ export default function ChatView() {
                     <span className="truncate font-heading text-sm text-foreground-primary">
                       {a.role}
                     </span>
+                    {isOrchestrator && (
+                      <span className="shrink-0 rounded-full bg-accent-primary-soft px-1.5 py-0.5 font-caption text-[9px] font-semibold text-accent-primary">
+                        {t("chat.pmBadge", "主理人")}
+                      </span>
+                    )}
                     {dot.typing ? (
                       <TypingDots />
                     ) : (

@@ -63,6 +63,23 @@ pub type WakeSubs = Arc<RwLock<HashMap<String, Vec<String>>>>;
 /// registered — inline-only roles (critic-loop's writer / critic /
 /// editor) don't get exit-fallback because there's no canonical signal
 /// to mark as failed.
+/// How long to wait after a worker writes its `handoff_signal` before
+/// the auto-kill fires. 5 seconds is long enough for claude/codex to
+/// finish printing the final scrollback + a `swarm_send_message`
+/// summary back to the orchestrator (typically <2s), but short enough
+/// that the UI ground-truth converges quickly. Tune up if recording
+/// playback shows truncation; tune down if zombie PTYs feel sluggish.
+const AUTO_KILL_GRACE_MS: u64 = 5_000;
+
+/// Local now-ms helper; mirrors `routes::rest::now_ms` so we don't have
+/// to cross-import.
+fn now_ms_local() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
 #[derive(Debug, Clone)]
 pub struct ExitKey {
     /// Role name — used to name the synthesized failure key as
@@ -333,6 +350,10 @@ pub struct WakeCoordinator {
     registry: Registry,
     subs: WakeSubs,
     exit_keys: ExitKeys,
+    /// Needed for the post-handoff auto-kill path: when a worker writes
+    /// its handoff_signal we mark its DB row as killed too, otherwise
+    /// the agent stays "live" forever in `list_agents`.
+    store: Arc<flockmux_storage::Store>,
 }
 
 impl WakeCoordinator {
@@ -345,12 +366,14 @@ impl WakeCoordinator {
         registry: Registry,
         subs: WakeSubs,
         exit_keys: ExitKeys,
+        store: Arc<flockmux_storage::Store>,
     ) -> JoinHandle<()> {
         let me = Self {
             swarm,
             registry,
             subs,
             exit_keys,
+            store,
         };
         tokio::spawn(me.run())
     }
@@ -403,6 +426,18 @@ impl WakeCoordinator {
                             }
                         }
                     }
+
+                    // Post-handoff auto-kill: if this blackboard write
+                    // matches some agent's registered handoff_signal,
+                    // that worker has done its job. claude/codex CLIs
+                    // don't self-exit after STOPping a reply — their
+                    // PTY sits idle forever, leaking process + per-agent
+                    // MCP config + a phantom "alive" row in the UI. We
+                    // tear that down on a small grace delay (let the
+                    // worker finish printing its final scroll, let the
+                    // recording flush) so the agent list and DAG return
+                    // to ground truth without operator action.
+                    self.maybe_auto_kill_on_handoff(&path).await;
                 }
                 Ok(SwarmEvent::AgentState { agent_id, state }) => {
                     if matches!(state, flockmux_protocol::ws_swarm::AgentState::Exited) {
@@ -423,6 +458,110 @@ impl WakeCoordinator {
                     break;
                 }
             }
+        }
+    }
+
+    /// Auto-kill a worker that just produced its `handoff_signal`.
+    /// Reverse-scan `exit_keys` for any agent whose `handoff_signal`
+    /// matches `path`. claude/codex CLIs don't STOP their PTY on their
+    /// own — once the reply is printed they enter an idle prompt
+    /// waiting for next input. Without this, every worker the user
+    /// ever spawned stays "alive" in the registry / agent list / DAG
+    /// canvas, eating per-agent MCP config files + a phantom PTY.
+    ///
+    /// We delay the kill by `AUTO_KILL_GRACE_MS` so:
+    ///   - the worker can finish printing whatever it's still streaming
+    ///   - the asciinema recording's last frames get flushed
+    ///   - if the LLM wrote the signal too eagerly mid-thought and
+    ///     immediately writes something else (rare), we don't yank it
+    ///
+    /// Race safety: we re-check the registry on the delayed tick.
+    /// The agent may have been manually killed in the meantime, or its
+    /// exit_keys entry may have been claimed by `handle_agent_exit`.
+    async fn maybe_auto_kill_on_handoff(&self, path: &str) {
+        // Capture (agent_id, role_label) pairs so the farewell message
+        // can sign off with the worker's role instead of an opaque UUID.
+        let targets: Vec<(String, String)> = {
+            let map = self.exit_keys.read().await;
+            map.iter()
+                .filter_map(|(aid, ek)| {
+                    if ek.handoff_signal == path {
+                        Some((aid.clone(), ek.role.clone()))
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        };
+        if targets.is_empty() {
+            return;
+        }
+        for (agent_id, role) in targets {
+            let registry = self.registry.clone();
+            let swarm = self.swarm.clone();
+            let subs = self.subs.clone();
+            let exit_keys = self.exit_keys.clone();
+            let store = self.store.clone();
+            let sig = path.to_string();
+            tokio::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(AUTO_KILL_GRACE_MS))
+                    .await;
+                // Re-check: agent might already be gone.
+                let slot = match registry.remove(&agent_id) {
+                    Some(s) => s,
+                    None => return,
+                };
+                // FAREWELL MESSAGE: before we tear down the worker, post a
+                // short note to the user in the workspace chat. Without
+                // this, the worker silently disappears from the member
+                // list and users have no idea who to talk to next — they
+                // think the project has stopped responding. Magentic-One's
+                // PM-style design assumes the orchestrator is "obviously"
+                // the one to follow up with, but new users have no such
+                // intuition. One sentence in the dying worker's voice
+                // fixes the entire confusion class.
+                let signal_label = sig
+                    .rsplit_once('/')
+                    .map(|(_, last)| last)
+                    .unwrap_or(&sig);
+                let body = format!(
+                    "✓ 已交付 {signal_label} 并解散。继续改 / 加新需求,直接跟 orchestrator 说就行,我俩看同一份 ledger,它清楚我刚才干了啥。",
+                );
+                let farewell = NewMessage {
+                    from_agent: agent_id.clone(),
+                    to_agent: "user".into(),
+                    kind: "farewell".into(),
+                    body,
+                    sent_at: now_ms_local(),
+                    in_reply_to: None,
+                };
+                if let Err(e) = swarm.send_message(farewell).await {
+                    tracing::warn!(?e, agent = %agent_id, "auto-kill: farewell send failed");
+                }
+                {
+                    let s = slot.lock();
+                    s.bridge.kill();
+                }
+                swarm.unregister_agent(&agent_id);
+                unregister_wake_subs(&subs, &agent_id).await;
+                unregister_exit_key(&exit_keys, &agent_id).await;
+                if let Err(e) = store
+                    .record_agent_kill(agent_id.clone(), now_ms_local())
+                    .await
+                {
+                    tracing::warn!(?e, agent = %agent_id, "auto-kill: record_agent_kill failed");
+                }
+                swarm.publish_event(SwarmEvent::AgentState {
+                    agent_id: agent_id.clone(),
+                    state: flockmux_protocol::ws_swarm::AgentState::Exited,
+                });
+                tracing::info!(
+                    agent = %agent_id,
+                    role = %role,
+                    handoff = %sig,
+                    "auto-killed worker after handoff_signal"
+                );
+            });
         }
     }
 

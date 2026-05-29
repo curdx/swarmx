@@ -163,7 +163,7 @@ pub fn tool_descriptors() -> Vec<Value> {
                     "depends_on": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "Blackboard keys this worker should wait for before doing real work. WakeCoordinator wakes this worker when any of these keys are written. Empty array means 'start immediately'."
+                        "description": "Blackboard keys this worker waits for before doing real work. **MUST** be populated whenever the worker depends on another worker's output — do NOT only write 'wait for X' in the system_prompt text. This field drives (1) WakeCoordinator auto-wake the instant deps land, (2) the DAG view's dashed 'waiting' edges, (3) the workers DB row's depends_on_json. Pass the exact key strings that the upstream worker's handoff_signal produces (typically `<workspace_id>/<signal>`). Empty array means 'start immediately'."
                     }
                 },
                 "required": ["cli", "role_label", "system_prompt"],

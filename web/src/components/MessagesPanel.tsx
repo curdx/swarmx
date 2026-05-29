@@ -269,6 +269,20 @@ export function MessagesPanel({
   const visible = useMemo(() => {
     const f = filter.toLowerCase();
     return items.filter((m) => {
+      // 内部协调噪音 — 这些消息是给 LLM 看的 prompt,英文,普通用户看到
+      // 一堆 "manual wake from operator —" / "blackboard X updated; please
+      // check" 很乱。activity panel ≠ chat thread (业界 2026 共识):chat
+      // 留给真对话,内部信令归后台 / Ledger 视图 / sqlite。
+      //   - kind=wake          — server 的 manual wake 注入
+      //   - from=system + body 提 blackboard updated  — swarm watcher 推的黑板通知
+      // farewell (worker 临别) 不算噪音,保留;普通 note/reply 全保留。
+      if (m.kind === "wake") return false;
+      if (
+        m.from_agent === "system" &&
+        m.body.startsWith("blackboard ")
+      ) {
+        return false;
+      }
       // 用户消息(from=user)走 to=scout(concierge),命中 wsSet。
       // user→system:<slug> 路径已经废除,但保留 filter 以兼容历史 DB 行:
       // 老消息可能还残留这种,slug 不匹配当前 ws 直接隐藏避免串房间。
@@ -290,7 +304,7 @@ export function MessagesPanel({
         m.body.toLowerCase().includes(f)
       );
     });
-  }, [items, filter, wsSet]);
+  }, [items, filter, wsSet, workspaceSlug]);
   const rows = useMemo(() => buildRows(visible), [visible]);
 
   // ── pending responder inference (UI/F.2-A) ────────────────────────────

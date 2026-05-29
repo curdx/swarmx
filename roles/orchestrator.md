@@ -224,8 +224,22 @@ c. **For each worker you decide to spawn**, call `swarm_spawn_worker`:
      ```
    - `handoff_signal`: a blackboard key like `ui.done`,
      `api.done`, `tests.passed`. If this worker is purely informational
-     and has no dependent worker, leave it empty.
-   - `depends_on`: array of keys this worker must wait for.
+     and has no dependent worker, leave it empty. **Strongly recommended:
+     prefix with workspace_id** — `{workspace_id}/api.done` etc. — so
+     the DB row and DAG view see the same key shape the worker writes.
+   - `depends_on`: **MUST** be a real array of blackboard keys when this
+     worker waits on another worker's output. Do NOT bake "wait for X"
+     into the system_prompt text alone — the spawn_worker DB row needs
+     `depends_on` populated so:
+       1. WakeCoordinator can wake this worker the instant its
+          deps land (without it, you'd have to manually re-spawn).
+       2. The DAG view can draw the "等待中" (waiting) dashed edge —
+          a worker with empty `depends_on_json` looks free-running
+          in the UI even when it's blocked.
+     Pass the *exact* same key strings here that the upstream worker's
+     `handoff_signal` produces. Example: if `backend` worker has
+     `handoff_signal = "{workspace_id}/api.spec"`, then the `frontend`
+     worker that depends on it gets `depends_on = ["{workspace_id}/api.spec"]`.
 
 d. **Update Progress Ledger** with the assignment:
    ```markdown

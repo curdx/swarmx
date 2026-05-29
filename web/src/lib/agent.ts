@@ -176,14 +176,27 @@ export function inferAgentStatus(
   // would mis-classify it as `idle`. A worker that's alive + shim_ready
   // and never spoken should read as "working" so the user sees a typing
   // dot in the member list while npm install / build / etc. run.
-  // Once the worker sends its first message (usually the completion
-  // report back to the orchestrator) the rules above take over.
+  //
+  // Important caveat: workers that hand off via blackboard signal and
+  // STOP don't actually kill their PTY — they just sit idle. Without a
+  // time bound here we'd keep showing typing dots forever for a worker
+  // that finished half an hour ago. Cap the "assumed working" window
+  // at WORKER_FRESH_WINDOW_MS past spawn; after that, no outbound +
+  // no recent inbound means truly idle, not stuck.
   if (agent.parent_agent_id && !lastOutbound) {
-    return "working";
+    const spawnedAt = agent.spawned_at ?? null;
+    if (spawnedAt == null || now - spawnedAt < WORKER_FRESH_WINDOW_MS) {
+      return "working";
+    }
   }
 
   return "idle";
 }
+
+/** Worker spawn 后默认显示为 "working" 的时间窗。短于此 → typing dot;
+ *  超出 → idle。够覆盖 npm install / cargo build / 中等编码任务,但短到
+ *  STOPped 后的僵尸 PTY 不会无限 typing。 */
+const WORKER_FRESH_WINDOW_MS = 10 * 60 * 1000;
 
 /** 文字 label —— 只在 agent 真的"不可用"或"被操作过"时显示。
  *  日常 idle/awaiting_user/responding/working 全部用色点 + typing 动画
