@@ -1,5 +1,14 @@
 # flockmux-core 实现审查报告（2026-05）
 
+> **修复进度（持续更新，全部已合入 main）**
+> - ✅ **P0 全部**：无鉴权/CORS → Origin 白名单；主干 2 个失败测试 + 接 CI 门禁；kill 改进程组回收孙进程。
+> - ✅ **多 CLI（详见 `multi-cli-redesign-plan.md`）**：F7 派发数据化（L2）、F8 删死字段、F9 加载韧性、F22 bootstrap 去重、stop_hook 超时外置、前端输入数据化、bootstrap 改 MCP-ready 信号、L3 golden 测试。
+> - ✅ **F4 fork-bomb**：spawn 全局存活上限（默认 256）+ 委派深度上限（默认 6），env 可调。
+> - ✅ **F3 wake 漏匹配**：handoff 写入但零订阅者时 warn（点名 orphan key + 当前等待列表）。
+> - ⏳ **未做**：F6 黑板 fs/DB 非原子、F12 lagged 丢一次性 wake、F5 DB 无保留策略、前端 Shell.tsx 巨型文件 / 两套 DAG。
+>
+> ---
+>
 > 多 agent + workflow 编排式审查。先**理解**（8 个 agent 测绘子系统）→ **挖掘**（6 个 agent 研读 swarm-ide / superpowers / openclaw / hermes-agent / gstack / golutra）→ **客观信号**（clippy / tsc / grep）→ **对抗式验证**（22 个 agent 逐条尝试证伪 + 3 项人工亲验）。
 > 严重度均经对抗验证校准：很多初判被**下调**并标注了已有缓解，所以这里的分级偏保守、可辩护。
 
