@@ -5,7 +5,8 @@
 > - ✅ **多 CLI（详见 `multi-cli-redesign-plan.md`）**：F7 派发数据化（L2）、F8 删死字段、F9 加载韧性、F22 bootstrap 去重、stop_hook 超时外置、前端输入数据化、bootstrap 改 MCP-ready 信号、L3 golden 测试。
 > - ✅ **F4 fork-bomb**：spawn 全局存活上限（默认 256）+ 委派深度上限（默认 6），env 可调。
 > - ✅ **F3 wake 漏匹配**：handoff 写入但零订阅者时 warn（点名 orphan key + 当前等待列表）。
-> - ⏳ **未做**：F6 黑板 fs/DB 非原子、F12 lagged 丢一次性 wake、F5 DB 无保留策略、前端 Shell.tsx 巨型文件 / 两套 DAG。
+> - ✅ **F12 lag 丢 wake**：广播 lag 后对账 depends_on vs 黑板（含 .error/.failed 别名）重唤醒丢失的一次性 wake；广播容量 256→1024 降低 lag 频率。
+> - ⏳ **未做**：F6 黑板 fs/DB 非原子、F5 DB 无保留策略、前端 Shell.tsx 巨型文件 / 两套 DAG。
 >
 > ---
 >
