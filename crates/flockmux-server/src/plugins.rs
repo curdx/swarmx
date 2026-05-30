@@ -2,7 +2,7 @@
 //! how to spawn one kind of CLI under our shim. M1 ships claude + codex
 //! only; others live in §13 Backlog of the plan.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -188,18 +188,60 @@ pub struct PluginRegistry {
 }
 
 impl PluginRegistry {
-    /// Load every `cli-plugins/*.toml`. **One malformed file is skipped with a
-    /// warning, not fatal** — a single bad/partial plugin must not take down
-    /// ALL CLIs (and thus server boot). This mirrors `roles::RoleRegistry`'s
-    /// tolerant policy; a missing dir is also non-fatal (empty registry).
+    /// Load every `cli-plugins/*.toml` from a single dir. **One malformed file
+    /// is skipped with a warning, not fatal** — a single bad/partial plugin
+    /// must not take down ALL CLIs (and thus server boot). This mirrors
+    /// `roles::RoleRegistry`'s tolerant policy; a missing dir is also non-fatal
+    /// (empty registry). Returns `Result` for call-site compatibility, but is
+    /// effectively infallible (every error path warns + skips).
     pub fn load_dir(dir: &Path) -> Result<Self> {
         let mut plugins: HashMap<String, CliPlugin> = HashMap::new();
-        if !dir.is_dir() {
-            tracing::warn!(dir = %dir.display(), "cli-plugins dir missing; no CLIs loaded");
-            return Ok(Self { plugins });
+        let mut source: HashMap<String, PathBuf> = HashMap::new();
+        Self::merge_dir(dir, &mut plugins, &mut source);
+        Ok(Self { plugins })
+    }
+
+    /// Load plugins from `dirs` in order; an id present in a LATER dir
+    /// overrides the same id from an earlier one (last-writer-wins). This is
+    /// how a user customizes or adds a CLI without forking the repo (L5a):
+    /// drop a `~/.flockmux/cli-plugins/<id>.toml` and it shadows the bundled
+    /// definition. Per-layer resilience is preserved — a bad file or missing
+    /// layer is warn-skipped, never fatal.
+    pub fn load_layered(dirs: &[PathBuf]) -> Self {
+        let mut plugins: HashMap<String, CliPlugin> = HashMap::new();
+        let mut source: HashMap<String, PathBuf> = HashMap::new();
+        for dir in dirs {
+            Self::merge_dir(dir, &mut plugins, &mut source);
         }
-        let read = std::fs::read_dir(dir)
-            .with_context(|| format!("read_dir({})", dir.display()))?;
+        if plugins.is_empty() {
+            tracing::warn!(
+                layers = dirs.len(),
+                "no CLI plugins loaded from any layer; spawns will fail with NOT_FOUND"
+            );
+        }
+        Self { plugins }
+    }
+
+    /// Merge one dir's `*.toml` into `plugins`, recording each id's source path
+    /// so an override (same id seen again, from this or a later layer) logs the
+    /// shadowing. All IO/parse errors warn + skip; an absent dir is silent
+    /// (the user override layer is normally absent).
+    fn merge_dir(
+        dir: &Path,
+        plugins: &mut HashMap<String, CliPlugin>,
+        source: &mut HashMap<String, PathBuf>,
+    ) {
+        if !dir.is_dir() {
+            tracing::debug!(dir = %dir.display(), "cli-plugins layer absent; skipping");
+            return;
+        }
+        let read = match std::fs::read_dir(dir) {
+            Ok(r) => r,
+            Err(err) => {
+                tracing::warn!(dir = %dir.display(), ?err, "cli-plugins layer unreadable; skipping");
+                return;
+            }
+        };
         for entry in read {
             let path = match entry {
                 Ok(e) => e.path(),
@@ -225,11 +267,18 @@ impl PluginRegistry {
                     continue;
                 }
             };
-            if let Some(prev) = plugins.insert(plugin.id.clone(), plugin) {
-                tracing::warn!(id = %prev.id, "duplicate cli-plugin id; later file wins");
+            let id = plugin.id.clone();
+            if let Some(prev) = source.get(&id) {
+                tracing::info!(
+                    id = %id,
+                    shadowed = %prev.display(),
+                    by = %path.display(),
+                    "cli-plugin overridden by a later layer"
+                );
             }
+            source.insert(id.clone(), path.clone());
+            plugins.insert(id, plugin);
         }
-        Ok(Self { plugins })
     }
 
     pub fn get(&self, id: &str) -> Option<&CliPlugin> {
@@ -260,6 +309,20 @@ pub fn default_plugins_dir() -> PathBuf {
         }
     }
     PathBuf::from("cli-plugins")
+}
+
+/// User override layer (L5a): `~/.flockmux/cli-plugins/`, or the path in
+/// `FLOCKMUX_USER_CLI_PLUGINS_DIR`. Returns `None` when neither resolves, so
+/// the caller just omits the layer. The dir need not exist — `load_layered`
+/// treats an absent layer as empty. Letting users drop a `<id>.toml` here means
+/// adding/overriding a CLI without forking the repo.
+pub fn user_plugins_dir() -> Option<PathBuf> {
+    if let Ok(p) = std::env::var("FLOCKMUX_USER_CLI_PLUGINS_DIR") {
+        return Some(PathBuf::from(p));
+    }
+    std::env::var("HOME")
+        .ok()
+        .map(|h| PathBuf::from(h).join(".flockmux").join("cli-plugins"))
 }
 
 #[cfg(test)]
@@ -341,5 +404,75 @@ binary="x"
         assert_eq!(p.trust_format, TrustFormat::None);
         assert_eq!(p.mcp_format, McpFormat::None);
         assert_eq!(p.stop_hook_format, StopHookFormat::None);
+    }
+
+    /// L5a: a user-layer `<id>.toml` overrides the bundled one (last-writer-wins),
+    /// a user-only id is added, and a malformed user file is skipped without
+    /// dropping the bundled plugins.
+    #[test]
+    fn layered_override_last_writer_wins() {
+        let base = tempfile::tempdir().unwrap();
+        let user = tempfile::tempdir().unwrap();
+
+        // Bundled layer: claude + codex.
+        std::fs::write(
+            base.path().join("claude.toml"),
+            "id=\"claude\"\ndisplay_name=\"Claude (bundled)\"\nbinary=\"claude\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            base.path().join("codex.toml"),
+            "id=\"codex\"\ndisplay_name=\"Codex\"\nbinary=\"codex\"\n",
+        )
+        .unwrap();
+
+        // User layer: override claude's binary + add a brand-new gemini.
+        std::fs::write(
+            user.path().join("claude.toml"),
+            "id=\"claude\"\ndisplay_name=\"Claude (user)\"\nbinary=\"/opt/claude-nightly\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            user.path().join("gemini.toml"),
+            "id=\"gemini\"\ndisplay_name=\"Gemini\"\nbinary=\"gemini\"\n",
+        )
+        .unwrap();
+        // A malformed user file must not nuke the rest.
+        std::fs::write(user.path().join("broken.toml"), "id = \nnot valid toml").unwrap();
+
+        let reg = PluginRegistry::load_layered(&[
+            base.path().to_path_buf(),
+            user.path().to_path_buf(),
+        ]);
+
+        // claude came from the user layer (override won).
+        let claude = reg.get("claude").expect("claude present");
+        assert_eq!(claude.display_name, "Claude (user)");
+        assert_eq!(claude.binary, "/opt/claude-nightly");
+        // codex untouched (only in bundled layer).
+        assert_eq!(reg.get("codex").unwrap().display_name, "Codex");
+        // gemini added purely from the user layer.
+        assert!(reg.get("gemini").is_some(), "user-only CLI added");
+        // broken.toml skipped, everyone else survived.
+        assert_eq!(reg.list().len(), 3, "claude + codex + gemini");
+    }
+
+    /// An entirely absent user layer is a no-op (the common case), and a missing
+    /// bundled layer just yields an empty registry — never a panic/error.
+    #[test]
+    fn layered_tolerates_absent_layers() {
+        let base = tempfile::tempdir().unwrap();
+        std::fs::write(
+            base.path().join("claude.toml"),
+            "id=\"claude\"\ndisplay_name=\"Claude\"\nbinary=\"claude\"\n",
+        )
+        .unwrap();
+        let missing = base.path().join("does-not-exist");
+
+        let reg = PluginRegistry::load_layered(&[base.path().to_path_buf(), missing.clone()]);
+        assert_eq!(reg.list().len(), 1, "absent override layer is a no-op");
+
+        let empty = PluginRegistry::load_layered(&[missing]);
+        assert!(empty.list().is_empty(), "all-absent layers → empty, not error");
     }
 }

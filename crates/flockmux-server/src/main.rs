@@ -93,10 +93,16 @@ async fn main() -> Result<()> {
         )
         .init();
 
+    // L5a: layered registry — bundled `cli-plugins/` first, then the user
+    // override layer `~/.flockmux/cli-plugins/` (last-writer-wins by id). Lets
+    // a user customize or add a CLI without forking the repo.
     let plugins_dir = plugins::default_plugins_dir();
-    info!(dir = %plugins_dir.display(), "loading cli plugins");
-    let plugin_registry = plugins::PluginRegistry::load_dir(&plugins_dir)
-        .with_context(|| format!("load plugins from {}", plugins_dir.display()))?;
+    let mut plugin_layers = vec![plugins_dir.clone()];
+    if let Some(user_dir) = plugins::user_plugins_dir() {
+        plugin_layers.push(user_dir);
+    }
+    info!(layers = ?plugin_layers, "loading cli plugins (bundled + user override)");
+    let plugin_registry = plugins::PluginRegistry::load_layered(&plugin_layers);
     info!(count = plugin_registry.list().len(), "plugins loaded");
 
     let spells_dir = spells::default_spells_dir();
