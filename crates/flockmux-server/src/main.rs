@@ -6,7 +6,11 @@
 //!   DELETE /api/agent/:id      — kill an agent
 //!   WS   /ws/pty/:id           — bidirectional PTY bridge
 //!
-//! Bind: 127.0.0.1:7777 (loopback only — no auth, single-user local).
+//! Bind: 127.0.0.1:7777 (loopback only, single-user local). There is no
+//! token auth yet, but `require_local_origin` rejects any request carrying a
+//! non-local `Origin` header — this is what stops a random web page the user
+//! visits from driving their agents over a cross-site WebSocket (WS bypasses
+//! CORS, so the CORS layer alone is not a security boundary).
 
 mod plugins;
 mod pre_spawn;
@@ -20,6 +24,10 @@ mod wake;
 
 use anyhow::{Context, Result};
 use axum::{
+    extract::Request,
+    http::{header, StatusCode},
+    middleware::{self, Next},
+    response::{IntoResponse, Response},
     routing::{delete, get, post},
     Router,
 };
@@ -267,8 +275,16 @@ async fn main() -> Result<()> {
         .route("/api/spell/run", post(routes::rest::run_spell))
         .route("/ws/swarm", get(routes::ws_swarm::ws_swarm))
         .route("/ws/pty/:agent_id", get(routes::pty_ws::pty_ws))
-        .layer(CorsLayer::permissive())  // localhost dev convenience
+        // CORS stays permissive so the Tauri webview's cross-origin fetch
+        // (tauri://localhost → 127.0.0.1:7777) keeps working. The actual
+        // security boundary is `require_local_origin` below, which rejects
+        // any request whose Origin isn't a local host — including the
+        // cross-site WebSocket upgrades that CORS does NOT cover.
+        .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
+        // Outermost layer (added last ⇒ runs first): drop cross-site
+        // requests before they reach any handler.
+        .layer(middleware::from_fn(require_local_origin))
         .with_state(state.clone());
 
     // FLOCKMUX_PORT env override — used to stand up a parallel test
@@ -280,7 +296,7 @@ async fn main() -> Result<()> {
         .and_then(|s| s.parse().ok())
         .unwrap_or(7777);
     let addr: SocketAddr = ([127, 0, 0, 1], port).into();
-    info!(%addr, "flockmux-server listening (loopback only, no auth)");
+    info!(%addr, "flockmux-server listening (loopback only; cross-origin requests rejected)");
     let listener = tokio::net::TcpListener::bind(addr).await?;
 
     // Magentic-One restart resilience: for every alive workspace whose
@@ -506,4 +522,82 @@ fn acquire_singleton_lock(db_path: &std::path::Path) -> Result<()> {
     Box::leak(Box::new(lock_file));
     info!(lock = %lock_path.display(), "acquired singleton lock");
     Ok(())
+}
+
+/// Reject cross-site requests. flockmux binds loopback with no token auth,
+/// but a browser will happily open a cross-origin WebSocket to
+/// `ws://127.0.0.1:7777` (WS bypasses CORS and sends no preflight), so any
+/// web page the user happens to visit could otherwise spawn agents, inject
+/// keystrokes into a live PTY, or read the blackboard.
+///
+/// Gate on the `Origin` header:
+///   * no `Origin` → native client (the MCP subprocess via reqwest, curl,
+///     the Tauri webview's own asset-scheme requests) → **allow**.
+///   * `Origin` present → allow only if its host is a local host (loopback or
+///     `*.localhost`): covers vite dev (`http://localhost:5173`), the bundle
+///     served on `:7777`, and the Tauri webview (`tauri://localhost` /
+///     `tauri.localhost`). Anything else (e.g. `http://evil.com`) → **403**.
+async fn require_local_origin(req: Request, next: Next) -> Response {
+    if let Some(origin) = req.headers().get(header::ORIGIN) {
+        let allowed = origin.to_str().ok().map(origin_is_local).unwrap_or(false);
+        if !allowed {
+            tracing::warn!(?origin, "rejected cross-origin request");
+            return (
+                StatusCode::FORBIDDEN,
+                "cross-origin request rejected (flockmux is loopback-only)",
+            )
+                .into_response();
+        }
+    }
+    next.run(req).await
+}
+
+/// True if an `Origin` header value (e.g. `http://localhost:5173`,
+/// `tauri://localhost`, `https://tauri.localhost`) points at a local host.
+/// A literal `null` origin (sandboxed iframe / `file://`) has no `://` host
+/// component → not local → rejected.
+fn origin_is_local(origin: &str) -> bool {
+    let host = match origin.split_once("://") {
+        Some((_scheme, rest)) => rest.split(['/', ':']).next().unwrap_or(""),
+        None => return false,
+    };
+    host == "127.0.0.1"
+        || host == "localhost"
+        || host == "::1"
+        || host == "[::1]"
+        || host.ends_with(".localhost")
+}
+
+#[cfg(test)]
+mod origin_tests {
+    use super::origin_is_local;
+
+    #[test]
+    fn allows_local_origins() {
+        for o in [
+            "http://localhost:5173",   // vite dev
+            "http://127.0.0.1:7777",   // bundle served by the server
+            "http://localhost:7777",
+            "http://127.0.0.1:4173",   // vite preview / sidecar test recipe
+            "tauri://localhost",       // macOS asset scheme
+            "https://tauri.localhost", // Windows/Linux asset scheme
+            "http://tauri.localhost",
+        ] {
+            assert!(origin_is_local(o), "should allow {o}");
+        }
+    }
+
+    #[test]
+    fn rejects_remote_and_null() {
+        for o in [
+            "http://evil.com",
+            "https://attacker.example:443",
+            "http://localhost.evil.com", // suffix attack — host is .evil.com
+            "http://notlocalhost",
+            "null", // sandboxed iframe / file://
+            "",
+        ] {
+            assert!(!origin_is_local(o), "should reject {o}");
+        }
+    }
 }
