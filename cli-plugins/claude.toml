@@ -12,11 +12,6 @@ binary = "claude"
 # would gate on a manual "1. Yes" in the PTY and block M5-style
 # autonomous coordination.
 default_args = ["--dangerously-skip-permissions"]
-ready_detect = "shim_osc"
-# M4 honors `auto_inject_mcp = true` and writes a per-spawn
-# `flockmux-swarm` entry into ~/.claude.json local scope. `mcp_inject` is
-# kept as documentation of which channel is used.
-mcp_inject = "claude_local_scope"
 home_env = "HOME"
 # Workspaces we create under ~/.flockmux/workspaces/ are trusted by
 # construction; pre-patch the per-project flag so claude doesn't prompt.

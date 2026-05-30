@@ -103,13 +103,6 @@ pub struct CliPlugin {
     pub binary: String,
     #[serde(default)]
     pub default_args: Vec<String>,
-    /// One of: `shim_osc`, `prompt_pattern`, `none`. M1 only honours
-    /// `shim_osc` (the others are stubs for M2+).
-    #[serde(default = "default_ready_detect")]
-    pub ready_detect: String,
-    /// One of: `project_mcp_json`, `codex_toml`, `none`. Unused in M1.
-    #[serde(default = "default_mcp_inject")]
-    pub mcp_inject: String,
     /// Env var name to pass through from the server process (so the CLI
     /// can find its OAuth credentials at `$HOME/.claude/` etc.). Default
     /// is "HOME".
@@ -173,8 +166,6 @@ pub struct CliPlugin {
     pub stop_hook_format: StopHookFormat,
 }
 
-fn default_ready_detect() -> String { "shim_osc".into() }
-fn default_mcp_inject() -> String { "none".into() }
 fn default_home_env() -> String { "HOME".into() }
 
 #[derive(Debug, Clone, Default)]

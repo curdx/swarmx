@@ -11,11 +11,6 @@ binary = "codex"
 # preset; we use the canonical long form so the intent is explicit in
 # logs. Codex still refuses to start under root, which we never do.
 default_args = ["--dangerously-bypass-approvals-and-sandbox"]
-ready_detect = "shim_osc"
-# M4 honors `auto_inject_mcp = true` and appends a single global
-# `[mcp_servers.flockmux-swarm]` section to ~/.codex/config.toml.
-# `mcp_inject` is kept as documentation of which channel is used.
-mcp_inject = "codex_global_toml"
 home_env = "HOME"
 # Pre-spawn ensures ~/.codex/config.toml carries one global
 # `[mcp_servers.flockmux-swarm]` block. Per-spawn agent identity rides in
