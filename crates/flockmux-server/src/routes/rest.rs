@@ -158,7 +158,7 @@ fn max_live_agents() -> usize {
         .ok()
         .and_then(|s| s.parse::<usize>().ok())
         .filter(|&n| n > 0)
-        .unwrap_or(24)
+        .unwrap_or(256)
 }
 
 /// Max delegation depth (orchestrator → worker → worker → …). Env override
