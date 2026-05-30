@@ -223,7 +223,15 @@ impl Swarm {
 
         let rel_owned = rel_path.to_string();
         let now = now_ms();
-        let record = self
+        // The content is now durably on disk. The op-log insert is for history
+        // + discovery (swarm_list_blackboard) + the FTS index — it is NOT
+        // load-bearing for the wake. So a failed insert (SQLITE_BUSY past the
+        // retry budget, disk-full, …) must NOT swallow the BlackboardChanged:
+        // dropping it would silently strand every depends_on subscriber (F6).
+        // On failure we log, still broadcast (with a sentinel id = -1), and
+        // still return Ok — the write genuinely happened; only the op-log row
+        // is missing (a future reconcile can backfill it).
+        match self
             .store
             .insert_blackboard_op(NewBlackboardOp {
                 agent_id: agent_id.clone(),
@@ -234,18 +242,44 @@ impl Swarm {
                 at: now,
             })
             .await
-            .context("store.insert_blackboard_op")?;
-
-        let _ = self.events_tx.send(SwarmEvent::BlackboardChanged {
-            id: record.id,
-            agent_id,
-            op: "write".into(),
-            path: rel_owned,
-            sha256: sha,
-            at: now,
-        });
-
-        Ok(record)
+        {
+            Ok(record) => {
+                let _ = self.events_tx.send(SwarmEvent::BlackboardChanged {
+                    id: record.id,
+                    agent_id,
+                    op: "write".into(),
+                    path: rel_owned,
+                    sha256: sha,
+                    at: now,
+                });
+                Ok(record)
+            }
+            Err(e) => {
+                tracing::warn!(
+                    ?e,
+                    path = %rel_owned,
+                    "blackboard op-log insert failed; content IS on disk — broadcasting the \
+                     wake anyway (id=-1) so dependents aren't stranded (F6)"
+                );
+                let _ = self.events_tx.send(SwarmEvent::BlackboardChanged {
+                    id: -1,
+                    agent_id: agent_id.clone(),
+                    op: "write".into(),
+                    path: rel_owned.clone(),
+                    sha256: sha.clone(),
+                    at: now,
+                });
+                Ok(BlackboardOpRecord {
+                    id: -1,
+                    agent_id,
+                    op: "write".into(),
+                    path: rel_owned,
+                    content: content.to_string(),
+                    sha256: sha,
+                    at: now,
+                })
+            }
+        }
     }
 
     /// Read the latest content of a blackboard file.
