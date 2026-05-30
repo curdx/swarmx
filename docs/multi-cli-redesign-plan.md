@@ -9,7 +9,8 @@
 > - ✅ **F9 已修**：`load_dir` 改为 warn-skip（单个坏 TOML 不再拖垮全部 CLI / 缺目录非致命 / 重复 id 告警）。
 > - ✅ **`ready_plan` DSL（answer_dialog）已落地**：新增 `ReadyStep`/`ReadyStepKind`（plugins.rs）+ `ReadyPlanRunner`（spawn.rs）取代写死的 `DialogAutoAnswer`；删除 `auto_answer_hooks_dialog` 布尔；codex 的 "Hooks need review"→`2\r` 改为 `codex.toml` 里的 `[[ready_plan]]` 数据；支持一个 CLI 列多个对话框、零 Rust。8 个 runner 单测 + manifest 守卫断言。启动自检干净。
 > - ✅ **F22 已修（bootstrap 去重）**：`spawn_worker` 与 `run_spell` 两份近乎逐字重复的 bootstrap 注入抽成单个 `spawn_bootstrap_inject(registry, rx, agent_id, prompt, BootstrapCtx)`（rest.rs，净 −37 行）；`2500ms` / `150ms` 等时序常量现在各只出现一次 = 唯一改动点。差异（worker raw prompt vs spell render_prompt、日志字段、占位符诊断）经 `BootstrapCtx` 参数化。全测试绿。
-> - ⏳ **待做**：把 bootstrap 的 `2500ms` 固定 sleep 换成对 MCP-ready banner 的 `wait_for`（机制可在 `spawn_bootstrap_inject` 里读 `slot.stream` 扫描，加超时兜底；但**banner 正则是 per-CLI 且版本相关，需真起一次 claude/codex 观察实际文案**才能定准 → 留待带真实 spawn 的验证）、`ready_plan` 的 `wait_for`/`input`/`extract_session_id`（顺序 onboarding）、`[stop_hook]` timeout 外置、`[input]`/`[ui]` + 前端 `CliPluginInfo` 数据化、删死字段 `mcp_inject`/`ready_detect`（F8）、L3 golden 测试、L4/L5。
+> - ✅ **F8 已修 + stop_hook 超时外置**：删除死字段 `mcp_inject`/`ready_detect`（零引用，纯误导）；Stop-hook 超时从两个 Rust 常量（claude 10000ms / codex 10s）搬进 manifest 的 `stop_hook_timeout`（各自原生单位写入），消除"未来 CLI 复用错常量→1000× 超时"的隐患。manifest 守卫断言锁定。
+> - ⏳ **待做**：把 bootstrap 的 `2500ms` 固定 sleep 换成对 MCP-ready banner 的 `wait_for`（机制可在 `spawn_bootstrap_inject` 里读 `slot.stream` 扫描，加超时兜底；但**banner 正则是 per-CLI 且版本相关，需真起一次 claude/codex 观察实际文案**才能定准 → 留待带真实 spawn 的验证）、`ready_plan` 的 `wait_for`/`input`/`extract_session_id`（顺序 onboarding）、`[input]`/`[ui]` + 前端 `CliPluginInfo` 数据化、L3 golden 测试、L4/L5。
 > - 现状净效果：**第三个 CLI 若复用 claude/codex 的配置格式 = 纯填 `cli-plugins/<id>.toml`，零 Rust**；若格式全新 = 加 1 个枚举值 + 1 个 writer + 1 个 match 臂（局部，不再散落）。
 
 ---
