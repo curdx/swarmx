@@ -52,63 +52,12 @@ import {
   roleColorClass as roleColor,
   roleColorHex as roleHex,
 } from "@/lib/agent";
+import {
+  deriveHandoffEdges,
+  deriveSpawnEdges,
+  liveAgents,
+} from "@/lib/dagEdgeDerivation";
 import { useState } from "react";
-
-interface DerivedEdge {
-  producerId: string;
-  dependentId: string;
-  key: string;
-  satisfied: boolean;
-}
-
-function deriveEdges(
-  agents: AgentInfo[],
-  bbAt: Map<string, number>,
-): DerivedEdge[] {
-  const producers = new Map<string, AgentInfo>();
-  for (const a of agents) {
-    if (a.handoff_signal) producers.set(a.handoff_signal, a);
-  }
-  const out: DerivedEdge[] = [];
-  for (const dep of agents) {
-    for (const key of dep.depends_on ?? []) {
-      const prod = producers.get(key);
-      if (!prod) continue;
-      const writtenAt = bbAt.get(key);
-      const satisfied =
-        writtenAt != null &&
-        dep.spawned_at != null &&
-        writtenAt >= dep.spawned_at;
-      out.push({
-        producerId: prod.agent_id,
-        dependentId: dep.agent_id,
-        key,
-        satisfied,
-      });
-    }
-  }
-  return out;
-}
-
-interface SpawnEdge {
-  parentId: string;
-  childId: string;
-}
-
-/** Parent → child edges derived from `parent_agent_id` (server fills this in
- *  from spell_runs.caller_agent_id). Only emitted when the parent is also in
- *  the displayed set — orphaned children (parent already exited) render as
- *  roots, which matches the layout's "no incoming = top" behavior. */
-function deriveSpawnEdges(agents: AgentInfo[]): SpawnEdge[] {
-  const idSet = new Set(agents.map((a) => a.agent_id));
-  const out: SpawnEdge[] = [];
-  for (const a of agents) {
-    if (!a.parent_agent_id) continue;
-    if (!idSet.has(a.parent_agent_id)) continue;
-    out.push({ parentId: a.parent_agent_id, childId: a.agent_id });
-  }
-  return out;
-}
 
 const NODE_W = 200;
 const NODE_H = 80;
@@ -208,13 +157,10 @@ interface CanvasProps {
 }
 
 function Canvas({ agents, bbAt, selectedId, onSelect, showMinimap }: CanvasProps) {
-  const live = useMemo(
-    () => agents.filter((a) => a.killed_at == null && a.shim_exit == null),
-    [agents],
-  );
+  const live = useMemo(() => liveAgents(agents), [agents]);
 
   const edges = useMemo<Edge[]>(() => {
-    const handoff = deriveEdges(live, bbAt);
+    const handoff = deriveHandoffEdges(live, bbAt);
     const spawn = deriveSpawnEdges(live);
     const handoffEdges: Edge[] = handoff.map((e, i) => ({
       id: `h-${i}-${e.producerId}-${e.dependentId}`,

@@ -17,16 +17,18 @@ import type { MessageRecord, SwarmEvent } from "../api/types";
 import { MessagesPanel } from "./MessagesPanel";
 import { BlackboardPanel } from "./BlackboardPanel";
 import { RecordingsPanel } from "./RecordingsPanel";
-import { GraphPanel } from "./GraphPanel";
 
-type Tab = "messages" | "blackboard" | "graph" | "recordings";
+// The collaboration graph lives in the primary product at /chat/:wsId/dag
+// (ReactFlow + dagre). The old hand-rolled SVG GraphPanel that used to be a
+// tab here was deleted — there's now ONE DAG implementation (edge logic in
+// lib/dagEdgeDerivation), so the two can no longer drift.
+type Tab = "messages" | "blackboard" | "recordings";
 
 // 中文显示名：tab 内部 key 仍用英文（避免改一堆 switch/比较），
 // 渲染时映射到中文。
 const TAB_LABELS: Record<Tab, string> = {
   messages: "消息",
   blackboard: "黑板",
-  graph: "图谱",
   recordings: "录像",
 };
 
@@ -44,10 +46,6 @@ export function SwarmPanel() {
     op: string;
   } | null>(null);
   const [recordingsTick, setRecordingsTick] = useState(0);
-  // Bumped on every agent_state event (any state, not just exited) so the
-  // GraphPanel can refresh `GET /api/agent` and pick up new spawns AND
-  // exits. Recordings panel only cares about exits — keep that separate.
-  const [agentTick, setAgentTick] = useState(0);
   const [unreadByFrom, setUnreadByFrom] = useState<Record<string, number>>({});
 
   // Reverse lookup: id → from_agent. Lets `message_read` events decrement
@@ -125,9 +123,8 @@ export function SwarmPanel() {
           });
           break;
         case "agent_state":
-          // Any state change triggers a graph refresh (new spawns,
-          // shim_ready transitions, exits all change what we draw).
-          setAgentTick((t) => t + 1);
+          // Only exits matter to this panel now (the Recordings tab); the
+          // graph that consumed every state change moved to /chat/:wsId/dag.
           if (ev.state === "exited") {
             setRecordingsTick((t) => t + 1);
           }
@@ -136,7 +133,6 @@ export function SwarmPanel() {
     },
     onReconnect: () => {
       setRecordingsTick((t) => t + 1);
-      setAgentTick((t) => t + 1);
       recomputeUnread();
     },
   });
@@ -146,7 +142,7 @@ export function SwarmPanel() {
   return (
     <aside style={container}>
       <div style={tabBar}>
-        {(["messages", "blackboard", "graph", "recordings"] as Tab[]).map((t) => (
+        {(["messages", "blackboard", "recordings"] as Tab[]).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -188,9 +184,6 @@ export function SwarmPanel() {
           />
         )}
         {tab === "blackboard" && <BlackboardPanel liveChange={liveChange} />}
-        {tab === "graph" && (
-          <GraphPanel liveChange={liveChange} agentTick={agentTick} />
-        )}
         {tab === "recordings" && <RecordingsPanel refreshTick={recordingsTick} />}
       </div>
     </aside>

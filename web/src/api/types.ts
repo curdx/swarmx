@@ -84,7 +84,8 @@ export interface AgentInfo {
   spell_run_id?: string | null;
   /** Derived server-side from spell_runs.caller_agent_id. Non-null only
    *  for sub-agents spawned via MCP `swarm_run_spell` from another agent.
-   *  Drives the "雇佣关系" (parent → child) overlay in GraphPanel. */
+   *  Drives the parent → child spawn edges in the DAG view (see
+   *  lib/dagEdgeDerivation deriveSpawnEdges). */
   parent_agent_id?: string | null;
   /** In-memory pause state. True when the operator has hit "暂停" — the
    *  WakeCoordinator skips auto-wake for this agent until resume. Manual
