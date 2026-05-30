@@ -19,4 +19,4 @@ pub use models::{
     NewMessage, NewRecording, NewSpellRun, NewWorker, NewWorkspace, NewWorkspaceRoot,
     RecordingRecord, SpellRunRecord, WorkerRecord, WorkspaceRecord, WorkspaceRootRecord,
 };
-pub use store::Store;
+pub use store::{PruneStats, Store};

@@ -52,6 +52,24 @@ fn with_busy_retry<T>(
     }
 }
 
+/// What a single [`Store::prune_expired`] pass removed. All counts are rows
+/// actually deleted; `recording_files_removed` is the subset of pruned
+/// recordings whose `.cast` file was also unlinked from disk (best-effort).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PruneStats {
+    pub blackboard_ops: usize,
+    pub messages: usize,
+    pub recordings: usize,
+    pub recording_files_removed: usize,
+}
+
+impl PruneStats {
+    /// True if nothing was deleted — lets the caller skip a log line.
+    pub fn is_empty(&self) -> bool {
+        self.blackboard_ops == 0 && self.messages == 0 && self.recordings == 0
+    }
+}
+
 /// Thread-safe handle to the SQLite store. Cheap to clone — wraps an `Arc`
 /// over the r2d2 pool.
 #[derive(Clone)]
@@ -641,6 +659,127 @@ impl Store {
         }))
         .await
         .context("spawn_blocking get_recording")?
+    }
+
+    // ── retention / prune (F5) ───────────────────────────────────────────
+
+    /// Delete rows older than `cutoff_ms` from the three append-only tables,
+    /// preserving everything still load-bearing. Returns what was removed.
+    ///
+    /// Safety constraints (see the audit's F5):
+    /// - **blackboard_ops**: only superseded history (`at < cutoff` AND there
+    ///   exists a newer row for the same path) is deleted. The latest row per
+    ///   path is ALWAYS kept regardless of age — `list_blackboard_ops(None)`
+    ///   (discovery) and `reconcile_oplog_from_disk` both read latest-per-path,
+    ///   so dropping it would make the key vanish. The FTS index is kept in
+    ///   sync by the `blackboard_ad` AFTER DELETE trigger.
+    /// - **messages**: only consumed wakes (`kind='wake' AND read_at NOT NULL`)
+    ///   and delivered+read normal messages are deleted. Un-consumed wakes
+    ///   (`read_at IS NULL`) are NEVER deleted — the WakeCoordinator depends on
+    ///   them. Rows still referenced by another message's `in_reply_to` are
+    ///   skipped so the delete can't trip the (immediate) FK constraint;
+    ///   they age out on a later pass once their children are gone.
+    /// - **pty_recordings**: only finalized rows (`finalized_at NOT NULL`) old
+    ///   enough are deleted, and their `.cast` file is unlinked best-effort.
+    ///   Live recordings are left alone.
+    ///
+    /// Idempotent and crash-safe: the three deletes run in one transaction,
+    /// and a partial run just removes fewer rows next time. After committing
+    /// we checkpoint+truncate the WAL and `PRAGMA optimize` (best-effort) so
+    /// freed pages don't leave the file bloated.
+    pub async fn prune_expired(&self, cutoff_ms: i64) -> Result<PruneStats> {
+        let pool = self.pool.clone();
+        let (mut stats, files): (PruneStats, Vec<String>) =
+            tokio::task::spawn_blocking(move || -> Result<(PruneStats, Vec<String>)> {
+                with_busy_retry(&pool, |conn| -> rusqlite::Result<(PruneStats, Vec<String>)> {
+                    let tx = conn.transaction()?;
+
+                    // Collect .cast paths BEFORE deleting the rows so we can
+                    // unlink them after the tx commits.
+                    let files: Vec<String> = {
+                        let mut stmt = tx.prepare(
+                            "SELECT path FROM pty_recordings \
+                             WHERE finalized_at IS NOT NULL AND started_at < ?1",
+                        )?;
+                        let rows = stmt
+                            .query_map(params![cutoff_ms], |r| r.get::<_, String>(0))?;
+                        rows.collect::<rusqlite::Result<Vec<_>>>()?
+                    };
+
+                    let recordings = tx.execute(
+                        "DELETE FROM pty_recordings \
+                         WHERE finalized_at IS NOT NULL AND started_at < ?1",
+                        params![cutoff_ms],
+                    )?;
+
+                    // Superseded blackboard history only — never the latest
+                    // row for a path (id < MAX(id) for that path).
+                    let blackboard_ops = tx.execute(
+                        "DELETE FROM blackboard_ops \
+                         WHERE at < ?1 \
+                           AND id < (SELECT MAX(id) FROM blackboard_ops b2 \
+                                     WHERE b2.path = blackboard_ops.path)",
+                        params![cutoff_ms],
+                    )?;
+
+                    // Consumed wakes + delivered/read normal messages, and only
+                    // ones not referenced as a thread parent (FK-safe).
+                    let messages = tx.execute(
+                        "DELETE FROM messages \
+                         WHERE sent_at < ?1 \
+                           AND id NOT IN ( \
+                               SELECT in_reply_to FROM messages \
+                               WHERE in_reply_to IS NOT NULL) \
+                           AND ( \
+                               (kind = 'wake' AND read_at IS NOT NULL) \
+                            OR (kind != 'wake' AND delivered_at IS NOT NULL \
+                                AND read_at IS NOT NULL))",
+                        params![cutoff_ms],
+                    )?;
+
+                    tx.commit()?;
+                    Ok((
+                        PruneStats {
+                            blackboard_ops,
+                            messages,
+                            recordings,
+                            recording_files_removed: 0,
+                        },
+                        files,
+                    ))
+                })
+            })
+            .await
+            .context("spawn_blocking prune_expired")??;
+
+        // Unlink pruned .cast files (filesystem, outside the DB tx).
+        let mut removed = 0usize;
+        for f in &files {
+            match std::fs::remove_file(f) {
+                Ok(()) => removed += 1,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => tracing::warn!(path = %f, ?e, "prune: failed to unlink .cast file"),
+            }
+        }
+        stats.recording_files_removed = removed;
+
+        // Post-prune hygiene (best-effort): bound the WAL and refresh planner
+        // stats. Not part of the prune contract — failures are logged, ignored.
+        if !stats.is_empty() {
+            let pool2 = self.pool.clone();
+            let _ = tokio::task::spawn_blocking(move || {
+                if let Ok(conn) = pool2.get() {
+                    if let Err(e) =
+                        conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE); PRAGMA optimize;")
+                    {
+                        tracing::warn!(?e, "prune: post-prune WAL checkpoint/optimize failed");
+                    }
+                }
+            })
+            .await;
+        }
+
+        Ok(stats)
     }
 
     // ── workspaces ───────────────────────────────────────────────────────

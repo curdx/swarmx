@@ -2,7 +2,7 @@
 //! `TempDir` so they parallelise safely.
 
 use flockmux_storage::{
-    ListMessagesOpts, NewAgent, NewBlackboardOp, NewMessage, NewRecording, Store,
+    ListMessagesOpts, MessageRecord, NewAgent, NewBlackboardOp, NewMessage, NewRecording, Store,
 };
 use tempfile::TempDir;
 
@@ -711,4 +711,146 @@ async fn mark_orphan_recordings_finalized_only_live_rows() {
     assert_eq!(done.finalized_at, Some(ts(50)));
     assert_eq!(done.duration_ms, Some(50));
     assert_eq!(done.last_seq, Some(7));
+}
+
+// ── retention / prune (F5) ──────────────────────────────────────────────────
+
+fn bb(path: &str, content: &str, at: i64) -> NewBlackboardOp {
+    NewBlackboardOp {
+        agent_id: Some("a".into()),
+        op: "write".into(),
+        path: path.into(),
+        content: content.into(),
+        sha256: format!("sha-{content}"),
+        at,
+    }
+}
+
+#[tokio::test]
+async fn prune_keeps_every_load_bearing_row() {
+    let (dir, store) = fresh_store().await;
+    let cutoff = ts(1000); // rows with timestamp < cutoff are "old"
+
+    // ── blackboard ──────────────────────────────────────────────────────
+    // path "p": two old superseded rows + one recent latest → 2 deletable.
+    store.insert_blackboard_op(bb("p", "p-v0", ts(0))).await.unwrap();
+    store.insert_blackboard_op(bb("p", "p-v1", ts(100))).await.unwrap();
+    store.insert_blackboard_op(bb("p", "p-v2", ts(2000))).await.unwrap();
+    // path "q": single OLD row — it's the latest for q, must be KEPT despite age.
+    store.insert_blackboard_op(bb("q", "q-v0", ts(0))).await.unwrap();
+    // path "r": old superseded + old latest → only the superseded one deletable.
+    store.insert_blackboard_op(bb("r", "r-v0", ts(0))).await.unwrap();
+    store.insert_blackboard_op(bb("r", "r-v1", ts(50))).await.unwrap();
+
+    // ── messages ────────────────────────────────────────────────────────
+    let id = |m: MessageRecord| m.id;
+    // m1: old normal note, delivered+read → deletable.
+    let m1 = id(store.insert_message(NewMessage {
+        from_agent: "x".into(), to_agent: "a".into(), kind: "note".into(),
+        body: "old read".into(), sent_at: ts(0), in_reply_to: None,
+    }).await.unwrap());
+    store.mark_delivered(vec![m1], ts(1)).await.unwrap();
+    store.mark_read(vec![m1], "a".into(), ts(2)).await.unwrap();
+    // m2: old normal note, NOT delivered/read → KEPT (conservative).
+    store.insert_message(NewMessage {
+        from_agent: "x".into(), to_agent: "a".into(), kind: "note".into(),
+        body: "old unread".into(), sent_at: ts(0), in_reply_to: None,
+    }).await.unwrap();
+    // m3: old wake, UN-consumed (different agent so consume below misses it) → KEPT.
+    store.insert_message(NewMessage {
+        from_agent: "x".into(), to_agent: "keep".into(), kind: "wake".into(),
+        body: "pending wake".into(), sent_at: ts(0), in_reply_to: None,
+    }).await.unwrap();
+    // m4: old wake, consumed → deletable.
+    store.insert_message(NewMessage {
+        from_agent: "x".into(), to_agent: "cons".into(), kind: "wake".into(),
+        body: "spent wake".into(), sent_at: ts(0), in_reply_to: None,
+    }).await.unwrap();
+    let consumed = store.consume_wakes("cons".into(), ts(3)).await.unwrap();
+    assert_eq!(consumed.len(), 1, "only the 'cons' wake is consumed");
+    // m5: recent normal note, delivered+read → KEPT (newer than cutoff).
+    let m5 = id(store.insert_message(NewMessage {
+        from_agent: "x".into(), to_agent: "a".into(), kind: "note".into(),
+        body: "recent".into(), sent_at: ts(2000), in_reply_to: None,
+    }).await.unwrap());
+    store.mark_delivered(vec![m5], ts(2001)).await.unwrap();
+    store.mark_read(vec![m5], "a".into(), ts(2002)).await.unwrap();
+    // m6 parent + m7 child: both old, delivered+read. m6 is referenced by m7
+    // → m6 KEPT this pass (FK-safe), m7 deletable.
+    let m6 = id(store.insert_message(NewMessage {
+        from_agent: "x".into(), to_agent: "a".into(), kind: "note".into(),
+        body: "parent".into(), sent_at: ts(0), in_reply_to: None,
+    }).await.unwrap());
+    store.mark_delivered(vec![m6], ts(1)).await.unwrap();
+    store.mark_read(vec![m6], "a".into(), ts(2)).await.unwrap();
+    let m7 = id(store.insert_message(NewMessage {
+        from_agent: "x".into(), to_agent: "a".into(), kind: "note".into(),
+        body: "child".into(), sent_at: ts(0), in_reply_to: Some(m6),
+    }).await.unwrap());
+    store.mark_delivered(vec![m7], ts(1)).await.unwrap();
+    store.mark_read(vec![m7], "a".into(), ts(2)).await.unwrap();
+
+    // ── recordings ──────────────────────────────────────────────────────
+    let cast = dir.path().join("rec1.cast");
+    std::fs::write(&cast, b"cast bytes").unwrap();
+    store.record_recording_start(NewRecording {
+        id: "rec1".into(), agent_id: "a".into(), path: cast.to_string_lossy().into(),
+        started_at: ts(0), cols: 80, rows: 24,
+    }).await.unwrap();
+    store.record_recording_finalize("rec1".into(), ts(10), 10, 1).await.unwrap();
+    // rec2: old but LIVE (not finalized) → KEPT.
+    store.record_recording_start(NewRecording {
+        id: "rec2".into(), agent_id: "a".into(), path: "/tmp/rec2.cast".into(),
+        started_at: ts(0), cols: 80, rows: 24,
+    }).await.unwrap();
+    // rec3: recent + finalized → KEPT.
+    store.record_recording_start(NewRecording {
+        id: "rec3".into(), agent_id: "a".into(), path: "/tmp/rec3.cast".into(),
+        started_at: ts(2000), cols: 80, rows: 24,
+    }).await.unwrap();
+    store.record_recording_finalize("rec3".into(), ts(2010), 10, 1).await.unwrap();
+
+    // ── prune ───────────────────────────────────────────────────────────
+    let stats = store.prune_expired(cutoff).await.unwrap();
+    assert_eq!(stats.blackboard_ops, 3, "p:2 + r:1 superseded-old rows");
+    assert_eq!(stats.messages, 3, "m1 (read) + m4 (consumed wake) + m7 (child)");
+    assert_eq!(stats.recordings, 1, "rec1 old+finalized");
+    assert_eq!(stats.recording_files_removed, 1, "rec1.cast unlinked");
+
+    // blackboard: all three paths still discoverable, latest content intact.
+    let latest = store.list_blackboard_ops(None).await.unwrap();
+    let mut paths: Vec<&str> = latest.iter().map(|r| r.path.as_str()).collect();
+    paths.sort();
+    assert_eq!(paths, vec!["p", "q", "r"], "no path lost discovery");
+    let p_rows = store.list_blackboard_ops(Some("p".into())).await.unwrap();
+    assert_eq!(p_rows.len(), 1, "p keeps only its latest row");
+    assert_eq!(p_rows[0].content, "p-v2");
+
+    // recordings: rec1 row + file gone; rec2 (live) + rec3 (recent) kept.
+    assert!(!cast.exists(), "pruned .cast file removed from disk");
+    assert!(store.get_recording("rec1".into()).await.unwrap().is_none());
+    assert!(store.get_recording("rec2".into()).await.unwrap().is_some());
+    assert!(store.get_recording("rec3".into()).await.unwrap().is_some());
+
+    // messages: kept = m2 (unread), m3 (pending wake), m5 (recent), m6 (parent).
+    let kept_a = store.list_messages(ListMessagesOpts {
+        to_agent: Some("a".into()), limit: 100, ..Default::default()
+    }).await.unwrap();
+    let bodies: Vec<&str> = kept_a.iter().map(|m| m.body.as_str()).collect();
+    assert!(bodies.contains(&"old unread"));
+    assert!(bodies.contains(&"recent"));
+    assert!(bodies.contains(&"parent"));
+    assert!(!bodies.contains(&"old read"), "delivered+read old note pruned");
+    assert!(!bodies.contains(&"child"), "child pruned");
+    let pending = store.list_messages(ListMessagesOpts {
+        to_agent: Some("keep".into()), limit: 100, ..Default::default()
+    }).await.unwrap();
+    assert_eq!(pending.len(), 1, "un-consumed wake must survive");
+
+    // Second pass: m6 is now unreferenced (m7 gone) → ages out. Demonstrates
+    // the FK-safe staged deletion documented on prune_expired.
+    let stats2 = store.prune_expired(cutoff).await.unwrap();
+    assert_eq!(stats2.messages, 1, "orphaned parent ages out next pass");
+    assert_eq!(stats2.blackboard_ops, 0);
+    assert_eq!(stats2.recordings, 0);
 }

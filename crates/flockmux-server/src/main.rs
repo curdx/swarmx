@@ -172,6 +172,27 @@ async fn main() -> Result<()> {
         Err(err) => tracing::warn!(?err, "blackboard op-log reconcile failed"),
     }
 
+    // F5 retention: the three append-only tables (blackboard_ops, messages,
+    // pty_recordings) otherwise grow forever. Trim rows past the retention
+    // window — but only ones that are no longer load-bearing (superseded
+    // blackboard history, consumed wakes + read messages, old finalized
+    // recordings). FLOCKMUX_RETENTION_DAYS=0 keeps everything. Runs once at
+    // boot; never blocks startup on failure.
+    if let Some(window_ms) = retention_window_ms() {
+        let cutoff = orphan_at.saturating_sub(window_ms);
+        match store.prune_expired(cutoff).await {
+            Ok(stats) if !stats.is_empty() => info!(
+                blackboard_ops = stats.blackboard_ops,
+                messages = stats.messages,
+                recordings = stats.recordings,
+                cast_files = stats.recording_files_removed,
+                "pruned expired rows past the retention window"
+            ),
+            Ok(_) => {}
+            Err(err) => tracing::warn!(?err, "retention prune failed; continuing startup"),
+        }
+    }
+
     let recordings_root = recordings_root_default();
     std::fs::create_dir_all(&recordings_root)?;
     info!(recordings = %recordings_root.display(), "recordings root");
@@ -440,6 +461,17 @@ fn workspaces_root_default() -> PathBuf {
         return PathBuf::from(home).join(".flockmux").join("workspaces");
     }
     PathBuf::from(".flockmux/workspaces")
+}
+
+/// Retention window in ms from `FLOCKMUX_RETENTION_DAYS` (default 30 days).
+/// Returns `None` when the var is set to 0 or negative — "keep everything,
+/// never prune". A non-numeric value falls back to the default.
+fn retention_window_ms() -> Option<i64> {
+    let days: i64 = std::env::var("FLOCKMUX_RETENTION_DAYS")
+        .ok()
+        .and_then(|v| v.trim().parse().ok())
+        .unwrap_or(30);
+    (days > 0).then(|| days * 24 * 60 * 60 * 1000)
 }
 
 fn db_path_default() -> PathBuf {
