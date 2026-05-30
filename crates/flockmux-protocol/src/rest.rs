@@ -18,6 +18,12 @@ pub struct SpawnAgentRequest {
     /// CreateWizard. The server will error if missing post-Step-3.
     #[serde(default)]
     pub workspace_id: Option<String>,
+    /// Optional model overlay (L5c). Passed to the CLI via its manifest
+    /// `model_args` template (e.g. claude/codex `--model <v>`). `None` ⇒ use
+    /// the plugin's `default_model`, else the CLI's own default. Decouples
+    /// model from CLI id — same `cli`, any model, no forked plugin/role.
+    #[serde(default)]
+    pub model: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -38,6 +44,11 @@ pub struct CliPluginInfo {
     /// policy be data-driven instead of branching on the agent-id prefix.
     #[serde(default)]
     pub input_settle_ms: u64,
+    /// Default model this CLI runs when a spawn doesn't override it (L5c).
+    /// `None` ⇒ the CLI picks its own default. Surfaced so a future spawn UI
+    /// can pre-fill / offer a model picker without hardcoding per-CLI names.
+    #[serde(default)]
+    pub default_model: Option<String>,
 }
 
 /// One entry in `GET /api/agent`. Mirrors `SpawnAgentResponse` plus the
@@ -134,6 +145,11 @@ pub struct SpawnWorkerRequest {
     /// Worker 所属 workspace。MCP 工具自动从 caller 反查;直接 REST 调用
     /// 时必填。
     pub workspace_id: String,
+    /// 可选 model overlay(L5c)。orchestrator 可给不同 worker 指定不同模型
+    /// (例如规划用 opus、批量执行用 sonnet),无需 fork CLI id 或 role。留空
+    /// 用 plugin.default_model,再无则 CLI 自身默认。
+    #[serde(default)]
+    pub model: Option<String>,
 }
 
 /// `POST /api/worker` 返回 — 新 spawn 的 PTY agent 元数据。

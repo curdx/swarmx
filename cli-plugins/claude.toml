@@ -35,3 +35,9 @@ mcp_format       = "claude-local-scope"    # ~/.claude.json local scope + per-ag
 stop_hook_format = "claude-settings-local" # <ws>/.claude/settings.local.json (timeout ms)
 stop_hook_timeout = 10000                  # milliseconds (claude's hook schema unit)
 input_settle_ms = 0                        # claude accepts keystrokes immediately after ready
+
+# L5c model overlay: how to pass a model to claude. {model} is substituted at
+# spawn time with the per-spawn `model` (REST/MCP) or `default_model` below.
+# claude accepts an alias ('opus'/'sonnet') or a full model id. With no
+# default_model set, claude uses its own configured default.
+model_args = ["--model", "{model}"]

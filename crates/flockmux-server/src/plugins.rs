@@ -177,6 +177,18 @@ pub struct CliPlugin {
     /// data-driven instead of branching on the agent-id prefix. 0 = none.
     #[serde(default)]
     pub input_settle_ms: u64,
+
+    /// L5c — model overlay. Argv template for passing a model to this CLI, with
+    /// a `{model}` placeholder substituted at spawn time. claude & codex both
+    /// take `["--model", "{model}"]`. Lives in the manifest (not Rust) so the
+    /// "host ≠ model" axiom holds: the same CLI runs any model without forking
+    /// the plugin id or a role. Empty ⇒ this CLI can't take a model override.
+    #[serde(default)]
+    pub model_args: Vec<String>,
+    /// Default model applied when a spawn doesn't pass one. `None` ⇒ let the CLI
+    /// pick its own default. A per-spawn `model` (REST/MCP) overrides this.
+    #[serde(default)]
+    pub default_model: Option<String>,
 }
 
 fn default_home_env() -> String { "HOME".into() }
@@ -368,6 +380,11 @@ mod tests {
         // (surfaced via CliPluginInfo), not a startsWith('codex-') branch.
         assert_eq!(claude.input_settle_ms, 0, "claude needs no settle delay");
         assert_eq!(codex.input_settle_ms, 300, "codex needs a ~300ms settle delay");
+
+        // L5c: both ship the model-overlay template so a spawn-time model is
+        // passed via the manifest, not a hardcoded Rust flag.
+        assert_eq!(claude.model_args, vec!["--model", "{model}"], "claude model_args");
+        assert_eq!(codex.model_args, vec!["--model", "{model}"], "codex model_args");
     }
 
     /// A new field with a kebab-case typo must FAIL parse (→ warn-skip at load),

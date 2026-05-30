@@ -31,6 +31,10 @@ export interface CliPluginInfo {
    *  policy so adding a CLI needs no frontend edit. Optional for back-compat
    *  with an older server that doesn't send it. */
   input_settle_ms?: number;
+  /** Default model this CLI runs when a spawn doesn't override it (L5c).
+   *  Undefined ⇒ the CLI picks its own default. A spawn UI can use this to
+   *  pre-fill / offer a model picker without hardcoding per-CLI names. */
+  default_model?: string;
 }
 
 export interface SpawnAgentRequest {
@@ -41,6 +45,10 @@ export interface SpawnAgentRequest {
    *  workspace-as-first-class rollout — the orphan `+ Claude` button
    *  is routed through CreateWizard when no active workspace exists. */
   workspace_id: string;
+  /** Optional model overlay (L5c). Passed to the CLI via its manifest
+   *  `model_args` template. Omit to use the plugin's default_model / the
+   *  CLI's own default. Decouples model from CLI id. */
+  model?: string;
 }
 
 export interface SpawnAgentResponse {

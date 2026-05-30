@@ -164,6 +164,10 @@ pub fn tool_descriptors() -> Vec<Value> {
                         "type": "array",
                         "items": {"type": "string"},
                         "description": "Blackboard keys this worker waits for before doing real work. **MUST** be populated whenever the worker depends on another worker's output — do NOT only write 'wait for X' in the system_prompt text. This field drives (1) WakeCoordinator auto-wake the instant deps land, (2) the DAG view's dashed 'waiting' edges, (3) the workers DB row's depends_on_json. Pass the exact key strings that the upstream worker's handoff_signal produces (typically `<workspace_id>/<signal>`). Empty array means 'start immediately'."
+                    },
+                    "model": {
+                        "type": "string",
+                        "description": "Optional model override for this worker, e.g. 'opus' / 'sonnet' for claude, or a codex model name. Lets you match model strength to the task (heavy reasoning vs. bulk execution) WITHOUT spawning a different cli. Omit to use the CLI's default."
                     }
                 },
                 "required": ["cli", "role_label", "system_prompt"],
@@ -563,6 +567,9 @@ async fn spawn_worker(ctx: &ToolContext, args: &Value) -> Result<String, String>
                 .collect()
         })
         .unwrap_or_default();
+    // Optional model overlay (L5c) — forwarded only when present so the server
+    // falls back to plugin.default_model / the CLI default otherwise.
+    let model = args.get("model").and_then(|v| v.as_str());
 
     // Reverse-resolve our own workspace_id via /api/agent (server attaches
     // workspace_id to every AgentInfo). caller_agent_id is the orchestrator
@@ -603,6 +610,7 @@ async fn spawn_worker(ctx: &ToolContext, args: &Value) -> Result<String, String>
         "depends_on": depends_on,
         "caller_agent_id": ctx.agent_id,
         "workspace_id": workspace_id,
+        "model": model,
     });
 
     let url = format!("{}/api/worker", ctx.server_url);

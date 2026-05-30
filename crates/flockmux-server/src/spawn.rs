@@ -62,6 +62,7 @@ pub enum WorkspaceLayout {
 pub fn spawn_agent(
     plugin: &CliPlugin,
     role: Option<String>,
+    model: Option<String>,
     workspace: &WorkspaceLayout,
     shim_path: &Path,
     mcp_bin: &Path,
@@ -90,6 +91,22 @@ pub fn spawn_agent(
     argv.push(shim_path.to_string_lossy().into_owned());
     argv.push(plugin.binary.clone());
     argv.extend(plugin.default_args.iter().cloned());
+
+    // L5c model overlay: a model passed at spawn time (REST/MCP) wins over the
+    // plugin's default_model. The flag itself (claude & codex both use
+    // `--model <v>`) lives in the manifest's `model_args` template, not here —
+    // host ≠ model: the same CLI runs any model with zero Rust/role forking.
+    match model.or_else(|| plugin.default_model.clone()) {
+        Some(m) if !plugin.model_args.is_empty() => {
+            argv.extend(model_overlay_args(&m, &plugin.model_args));
+            tracing::info!(agent = %agent_id, model = %m, "model overlay applied");
+        }
+        Some(m) => tracing::warn!(
+            agent = %agent_id, model = %m,
+            "model requested but plugin declares no model_args; ignoring"
+        ),
+        None => {}
+    }
 
     // codex 0.130 gates non-managed Stop hooks behind an in-app /hooks
     // trust-review prompt — workspace-local hooks.json gets installed but
@@ -498,6 +515,32 @@ impl ReadyPlanRunner {
 }
 
 #[cfg(test)]
+mod model_overlay_tests {
+    use super::model_overlay_args;
+
+    #[test]
+    fn substitutes_placeholder() {
+        let tmpl = vec!["--model".to_string(), "{model}".to_string()];
+        assert_eq!(
+            model_overlay_args("opus", &tmpl),
+            vec!["--model".to_string(), "opus".to_string()]
+        );
+    }
+
+    #[test]
+    fn substitutes_inside_a_joined_arg() {
+        // A CLI that takes `--model=<v>` as one token still works.
+        let tmpl = vec!["--model={model}".to_string()];
+        assert_eq!(model_overlay_args("sonnet", &tmpl), vec!["--model=sonnet"]);
+    }
+
+    #[test]
+    fn empty_template_yields_no_args() {
+        assert!(model_overlay_args("opus", &[]).is_empty());
+    }
+}
+
+#[cfg(test)]
 mod ready_plan_tests {
     use super::*;
     use crate::plugins::{ReadyStep, ReadyStepKind};
@@ -626,6 +669,13 @@ mod ready_plan_tests {
 /// — adding a future-only flag unconditionally would brick every spawn on
 /// the older version).
 ///
+/// L5c — substitute `{model}` in each manifest `model_args` entry. Pure +
+/// unit-tested so the spawn argv path stays trivial. Caller decides whether a
+/// model is in effect; this only renders the template.
+fn model_overlay_args(model: &str, template: &[String]) -> Vec<String> {
+    template.iter().map(|a| a.replace("{model}", model)).collect()
+}
+
 /// Cache key is `(binary, flag)` so different plugins probing different
 /// flags don't collide. The cache is process-lifetime — a CLI upgrade
 /// requires a server restart to re-probe, which is fine for the local

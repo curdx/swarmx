@@ -44,6 +44,7 @@ pub async fn list_plugins(State(state): State<AppState>) -> impl IntoResponse {
             display_name: p.display_name.clone(),
             binary: p.binary.clone(),
             input_settle_ms: p.input_settle_ms,
+            default_model: p.default_model.clone(),
         })
         .collect();
     Json(plugins)
@@ -112,7 +113,7 @@ pub async fn spawn(
     let layout = WorkspaceLayout::PerAgent {
         root: workspace_root,
     };
-    let outcome = spawn_with_bookkeeping(&state, &req.cli, req.role, layout, ws.id, None)
+    let outcome = spawn_with_bookkeeping(&state, &req.cli, req.role, req.model, layout, ws.id, None)
         .await
         .map_err(|(status, msg)| (status, Json(json!({"error": msg}))))?;
     Ok(Json(SpawnAgentResponse {
@@ -175,6 +176,7 @@ pub(crate) async fn spawn_with_bookkeeping(
     state: &AppState,
     cli: &str,
     role: Option<String>,
+    model: Option<String>,
     layout: WorkspaceLayout,
     workspace_id: String,
     spell_run_id: Option<String>,
@@ -233,6 +235,7 @@ pub(crate) async fn spawn_with_bookkeeping(
     let result = spawn_agent(
         &plugin,
         role,
+        model,
         &layout,
         &state.shim_path,
         &state.mcp_bin,
@@ -824,6 +827,7 @@ pub async fn spawn_worker(
         &state,
         &req.cli,
         Some(req.role_label.clone()),
+        req.model.clone(),
         layout,
         req.workspace_id.clone(),
         None, // ad-hoc workers don't belong to a spell run
@@ -2152,6 +2156,7 @@ pub async fn run_spell(
             &state,
             &resolved.cli,
             Some(resolved.role.clone()),
+            None, // spells don't carry a per-worker model overlay (yet)
             layout.clone(),
             workspace.id.clone(),
             Some(spell_run_id.clone()),
