@@ -303,6 +303,59 @@ impl Swarm {
         .context("spawn_blocking fs::read")?
     }
 
+    /// Boot-time op-log reconcile (completes F6). A failed `insert_blackboard_op`
+    /// leaves a file on disk with NO op-log row — `write_blackboard` keeps the
+    /// content and still broadcasts the wake, but the row (and thus the
+    /// `swarm_list_blackboard` discovery entry) is lost. After a restart that
+    /// path would be invisible to discovery. Here we walk the blackboard tree
+    /// and backfill an op row for any file the op-log doesn't know about.
+    /// Idempotent (only genuinely-missing paths), and does NOT broadcast (boot:
+    /// no live subscribers, and a reconcile is not a fresh write event).
+    /// Returns the number of rows backfilled.
+    pub async fn reconcile_oplog_from_disk(&self) -> Result<usize> {
+        // One query: every path the op-log already knows (latest-per-path).
+        let known: std::collections::HashSet<String> = self
+            .store
+            .list_blackboard_ops(None)
+            .await
+            .context("list_blackboard_ops for reconcile")?
+            .into_iter()
+            .map(|r| r.path)
+            .collect();
+
+        let root = self.blackboard_root.clone();
+        let files = tokio::task::spawn_blocking(move || collect_blackboard_files(&root))
+            .await
+            .context("spawn_blocking collect_blackboard_files")??;
+
+        let mut backfilled = 0usize;
+        for (rel, content, sha) in files {
+            if known.contains(&rel) {
+                continue;
+            }
+            let at = now_ms();
+            match self
+                .store
+                .insert_blackboard_op(NewBlackboardOp {
+                    agent_id: None,
+                    op: "reconcile".into(),
+                    path: rel.clone(),
+                    content,
+                    sha256: sha,
+                    at,
+                })
+                .await
+            {
+                Ok(_) => {
+                    backfilled += 1;
+                    tracing::info!(path = %rel, "reconcile: backfilled blackboard op row missing from the log");
+                }
+                Err(e) => tracing::warn!(?e, path = %rel, "reconcile: backfill insert failed"),
+            }
+        }
+        Ok(backfilled)
+    }
+
     /// Called by the watcher when an external filesystem event fires.
     /// Compares the file's current SHA-256 with the cached one — if they
     /// match, we wrote this and skip; otherwise we record an "external" op
@@ -384,6 +437,51 @@ impl Swarm {
 
         Ok(())
     }
+}
+
+/// Recursively list every regular file under `root` as
+/// `(rel_path, content, sha256)`, with `/`-separated relative paths matching
+/// the keys agents pass to the blackboard. Skips dot-prefixed entries
+/// (editor / `.git` noise) and unreadable/binary files. Sync — invoked inside
+/// `spawn_blocking` by the boot reconcile.
+fn collect_blackboard_files(root: &Path) -> Result<Vec<(String, String, String)>> {
+    let mut out = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let rd = match std::fs::read_dir(&dir) {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+        for entry in rd.flatten() {
+            if entry.file_name().to_string_lossy().starts_with('.') {
+                continue;
+            }
+            let path = entry.path();
+            let ft = match entry.file_type() {
+                Ok(t) => t,
+                Err(_) => continue,
+            };
+            if ft.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            if !ft.is_file() {
+                continue;
+            }
+            let rel = match path.strip_prefix(root) {
+                Ok(r) => r.to_string_lossy().into_owned(),
+                Err(_) => continue,
+            };
+            match std::fs::read_to_string(&path) {
+                Ok(content) => {
+                    let sha = sha256_hex(content.as_bytes());
+                    out.push((rel, content, sha));
+                }
+                Err(_) => continue, // binary / unreadable — not a text blackboard key
+            }
+        }
+    }
+    Ok(out)
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {

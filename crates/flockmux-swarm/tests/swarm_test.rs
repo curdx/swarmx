@@ -294,3 +294,50 @@ async fn send_message_with_in_reply_to_threads() {
         other => panic!("unexpected: {other:?}"),
     }
 }
+
+// F6 completion: a file left on disk by a crash mid-write (content present but
+// op-log row missing) must be backfilled at boot so it's discoverable again.
+#[tokio::test]
+async fn reconcile_backfills_only_orphaned_files() {
+    let (dir, swarm) = fresh().await;
+
+    // A normal write — gets an op-log row through the happy path.
+    swarm
+        .write_blackboard(Some("a".into()), "normal.md", "hi")
+        .await
+        .unwrap();
+
+    // An orphaned file: written straight to disk, NO op-log row. This is what
+    // write_blackboard leaves behind when the insert fails after the fs::write.
+    let bb = dir.path().join("blackboard");
+    std::fs::write(bb.join("orphan.md"), b"orphan-content").unwrap();
+
+    // Reconcile backfills ONLY the orphan — normal.md already has a row.
+    let n = swarm.reconcile_oplog_from_disk().await.unwrap();
+    assert_eq!(n, 1, "only the orphaned file should be backfilled");
+
+    // Idempotent: a second pass finds nothing new.
+    assert_eq!(
+        swarm.reconcile_oplog_from_disk().await.unwrap(),
+        0,
+        "second reconcile is a no-op"
+    );
+
+    // The backfilled key is readable (content was never lost — only the row).
+    assert_eq!(
+        swarm.read_blackboard("orphan.md").await.unwrap().as_deref(),
+        Some("orphan-content")
+    );
+
+    // And it is now present in the op-log discovery surface.
+    let paths: Vec<String> = swarm
+        .store()
+        .list_blackboard_ops(None)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|r| r.path)
+        .collect();
+    assert!(paths.contains(&"orphan.md".to_string()));
+    assert!(paths.contains(&"normal.md".to_string()));
+}

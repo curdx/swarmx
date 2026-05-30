@@ -6,8 +6,8 @@
 > - ✅ **F4 fork-bomb**：spawn 全局存活上限（默认 256）+ 委派深度上限（默认 6），env 可调。
 > - ✅ **F3 wake 漏匹配**：handoff 写入但零订阅者时 warn（点名 orphan key + 当前等待列表）。
 > - ✅ **F12 lag 丢 wake**：广播 lag 后对账 depends_on vs 黑板（含 .error/.failed 别名）重唤醒丢失的一次性 wake；广播容量 256→1024 降低 lag 频率。
-> - ✅ **F6 写入非原子（liveness）**：黑板 op-log insert 失败时不再吞掉 BlackboardChanged——内容已在盘上，照发 wake（哨兵 id=-1）+ 返回成功，依赖方不再被一次 DB 抖动悄悄搁浅。（残留：启动对账补回缺失 op 行 = 发现/历史完整性，非正确性，已降级为后续小项。）真 swarm 浏览器跑通、零回归。
-> - ⏳ **未做**：F5 DB 无保留策略（破坏性删除，单独排期）、F6 启动对账（小）、前端 Shell.tsx 巨型文件 / 两套 DAG（大）。
+> - ✅ **F6 写入非原子（完整修复）**：①**liveness**——黑板 op-log insert 失败时不再吞掉 BlackboardChanged，内容已在盘上，照发 wake（哨兵 id=-1）+ 返回成功，依赖方不再被一次 DB 抖动悄悄搁浅；②**启动对账**——boot 时 `reconcile_oplog_from_disk` 扫黑板目录 vs op-log，给"有文件无 op 行"（崩溃中途写）的 path 补回 `op="reconcile"` 行，恢复 `swarm_list_blackboard` 发现性；幂等、不广播（boot 无订阅者）。新增单测（孤儿文件→只补它、二次为 no-op、可读回 + 进 discovery）。真 swarm 浏览器跑通、零回归。
+> - ⏳ **未做**：F5 DB 无保留策略（破坏性删除，单独排期）、前端 Shell.tsx 巨型文件 / 两套 DAG（大）。
 >
 > ---
 >

@@ -163,6 +163,15 @@ async fn main() -> Result<()> {
         .context("spawn blackboard watcher")?;
     let watcher = Arc::new(watcher);
 
+    // F6 completion: backfill op-log rows for any blackboard file left on disk
+    // without one by a prior crash mid-write, so it's visible to discovery
+    // again. Cheap + idempotent (one query + inserts only for missing paths).
+    match swarm.reconcile_oplog_from_disk().await {
+        Ok(n) if n > 0 => info!(reconciled = n, "backfilled blackboard op rows missing from a prior crash"),
+        Ok(_) => {}
+        Err(err) => tracing::warn!(?err, "blackboard op-log reconcile failed"),
+    }
+
     let recordings_root = recordings_root_default();
     std::fs::create_dir_all(&recordings_root)?;
     info!(recordings = %recordings_root.display(), "recordings root");
