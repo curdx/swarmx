@@ -529,6 +529,118 @@ pub async fn wake_agent(
 // 跟 run_spell 的区别只是"不解析 spell / 不查 role registry / 不挂 spell_run"。
 // ────────────────────────────────────────────────────────────────────────
 
+/// Per-agent bootstrap-injection context — the only things that differ
+/// between the `spawn_worker` (ad-hoc) and `run_spell` launch paths.
+struct BootstrapCtx {
+    /// "worker" or "spell" — surfaced in log lines.
+    source: &'static str,
+    /// Spell name for spell-launched agents; empty for ad-hoc workers.
+    spell: String,
+    /// Declared role-id keys; used to flag a surviving `{<role>_id}` / `{task}`
+    /// placeholder in the rendered prompt (empty for raw worker prompts).
+    role_keys: Vec<String>,
+}
+
+/// Background task: wait for `ShimReady` (short-circuit if it already fired),
+/// let the agent's MCP servers settle, then paste `prompt` + Enter into its
+/// PTY. Fail-soft — every error path `warn!`s and returns.
+///
+/// This is the SINGLE home of the timing-sensitive bootstrap sequence. It was
+/// previously copy-pasted between `spawn_worker` and `run_spell` (the F22
+/// finding); extracting it means the 2500ms MCP-settle window, the
+/// paste→150ms→`\r` submit split, and the ShimReady race handling can never
+/// drift between the two paths.
+fn spawn_bootstrap_inject(
+    registry: crate::registry::Registry,
+    mut rx: tokio::sync::broadcast::Receiver<LifecycleEvent>,
+    agent_id: String,
+    prompt: String,
+    ctx: BootstrapCtx,
+) {
+    tokio::spawn(async move {
+        // Short-circuit if ShimReady already fired in the gap between
+        // spawn_agent returning and our resubscribe — the PTY pump runs
+        // concurrently with the spawn caller, so for fast CLIs OSC_READY can
+        // arrive before a receiver is hooked up. Reading the mutex covers it.
+        let already_ready = registry
+            .get(&agent_id)
+            .map(|s| s.lock().lifecycle.lock().shim_ready)
+            .unwrap_or(false);
+        if !already_ready {
+            let wait_ready = async {
+                loop {
+                    match rx.recv().await {
+                        Ok(LifecycleEvent::ShimReady) => return Ok(()),
+                        Ok(LifecycleEvent::ShimExit(code)) => {
+                            return Err(format!("agent exited before ShimReady (code={code})"));
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                            return Err("lifecycle channel closed".into());
+                        }
+                    }
+                }
+            };
+            match tokio::time::timeout(std::time::Duration::from_secs(30), wait_ready).await {
+                Ok(Ok(())) => {}
+                Ok(Err(msg)) => {
+                    tracing::warn!(source = ctx.source, spell = %ctx.spell, agent = %agent_id, msg = %msg, "bootstrap aborted");
+                    return;
+                }
+                Err(_) => {
+                    tracing::warn!(source = ctx.source, spell = %ctx.spell, agent = %agent_id, "bootstrap timed out waiting for ShimReady");
+                    return;
+                }
+            }
+        }
+        // MCP-settle grace. claude/codex spawn their MCP subprocesses AFTER
+        // the UI shows ready (1–3 s); firing the prompt before flockmux-swarm
+        // finishes its handshake makes the agent read an empty toolset and
+        // hand-wave "I don't have a swarm_send_message tool". ~2500ms clears
+        // claude's "MCP Wait for Servers" banner on a typical machine while
+        // keeping bootstrap under 3 s. (TODO: replace with a ready_plan
+        // `wait_for` on the banner — needs the bootstrap to watch PTY output;
+        // see docs/multi-cli-redesign-plan.md.)
+        tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
+        let slot_lock = match registry.get(&agent_id) {
+            Some(s) => s,
+            None => {
+                tracing::warn!(source = ctx.source, spell = %ctx.spell, agent = %agent_id, "slot vanished before bootstrap");
+                return;
+            }
+        };
+        let input_tx = slot_lock.lock().input_tx.clone();
+        // Diagnostic: flag a surviving `{task}` / `{<role>_id}` placeholder
+        // (computed before `prompt` is consumed by `into_bytes`).
+        let has_unsubst = prompt.contains("{task}")
+            || ctx.role_keys.iter().any(|r| prompt.contains(&format!("{{{r}_id}}")));
+        let body = prompt.into_bytes();
+        let body_len = body.len();
+        // Submit as TWO frames (paste body, settle 150ms, then \r): claude/
+        // codex TUIs classify a burst containing newlines as a *paste*, so a
+        // \r in the same burst becomes a literal newline rather than a submit.
+        // Splitting lets the TUI settle the paste, then the standalone \r reads
+        // as Enter. 150ms is empirical (50ms sometimes missed cold-start codex).
+        if let Err(err) = input_tx.send(bytes::Bytes::from(body)).await {
+            tracing::warn!(source = ctx.source, spell = %ctx.spell, agent = %agent_id, ?err, "PTY paste send failed during bootstrap");
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        if let Err(err) = input_tx.send(bytes::Bytes::from_static(b"\r")).await {
+            tracing::warn!(source = ctx.source, spell = %ctx.spell, agent = %agent_id, ?err, "PTY submit send failed during bootstrap");
+            return;
+        }
+        tracing::info!(
+            source = ctx.source,
+            spell = %ctx.spell,
+            agent = %agent_id,
+            bytes = body_len,
+            has_unsubstituted_placeholders = has_unsubst,
+            "bootstrap prompt injected"
+        );
+    });
+}
+
 pub async fn spawn_worker(
     State(state): State<AppState>,
     Json(req): Json<SpawnWorkerRequest>,
@@ -653,72 +765,20 @@ pub async fn spawn_worker(
         tracing::warn!(?e, agent = %out.agent_id, "record_worker failed");
     }
 
-    // Bootstrap inject — copied near-verbatim from run_spell. Same race
-    // semantics (ShimReady or already_ready short-circuit), same 2500ms
-    // MCP-settle window, same paste + 150ms + \r submit pattern.
-    let prompt = req.system_prompt.clone();
-    let agent_id = out.agent_id.clone();
-    let mut rx = out.lifecycle_rx.resubscribe();
-    let registry = state.registry.clone();
-    let agent_for_log = agent_id.clone();
-    tokio::spawn(async move {
-        let already_ready = registry
-            .get(&agent_id)
-            .map(|s| s.lock().lifecycle.lock().shim_ready)
-            .unwrap_or(false);
-        if !already_ready {
-            let bootstrap = async {
-                loop {
-                    match rx.recv().await {
-                        Ok(LifecycleEvent::ShimReady) => return Ok(()),
-                        Ok(LifecycleEvent::ShimExit(code)) => {
-                            return Err(format!("worker exited before ShimReady (code={code})"));
-                        }
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                            return Err("lifecycle channel closed".into());
-                        }
-                    }
-                }
-            };
-            match tokio::time::timeout(std::time::Duration::from_secs(30), bootstrap).await {
-                Ok(Ok(())) => {}
-                Ok(Err(msg)) => {
-                    tracing::warn!(agent = %agent_for_log, msg = %msg, "worker bootstrap aborted");
-                    return;
-                }
-                Err(_) => {
-                    tracing::warn!(agent = %agent_for_log, "worker bootstrap timed out waiting for ShimReady");
-                    return;
-                }
-            }
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
-        let slot_lock = match registry.get(&agent_for_log) {
-            Some(s) => s,
-            None => {
-                tracing::warn!(agent = %agent_for_log, "worker slot vanished before bootstrap");
-                return;
-            }
-        };
-        let input_tx = slot_lock.lock().input_tx.clone();
-        let body = prompt.into_bytes();
-        let body_len = body.len();
-        if let Err(err) = input_tx.send(bytes::Bytes::from(body)).await {
-            tracing::warn!(agent = %agent_for_log, ?err, "worker PTY paste send failed");
-            return;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
-        if let Err(err) = input_tx.send(bytes::Bytes::from_static(b"\r")).await {
-            tracing::warn!(agent = %agent_for_log, ?err, "worker PTY submit send failed");
-            return;
-        }
-        tracing::info!(
-            agent = %agent_for_log,
-            bytes = body_len,
-            "worker bootstrap prompt injected"
-        );
-    });
+    // Bootstrap inject — shared with run_spell (see spawn_bootstrap_inject).
+    // Ad-hoc workers inject the request's system_prompt raw (no render_prompt:
+    // the orchestrator authored it with concrete ids at call time).
+    spawn_bootstrap_inject(
+        state.registry.clone(),
+        out.lifecycle_rx.resubscribe(),
+        out.agent_id.clone(),
+        req.system_prompt.clone(),
+        BootstrapCtx {
+            source: "worker",
+            spell: String::new(),
+            role_keys: Vec::new(),
+        },
+    );
 
     Ok(Json(SpawnWorkerResponse {
         agent_id: out.agent_id,
@@ -2035,118 +2095,21 @@ pub async fn run_spell(
             continue;
         }
         let prompt = spells::render_prompt(raw_prompt, &req.task, &workspace_id, &role_to_id);
-        let agent_id = out.agent_id.clone();
-        let mut rx = out.lifecycle_rx.resubscribe();
-        let registry = state.registry.clone();
-        let spell_name_for_task = spell_name.clone();
-        let role_to_id_for_task = role_to_id.clone();
-        tokio::spawn(async move {
-            // Check first whether ShimReady already fired in the gap
-            // between spawn_agent returning and our subscribe — the PTY
-            // pump task is concurrent with the spawn caller, so for fast
-            // CLIs (or warm filesystem caches) OSC_READY can arrive
-            // BEFORE we have a receiver hooked up. Reading the mutex
-            // covers that race; if shim_ready is already true we bypass
-            // the broadcast wait entirely.
-            let already_ready = registry
-                .get(&agent_id)
-                .map(|s| s.lock().lifecycle.lock().shim_ready)
-                .unwrap_or(false);
-            if !already_ready {
-                let bootstrap = async {
-                    loop {
-                        match rx.recv().await {
-                            Ok(LifecycleEvent::ShimReady) => return Ok(()),
-                            Ok(LifecycleEvent::ShimExit(code)) => {
-                                return Err(format!(
-                                    "agent exited before ShimReady (code={code})"
-                                ));
-                            }
-                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                                return Err("lifecycle channel closed".into());
-                            }
-                        }
-                    }
-                };
-                match tokio::time::timeout(std::time::Duration::from_secs(30), bootstrap).await {
-                    Ok(Ok(())) => {}
-                    Ok(Err(msg)) => {
-                        tracing::warn!(spell = %spell_name_for_task, agent = %agent_id, msg = %msg, "spell bootstrap aborted");
-                        return;
-                    }
-                    Err(_) => {
-                        tracing::warn!(spell = %spell_name_for_task, agent = %agent_id, "spell bootstrap timed out waiting for ShimReady");
-                        return;
-                    }
-                }
-            }
-            // Grace period before injecting the bootstrap prompt. Two
-            // distinct waits are stacked here:
-            //
-            // - Input-stack settle (XtermPane has the same logic): codex's
-            //   ratatui crossterm poll attaches just after OSC_READY and
-            //   ~300ms covers the race.
-            // - MCP server connect: claude/codex spawn MCP subprocesses
-            //   AFTER their UI shows ready, taking 1–3 s. If we fire the
-            //   prompt before flockmux-swarm finishes the handshake, the
-            //   agent reads its toolset, sees no swarm tools, and hand-
-            //   waves with "I don't have a swarm_send_message tool" —
-            //   exactly what we observed in practice. Empirically the
-            //   "MCP Wait for Servers" banner in claude clears at ~2 s
-            //   on this machine; 2500 ms gives breathing room while still
-            //   keeping bootstrap under 3 s end-to-end.
-            tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
-            let slot_lock = match registry.get(&agent_id) {
-                Some(s) => s,
-                None => {
-                    tracing::warn!(spell = %spell_name_for_task, agent = %agent_id, "agent slot vanished before bootstrap");
-                    return;
-                }
-            };
-            let input_tx = slot_lock.lock().input_tx.clone();
-            // Submission strategy: send the prompt body and the Enter
-            // keystroke as TWO separate frames with a delay between.
-            //
-            // Why: claude/codex TUIs heuristically classify a burst of
-            // bytes containing newlines as a *paste* (claude renders
-            // "[Pasted text #N +M lines]" placeholder). If \r is part of
-            // the same burst, it becomes a paste-newline (a literal line
-            // break within the message body) rather than a submit. By
-            // splitting and letting the TUI settle the paste first, the
-            // standalone \r reads as the Enter key the way the user
-            // would have pressed it.
-            //
-            // The 150ms gap is empirical: shorter (~50ms) sometimes
-            // missed the boundary on cold-start codex; longer hurts
-            // user-perceived bootstrap time without measurable benefit.
-            let body = prompt.into_bytes();
-            let body_len = body.len();
-            let lossy = String::from_utf8_lossy(&body);
-            // Diagnostic: log when a `{task}` or `{<role>_id}` slot
-            // survived rendering. Dynamic over the spell's declared
-            // roles so this fires for any spell, not just critic-loop.
-            let has_unsubst = lossy.contains("{task}")
-                || role_to_id_for_task
-                    .keys()
-                    .any(|r| lossy.contains(&format!("{{{r}_id}}")));
-            if let Err(err) = input_tx.send(bytes::Bytes::from(body)).await {
-                tracing::warn!(spell = %spell_name_for_task, agent = %agent_id, ?err, "PTY paste send failed during spell bootstrap");
-                return;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(150)).await;
-            if let Err(err) = input_tx.send(bytes::Bytes::from_static(b"\r")).await {
-                tracing::warn!(spell = %spell_name_for_task, agent = %agent_id, ?err, "PTY submit send failed during spell bootstrap");
-                return;
-            }
-            tracing::info!(
-                spell = %spell_name_for_task,
-                agent = %agent_id,
-                bytes = body_len,
-                has_unsubstituted_placeholders = has_unsubst,
-                "spell bootstrap prompt injected"
-            );
-        });
+        // Bootstrap inject — shared with spawn_worker (see
+        // spawn_bootstrap_inject). Spell agents inject the RENDERED prompt
+        // ({task}/{workspace_id}/{<role>_id} substituted above) and pass the
+        // role keys so a surviving placeholder is flagged in the log.
+        spawn_bootstrap_inject(
+            state.registry.clone(),
+            out.lifecycle_rx.resubscribe(),
+            out.agent_id.clone(),
+            prompt,
+            BootstrapCtx {
+                source: "spell",
+                spell: spell_name.clone(),
+                role_keys: role_to_id.keys().cloned().collect(),
+            },
+        );
     }
 
     let resp = RunSpellResponse {
