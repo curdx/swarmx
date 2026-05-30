@@ -12,6 +12,7 @@
 //! visits from driving their agents over a cross-site WebSocket (WS bypasses
 //! CORS, so the CORS layer alone is not a security boundary).
 
+mod acp;
 mod plugins;
 mod pre_spawn;
 mod pty_stream;

@@ -75,6 +75,19 @@ pub fn spawn_agent(
         WorkspaceLayout::Shared { dir } => ensure_shared_workspace(dir)?,
     };
 
+    // L4 transport seam: the ACP (structured JSON-RPC-over-stdio) session
+    // driver isn't wired yet — only the codec exists (`crate::acp`). A plugin
+    // that declares `transport = "acp"` still spawns over the PTY so it's
+    // usable today; the warning marks where the future ACP path will branch
+    // (build an acp::Session on the child's stdio instead of the PTY pump).
+    if plugin.transport == crate::plugins::Transport::Acp {
+        tracing::warn!(
+            agent = %agent_id, cli = %plugin.id,
+            "transport=acp declared but the ACP session driver isn't wired yet \
+             (L4 foundation only); falling back to the PTY transport"
+        );
+    }
+
     // Suppress per-CLI interactive prompts that would block a headless PTY
     // (claude's "trust folder", codex's "update available"). Each patch is a
     // no-op when not configured / not applicable. The MCP-inject patch is

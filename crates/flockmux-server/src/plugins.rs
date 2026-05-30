@@ -52,6 +52,22 @@ pub enum StopHookFormat {
     CodexHooksJson,
 }
 
+/// How flockmux talks to this CLI's process (L4). `pty` (default) drives the
+/// CLI's interactive TUI over a pseudo-terminal — scraping output, injecting
+/// keystrokes, auto-answering dialogs (the only wired transport today). `acp`
+/// reserves a structured JSON-RPC-over-stdio path (ACP / Codex `app-server`)
+/// that would yield real tool-call / permission / streaming events instead of
+/// scraping a TUI. The codec for it lives in `crate::acp`; session-driving is
+/// a future increment, so declaring `acp` currently warns and falls back to
+/// PTY (see `spawn.rs`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum Transport {
+    #[default]
+    Pty,
+    Acp,
+}
+
 /// Kind of a [`ReadyStep`]. Today only `answer_dialog` is implemented; the
 /// golutra-style sequential kinds (`wait_for`, `input`, `extract_session_id`)
 /// are the next increment.
@@ -189,6 +205,12 @@ pub struct CliPlugin {
     /// pick its own default. A per-spawn `model` (REST/MCP) overrides this.
     #[serde(default)]
     pub default_model: Option<String>,
+
+    /// Transport to drive this CLI (L4). Defaults to `pty` — the only wired
+    /// path today. `acp` is reserved for structured JSON-RPC-over-stdio; see
+    /// [`Transport`].
+    #[serde(default)]
+    pub transport: Transport,
 }
 
 fn default_home_env() -> String { "HOME".into() }
@@ -385,6 +407,11 @@ mod tests {
         // passed via the manifest, not a hardcoded Rust flag.
         assert_eq!(claude.model_args, vec!["--model", "{model}"], "claude model_args");
         assert_eq!(codex.model_args, vec!["--model", "{model}"], "codex model_args");
+
+        // L4: both default to the PTY transport (the only wired one); neither
+        // opts into the not-yet-wired ACP path.
+        assert_eq!(claude.transport, Transport::Pty, "claude defaults to pty");
+        assert_eq!(codex.transport, Transport::Pty, "codex defaults to pty");
     }
 
     /// A new field with a kebab-case typo must FAIL parse (→ warn-skip at load),
