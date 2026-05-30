@@ -700,8 +700,11 @@ async fn mark_orphan_recordings_finalized_only_live_rows() {
 
     let live = store.get_recording("live".into()).await.unwrap().unwrap();
     assert_eq!(live.finalized_at, Some(ts(100)));
-    // duration / last_seq stay NULL — we don't fabricate metrics.
-    assert!(live.duration_ms.is_none());
+    // duration_ms is backfilled from the wall-clock span (finalized_at -
+    // started_at = 100) so restart-orphan recordings aren't shown with no
+    // duration in the Replays list; last_seq stays NULL (reattach treats
+    // NULL as "replay from head"). See mark_orphan_recordings_finalized.
+    assert_eq!(live.duration_ms, Some(100));
     assert!(live.last_seq.is_none());
 
     let done = store.get_recording("done".into()).await.unwrap().unwrap();

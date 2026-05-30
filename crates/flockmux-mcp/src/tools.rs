@@ -1,4 +1,4 @@
-//! The seven swarm tools exposed over MCP. Each one is a thin wrapper that
+//! The eight swarm tools exposed over MCP. Each one is a thin wrapper that
 //! formats inputs, calls the matching flockmux-server REST endpoint, and
 //! folds the response into a human-readable `text` content block.
 //!
@@ -49,7 +49,7 @@ impl ToolContext {
     }
 }
 
-/// The seven tool descriptors served by `tools/list`. inputSchema is hand-
+/// The eight tool descriptors served by `tools/list`. inputSchema is hand-
 /// written JSON-Schema; we don't pull in `schemars` because the surface
 /// is small and stable.
 pub fn tool_descriptors() -> Vec<Value> {

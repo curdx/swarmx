@@ -2,7 +2,7 @@
 //!   - `initialize`                  — handshake; returns protocol version + caps
 //!   - `notifications/initialized`   — no response (notification)
 //!   - `tools/list`                  — array of tool descriptors
-//!   - `tools/call`                  — invoke one of the seven swarm_* tools
+//!   - `tools/call`                  — invoke one of the eight swarm_* tools
 //!
 //! Anything else returns METHOD_NOT_FOUND. We never panic on bad params —
 //! claude treats a closed stdio as a server crash and stops trying to use it.
@@ -97,9 +97,11 @@ mod tests {
         let resp = dispatch(&ctx, json!(2), "tools/list", None).await;
         let result = resp.result.unwrap();
         let arr = result["tools"].as_array().unwrap();
-        // 7 original (3 messages + 4 blackboard/agents) + 2 M6c (spells
-        // discovery + dispatch). Bump this when adding tools.
-        assert_eq!(arr.len(), 9);
+        // 7 swarm primitives (3 messages + 4 blackboard/agents) +
+        // swarm_spawn_worker (the sole delegation entry after the
+        // Magentic-One refactor removed the spell tools) = 8.
+        // Keep in sync with tools::tool_descriptors() (asserted at tools.rs).
+        assert_eq!(arr.len(), 8);
     }
 
     #[tokio::test]

@@ -1,0 +1,53 @@
+name: CI
+
+# Gate every push / PR on the test suite. Two broken tests
+# (flockmux-mcp tools_list, flockmux-storage orphan-recordings) shipped on
+# main precisely because nothing ran `cargo test` before merge — this is the
+# guard against that recurring.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust:
+    name: Rust (build · test · clippy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # rust-toolchain.toml pins channel=stable + clippy/rustfmt, so rustup
+      # auto-installs the right toolchain and components on first cargo call.
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --workspace --locked
+      - name: Test (hard gate)
+        run: cargo test --workspace --locked
+      - name: Clippy (informational)
+        run: cargo clippy --workspace --all-targets
+        continue-on-error: true
+      - name: Format check (informational)
+        run: cargo fmt --all -- --check
+        continue-on-error: true
+
+  web:
+    name: Web (typecheck · build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install
+        run: npm ci
+        working-directory: web
+      - name: Typecheck + build (hard gate)
+        # `npm run build` is `tsc -b && vite build`; tsc is the typecheck gate.
+        run: npm run build
+        working-directory: web
