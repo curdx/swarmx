@@ -149,6 +149,28 @@ pub(crate) struct SpawnOutcome {
 /// On success the agent is fully live: PTY pumping, registry insert
 /// done, swarm inbox registered, SQLite + ws/swarm fan-out task spawned,
 /// recording file open and finalize-watcher scheduled.
+/// Hard ceiling on concurrent **live** agents — the fork-bomb guard (F4).
+/// Counts the in-memory registry (killed agents are removed from it), so it's
+/// a true concurrency bound. Env override `FLOCKMUX_MAX_LIVE_AGENTS` for
+/// bigger hosts; 0 / unparseable falls back to the default.
+fn max_live_agents() -> usize {
+    std::env::var("FLOCKMUX_MAX_LIVE_AGENTS")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(24)
+}
+
+/// Max delegation depth (orchestrator → worker → worker → …). Env override
+/// `FLOCKMUX_MAX_SPAWN_DEPTH`; 0 / unparseable falls back to the default.
+fn max_spawn_depth() -> usize {
+    std::env::var("FLOCKMUX_MAX_SPAWN_DEPTH")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(6)
+}
+
 pub(crate) async fn spawn_with_bookkeeping(
     state: &AppState,
     cli: &str,
@@ -157,6 +179,25 @@ pub(crate) async fn spawn_with_bookkeeping(
     workspace_id: String,
     spell_run_id: Option<String>,
 ) -> Result<SpawnOutcome, (StatusCode, String)> {
+    // Fork-bomb guard (F4): a runaway/looping orchestrator — or a worker it
+    // spawned — calling swarm_spawn_worker can otherwise fork unbounded real
+    // CLI processes (each launched with --dangerously-skip-permissions),
+    // exhausting PTYs / RAM / file descriptors and burning API budget. Cap the
+    // TOTAL live agents here, the single chokepoint shared by /api/agent,
+    // /api/worker and run_spell, so every spawn path is bounded. The auto-kill
+    // reaper keeps well-behaved swarms far below this.
+    let live = state.registry.list().len();
+    let cap = max_live_agents();
+    if live >= cap {
+        return Err((
+            StatusCode::TOO_MANY_REQUESTS,
+            format!(
+                "live-agent cap reached ({live}/{cap}); refusing to spawn. \
+                 Finish or kill an agent first, or raise FLOCKMUX_MAX_LIVE_AGENTS."
+            ),
+        ));
+    }
+
     let plugin: CliPlugin = state
         .plugins
         .get(cli)
@@ -737,6 +778,47 @@ pub async fn spawn_worker(
     let layout = WorkspaceLayout::Shared {
         dir: PathBuf::from(&ws.cwd),
     };
+
+    // Fork-bomb guard (F4), recursion arm: bound the delegation depth so a
+    // worker that spawns a worker that spawns a worker… can't recurse without
+    // limit. Walk the parent chain in the workers table from the caller up;
+    // the orchestrator is a spell agent (not a worker), so it isn't in the
+    // table and the walk terminates there. The global live-agent cap bounds
+    // total blast radius; this gives a faster, clearer rejection for deep
+    // chains and is loop-bounded so a corrupt/cyclic link can't hang the walk.
+    {
+        let cap = max_spawn_depth();
+        let mut depth = 1usize; // the worker we're about to spawn
+        let mut cur = req.caller_agent_id.clone();
+        for _ in 0..cap + 2 {
+            let rows = state
+                .store
+                .list_workers_by_ids(vec![cur.clone()])
+                .await
+                .map_err(|e| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({"error": format!("worker depth lookup failed: {e}")})),
+                    )
+                })?;
+            match rows.get(&cur) {
+                Some(w) if !w.parent_agent_id.is_empty() => {
+                    depth += 1;
+                    cur = w.parent_agent_id.clone();
+                }
+                _ => break,
+            }
+        }
+        if depth > cap {
+            return Err((
+                StatusCode::TOO_MANY_REQUESTS,
+                Json(json!({"error": format!(
+                    "spawn-depth cap reached (depth {depth} > {cap}); refusing to delegate deeper. \
+                     Flatten the work or raise FLOCKMUX_MAX_SPAWN_DEPTH."
+                )})),
+            ));
+        }
+    }
 
     let out = spawn_with_bookkeeping(
         &state,
