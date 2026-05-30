@@ -52,6 +52,14 @@ pub struct AgentSlot {
     /// inject PTY bytes for this agent. Manual operator wakes bypass this.
     /// Persisted lifetime = process lifetime; resets on server restart.
     pub paused: Arc<AtomicBool>,
+    /// MCP-readiness gate. The agent's `flockmux-mcp` subprocess flips this to
+    /// `true` (via `POST /api/agent/:id/mcp-ready`) the moment the CLI fetches
+    /// its tool list — per the MCP lifecycle that means the model can now see
+    /// the `swarm_*` tools. The bootstrap waits on this (with a fallback
+    /// timeout) instead of a fixed sleep: the readiness-probe pattern. `watch`
+    /// retains the latest value, so a ping that races the subscriber is never
+    /// lost (`send_replace` updates the stored value even with no receivers).
+    pub mcp_ready: tokio::sync::watch::Sender<bool>,
 }
 
 #[derive(Debug, Clone, Copy)]

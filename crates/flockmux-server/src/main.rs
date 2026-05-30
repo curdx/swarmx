@@ -216,6 +216,9 @@ async fn main() -> Result<()> {
         .route("/api/agent/:id/wake", post(routes::rest::wake_agent))
         .route("/api/agent/:id/interrupt", post(routes::rest::interrupt))
         .route("/api/agent/:id/resume", post(routes::rest::resume))
+        // Internal: the agent's own flockmux-mcp pings this when its tool list
+        // is fetched (MCP ready), so the bootstrap can inject without a fixed wait.
+        .route("/api/agent/:id/mcp-ready", post(routes::rest::mcp_ready))
         .route(
             "/api/agent/interrupt-all",
             post(routes::rest::interrupt_all),

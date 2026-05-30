@@ -49,6 +49,27 @@ pub async fn list_plugins(State(state): State<AppState>) -> impl IntoResponse {
     Json(plugins)
 }
 
+/// `POST /api/agent/:id/mcp-ready` — called by the agent's own `flockmux-mcp`
+/// subprocess once the CLI has fetched its tool list (per the MCP lifecycle,
+/// that's the moment the `swarm_*` tools become visible to the model). Flips
+/// the slot's `mcp_ready` gate so the deferred bootstrap can inject the prompt
+/// immediately instead of waiting out a fixed timeout — the readiness-probe
+/// pattern, replacing the old fixed 2500ms MCP-settle sleep. Idempotent;
+/// 404 if the agent isn't (or is no longer) live.
+pub async fn mcp_ready(
+    State(state): State<AppState>,
+    Path(agent_id): Path<String>,
+) -> StatusCode {
+    match state.registry.get(&agent_id) {
+        Some(slot) => {
+            slot.lock().mcp_ready.send_replace(true);
+            tracing::debug!(agent = %agent_id, "mcp-ready signalled by flockmux-mcp");
+            StatusCode::NO_CONTENT
+        }
+        None => StatusCode::NOT_FOUND,
+    }
+}
+
 pub async fn spawn(
     State(state): State<AppState>,
     Json(req): Json<SpawnAgentRequest>,
@@ -594,15 +615,16 @@ fn spawn_bootstrap_inject(
                 }
             }
         }
-        // MCP-settle grace. claude/codex spawn their MCP subprocesses AFTER
-        // the UI shows ready (1–3 s); firing the prompt before flockmux-swarm
-        // finishes its handshake makes the agent read an empty toolset and
-        // hand-wave "I don't have a swarm_send_message tool". ~2500ms clears
-        // claude's "MCP Wait for Servers" banner on a typical machine while
-        // keeping bootstrap under 3 s. (TODO: replace with a ready_plan
-        // `wait_for` on the banner — needs the bootstrap to watch PTY output;
-        // see docs/multi-cli-redesign-plan.md.)
-        tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
+        // Wait until the agent's MCP tools are actually visible to the model
+        // before injecting — otherwise the model reads an empty toolset and
+        // hand-waves "I don't have a swarm_send_message tool". The agent's own
+        // flockmux-mcp pings /api/agent/:id/mcp-ready when the CLI fetches its
+        // tool list (MCP lifecycle), flipping the slot's `mcp_ready` watch. We
+        // wait for that real signal (readiness-probe pattern) with a bounded
+        // fallback for any CLI/case that never pings. This replaces a fixed
+        // 2500ms sleep: claude/codex emit no stable "MCP ready" banner to
+        // scrape (verified empirically), and a fixed sleep both over-waits on
+        // fast starts and under-waits on slow ones (a known anti-pattern).
         let slot_lock = match registry.get(&agent_id) {
             Some(s) => s,
             None => {
@@ -610,6 +632,22 @@ fn spawn_bootstrap_inject(
                 return;
             }
         };
+        // Subscribe without holding the parking_lot guard across the await.
+        let mut mcp_rx = slot_lock.lock().mcp_ready.subscribe();
+        if !*mcp_rx.borrow() {
+            // Generous cap: only applies when the ping never arrives (e.g. a
+            // future CLI without MCP, or a lost ping). On the happy path the
+            // watch fires in ~1-2s and we proceed immediately.
+            const MCP_READY_FALLBACK: std::time::Duration = std::time::Duration::from_secs(6);
+            tokio::select! {
+                _ = mcp_rx.changed() => {
+                    tracing::debug!(source = ctx.source, spell = %ctx.spell, agent = %agent_id, "mcp ready; injecting bootstrap");
+                }
+                _ = tokio::time::sleep(MCP_READY_FALLBACK) => {
+                    tracing::warn!(source = ctx.source, spell = %ctx.spell, agent = %agent_id, "mcp-ready not signalled within fallback; injecting anyway");
+                }
+            }
+        }
         let input_tx = slot_lock.lock().input_tx.clone();
         // Diagnostic: flag a surviving `{task}` / `{<role>_id}` placeholder
         // (computed before `prompt` is consumed by `into_bytes`).

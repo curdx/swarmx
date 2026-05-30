@@ -252,6 +252,11 @@ pub fn spawn_agent(
         role: role.unwrap_or_else(|| plugin.id.clone()),
         workspace: workspace.to_string_lossy().into_owned(),
         paused: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        // Starts false; flipped true when the agent's flockmux-mcp pings
+        // /api/agent/:id/mcp-ready. We keep only the Sender — subscribers call
+        // `.subscribe()`; `send_replace` updates the retained value even before
+        // any subscriber exists, so an early ping is never lost.
+        mcp_ready: tokio::sync::watch::channel(false).0,
     };
 
     Ok(AgentSpawn { agent_id, slot })

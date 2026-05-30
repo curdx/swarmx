@@ -10,12 +10,38 @@
 use crate::protocol::{JsonRpcResponse, INVALID_PARAMS, METHOD_NOT_FOUND};
 use crate::tools::{call_tool, tool_descriptors, ToolContext};
 use serde_json::{json, Value};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Protocol version we advertise on `initialize`. The string is checked by
 /// claude / codex against their supported set; if they upgrade past this
 /// version, the symptom is the server failing the handshake and bump
 /// strings here.
 const PROTOCOL_VERSION: &str = "2024-11-05";
+
+/// Fired (once per process) the first time the CLI fetches our tool list:
+/// per the MCP lifecycle that's the moment the `swarm_*` tools become visible
+/// to the model, so it's the canonical "this agent is ready to coordinate"
+/// signal. We POST it to flockmux-server so the deferred bootstrap can inject
+/// the agent's prompt immediately instead of waiting out a fixed timeout
+/// (readiness-probe pattern). Fire-and-forget: a failed/late ping just means
+/// the server falls back to its bootstrap timeout — never blocks the tool
+/// response.
+static MCP_READY_PINGED: AtomicBool = AtomicBool::new(false);
+
+fn fire_mcp_ready_once(ctx: &ToolContext) {
+    if MCP_READY_PINGED.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    let http = ctx.http.clone();
+    let url = format!(
+        "{}/api/agent/{}/mcp-ready",
+        ctx.server_url.trim_end_matches('/'),
+        ctx.agent_id
+    );
+    tokio::spawn(async move {
+        let _ = http.post(&url).send().await;
+    });
+}
 
 pub async fn dispatch(
     ctx: &ToolContext,
@@ -25,7 +51,12 @@ pub async fn dispatch(
 ) -> JsonRpcResponse {
     match method {
         "initialize" => JsonRpcResponse::ok(id, initialize()),
-        "tools/list" => JsonRpcResponse::ok(id, tools_list()),
+        "tools/list" => {
+            // The CLI just pulled the tool surface ⇒ swarm_* tools are now in
+            // the model's toolset. Signal readiness so the bootstrap fires.
+            fire_mcp_ready_once(ctx);
+            JsonRpcResponse::ok(id, tools_list())
+        }
         "tools/call" => match tools_call(ctx, params).await {
             Ok(result) => JsonRpcResponse::ok(id, result),
             Err(msg) => JsonRpcResponse::err(id, INVALID_PARAMS, msg),
