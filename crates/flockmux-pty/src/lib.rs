@@ -34,8 +34,8 @@ const DEFAULT_CHANNEL_CAP: usize = 256;
 
 /// One PTY + child pair. Output flows through `output_rx`, input through
 /// `input_tx`. The reader thread exits when the kernel returns EOF / EIO.
-/// Drop the bridge to terminate the child (SIGHUP → SIGTERM → SIGKILL,
-/// implemented in `Drop`).
+/// Drop the bridge to terminate the child — see [`PtyBridge::kill`] for the
+/// process-group teardown (SIGTERM → grace → SIGKILL on the whole group).
 pub struct PtyBridge {
     master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
     child: Arc<Mutex<Box<dyn Child + Send + Sync>>>,
@@ -161,10 +161,61 @@ impl PtyBridge {
     }
 
     /// Best-effort terminate. Used by `Drop`; safe to call multiple times.
+    ///
+    /// `portable_pty::Child::kill` SIGKILLs only the **direct** child — the
+    /// `flockmux-shim` process. But the real CLI (claude/codex) is the shim's
+    /// child, i.e. a *grandchild* of the server, and anything that CLI spawns
+    /// is a great-grandchild. SIGKILLing just the shim leaves the real CLI
+    /// reparented to init, still running and still burning API tokens.
+    ///
+    /// `openpty` puts the shim in its own session (it's the PTY's controlling
+    /// process, so `setsid`'d by `portable-pty` at spawn), which means the
+    /// shim, the real CLI, and their same-group descendants all share the
+    /// shim's process group. So we signal the **group**, not the pid:
+    /// `SIGTERM` (let the CLI flush/commit) → short grace → `SIGKILL` the
+    /// group → reap the direct child. A safety guard refuses to signal our
+    /// own process group (which would kill flockmux-server itself) in the
+    /// unlikely event the child was never isolated into its own session.
     pub fn kill(&self) {
-        // portable-pty's Child::kill sends SIGKILL on Unix. For a graceful
-        // shutdown we close the master first (which sends SIGHUP via
-        // ptmx close-on-last-fd on most kernels) and then escalate.
+        #[cfg(unix)]
+        {
+            let pid = self.child.lock().process_id().map(|p| p as libc::pid_t);
+            if let Some(pid) = pid {
+                // SAFETY: getpgid/killpg/kill are async-signal-safe libc
+                // calls; we only pass pids we own and guard against our own
+                // group below.
+                unsafe {
+                    let pgid = libc::getpgid(pid);
+                    let own_pgid = libc::getpgid(0);
+                    if pgid > 0 && pgid != own_pgid {
+                        // Graceful: ask the whole group to terminate.
+                        libc::killpg(pgid, libc::SIGTERM);
+                        // Brief grace (~1s) for the CLI to flush; poll the
+                        // direct child without holding the lock across sleeps.
+                        let mut exited = false;
+                        for _ in 0..20 {
+                            if matches!(self.child.lock().try_wait(), Ok(Some(_))) {
+                                exited = true;
+                                break;
+                            }
+                            std::thread::sleep(std::time::Duration::from_millis(50));
+                        }
+                        if !exited {
+                            libc::killpg(pgid, libc::SIGKILL);
+                        }
+                    } else {
+                        // Could not isolate a distinct group — fall back to
+                        // killing just the shim pid rather than risk signaling
+                        // our own group.
+                        warn!(pid, pgid, own_pgid, "kill: child not in its own \
+                            process group; falling back to pid-only SIGKILL");
+                        libc::kill(pid, libc::SIGKILL);
+                    }
+                }
+            }
+        }
+        // Reap the direct child (and on non-unix this IS the whole kill:
+        // Child::kill SIGKILLs, then wait() collects the exit status).
         let mut child = self.child.lock();
         let _ = child.kill();
         let _ = child.wait();
