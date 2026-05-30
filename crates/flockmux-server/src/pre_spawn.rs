@@ -533,118 +533,93 @@ fn install_codex_stop_hook_at(
 /// (or the agent is missing the swarm tool block), which is annoying but
 /// not fatal.
 ///
-/// Adding a new CLI is two steps:
-///   1. add a `cli-plugins/<id>.toml` and set the auto-* flags you want;
-///   2. add a `run_<id>_patches` fn here and route to it from the match.
+/// Apply all pre-spawn host patches for `plugin`. Each capability is gated on
+/// its `auto_*` flag, and the *writer* is chosen by the plugin's declared
+/// **format** enum (`trust_format` / `mcp_format` / `stop_hook_format`) — NOT
+/// by `plugin.id`. So adding a CLI that reuses an existing config format is
+/// pure config (`cli-plugins/<id>.toml`); a CLI with a genuinely new format
+/// adds one enum variant (in `plugins.rs`) + one writer below + one match arm.
 pub fn run_patches(
     plugin: &crate::plugins::CliPlugin,
     workspace: &Path,
     ctx: &PreSpawnCtx,
 ) {
-    match plugin.id.as_str() {
-        "claude" => run_claude_patches(plugin, workspace, ctx),
-        "codex" => run_codex_patches(plugin, workspace, ctx),
-        other => {
-            tracing::debug!(
-                cli = %other,
-                "no pre-spawn patch handler registered for this CLI"
-            );
-        }
-    }
-}
+    use crate::plugins::{McpFormat, StopHookFormat, TrustFormat};
 
-/// All `claude`-specific pre-spawn patches, in execution order. Each step
-/// is gated on its `auto_*` flag in the plugin manifest, so a host that
-/// only wants trust auto-accept (no MCP, no hook) can opt out cleanly.
-fn run_claude_patches(
-    plugin: &crate::plugins::CliPlugin,
-    workspace: &Path,
-    ctx: &PreSpawnCtx,
-) {
-    // 1. Auto-accept "Do you trust this folder?" — workspaces are flockmux-owned.
+    // 1. Trust: pre-accept the "do you trust this folder?" gate.
     if plugin.auto_trust_workspace {
-        if let Err(err) = mark_claude_workspace_trusted(workspace) {
-            tracing::warn!(?err, "claude: auto-trust patch failed");
+        let res = match plugin.trust_format {
+            TrustFormat::ClaudeJson => mark_claude_workspace_trusted(workspace),
+            TrustFormat::CodexToml => mark_codex_workspace_trusted(workspace),
+            TrustFormat::None => {
+                tracing::warn!(cli = %plugin.id, "auto_trust_workspace set but trust_format = none; skipping");
+                Ok(())
+            }
+        };
+        if let Err(err) = res {
+            tracing::warn!(?err, cli = %plugin.id, "auto-trust patch failed");
         }
     }
-    // 2. Register flockmux-swarm as a local-scope MCP server with this
-    //    spawn's agent_id baked into args + env.
-    if plugin.auto_inject_mcp {
-        if let Err(err) = mark_claude_mcp_local(
-            workspace,
-            &ctx.agent_id,
-            &ctx.mcp_bin,
-            &ctx.server_url,
-        ) {
-            tracing::warn!(?err, "claude: mcp-inject patch failed");
-        }
-        // 2b. Per-agent MCP config file under ~/.flockmux/mcp/. spawn.rs
-        //     passes this to claude as `--mcp-config <file> --strict-mcp-
-        //     config` so claude never sees the (potentially stale, in
-        //     shared_workspace spells) ~/.claude.json mcpServers section.
-        //     See `write_claude_per_agent_mcp_config` for the why.
-        if let Err(err) = write_claude_per_agent_mcp_config(
-            &ctx.agent_id,
-            &ctx.mcp_bin,
-            &ctx.server_url,
-        ) {
-            tracing::warn!(?err, "claude: per-agent mcp file write failed");
-        }
-    }
-    // 3. Install <workspace>/.claude/settings.local.json Stop hook (M5b
-    //    wake-check). Timeout is in MILLISECONDS for claude.
-    if plugin.auto_inject_stop_hook {
-        if let Err(err) = install_claude_stop_hook(
-            workspace,
-            &ctx.mcp_bin,
-            &ctx.server_url,
-        ) {
-            tracing::warn!(?err, "claude: stop-hook install failed");
-        }
-    }
-}
 
-/// All `codex`-specific pre-spawn patches, in execution order. Codex has
-/// one extra step over claude (auto-dismiss the "update available" prompt
-/// that blocks a headless PTY), and writes to different files / different
-/// timeout units — keep them paired here so the differences are visible
-/// at a glance.
-fn run_codex_patches(
-    plugin: &crate::plugins::CliPlugin,
-    workspace: &Path,
-    ctx: &PreSpawnCtx,
-) {
-    // 1. Auto-accept "Do you trust the contents of this directory?".
-    if plugin.auto_trust_workspace {
-        if let Err(err) = mark_codex_workspace_trusted(workspace) {
-            tracing::warn!(?err, "codex: auto-trust patch failed");
-        }
-    }
-    // 2. Mark the latest codex release as already-dismissed so the
-    //    "Update available! Press enter to continue" prompt is skipped.
-    //    (claude has no equivalent prompt.)
+    // 2. Suppress the "update available" prompt. Codex-only quirk today
+    //    (claude has no equivalent), so this stays a simple flag gate rather
+    //    than a format dispatch.
     if plugin.auto_dismiss_update {
         if let Err(err) = mark_codex_update_dismissed() {
-            tracing::warn!(?err, "codex: auto-dismiss-update patch failed");
+            tracing::warn!(?err, cli = %plugin.id, "auto-dismiss-update patch failed");
         }
     }
-    // 3. Ensure ~/.codex/config.toml has the global flockmux-swarm MCP
-    //    server block. Per-spawn identity rides in via FLOCKMUX_AGENT_ID
-    //    env passthrough (whitelisted in env_vars).
+
+    // 3. Register the flockmux-swarm MCP server so the agent gets swarm_* tools.
     if plugin.auto_inject_mcp {
-        if let Err(err) = ensure_codex_mcp_global(&ctx.mcp_bin) {
-            tracing::warn!(?err, "codex: mcp-inject patch failed");
+        match plugin.mcp_format {
+            McpFormat::ClaudeLocalScope => {
+                // Local-scope entry in ~/.claude.json ...
+                if let Err(err) =
+                    mark_claude_mcp_local(workspace, &ctx.agent_id, &ctx.mcp_bin, &ctx.server_url)
+                {
+                    tracing::warn!(?err, "claude: mcp-inject patch failed");
+                }
+                // ... plus a per-agent file that spawn.rs passes as
+                // `--mcp-config <file> --strict-mcp-config` to dodge the
+                // shared-cwd ~/.claude.json mcpServers collision (M6b). Run
+                // independently of the entry above (matches prior behavior).
+                if let Err(err) =
+                    write_claude_per_agent_mcp_config(&ctx.agent_id, &ctx.mcp_bin, &ctx.server_url)
+                {
+                    tracing::warn!(?err, "claude: per-agent mcp file write failed");
+                }
+            }
+            McpFormat::CodexGlobalToml => {
+                // Global [mcp_servers.flockmux-swarm] in ~/.codex/config.toml;
+                // per-spawn identity rides in via FLOCKMUX_AGENT_ID env.
+                if let Err(err) = ensure_codex_mcp_global(&ctx.mcp_bin) {
+                    tracing::warn!(?err, "codex: mcp-inject patch failed");
+                }
+            }
+            McpFormat::None => {
+                tracing::warn!(cli = %plugin.id, "auto_inject_mcp set but mcp_format = none; agent will have NO swarm_* tools (cannot coordinate)");
+            }
         }
     }
-    // 4. Install <workspace>/.codex/hooks.json Stop hook (M5b wake-check).
-    //    Timeout is in SECONDS for codex — different from claude.
+
+    // 4. Install the wake Stop-hook (timeout unit differs per writer:
+    //    claude = ms, codex = seconds).
     if plugin.auto_inject_stop_hook {
-        if let Err(err) = install_codex_stop_hook(
-            workspace,
-            &ctx.mcp_bin,
-            &ctx.server_url,
-        ) {
-            tracing::warn!(?err, "codex: stop-hook install failed");
+        let res = match plugin.stop_hook_format {
+            StopHookFormat::ClaudeSettingsLocal => {
+                install_claude_stop_hook(workspace, &ctx.mcp_bin, &ctx.server_url)
+            }
+            StopHookFormat::CodexHooksJson => {
+                install_codex_stop_hook(workspace, &ctx.mcp_bin, &ctx.server_url)
+            }
+            StopHookFormat::None => {
+                tracing::warn!(cli = %plugin.id, "auto_inject_stop_hook set but stop_hook_format = none; agent will never be re-woken");
+                Ok(())
+            }
+        };
+        if let Err(err) = res {
+            tracing::warn!(?err, cli = %plugin.id, "stop-hook install failed");
         }
     }
 }

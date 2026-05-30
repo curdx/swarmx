@@ -103,13 +103,17 @@ pub fn spawn_agent(
     //   - codex >=0.131 (future): probe -> true, flag injected, our
     //     existing hooks.json install becomes immediately effective with
     //     zero config change on flockmux's side.
-    if plugin.id == "codex"
+    // Gated on the codex hooks.json format (not the literal id) + a binary
+    // probe, so it's the *capability* that drives it: any CLI declaring
+    // `stop_hook_format = "codex-hooks-json"` whose binary supports the flag
+    // gets it; others never do.
+    if plugin.stop_hook_format == crate::plugins::StopHookFormat::CodexHooksJson
         && binary_supports_flag(&plugin.binary, "--dangerously-bypass-hook-trust")
     {
         argv.push("--dangerously-bypass-hook-trust".into());
         tracing::info!(
             agent = %agent_id,
-            "codex --dangerously-bypass-hook-trust supported; injecting"
+            "--dangerously-bypass-hook-trust supported; injecting"
         );
     }
 
@@ -119,7 +123,7 @@ pub fn spawn_agent(
     // shared_workspace collision that hung M6b run #4) can no longer leak
     // someone else's agent_id into our MCP server. Skipped if the file
     // wasn't written (no $HOME) — fall back to legacy ~/.claude.json path.
-    if plugin.id == "claude" && plugin.auto_inject_mcp {
+    if plugin.mcp_format == crate::plugins::McpFormat::ClaudeLocalScope && plugin.auto_inject_mcp {
         if let Some(path) = crate::pre_spawn::claude_per_agent_mcp_config_path(&agent_id) {
             if path.is_file() {
                 argv.push("--mcp-config".into());
@@ -186,18 +190,13 @@ pub fn spawn_agent(
     let input_tx = bridge.input_sender();
     let bridge = Arc::new(bridge);
 
-    // Optional auto-answer for first-spawn confirmation dialogs that block
-    // a headless PTY — e.g. codex 0.130+'s "Hooks need review" menu, which
-    // pops up the first time codex sees a non-managed hook with a previously
-    // unseen file-path trust key. The user can't reach the codex TUI to
-    // pick "2 Trust all and continue" because the dialog is gating input,
-    // so we synthesize the keystrokes for them. Per-CLI opt-in via plugin
-    // manifest so claude (no such dialog) stays untouched.
-    let dialog_auto_answer = if plugin.auto_answer_hooks_dialog {
-        Some(DialogAutoAnswer::new(input_tx.clone(), &agent_id))
-    } else {
-        None
-    };
+    // Post-spawn readiness automation: auto-answer first-spawn confirmation
+    // dialogs that would block a headless PTY (e.g. codex 0.130+'s "Hooks
+    // need review" menu — the user can't reach the codex TUI to pick "2
+    // Trust all and continue" because the dialog gates input). Steps are
+    // declared in the plugin manifest's `ready_plan`, so claude (no such
+    // dialog) ships an empty plan and this is `None`.
+    let ready_plan = ReadyPlanRunner::from_plan(&plugin.ready_plan, input_tx.clone(), &agent_id);
 
     // Drain the PTY's output mpsc into the shared resume buffer. The pump
     // owns the receiver for the agent's whole lifetime — WS subscribers
@@ -220,14 +219,14 @@ pub fn spawn_agent(
         let lifecycle_tx = lifecycle_tx.clone();
         let agent_id_for_log = agent_id.clone();
         let recorder = recorder.clone();
-        let mut dialog_auto_answer = dialog_auto_answer;
+        let mut ready_plan = ready_plan;
         tokio::spawn(async move {
             let mut output_rx = output_rx;
             let mut osc_buf: Vec<u8> = Vec::new();
             while let Some(chunk) = output_rx.recv().await {
                 scan_osc(&mut osc_buf, &chunk, &lifecycle, &lifecycle_tx);
-                if let Some(answerer) = dialog_auto_answer.as_mut() {
-                    answerer.scan(&chunk);
+                if let Some(rp) = ready_plan.as_mut() {
+                    rp.scan(&chunk);
                 }
                 if let Some(rec) = &recorder {
                     rec.write_chunk(chunk.clone());
@@ -371,79 +370,92 @@ pub fn locate_mcp() -> Result<PathBuf> {
     locate_sibling_bin("flockmux-mcp", "FLOCKMUX_MCP_PATH")
 }
 
-/// Auto-answer a first-spawn confirmation dialog that would otherwise block
-/// the PTY. Designed for codex 0.130+'s "Hooks need review" menu: when codex
-/// sees a hooks.json file path it hasn't recorded a trust hash for, it draws
-/// a numbered menu in the TUI and waits for a keystroke before continuing.
-/// Because flockmux mints a fresh workspace per spawn and codex keys trust
-/// by absolute hooks.json path, the dialog reappears every time even after
-/// the user has approved an identical hook elsewhere — so we synthesize
-/// "2\r" (Trust all and continue) on the user's behalf.
+/// Host-side post-spawn readiness automation, built from a plugin's
+/// `ready_plan` ([`crate::plugins::ReadyStep`]). Today it handles
+/// `answer_dialog` steps: watch the PTY output stream for a `needle` and
+/// inject a `response` once, so a first-spawn TUI dialog that gates input
+/// (e.g. codex 0.130+'s "Hooks need review" menu — the user can't reach the
+/// codex TUI to pick "2 Trust all and continue") doesn't hang a headless PTY.
 ///
-/// Safety constraints baked in:
-/// 1. Single-shot per agent — once we've sent the response we mark `fired`
-///    and never touch the PTY again, even if the dialog text appears later.
-/// 2. Time-boxed — the scanner shuts off after `WINDOW` regardless of
-///    whether the dialog ever appeared. A 30-second window covers cold
-///    starts; anything later is either a different dialog or user-typed.
-/// 3. Specific needle — matching the literal heading "Hooks need review"
-///    (a 17-byte ASCII run codex's ratatui dialog draws in one go). We do
-///    NOT match shorter strings like "Trust" or "hook" that could appear
-///    in routine output.
-/// 4. Buffer bounded — we keep a sliding 8KB window so a chatty agent
-///    can't OOM us by streaming gigabytes before the dialog appears.
-///
-/// This auto-answer is intentionally implemented host-side (not in the
-/// client xterm) so it works regardless of which UI is attached, including
-/// no UI at all (`flockmux-cli` headless / agent-to-agent only).
-struct DialogAutoAnswer {
-    /// Bytes to look for in PTY output to recognize the dialog state.
-    needle: &'static [u8],
-    /// What to inject into PTY input to dismiss the dialog. For codex the
-    /// menu's #2 option is "Trust all and continue"; pressing Enter
-    /// confirms.
-    response: &'static [u8],
-    /// Stop scanning at this instant — even if the dialog never appeared,
-    /// we don't want to be perpetually pattern-matching against routine
-    /// agent output.
-    deadline: Instant,
-    /// One-shot guard: flips to true after we've sent the response.
-    fired: bool,
-    /// Sliding window over PTY output. Bounded by `MAX_BUFFER`.
+/// This is the **data-driven replacement** for the old hard-coded
+/// `DialogAutoAnswer`: the needle/response now live in `cli-plugins/<id>.toml`,
+/// so any CLI declares its own dialogs with zero Rust change, and a CLI may
+/// list multiple. Each step keeps the original safety constraints — single-shot
+/// (`fired`), time-boxed (`window_ms`, default 30s), specific-needle (we match
+/// the literal heading, never a short substring like "hook"), and
+/// buffer-bounded (a sliding 8 KiB window so a chatty agent can't OOM us).
+/// Implemented host-side so it works regardless of which UI (if any) is
+/// attached (`flockmux-cli` headless / agent-to-agent included).
+struct ReadyPlanRunner {
+    answers: Vec<AnswerDialogState>,
+    /// Sliding window over PTY output, shared across steps. Bounded by `MAX_BUFFER`.
     buf: Vec<u8>,
-    /// Cloned PtyBridge input channel. `try_send` is non-blocking and used
-    /// from the sync `scan` path; the channel has plenty of capacity for a
-    /// 2-byte response and we degrade silently if full.
+    /// Cloned PtyBridge input channel. `try_send` is non-blocking and used from
+    /// the sync `scan` path; ample capacity for a few bytes, degrade silently.
     input_tx: mpsc::Sender<Bytes>,
-    /// Agent_id for log lines only — never written into PTY.
+    /// Agent_id for log lines only — never written into the PTY.
     agent_id: String,
 }
 
-impl DialogAutoAnswer {
-    const WINDOW: Duration = Duration::from_secs(30);
+/// Per-`answer_dialog`-step state.
+struct AnswerDialogState {
+    needle: Vec<u8>,
+    response: Vec<u8>,
+    /// Stop watching this step at this instant even if the needle never showed.
+    deadline: Instant,
+    /// One-shot guard: set once we've injected the response.
+    fired: bool,
+}
+
+impl ReadyPlanRunner {
     const MAX_BUFFER: usize = 8 * 1024;
 
-    fn new(input_tx: mpsc::Sender<Bytes>, agent_id: &str) -> Self {
-        Self {
-            // codex 0.132 draws this verbatim as the dialog heading. Test
-            // your local codex `/hooks` panel to confirm if a future version
-            // renames it.
-            needle: b"Hooks need review",
-            // 2 = "Trust all and continue", \r = Enter to confirm.
-            response: b"2\r",
-            deadline: Instant::now() + Self::WINDOW,
-            fired: false,
-            buf: Vec::with_capacity(2048),
-            input_tx,
-            agent_id: agent_id.to_string(),
+    /// Build from a plugin's `ready_plan`. Returns `None` when there are no
+    /// actionable steps, so the PTY pump skips scanning entirely (the common
+    /// case — e.g. claude has no blocking dialog and ships an empty plan).
+    fn from_plan(
+        plan: &[crate::plugins::ReadyStep],
+        input_tx: mpsc::Sender<Bytes>,
+        agent_id: &str,
+    ) -> Option<Self> {
+        use crate::plugins::ReadyStepKind;
+        let now = Instant::now();
+        let mut answers = Vec::new();
+        for step in plan {
+            match step.kind {
+                ReadyStepKind::AnswerDialog => {
+                    if step.needle.is_empty() || step.response.is_empty() {
+                        tracing::warn!(
+                            agent = %agent_id,
+                            "ready_plan: answer_dialog step missing needle/response; skipping",
+                        );
+                        continue;
+                    }
+                    answers.push(AnswerDialogState {
+                        needle: step.needle.clone().into_bytes(),
+                        response: step.response.clone().into_bytes(),
+                        deadline: now + Duration::from_millis(step.window_ms),
+                        fired: false,
+                    });
+                }
+            }
+        }
+        if answers.is_empty() {
+            None
+        } else {
+            Some(Self {
+                answers,
+                buf: Vec::with_capacity(2048),
+                input_tx,
+                agent_id: agent_id.to_string(),
+            })
         }
     }
 
     fn scan(&mut self, chunk: &[u8]) {
-        if self.fired {
-            return;
-        }
-        if Instant::now() > self.deadline {
+        let now = Instant::now();
+        // Nothing left to do once every step has fired or timed out.
+        if self.answers.iter().all(|a| a.fired || now > a.deadline) {
             return;
         }
         self.buf.extend_from_slice(chunk);
@@ -451,59 +463,84 @@ impl DialogAutoAnswer {
             let keep_from = self.buf.len() - 1024;
             self.buf.drain(..keep_from);
         }
-        if find(&self.buf, self.needle).is_some() {
-            self.fired = true;
-            // try_send is non-blocking; if the channel is full something
-            // is very wrong but it's not worth blocking the PTY pump for.
-            match self.input_tx.try_send(Bytes::from_static(self.response)) {
-                Ok(()) => {
-                    tracing::info!(
+        for a in &mut self.answers {
+            if a.fired || now > a.deadline {
+                continue;
+            }
+            if find(&self.buf, &a.needle).is_some() {
+                a.fired = true;
+                // try_send is non-blocking; if the channel is full something
+                // is very wrong but it's not worth blocking the PTY pump for.
+                match self.input_tx.try_send(Bytes::copy_from_slice(&a.response)) {
+                    Ok(()) => tracing::info!(
                         agent = %self.agent_id,
-                        "auto-answered codex Hooks-need-review dialog (sent 2+Enter)",
-                    );
-                }
-                Err(err) => {
-                    tracing::warn!(
+                        needle = %String::from_utf8_lossy(&a.needle),
+                        "ready_plan: auto-answered dialog",
+                    ),
+                    Err(err) => tracing::warn!(
                         agent = %self.agent_id,
                         ?err,
-                        "auto-answer try_send failed; user will need to dismiss dialog manually",
-                    );
+                        "ready_plan: answer try_send failed; user may need to dismiss the dialog manually",
+                    ),
                 }
             }
+        }
+        // Free the buffer once all steps are done.
+        if self.answers.iter().all(|a| a.fired) {
             self.buf.clear();
         }
     }
 }
 
 #[cfg(test)]
-mod dialog_auto_answer_tests {
+mod ready_plan_tests {
     use super::*;
+    use crate::plugins::{ReadyStep, ReadyStepKind};
 
-    fn make_pair() -> (DialogAutoAnswer, mpsc::Receiver<Bytes>) {
+    fn codex_hooks_step() -> ReadyStep {
+        ReadyStep {
+            kind: ReadyStepKind::AnswerDialog,
+            needle: "Hooks need review".into(),
+            response: "2\r".into(),
+            window_ms: 30_000,
+        }
+    }
+
+    fn make_pair() -> (ReadyPlanRunner, mpsc::Receiver<Bytes>) {
         let (tx, rx) = mpsc::channel::<Bytes>(8);
-        let aa = DialogAutoAnswer::new(tx, "codex-test");
-        (aa, rx)
+        let runner = ReadyPlanRunner::from_plan(&[codex_hooks_step()], tx, "codex-test")
+            .expect("non-empty plan yields a runner");
+        (runner, rx)
+    }
+
+    #[tokio::test]
+    async fn empty_plan_is_none() {
+        let (tx, _rx) = mpsc::channel::<Bytes>(8);
+        assert!(
+            ReadyPlanRunner::from_plan(&[], tx, "x").is_none(),
+            "no steps ⇒ no runner (pump skips scanning)",
+        );
     }
 
     #[tokio::test]
     async fn sends_response_on_match() {
-        let (mut aa, mut rx) = make_pair();
-        aa.scan(b"some noise before the dialog\n");
-        aa.scan(b"\nHooks need review\n1 hook is new\n");
+        let (mut r, mut rx) = make_pair();
+        r.scan(b"some noise before the dialog\n");
+        r.scan(b"\nHooks need review\n1 hook is new\n");
         // Should have sent "2\r" exactly once.
         let got = rx.try_recv().expect("response should have been queued");
         assert_eq!(&got[..], b"2\r");
         assert!(rx.try_recv().is_err(), "no second response");
-        assert!(aa.fired, "fired flag should be set");
+        assert!(r.answers[0].fired, "fired flag should be set");
     }
 
     #[tokio::test]
     async fn single_shot_after_fired() {
-        let (mut aa, mut rx) = make_pair();
-        aa.scan(b"Hooks need review");
+        let (mut r, mut rx) = make_pair();
+        r.scan(b"Hooks need review");
         let _ = rx.try_recv().expect("first response sent");
         // Even if the dialog text repeats, never fire again.
-        aa.scan(b"Hooks need review again somehow");
+        r.scan(b"Hooks need review again somehow");
         assert!(
             rx.try_recv().is_err(),
             "second match must NOT enqueue another response",
@@ -512,47 +549,69 @@ mod dialog_auto_answer_tests {
 
     #[tokio::test]
     async fn matches_across_chunk_boundary() {
-        let (mut aa, mut rx) = make_pair();
+        let (mut r, mut rx) = make_pair();
         // Split the needle across two chunks — the sliding buffer must
         // stitch them back together before matching.
-        aa.scan(b"Hooks ne");
+        r.scan(b"Hooks ne");
         assert!(rx.try_recv().is_err(), "no premature match");
-        aa.scan(b"ed review");
+        r.scan(b"ed review");
         let got = rx.try_recv().expect("match after stitching chunks");
         assert_eq!(&got[..], b"2\r");
     }
 
     #[tokio::test]
     async fn ignores_unrelated_substrings() {
-        let (mut aa, mut rx) = make_pair();
-        aa.scan(b"Trust this folder? hook count: 0");
-        aa.scan(b"reviewing your code changes now");
+        let (mut r, mut rx) = make_pair();
+        r.scan(b"Trust this folder? hook count: 0");
+        r.scan(b"reviewing your code changes now");
         assert!(rx.try_recv().is_err(), "substring 'hook' / 'review' alone must NOT trigger");
-        assert!(!aa.fired);
+        assert!(!r.answers[0].fired);
     }
 
     #[tokio::test]
     async fn does_not_fire_after_window_expires() {
-        let (mut aa, mut rx) = make_pair();
+        let (mut r, mut rx) = make_pair();
         // Synthesize an expired deadline so we don't actually sleep 30s.
-        aa.deadline = Instant::now() - Duration::from_secs(1);
-        aa.scan(b"Hooks need review");
+        r.answers[0].deadline = Instant::now() - Duration::from_secs(1);
+        r.scan(b"Hooks need review");
         assert!(rx.try_recv().is_err(), "expired window must not fire");
-        assert!(!aa.fired);
+        assert!(!r.answers[0].fired);
     }
 
     #[tokio::test]
     async fn buffer_stays_bounded_under_chatty_input() {
-        let (mut aa, _rx) = make_pair();
+        let (mut r, _rx) = make_pair();
         // Push many small chunks of unrelated bytes.
         for _ in 0..200 {
-            aa.scan(&[b'.'; 1024]);
+            r.scan(&[b'.'; 1024]);
         }
         assert!(
-            aa.buf.len() <= DialogAutoAnswer::MAX_BUFFER,
+            r.buf.len() <= ReadyPlanRunner::MAX_BUFFER,
             "buffer must stay capped (got {})",
-            aa.buf.len(),
+            r.buf.len(),
         );
+    }
+
+    #[tokio::test]
+    async fn multiple_dialogs_each_fire_once() {
+        let (tx, mut rx) = mpsc::channel::<Bytes>(8);
+        let plan = vec![
+            ReadyStep {
+                kind: ReadyStepKind::AnswerDialog,
+                needle: "Trust this folder".into(),
+                response: "1\r".into(),
+                window_ms: 30_000,
+            },
+            codex_hooks_step(),
+        ];
+        let mut r = ReadyPlanRunner::from_plan(&plan, tx, "multi").expect("runner");
+        // Needle match is case-sensitive (same as the old DialogAutoAnswer),
+        // so the chunk must carry the literal heading "Trust this folder".
+        r.scan(b"? Trust this folder ? [y/N]");
+        assert_eq!(&rx.try_recv().expect("first dialog answered")[..], b"1\r");
+        r.scan(b"... later ... Hooks need review ...");
+        assert_eq!(&rx.try_recv().expect("second dialog answered")[..], b"2\r");
+        assert!(rx.try_recv().is_err(), "no extra responses");
     }
 }
 

@@ -31,3 +31,10 @@ auto_inject_mcp = true
 # returns `{decision:"block", reason:"..."}` and claude continues into a
 # new turn that picks the messages up via swarm_list_messages.
 auto_inject_stop_hook = true
+
+# Which config FORMAT each auto_* patch uses. pre_spawn.rs dispatches on
+# these, NOT on `id` — so behavior is data-driven and a claude-compatible
+# CLI could reuse these values verbatim with zero Rust changes.
+trust_format     = "claude-json"           # ~/.claude.json hasTrustDialogAccepted
+mcp_format       = "claude-local-scope"    # ~/.claude.json local scope + per-agent --mcp-config
+stop_hook_format = "claude-settings-local" # <ws>/.claude/settings.local.json (timeout ms)
