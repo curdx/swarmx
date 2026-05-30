@@ -25,6 +25,18 @@ export function projectSummaryKey(path: string): string {
   return `project.summary.${workspaceSlug(path)}`;
 }
 
+/** Split a filesystem path into its last segment (`name`) and everything
+ *  before it (`parent`), for the sidebar's name + mono-caption display.
+ *  Trailing slashes are trimmed; a bare name (no separator) has empty parent.
+ *  Shared by the Shell layout and the workspace sidebar tree. */
+export function splitWorkspacePath(path: string): { name: string; parent: string } {
+  if (!path || path === "(no workspace)") return { name: path || "", parent: "" };
+  const trimmed = path.replace(/[\\/]+$/, "");
+  const idx = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
+  if (idx < 0) return { name: trimmed, parent: "" };
+  return { name: trimmed.slice(idx + 1) || trimmed, parent: trimmed.slice(0, idx) };
+}
+
 // workspaceNameKey / workspaceAccentKey / WORKSPACE_ACCENT_KEY_PREFIX /
 // WORKSPACE_NAME_KEY_PREFIX_VALUE 在 workspace-as-first-class refactor
 // 中被删了 — name 和 accent 现在直接是 workspaces 表的列，CreateWizard
