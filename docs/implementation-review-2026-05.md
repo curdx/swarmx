@@ -8,7 +8,10 @@
 > - ✅ **F12 lag 丢 wake**：广播 lag 后对账 depends_on vs 黑板（含 .error/.failed 别名）重唤醒丢失的一次性 wake；广播容量 256→1024 降低 lag 频率。
 > - ✅ **F6 写入非原子（完整修复）**：①**liveness**——黑板 op-log insert 失败时不再吞掉 BlackboardChanged，内容已在盘上，照发 wake（哨兵 id=-1）+ 返回成功，依赖方不再被一次 DB 抖动悄悄搁浅；②**启动对账**——boot 时 `reconcile_oplog_from_disk` 扫黑板目录 vs op-log，给"有文件无 op 行"（崩溃中途写）的 path 补回 `op="reconcile"` 行，恢复 `swarm_list_blackboard` 发现性；幂等、不广播（boot 无订阅者）。新增单测（孤儿文件→只补它、二次为 no-op、可读回 + 进 discovery）。真 swarm 浏览器跑通、零回归。
 > - ✅ **F5 DB 无保留策略**：boot 时按保留窗口（`FLOCKMUX_RETENTION_DAYS`，默认 30、0=永久保留）prune 三张只增表，只删"不再承重"的行——黑板**被取代的旧历史**（永不删每 path 最新行，发现/reconcile 依赖）、**已消费 wake + 已投递已读**消息（未消费 wake 永不删，FK 引用的父消息跳过下轮再删）、**旧的已 finalize 录制**（顺带 best-effort unlink `.cast` 文件）。单事务 + 删后 `wal_checkpoint(TRUNCATE)`+`optimize`；新增 `(path,id)` 索引（迁移 0008，顺带提速 latest-per-path 发现）；不做写时 dedup（会破坏"重写同内容也发 wake"语义）、不强制 VACUUM（空闲页复用已封顶增长）。穷尽单测覆盖全部安全红线 + boot 冒烟验迁移/接线。
-> - ⏳ **未做**：前端 Shell.tsx 巨型文件 / 两套 DAG（大）；L4 ACP 传输 + L5 分层 override / model 解耦（远期）。
+> - ✅ **多 CLI L5/L4（详见 `multi-cli-redesign-plan.md`）**：L5a 分层 registry override（用户 `~/.flockmux/cli-plugins` 不 fork 即可改/加 CLI）、L5c model 与 CLI 解耦（数据驱动 model overlay，同 CLI 任意 model 不分叉 role）、L4 ACP 传输基础（单一可复用 JSON-RPC-over-stdio codec + transport 接缝，声明 acp 安全回退 PTY）。
+> - ✅ **前端 F15 两套 DAG 合并**：删 legacy GraphPanel，edge 推导抽成 `lib/dagEdgeDerivation` 单一来源（消除 satisfied/producer/live-filter 漂移）；SwarmPanel 去 graph tab。
+> - ✅ **前端 Shell.tsx 巨型文件拆分**：1438 → 516 行；侧栏树 + ManageRootsDialog → `WorkspaceSidebar`，tab 栏 + 过渡 → `WorkspaceToolbar`，类型 → `types.ts`；行为零变化，tsc + vite build + 浏览器走查通过。
+> - ⏳ **未做（远期）**：`ready_plan` 顺序 onboarding（wait_for/input/extract_session_id）、L4 ACP **session 驱动**（codec 已就位）；前端 `useWorkspaceShellData` 数据 hook 进一步抽离（高耦合，本轮按风险保留在 Shell）。
 >
 > ---
 >
