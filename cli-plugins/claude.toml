@@ -33,3 +33,4 @@ auto_inject_stop_hook = true
 trust_format     = "claude-json"           # ~/.claude.json hasTrustDialogAccepted
 mcp_format       = "claude-local-scope"    # ~/.claude.json local scope + per-agent --mcp-config
 stop_hook_format = "claude-settings-local" # <ws>/.claude/settings.local.json (timeout ms)
+stop_hook_timeout = 10000                  # milliseconds (claude's hook schema unit)

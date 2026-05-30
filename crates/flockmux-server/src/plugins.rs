@@ -164,9 +164,16 @@ pub struct CliPlugin {
     /// Which Stop-hook format to install when `auto_inject_stop_hook` is set.
     #[serde(default)]
     pub stop_hook_format: StopHookFormat,
+    /// Stop-hook `timeout` value, written verbatim into the hook config in the
+    /// CLI's NATIVE unit (claude/settings.local.json = milliseconds, codex/
+    /// hooks.json = seconds). Externalized from a Rust constant so a new CLI
+    /// declares its own value+unit instead of inheriting a 1000×-wrong one.
+    #[serde(default = "default_stop_hook_timeout")]
+    pub stop_hook_timeout: i64,
 }
 
 fn default_home_env() -> String { "HOME".into() }
+fn default_stop_hook_timeout() -> i64 { 10_000 }
 
 #[derive(Debug, Clone, Default)]
 pub struct PluginRegistry {
@@ -281,6 +288,11 @@ mod tests {
         );
         // claude has no first-spawn blocking dialog → empty plan.
         assert!(claude.ready_plan.is_empty(), "claude ships no ready_plan");
+
+        // Stop-hook timeout is externalized to the manifest in each CLI's
+        // native unit (claude = ms, codex = s), not a Rust constant.
+        assert_eq!(claude.stop_hook_timeout, 10_000, "claude stop-hook timeout in ms");
+        assert_eq!(codex.stop_hook_timeout, 10, "codex stop-hook timeout in seconds");
     }
 
     /// A new field with a kebab-case typo must FAIL parse (→ warn-skip at load),
