@@ -62,7 +62,13 @@ pub struct Swarm {
 
 impl Swarm {
     pub fn new(store: Arc<Store>, blackboard_root: PathBuf) -> Arc<Self> {
-        let (events_tx, _events_rx) = broadcast::channel(256);
+        // Capacity for the shared SwarmEvent ring (messages + blackboard +
+        // lifecycle all flow through here). 1024 gives the WakeCoordinator
+        // ample headroom against a message/blackboard burst so it rarely
+        // `Lagged`s; if it ever does, the coordinator reconciles depends_on
+        // against the blackboard and re-wakes (F12), so a drop is recoverable
+        // rather than a permanent stall.
+        let (events_tx, _events_rx) = broadcast::channel(1024);
         Arc::new(Self {
             store,
             inboxes: DashMap::new(),

@@ -237,6 +237,31 @@ pub fn orphaned_handoff_diagnosis(
     Some(waiting)
 }
 
+/// Lag recovery (F12): the shared SwarmEvent broadcast can drop events under a
+/// burst, and a dropped `BlackboardChanged` for a one-shot handoff key is lost
+/// forever — there's no "next write" to catch up, so the dependent hangs and
+/// no mailbox wake row is ever written either. On `Lagged` the coordinator
+/// reconciles: given the subs snapshot and the set of `depends_on` keys we've
+/// confirmed are already present on the blackboard (`satisfied`), return one
+/// `(agent, key)` to re-wake per affected agent. Re-waking is benign (a
+/// redundant recheck turn) and far better than a permanent stall. Pure +
+/// deterministically ordered for unit testing.
+pub fn agents_to_rewake(
+    subs: &HashMap<String, Vec<String>>,
+    satisfied: &std::collections::HashSet<String>,
+) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = subs
+        .iter()
+        .filter_map(|(agent, keys)| {
+            keys.iter()
+                .find(|k| satisfied.contains(k.as_str()))
+                .map(|k| (agent.clone(), k.clone()))
+        })
+        .collect();
+    out.sort();
+    out
+}
+
 /// Injects `\x15<short text>\r` into an agent's PTY input. Matches the
 /// existing pattern in `rest.rs::run_spell` spell bootstrap injection
 /// (parking_lot guard held briefly to clone the sender, sender held
@@ -502,12 +527,18 @@ impl WakeCoordinator {
                 }
                 Ok(_) => {} // ignore the rest (message, message_read)
                 Err(RecvError::Lagged(n)) => {
-                    // Broadcast buffer overflow — should never happen in
-                    // practice (we'd have to lag by hundreds of events).
-                    // Log and keep going; missing one wake is recoverable
-                    // because the *next* write to the same key will catch
-                    // up, and the mailbox isn't lost.
-                    tracing::warn!(lagged = n, "wake coordinator broadcast lagged");
+                    // Broadcast overflow: the coordinator fell behind a burst
+                    // and the ring dropped events. A dropped BlackboardChanged
+                    // for a one-shot handoff key has NO "next write" to catch
+                    // up (and no mailbox row was written), so the dependent
+                    // would hang forever (F12). Recover by reconciling every
+                    // depends_on against the blackboard and re-waking anything
+                    // already satisfied.
+                    tracing::warn!(
+                        lagged = n,
+                        "wake coordinator broadcast lagged; reconciling depends_on against the blackboard"
+                    );
+                    self.reconcile_after_lag().await;
                 }
                 Err(RecvError::Closed) => {
                     tracing::info!("wake coordinator: broadcast closed, exiting");
@@ -730,6 +761,55 @@ impl WakeCoordinator {
         }
     }
 
+    /// Is `key` — or its `.error` / `.failed` failure alias — present on the
+    /// blackboard right now? Failure aliases mirror the normal dispatch, which
+    /// also wakes `depends_on = K` subscribers when `K.error` is written.
+    async fn key_or_alias_written(&self, key: &str) -> bool {
+        for probe in [
+            key.to_string(),
+            format!("{key}.error"),
+            format!("{key}.failed"),
+        ] {
+            if matches!(self.swarm.read_blackboard(&probe).await, Ok(Some(_))) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Recover from a broadcast `Lagged` (F12). The coordinator can't know
+    /// which events were dropped, so reconcile against ground truth: for every
+    /// registered `depends_on` key that's already satisfied on the blackboard,
+    /// re-wake the waiting agent. A one-shot handoff wake that was dropped is
+    /// otherwise lost forever (no next write, no mailbox row), hanging the
+    /// dependent. Re-waking an already-active agent just costs a recheck turn.
+    async fn reconcile_after_lag(&self) {
+        let map = self.subs.read().await.clone();
+        let mut satisfied: std::collections::HashSet<String> = Default::default();
+        let mut checked: std::collections::HashSet<String> = Default::default();
+        for keys in map.values() {
+            for key in keys {
+                if !checked.insert(key.clone()) {
+                    continue;
+                }
+                if self.key_or_alias_written(key).await {
+                    satisfied.insert(key.clone());
+                }
+            }
+        }
+        let rewake = agents_to_rewake(&map, &satisfied);
+        if !rewake.is_empty() {
+            tracing::warn!(
+                count = rewake.len(),
+                "wake coordinator: re-waking dependents after broadcast lag \
+                 (their awaited key was already on the blackboard)"
+            );
+        }
+        for (agent, key) in rewake {
+            self.deliver_wake(&agent, &key).await;
+        }
+    }
+
     async fn deliver_wake(&self, target: &str, key: &str) {
         // M-pause: if the operator paused this agent, swallow auto-wakes.
         // The mailbox is intentionally NOT written either — paused means
@@ -930,6 +1010,34 @@ mod tests {
             orphaned_handoff_diagnosis(&subs, &handoffs, "ws/progress.ledger.md", false),
             None
         );
+    }
+
+    #[test]
+    fn agents_to_rewake_picks_only_satisfied_dependents() {
+        // be + qa depend on a satisfied key → re-wake; fe's key is not
+        // satisfied → skip. Output is deterministically sorted.
+        let subs = build_subs(&[
+            ("be", &["ws/api.done"]),
+            ("fe", &["ws/ui.done"]),
+            ("qa", &["ws/api.done", "ws/ui.done"]),
+        ]);
+        let mut satisfied = std::collections::HashSet::new();
+        satisfied.insert("ws/api.done".to_string());
+        let got = agents_to_rewake(&subs, &satisfied);
+        assert_eq!(
+            got,
+            vec![
+                ("be".to_string(), "ws/api.done".to_string()),
+                ("qa".to_string(), "ws/api.done".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn agents_to_rewake_empty_when_nothing_satisfied() {
+        let subs = build_subs(&[("be", &["ws/api.done"])]);
+        let satisfied = std::collections::HashSet::new();
+        assert!(agents_to_rewake(&subs, &satisfied).is_empty());
     }
 
     #[test]
