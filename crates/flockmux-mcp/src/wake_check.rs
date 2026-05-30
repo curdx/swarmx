@@ -385,7 +385,7 @@ fn unix_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::{extract::Query, routing::get, Json, Router};
+    use axum::{extract::Query, Json, Router};
     use serde_json::json;
     use std::collections::HashMap;
     use std::net::SocketAddr;
