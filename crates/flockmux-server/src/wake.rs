@@ -207,6 +207,36 @@ pub fn select_targets(
         .collect()
 }
 
+/// Diagnose the dominant silent-stall failure mode: a blackboard write that
+/// IS some agent's declared `handoff_signal` yet matched ZERO `depends_on`
+/// subscribers. That means a producer just shipped its completion key but
+/// nothing is wired to react — almost always a key-string mismatch between the
+/// producer's `handoff_signal` and a dependent's `depends_on` (a missing
+/// `<workspace_id>` prefix, a trailing slash, or a typo). Wake matching is
+/// exact-string, so the dependent then hangs forever with no other signal.
+///
+/// Returns `Some(keys_other_agents_are_waiting_on)` when this is an orphaned
+/// handoff (the caller logs a warning with that context so the mismatch is
+/// visible), or `None` otherwise. Pure (no IO/async) for unit testing.
+/// `woke_anyone` = whether the fan-out already delivered to ≥1 subscriber.
+pub fn orphaned_handoff_diagnosis(
+    subs: &HashMap<String, Vec<String>>,
+    handoff_signals: &[String],
+    written_key: &str,
+    woke_anyone: bool,
+) -> Option<Vec<String>> {
+    if woke_anyone {
+        return None;
+    }
+    if !handoff_signals.iter().any(|h| h == written_key) {
+        return None;
+    }
+    let mut waiting: Vec<String> = subs.values().flatten().cloned().collect();
+    waiting.sort();
+    waiting.dedup();
+    Some(waiting)
+}
+
 /// Injects `\x15<short text>\r` into an agent's PTY input. Matches the
 /// existing pattern in `rest.rs::run_spell` spell bootstrap injection
 /// (parking_lot guard held briefly to clone the sender, sender held
@@ -424,6 +454,32 @@ impl WakeCoordinator {
                             if delivered.insert(t.clone()) {
                                 self.deliver_wake(&t, &path).await;
                             }
+                        }
+                    }
+
+                    // Diagnose the dominant silent stall (F3): nobody was woken
+                    // by this write. If the key IS some agent's declared
+                    // handoff_signal, a producer just "finished" but no
+                    // dependent is wired to it — a depends_on/handoff_signal key
+                    // mismatch that would otherwise hang the dependent with zero
+                    // diagnostics. Only read exit_keys on this rare zero-wake
+                    // path, so the common (matched) case stays cheap.
+                    if delivered.is_empty() {
+                        let handoffs: Vec<String> = {
+                            let ek = self.exit_keys.read().await;
+                            ek.values().map(|e| e.handoff_signal.clone()).collect()
+                        };
+                        if let Some(waiting) =
+                            orphaned_handoff_diagnosis(&map, &handoffs, &path, false)
+                        {
+                            tracing::warn!(
+                                handoff = %path,
+                                waiting_on = ?waiting,
+                                "handoff signal written but NO agent depends_on it — likely a \
+                                 depends_on/handoff_signal key mismatch; the dependent will hang \
+                                 forever. Verify the keys match EXACTLY (workspace_id prefix, \
+                                 trailing slash, spelling)."
+                            );
                         }
                     }
 
@@ -840,6 +896,40 @@ mod tests {
         let mut t = select_targets(&m, "k", None);
         t.sort();
         assert_eq!(t, vec!["a".to_string(), "b".to_string()]);
+    }
+
+    #[test]
+    fn orphaned_handoff_warns_on_depends_on_mismatch() {
+        // Producer's handoff is "ws-42/api.done"; the dependent drifted to
+        // "api.done" (dropped the workspace prefix) → nobody matches → orphan.
+        // Returns the keys agents ARE waiting on, for the warning context.
+        let subs = build_subs(&[("be", &["api.done"])]);
+        let handoffs = vec!["ws-42/api.done".to_string()];
+        let got = orphaned_handoff_diagnosis(&subs, &handoffs, "ws-42/api.done", false);
+        assert_eq!(got, Some(vec!["api.done".to_string()]));
+    }
+
+    #[test]
+    fn orphaned_handoff_silent_when_a_subscriber_matched() {
+        // woke_anyone = true (the fan-out delivered) → never warn.
+        let subs = build_subs(&[("be", &["ws/api.done"])]);
+        let handoffs = vec!["ws/api.done".to_string()];
+        assert_eq!(
+            orphaned_handoff_diagnosis(&subs, &handoffs, "ws/api.done", true),
+            None
+        );
+    }
+
+    #[test]
+    fn orphaned_handoff_silent_for_non_handoff_writes() {
+        // A routine scratch/ledger write that isn't any agent's handoff_signal
+        // must NOT warn, even with zero subscribers — keeps the signal noise-free.
+        let subs = build_subs(&[("be", &["ws/api.done"])]);
+        let handoffs = vec!["ws/api.done".to_string()];
+        assert_eq!(
+            orphaned_handoff_diagnosis(&subs, &handoffs, "ws/progress.ledger.md", false),
+            None
+        );
     }
 
     #[test]
