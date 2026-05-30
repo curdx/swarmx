@@ -43,6 +43,7 @@ pub async fn list_plugins(State(state): State<AppState>) -> impl IntoResponse {
             id: p.id.clone(),
             display_name: p.display_name.clone(),
             binary: p.binary.clone(),
+            input_settle_ms: p.input_settle_ms,
         })
         .collect();
     Json(plugins)

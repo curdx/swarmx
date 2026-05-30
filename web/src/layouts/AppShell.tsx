@@ -30,6 +30,8 @@ import { CommandPalette } from "@/components/CommandPalette";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { NotificationPopover } from "@/components/NotificationPopover";
 import { useNotificationBadge } from "@/hooks/useNotificationBadge";
+import { api } from "@/api/http";
+import { primeInputPolicies } from "@/lib/cliInputPolicy";
 import {
   Tooltip,
   TooltipContent,
@@ -56,6 +58,17 @@ export function AppShell() {
   useEffect(() => {
     if (location.pathname.startsWith("/notifications")) markSeen();
   }, [location.pathname, markSeen]);
+
+  // Prime per-CLI input policies from the backend plugin manifest once at
+  // startup, so the terminal's keystroke-settle timing is data-driven (no
+  // hardcoded per-CLI branch). Best-effort: a fetch failure just leaves the
+  // permissive 0ms default. Runs long before any agent terminal mounts.
+  useEffect(() => {
+    api
+      .listPlugins()
+      .then(primeInputPolicies)
+      .catch(() => {});
+  }, []);
 
   const isMac =
     typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);

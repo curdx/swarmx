@@ -33,6 +33,11 @@ pub struct CliPluginInfo {
     pub id: String,
     pub display_name: String,
     pub binary: String,
+    /// Keystroke-settle delay (ms) the web terminal applies after the CLI
+    /// signals ready (codex needs ~300ms; claude 0). Lets the frontend input
+    /// policy be data-driven instead of branching on the agent-id prefix.
+    #[serde(default)]
+    pub input_settle_ms: u64,
 }
 
 /// One entry in `GET /api/agent`. Mirrors `SpawnAgentResponse` plus the

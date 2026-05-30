@@ -44,6 +44,7 @@ trust_format     = "codex-toml"        # appended [projects."<ws>"] trust_level
 mcp_format       = "codex-global-toml" # global [mcp_servers.flockmux-swarm] in ~/.codex/config.toml
 stop_hook_format = "codex-hooks-json"  # <ws>/.codex/hooks.json (timeout seconds)
 stop_hook_timeout = 10                 # SECONDS (codex's hook schema unit; ms would be 2.7h)
+input_settle_ms = 300                  # codex's ratatui input poll attaches ~120-180ms after ready
 
 # Post-spawn readiness automation (host-side). codex 0.130+ pops a "Hooks need
 # review" TUI dialog the first time it sees a hooks.json path it hasn't recorded

@@ -170,6 +170,13 @@ pub struct CliPlugin {
     /// declares its own value+unit instead of inheriting a 1000×-wrong one.
     #[serde(default = "default_stop_hook_timeout")]
     pub stop_hook_timeout: i64,
+    /// Frontend keystroke-settle delay (ms) applied after the CLI signals
+    /// ready, for CLIs whose TUI swallows the first byte if sent too early
+    /// (codex's ratatui input poll attaches ~120-180ms after OSC_READY).
+    /// Surfaced in `CliPluginInfo` so the web terminal's input policy is
+    /// data-driven instead of branching on the agent-id prefix. 0 = none.
+    #[serde(default)]
+    pub input_settle_ms: u64,
 }
 
 fn default_home_env() -> String { "HOME".into() }
@@ -293,6 +300,11 @@ mod tests {
         // native unit (claude = ms, codex = s), not a Rust constant.
         assert_eq!(claude.stop_hook_timeout, 10_000, "claude stop-hook timeout in ms");
         assert_eq!(codex.stop_hook_timeout, 10, "codex stop-hook timeout in seconds");
+
+        // Frontend keystroke-settle delay is data-driven from the manifest
+        // (surfaced via CliPluginInfo), not a startsWith('codex-') branch.
+        assert_eq!(claude.input_settle_ms, 0, "claude needs no settle delay");
+        assert_eq!(codex.input_settle_ms, 300, "codex needs a ~300ms settle delay");
     }
 
     /// A new field with a kebab-case typo must FAIL parse (→ warn-skip at load),

@@ -157,13 +157,20 @@ export function GraphPanel({ liveChange, agentTick }: Props) {
     spawnEdges.push({ fromId: a.parent_agent_id, toId: a.agent_id });
   }
 
-  // Per-CLI accent colors. Picks up the same scheme used by the pane
-  // header borders so the graph feels of-a-piece with the rest of the UI.
-  const cliColor = (cli: string): string => {
-    if (cli === "claude") return "#7c3aed"; // purple
-    if (cli === "codex") return "#0ea5e9"; // sky
-    return "#64748b"; // slate
+  // Per-CLI accent colors — a lookup with a graceful default, not a hard
+  // per-CLI `if`/branch, so an unknown CLI degrades to neutral slate instead
+  // of needing a code edit. These stay frontend-side ON PURPOSE: color is a
+  // theme concern, not backend-manifest data (cf. VS Code "contributes"
+  // theming — semantic tokens resolve client-side, not hardcoded hex shipped
+  // from the server). GraphPanel is the legacy /debug view; the primary DAG
+  // (Dag.tsx) colors by ROLE. Full theme-token migration is part of the
+  // GraphPanel cleanup, not this change.
+  const CLI_COLORS: Record<string, string> = {
+    claude: "#7c3aed", // purple
+    codex: "#0ea5e9", // sky
   };
+  const CLI_COLOR_DEFAULT = "#64748b"; // slate
+  const cliColor = (cli: string): string => CLI_COLORS[cli] ?? CLI_COLOR_DEFAULT;
 
   return (
     <div style={scrollWrap}>

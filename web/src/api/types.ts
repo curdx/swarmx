@@ -26,6 +26,11 @@ export interface CliPluginInfo {
   id: string;
   display_name: string;
   binary: string;
+  /** Keystroke-settle delay (ms) the terminal applies after the CLI is ready
+   *  (codex ~300, claude 0). Mirrors the backend manifest; drives the input
+   *  policy so adding a CLI needs no frontend edit. Optional for back-compat
+   *  with an older server that doesn't send it. */
+  input_settle_ms?: number;
 }
 
 export interface SpawnAgentRequest {
