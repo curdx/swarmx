@@ -15,19 +15,29 @@
 //!
 //! **Status**: codec + id allocation are complete and tested. Driving an
 //! actual ACP *session* (initialize handshake, permission/tool-call event
-//! mapping, streaming) is the next L4 increment and will be built on top of
-//! this — see `spawn.rs` for the transport-selection seam. Until then PTY
-//! remains the only wired transport (declaring `transport = "acp"` logs a
-//! warning and falls back to PTY).
+//! mapping, streaming) is the next L4 increment.
+//!
+//! **Status**: the codec AND the async [`Connection`] layer (JSON-RPC
+//! request/response correlation over a child's stdio + notification / peer-
+//! request channels) are complete and tested (with a simulated peer). What
+//! remains is the ACP-SPECIFIC session on top — the `initialize` handshake and
+//! mapping ACP notifications onto flockmux `SwarmEvent`s — plus a piped-stdio
+//! spawn path in `spawn.rs` (today the transport seam still falls back to PTY).
+//! Those need a live ACP CLI to pin the wire schema; see the `spawn.rs` seam.
 
-// The codec is a finished, tested foundation that nothing drives YET (the ACP
-// session loop is the next increment). Allow dead_code so the unwired-but-ready
-// component doesn't warn; remove this once spawn.rs builds a session on it.
+// Built + tested foundation that nothing drives YET (the ACP session layer is
+// the next increment, gated on a live CLI). Allow dead_code so the
+// unwired-but-ready component doesn't warn; remove once spawn.rs drives it.
 #![allow(dead_code)]
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::{Arc, Mutex};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::sync::{mpsc, oneshot, Mutex as AsyncMutex};
+use tokio::task::JoinHandle;
 
 pub const JSONRPC_VERSION: &str = "2.0";
 
@@ -223,6 +233,175 @@ impl IdGen {
     }
 }
 
+/// Why a `request()` didn't get a result.
+#[derive(Debug)]
+pub enum ConnError {
+    /// The peer answered with a JSON-RPC error object.
+    Rpc(RpcError),
+    /// The connection's reader task ended (EOF / IO error) before a response
+    /// arrived, or a write failed — the peer is gone.
+    Closed,
+}
+
+impl std::fmt::Display for ConnError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ConnError::Rpc(e) => write!(f, "JSON-RPC error {}: {}", e.code, e.message),
+            ConnError::Closed => write!(f, "JSON-RPC connection closed"),
+        }
+    }
+}
+impl std::error::Error for ConnError {}
+
+/// What [`Connection::spawn`] hands back: the connection handle plus the two
+/// inbound streams a client cares about — peer **notifications** (e.g. ACP
+/// `session/update` streaming) and peer-initiated **requests** (e.g. an ACP
+/// server asking the client for a permission decision, which the client must
+/// answer with a [`Response`] — wiring that answer back is the session layer's
+/// job, built on top of this).
+pub struct ConnectionHandles {
+    pub conn: Connection,
+    pub notifications: mpsc::UnboundedReceiver<Notification>,
+    pub incoming_requests: mpsc::UnboundedReceiver<Request>,
+}
+
+/// An async JSON-RPC 2.0 connection over a child's stdio (or any
+/// AsyncRead/AsyncWrite pair). Built on the codec + [`LineDecoder`] — the
+/// SINGLE place flockmux speaks JSON-RPC-over-stdio, so a future ACP /
+/// app-server transport doesn't reimplement framing + id-correlation (hermes's
+/// cautionary 3×). Protocol-agnostic: correlates responses to outbound
+/// requests by id, surfaces inbound notifications + requests on channels, and
+/// serializes concurrent writes behind an async mutex.
+///
+/// NOT here yet (the ACP-specific session layer — the final L4 step, which
+/// needs a live ACP CLI to pin the wire schema): the `initialize` handshake +
+/// capability params, and mapping ACP notifications (permission / tool-call /
+/// streaming) onto flockmux `SwarmEvent`s + the `spawn.rs` transport branch.
+/// Those build ON this Connection.
+pub struct Connection {
+    writer: Arc<AsyncMutex<Box<dyn AsyncWrite + Send + Unpin>>>,
+    pending: Arc<Mutex<HashMap<i64, oneshot::Sender<Response>>>>,
+    next_id: AtomicI64,
+    /// Reader task handle — aborted when the Connection is dropped.
+    reader: JoinHandle<()>,
+}
+
+impl Drop for Connection {
+    fn drop(&mut self) {
+        self.reader.abort();
+    }
+}
+
+impl Connection {
+    /// Start a connection: spawn a reader task that decodes frames off `reader`
+    /// and routes them (responses → the matching `request()` future,
+    /// notifications + peer requests → the returned channels). Writes go out
+    /// through `writer`.
+    pub fn spawn<R, W>(reader: R, writer: W) -> ConnectionHandles
+    where
+        R: AsyncRead + Unpin + Send + 'static,
+        W: AsyncWrite + Unpin + Send + 'static,
+    {
+        let pending: Arc<Mutex<HashMap<i64, oneshot::Sender<Response>>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+        let (notif_tx, notif_rx) = mpsc::unbounded_channel();
+        let (req_tx, req_rx) = mpsc::unbounded_channel();
+
+        let pending_r = pending.clone();
+        let reader_task = tokio::spawn(async move {
+            let mut reader = reader;
+            let mut dec = LineDecoder::new();
+            let mut chunk = [0u8; 8192];
+            loop {
+                let n = match reader.read(&mut chunk).await {
+                    Ok(0) | Err(_) => break, // EOF or IO error → peer gone
+                    Ok(n) => n,
+                };
+                for msg in dec.push(&chunk[..n]) {
+                    match msg {
+                        Ok(Message::Response(r)) => {
+                            if let Some(id) = r.id.as_i64() {
+                                if let Some(tx) = pending_r.lock().unwrap().remove(&id) {
+                                    let _ = tx.send(r);
+                                }
+                            }
+                        }
+                        Ok(Message::Notification(n)) => {
+                            let _ = notif_tx.send(n);
+                        }
+                        Ok(Message::Request(req)) => {
+                            let _ = req_tx.send(req);
+                        }
+                        Err(e) => tracing::warn!(?e, "acp: dropping malformed JSON-RPC frame"),
+                    }
+                }
+            }
+            // Peer gone: drop every pending sender so awaiting `request()`s get
+            // `ConnError::Closed` instead of hanging forever.
+            pending_r.lock().unwrap().clear();
+        });
+
+        let conn = Connection {
+            writer: Arc::new(AsyncMutex::new(Box::new(writer))),
+            pending,
+            next_id: AtomicI64::new(1),
+            reader: reader_task,
+        };
+        ConnectionHandles {
+            conn,
+            notifications: notif_rx,
+            incoming_requests: req_rx,
+        }
+    }
+
+    /// Send a request and await its correlated response. Resolves to the
+    /// `result` value, or `ConnError::Rpc` if the peer returned an error, or
+    /// `ConnError::Closed` if the peer went away first.
+    pub async fn request(
+        &self,
+        method: &str,
+        params: Option<Value>,
+    ) -> Result<Value, ConnError> {
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        let (tx, rx) = oneshot::channel();
+        self.pending.lock().unwrap().insert(id, tx);
+        if let Err(e) = self
+            .write_msg(&Message::Request(Request::new(id, method, params)))
+            .await
+        {
+            self.pending.lock().unwrap().remove(&id); // un-register; no response coming
+            return Err(e);
+        }
+        match rx.await {
+            Ok(resp) => match resp.error {
+                Some(err) => Err(ConnError::Rpc(err)),
+                None => Ok(resp.result.unwrap_or(Value::Null)),
+            },
+            Err(_) => Err(ConnError::Closed), // reader dropped our pending sender
+        }
+    }
+
+    /// Fire a notification (no response expected).
+    pub async fn notify(&self, method: &str, params: Option<Value>) -> Result<(), ConnError> {
+        self.write_msg(&Message::Notification(Notification::new(method, params)))
+            .await
+    }
+
+    /// Answer a peer-initiated request (e.g. an ACP permission prompt) by
+    /// writing a [`Response`] carrying the original request's id.
+    pub async fn respond(&self, resp: Response) -> Result<(), ConnError> {
+        self.write_msg(&Message::Response(resp)).await
+    }
+
+    async fn write_msg(&self, m: &Message) -> Result<(), ConnError> {
+        let line = m.encode_line();
+        let mut w = self.writer.lock().await;
+        w.write_all(&line).await.map_err(|_| ConnError::Closed)?;
+        w.flush().await.map_err(|_| ConnError::Closed)?;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -321,5 +500,96 @@ mod tests {
         assert_eq!(gen.next(), json!(1));
         assert_eq!(gen.next(), json!(2));
         assert_eq!(gen.next(), json!(3));
+    }
+}
+
+#[cfg(test)]
+mod conn_tests {
+    use super::*;
+    use serde_json::json;
+    use tokio::io::{split, AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+    /// Wire a Connection to an in-memory peer (tokio duplex). Returns the conn
+    /// handles + the peer's (read, write) halves so a test can play the server.
+    fn pair() -> (
+        ConnectionHandles,
+        BufReader<tokio::io::ReadHalf<tokio::io::DuplexStream>>,
+        tokio::io::WriteHalf<tokio::io::DuplexStream>,
+    ) {
+        let (client, server) = tokio::io::duplex(4096);
+        let (cr, cw) = split(client);
+        let (sr, sw) = split(server);
+        (Connection::spawn(cr, cw), BufReader::new(sr), sw)
+    }
+
+    #[tokio::test]
+    async fn request_correlates_with_response() {
+        let (h, mut peer_r, mut peer_w) = pair();
+        // Peer: read one request line, echo back a Response with the same id.
+        let server = tokio::spawn(async move {
+            let mut line = String::new();
+            peer_r.read_line(&mut line).await.unwrap();
+            let req: Request = serde_json::from_str(line.trim()).unwrap();
+            assert_eq!(req.method, "ping");
+            let resp = Response {
+                jsonrpc: JSONRPC_VERSION.into(),
+                id: req.id.clone(),
+                result: Some(json!({"pong": true})),
+                error: None,
+            };
+            peer_w.write_all(&Message::Response(resp).encode_line()).await.unwrap();
+        });
+        let got = h.conn.request("ping", Some(json!({"n": 1}))).await.unwrap();
+        assert_eq!(got, json!({"pong": true}));
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn request_surfaces_rpc_error() {
+        let (h, mut peer_r, mut peer_w) = pair();
+        let server = tokio::spawn(async move {
+            let mut line = String::new();
+            peer_r.read_line(&mut line).await.unwrap();
+            let req: Request = serde_json::from_str(line.trim()).unwrap();
+            let resp = Response {
+                jsonrpc: JSONRPC_VERSION.into(),
+                id: req.id,
+                result: None,
+                error: Some(RpcError { code: -32601, message: "no method".into(), data: None }),
+            };
+            peer_w.write_all(&Message::Response(resp).encode_line()).await.unwrap();
+        });
+        let err = h.conn.request("nope", None).await.unwrap_err();
+        assert!(matches!(err, ConnError::Rpc(e) if e.code == -32601));
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn delivers_notifications_and_peer_requests() {
+        let (mut h, _peer_r, mut peer_w) = pair();
+        // Peer pushes a notification then a server→client request.
+        peer_w
+            .write_all(&Message::Notification(Notification::new("update", Some(json!({"x": 1})))).encode_line())
+            .await
+            .unwrap();
+        peer_w
+            .write_all(&Message::Request(Request::new(7, "permission/request", None)).encode_line())
+            .await
+            .unwrap();
+        let n = h.notifications.recv().await.expect("notification delivered");
+        assert_eq!(n.method, "update");
+        let req = h.incoming_requests.recv().await.expect("peer request delivered");
+        assert_eq!(req.method, "permission/request");
+        assert_eq!(req.id, json!(7));
+    }
+
+    #[tokio::test]
+    async fn request_errors_when_peer_closes() {
+        let (h, peer_r, peer_w) = pair();
+        // Drop the peer immediately → reader hits EOF → pending fails Closed.
+        drop(peer_r);
+        drop(peer_w);
+        let err = h.conn.request("ping", None).await.unwrap_err();
+        assert!(matches!(err, ConnError::Closed));
     }
 }

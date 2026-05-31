@@ -76,10 +76,14 @@ pub fn spawn_agent(
     };
 
     // L4 transport seam: the ACP (structured JSON-RPC-over-stdio) session
-    // driver isn't wired yet — only the codec exists (`crate::acp`). A plugin
-    // that declares `transport = "acp"` still spawns over the PTY so it's
-    // usable today; the warning marks where the future ACP path will branch
-    // (build an acp::Session on the child's stdio instead of the PTY pump).
+    // driver isn't wired yet. `crate::acp` now has both the codec AND the async
+    // `Connection` layer (request/response correlation + notification/peer-
+    // request channels) — what's still missing is the ACP-specific session on
+    // top: spawn the child with PIPED stdio (not a PTY), `Connection::spawn` on
+    // it, do the `initialize` handshake, and map ACP notifications (permission
+    // / tool-call / streaming) onto SwarmEvents. That needs a live ACP CLI to
+    // pin the schema, so for now a plugin declaring `transport = "acp"` still
+    // spawns over the PTY (usable today); this warning marks the branch point.
     if plugin.transport == crate::plugins::Transport::Acp {
         tracing::warn!(
             agent = %agent_id, cli = %plugin.id,
