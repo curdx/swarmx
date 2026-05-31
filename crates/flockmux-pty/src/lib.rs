@@ -114,8 +114,10 @@ impl PtyBridge {
         let (output_tx, output_rx) = mpsc::channel::<Bytes>(DEFAULT_CHANNEL_CAP);
         let (input_tx, input_rx) = mpsc::channel::<Bytes>(DEFAULT_CHANNEL_CAP);
 
-        let reader_thread = spawn_reader(reader, output_tx);
-        let writer_thread = spawn_writer(writer, input_rx);
+        let reader_thread =
+            spawn_reader(reader, output_tx).context("spawn pty reader thread")?;
+        let writer_thread =
+            spawn_writer(writer, input_rx).context("spawn pty writer thread")?;
 
         Ok(PtyHandles {
             bridge: PtyBridge {
@@ -233,7 +235,10 @@ impl Drop for PtyBridge {
     }
 }
 
-fn spawn_reader(mut reader: Box<dyn Read + Send>, tx: mpsc::Sender<Bytes>) -> thread::JoinHandle<()> {
+fn spawn_reader(
+    mut reader: Box<dyn Read + Send>,
+    tx: mpsc::Sender<Bytes>,
+) -> std::io::Result<thread::JoinHandle<()>> {
     thread::Builder::new()
         .name("flockmux-pty-reader".into())
         .spawn(move || {
@@ -260,10 +265,12 @@ fn spawn_reader(mut reader: Box<dyn Read + Send>, tx: mpsc::Sender<Bytes>) -> th
                 }
             }
         })
-        .expect("spawn reader thread")
 }
 
-fn spawn_writer(mut writer: Box<dyn Write + Send>, mut rx: mpsc::Receiver<Bytes>) -> thread::JoinHandle<()> {
+fn spawn_writer(
+    mut writer: Box<dyn Write + Send>,
+    mut rx: mpsc::Receiver<Bytes>,
+) -> std::io::Result<thread::JoinHandle<()>> {
     thread::Builder::new()
         .name("flockmux-pty-writer".into())
         .spawn(move || {
@@ -279,7 +286,6 @@ fn spawn_writer(mut writer: Box<dyn Write + Send>, mut rx: mpsc::Receiver<Bytes>
                 let _ = writer.flush();
             }
         })
-        .expect("spawn writer thread")
 }
 
 #[cfg(test)]

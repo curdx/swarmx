@@ -59,6 +59,25 @@ pub async fn pty_ws(
     ws.on_upgrade(move |socket| handle_socket(socket, state, agent_id, params))
 }
 
+/// Serialize a `ServerControl` and send it on `sink`, logging (NOT panicking)
+/// on the practically-impossible serialize error. Generic over the sink so it
+/// works for both the unsplit `WebSocket` (pre-attach) and the `SplitSink`
+/// (the writer pump). Returns the send result so callers that must bail on a
+/// dead socket (e.g. the Hello frame) can still observe it. Replaces a row of
+/// `serde_json::to_string(&ctrl).unwrap()` panics on the WS hot path.
+async fn send_ctrl<S, E>(sink: &mut S, ctrl: &ServerControl) -> Result<(), E>
+where
+    S: SinkExt<Message, Error = E> + Unpin,
+{
+    match serde_json::to_string(ctrl) {
+        Ok(s) => sink.send(Message::Text(s)).await,
+        Err(e) => {
+            warn!(?e, "failed to serialize ServerControl frame; dropping it");
+            Ok(())
+        }
+    }
+}
+
 async fn handle_socket(
     mut socket: WebSocket,
     state: AppState,
@@ -68,14 +87,13 @@ async fn handle_socket(
     let slot_arc = match state.registry.get(&agent_id) {
         Some(s) => s,
         None => {
-            let _ = socket
-                .send(Message::Text(
-                    serde_json::to_string(&ServerControl::Error {
-                        message: format!("agent {agent_id} not found"),
-                    })
-                    .unwrap(),
-                ))
-                .await;
+            let _ = send_ctrl(
+                &mut socket,
+                &ServerControl::Error {
+                    message: format!("agent {agent_id} not found"),
+                },
+            )
+            .await;
             let _ = socket.close().await;
             return;
         }
@@ -141,28 +159,31 @@ async fn handle_socket(
     };
     let seq_start = cursor.saturating_add(1);
 
-    let hello = serde_json::to_string(&ServerControl::Hello {
-        seq_start,
-        agent_id: agent_id.clone(),
-        shim_ready: lifecycle_snapshot.shim_ready,
-        shim_exit: lifecycle_snapshot.shim_exit,
-    })
-    .unwrap();
-    if socket.send(Message::Text(hello)).await.is_err() {
+    if send_ctrl(
+        &mut socket,
+        &ServerControl::Hello {
+            seq_start,
+            agent_id: agent_id.clone(),
+            shim_ready: lifecycle_snapshot.shim_ready,
+            shim_exit: lifecycle_snapshot.shim_exit,
+        },
+    )
+    .await
+    .is_err()
+    {
         return;
     }
     if let Some((lo, hi)) = gap_seq_lost {
-        let _ = socket
-            .send(Message::Text(
-                serde_json::to_string(&ServerControl::Error {
-                    message: format!(
-                        "resume gap: seqs {lo}..={hi} evicted before reconnect; \
-                         restarting from {seq_start}"
-                    ),
-                })
-                .unwrap(),
-            ))
-            .await;
+        let _ = send_ctrl(
+            &mut socket,
+            &ServerControl::Error {
+                message: format!(
+                    "resume gap: seqs {lo}..={hi} evicted before reconnect; \
+                     restarting from {seq_start}"
+                ),
+            },
+        )
+        .await;
     }
 
     info!(agent = %agent_id, %cursor, last_seq = ?params.last_seq, "pty ws attached");
@@ -194,17 +215,16 @@ async fn handle_socket(
                     // forward; this should only happen if the writer falls
                     // behind producer by more than MAX_BUFFER_BYTES, which is
                     // a pathological case (slow network on heavy CLI output).
-                    let _ = sender
-                        .send(Message::Text(
-                            serde_json::to_string(&ServerControl::Error {
-                                message: format!(
-                                    "byte buffer overran subscriber; jumped from \
-                                     seq {cursor} to {current_seq}"
-                                ),
-                            })
-                            .unwrap(),
-                        ))
-                        .await;
+                    let _ = send_ctrl(
+                        &mut sender,
+                        &ServerControl::Error {
+                            message: format!(
+                                "byte buffer overran subscriber; jumped from \
+                                 seq {cursor} to {current_seq}"
+                            ),
+                        },
+                    )
+                    .await;
                     cursor = current_seq;
                 }
             }
@@ -212,11 +232,7 @@ async fn handle_socket(
             let snap = stream_for_writer.snapshot();
             if snap.closed && cursor >= snap.next_seq.saturating_sub(1) {
                 // Drained + closed. Send Eof and exit.
-                let _ = sender
-                    .send(Message::Text(
-                        serde_json::to_string(&ServerControl::Eof).unwrap(),
-                    ))
-                    .await;
+                let _ = send_ctrl(&mut sender, &ServerControl::Eof).await;
                 let _ = sender.close().await;
                 return;
             }
@@ -229,19 +245,10 @@ async fn handle_socket(
                 event = lifecycle_rx.recv() => {
                     match event {
                         Ok(LifecycleEvent::ShimReady) => {
-                            let _ = sender
-                                .send(Message::Text(
-                                    serde_json::to_string(&ServerControl::ShimReady).unwrap(),
-                                ))
-                                .await;
+                            let _ = send_ctrl(&mut sender, &ServerControl::ShimReady).await;
                         }
                         Ok(LifecycleEvent::ShimExit(code)) => {
-                            let _ = sender
-                                .send(Message::Text(
-                                    serde_json::to_string(&ServerControl::ShimExit { code })
-                                        .unwrap(),
-                                ))
-                                .await;
+                            let _ = send_ctrl(&mut sender, &ServerControl::ShimExit { code }).await;
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
                             // We missed a lifecycle event. The shim_ready /
@@ -251,22 +258,11 @@ async fn handle_socket(
                             // (broadcast capacity is 16 so this is unlikely.)
                             let snap_l = *slot_for_writer.lock().lifecycle.lock();
                             if snap_l.shim_ready {
-                                let _ = sender
-                                    .send(Message::Text(
-                                        serde_json::to_string(&ServerControl::ShimReady)
-                                            .unwrap(),
-                                    ))
-                                    .await;
+                                let _ = send_ctrl(&mut sender, &ServerControl::ShimReady).await;
                             }
                             if let Some(code) = snap_l.shim_exit {
-                                let _ = sender
-                                    .send(Message::Text(
-                                        serde_json::to_string(&ServerControl::ShimExit {
-                                            code,
-                                        })
-                                        .unwrap(),
-                                    ))
-                                    .await;
+                                let _ =
+                                    send_ctrl(&mut sender, &ServerControl::ShimExit { code }).await;
                             }
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Closed) => {
