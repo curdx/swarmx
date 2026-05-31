@@ -696,7 +696,17 @@ fn model_overlay_args(model: &str, template: &[String]) -> Vec<String> {
 ///
 /// Errors and timeouts on the probe fall through as `false`: if we can't
 /// confirm the flag is supported, we don't inject it.
+///
+/// The probe is **timeout-bounded** (F17): `<binary> --help` runs on a worker
+/// thread and we wait at most `PROBE_TIMEOUT` for it via `recv_timeout`. This
+/// fn is called synchronously on the async spawn path, so an unresponsive
+/// `--help` must not be able to stall a spawn forever — past the deadline we
+/// give up and return `false`, making the doc comment above actually true.
+/// (A genuinely hung `--help` leaves its child + thread lingering until it
+/// exits on its own or the server does; a real CLI's `--help` returns in ms,
+/// so this is an acceptable bound on a pathological case.)
 fn binary_supports_flag(binary: &str, flag: &str) -> bool {
+    const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
     static CACHE: OnceLock<Mutex<HashMap<(String, String), bool>>> = OnceLock::new();
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
 
@@ -705,16 +715,28 @@ fn binary_supports_flag(binary: &str, flag: &str) -> bool {
         return v;
     }
 
-    let supported = std::process::Command::new(binary)
-        .arg("--help")
-        .output()
-        .ok()
-        .map(|o| {
+    let bin = binary.to_string();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        // output() drains stdout+stderr (so the child can't deadlock on a full
+        // pipe) and waits for exit. Result is sent back; ignore send errors
+        // (receiver already gave up on timeout).
+        let _ = tx.send(std::process::Command::new(&bin).arg("--help").output());
+    });
+
+    let supported = match rx.recv_timeout(PROBE_TIMEOUT) {
+        Ok(Ok(o)) => {
             let stdout = String::from_utf8_lossy(&o.stdout);
             let stderr = String::from_utf8_lossy(&o.stderr);
             stdout.contains(flag) || stderr.contains(flag)
-        })
-        .unwrap_or(false);
+        }
+        Ok(Err(_)) => false, // spawn / IO error
+        Err(_) => {
+            // recv timed out — the probe took longer than PROBE_TIMEOUT.
+            tracing::warn!(binary, flag, "binary flag probe timed out; assuming unsupported");
+            false
+        }
+    };
 
     tracing::info!(
         binary, flag, supported,
