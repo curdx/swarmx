@@ -68,15 +68,26 @@ pub enum Transport {
     Acp,
 }
 
-/// Kind of a [`ReadyStep`]. Today only `answer_dialog` is implemented; the
-/// golutra-style sequential kinds (`wait_for`, `input`, `extract_session_id`)
-/// are the next increment.
+/// Kind of a [`ReadyStep`]. `ready_plan` is a **sequential** golutra-style DSL:
+/// the host advances through the steps in declared order as PTY output arrives.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ReadyStepKind {
-    /// Watch PTY output for `needle`; inject `response` once when it appears.
+    /// Watch PTY output for `needle`; inject `response` once when it appears,
+    /// then advance. (A `wait_for` + `input` fused into one step.)
     #[default]
     AnswerDialog,
+    /// Block the plan until `needle` appears in PTY output, then advance. Used
+    /// to gate later steps on a prompt/banner (replaces a fixed sleep).
+    WaitFor,
+    /// Inject `response` into the PTY as soon as this step becomes active
+    /// (no needle). Used to type an initial command after a preceding wait.
+    Input,
+    /// When `needle` appears, capture the whitespace-delimited token that
+    /// follows it on the same line into the capture slot named by `into`
+    /// (golutra resume support), then advance. The captured value is exposed
+    /// via `ReadyPlanRunner::captured()` — a future resume path can read it.
+    ExtractSessionId,
 }
 
 /// One step of a CLI's post-spawn readiness automation — host-side handling
@@ -94,18 +105,23 @@ pub enum ReadyStepKind {
 pub struct ReadyStep {
     #[serde(default)]
     pub kind: ReadyStepKind,
-    /// `answer_dialog`: substring to match in PTY output (matched on raw bytes,
-    /// stitched across chunk boundaries).
+    /// Substring to match in PTY output (raw bytes, stitched across chunk
+    /// boundaries). Used by `answer_dialog` / `wait_for` / `extract_session_id`.
     #[serde(default)]
     pub needle: String,
-    /// `answer_dialog`: bytes to inject once `needle` appears. TOML escapes
-    /// like `\r` are honored.
+    /// Bytes to inject — the dialog answer (`answer_dialog`) or the text to type
+    /// (`input`). TOML escapes like `\r` are honored.
     #[serde(default)]
     pub response: String,
-    /// `answer_dialog`: stop watching after this many ms (default 30s) so we
-    /// don't pattern-match routine agent output forever.
+    /// Give up on a needle-matching step (`answer_dialog`/`wait_for`/
+    /// `extract_session_id`) after this many ms so we don't watch forever; the
+    /// plan then advances past it. Default 30s.
     #[serde(default = "default_answer_window_ms")]
     pub window_ms: u64,
+    /// `extract_session_id`: name of the capture slot to store the token that
+    /// follows `needle` into (read back via `ReadyPlanRunner::captured()`).
+    #[serde(default)]
+    pub into: String,
 }
 
 fn default_answer_window_ms() -> u64 {

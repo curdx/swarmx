@@ -406,23 +406,36 @@ pub fn locate_mcp() -> Result<PathBuf> {
 }
 
 /// Host-side post-spawn readiness automation, built from a plugin's
-/// `ready_plan` ([`crate::plugins::ReadyStep`]). Today it handles
-/// `answer_dialog` steps: watch the PTY output stream for a `needle` and
-/// inject a `response` once, so a first-spawn TUI dialog that gates input
-/// (e.g. codex 0.130+'s "Hooks need review" menu — the user can't reach the
-/// codex TUI to pick "2 Trust all and continue") doesn't hang a headless PTY.
+/// `ready_plan` ([`crate::plugins::ReadyStep`]). A **sequential** golutra-style
+/// state machine: the host advances a `cursor` through the steps in declared
+/// order as PTY output arrives, fed by `scan(chunk)` from the pump. Step kinds:
+///   - `answer_dialog` — wait for `needle`, inject `response`, advance (the
+///     codex "Hooks need review" → `2\r` case; the only kind any shipped CLI
+///     uses today).
+///   - `wait_for` — block until `needle` appears, then advance (gate a later
+///     step on a prompt/banner instead of a fixed sleep).
+///   - `input` — inject `response` immediately when this step becomes active.
+///   - `extract_session_id` — capture the token after `needle` into the named
+///     `into` slot (resume support), then advance.
 ///
 /// This is the **data-driven replacement** for the old hard-coded
-/// `DialogAutoAnswer`: the needle/response now live in `cli-plugins/<id>.toml`,
-/// so any CLI declares its own dialogs with zero Rust change, and a CLI may
-/// list multiple. Each step keeps the original safety constraints — single-shot
-/// (`fired`), time-boxed (`window_ms`, default 30s), specific-needle (we match
-/// the literal heading, never a short substring like "hook"), and
-/// buffer-bounded (a sliding 8 KiB window so a chatty agent can't OOM us).
-/// Implemented host-side so it works regardless of which UI (if any) is
-/// attached (`flockmux-cli` headless / agent-to-agent included).
+/// `DialogAutoAnswer`: needle/response live in `cli-plugins/<id>.toml`, so a CLI
+/// declares its own onboarding with zero Rust change. Safety constraints
+/// preserved: each step is single-shot (cursor only moves forward), needle
+/// steps are time-boxed (`window_ms`, default 30s — the plan advances past a
+/// step whose needle never shows), needle matching is the literal substring
+/// (never a short fragment), and the output buffer is bounded (sliding 8 KiB,
+/// so a chatty agent can't OOM us). Host-side, so it works regardless of which
+/// UI (if any) is attached. NOTE: advance is output-driven (only fires while
+/// the pump delivers chunks); a step waiting on a needle that the CLL never
+/// prints just times out and the plan moves on.
 struct ReadyPlanRunner {
-    answers: Vec<AnswerDialogState>,
+    steps: Vec<PlanStep>,
+    /// Index of the currently-active step; `>= steps.len()` once the plan is done.
+    cursor: usize,
+    /// Deadline for the active needle step (`None` for `input`, which fires
+    /// immediately, and once the plan is done). Set when a step becomes active.
+    deadline: Option<Instant>,
     /// Sliding window over PTY output, shared across steps. Bounded by `MAX_BUFFER`.
     buf: Vec<u8>,
     /// Cloned PtyBridge input channel. `try_send` is non-blocking and used from
@@ -430,16 +443,17 @@ struct ReadyPlanRunner {
     input_tx: mpsc::Sender<Bytes>,
     /// Agent_id for log lines only — never written into the PTY.
     agent_id: String,
+    /// `extract_session_id` captures, keyed by the step's `into` name.
+    captured: std::collections::HashMap<String, String>,
 }
 
-/// Per-`answer_dialog`-step state.
-struct AnswerDialogState {
+/// One resolved step (bytes pre-decoded from the manifest strings).
+struct PlanStep {
+    kind: crate::plugins::ReadyStepKind,
     needle: Vec<u8>,
     response: Vec<u8>,
-    /// Stop watching this step at this instant even if the needle never showed.
-    deadline: Instant,
-    /// One-shot guard: set once we've injected the response.
-    fired: bool,
+    window: Duration,
+    into: String,
 }
 
 impl ReadyPlanRunner {
@@ -448,83 +462,183 @@ impl ReadyPlanRunner {
     /// Build from a plugin's `ready_plan`. Returns `None` when there are no
     /// actionable steps, so the PTY pump skips scanning entirely (the common
     /// case — e.g. claude has no blocking dialog and ships an empty plan).
+    /// Invalid steps (missing needle/response/into for their kind) are
+    /// warn-skipped rather than aborting the whole plan.
     fn from_plan(
         plan: &[crate::plugins::ReadyStep],
         input_tx: mpsc::Sender<Bytes>,
         agent_id: &str,
     ) -> Option<Self> {
         use crate::plugins::ReadyStepKind;
-        let now = Instant::now();
-        let mut answers = Vec::new();
+        let mut steps = Vec::new();
         for step in plan {
-            match step.kind {
-                ReadyStepKind::AnswerDialog => {
-                    if step.needle.is_empty() || step.response.is_empty() {
-                        tracing::warn!(
-                            agent = %agent_id,
-                            "ready_plan: answer_dialog step missing needle/response; skipping",
-                        );
-                        continue;
-                    }
-                    answers.push(AnswerDialogState {
-                        needle: step.needle.clone().into_bytes(),
-                        response: step.response.clone().into_bytes(),
-                        deadline: now + Duration::from_millis(step.window_ms),
-                        fired: false,
-                    });
-                }
+            let needs_needle = matches!(
+                step.kind,
+                ReadyStepKind::AnswerDialog
+                    | ReadyStepKind::WaitFor
+                    | ReadyStepKind::ExtractSessionId
+            );
+            let needs_response =
+                matches!(step.kind, ReadyStepKind::AnswerDialog | ReadyStepKind::Input);
+            if needs_needle && step.needle.is_empty() {
+                tracing::warn!(agent = %agent_id, kind = ?step.kind, "ready_plan: step missing needle; skipping");
+                continue;
             }
+            if needs_response && step.response.is_empty() {
+                tracing::warn!(agent = %agent_id, kind = ?step.kind, "ready_plan: step missing response; skipping");
+                continue;
+            }
+            if matches!(step.kind, ReadyStepKind::ExtractSessionId) && step.into.is_empty() {
+                tracing::warn!(agent = %agent_id, "ready_plan: extract_session_id missing `into`; skipping");
+                continue;
+            }
+            steps.push(PlanStep {
+                kind: step.kind,
+                needle: step.needle.clone().into_bytes(),
+                response: step.response.clone().into_bytes(),
+                window: Duration::from_millis(step.window_ms),
+                into: step.into.clone(),
+            });
         }
-        if answers.is_empty() {
-            None
-        } else {
-            Some(Self {
-                answers,
-                buf: Vec::with_capacity(2048),
-                input_tx,
-                agent_id: agent_id.to_string(),
-            })
+        if steps.is_empty() {
+            return None;
+        }
+        let mut runner = Self {
+            steps,
+            cursor: 0,
+            deadline: None,
+            buf: Vec::with_capacity(2048),
+            input_tx,
+            agent_id: agent_id.to_string(),
+            captured: std::collections::HashMap::new(),
+        };
+        runner.arm_deadline(Instant::now());
+        Some(runner)
+    }
+
+    /// Captured `extract_session_id` values (slot name → token). A future
+    /// resume path reads this; today it's surfaced for logging/tests.
+    #[allow(dead_code)]
+    fn captured(&self) -> &std::collections::HashMap<String, String> {
+        &self.captured
+    }
+
+    /// Set `deadline` for the step now under `cursor`: a window for needle
+    /// steps, `None` for `input` (fires immediately) and for "plan done".
+    fn arm_deadline(&mut self, now: Instant) {
+        use crate::plugins::ReadyStepKind;
+        self.deadline = self.steps.get(self.cursor).and_then(|s| match s.kind {
+            ReadyStepKind::Input => None,
+            _ => Some(now + s.window),
+        });
+    }
+
+    fn inject(&self, bytes: &[u8]) {
+        // try_send is non-blocking; if the channel is full something is very
+        // wrong but it's not worth blocking the PTY pump for.
+        match self.input_tx.try_send(Bytes::copy_from_slice(bytes)) {
+            Ok(()) => tracing::info!(agent = %self.agent_id, "ready_plan: injected step response"),
+            Err(err) => tracing::warn!(
+                agent = %self.agent_id, ?err,
+                "ready_plan: inject try_send failed; user may need to act manually",
+            ),
         }
     }
 
     fn scan(&mut self, chunk: &[u8]) {
-        let now = Instant::now();
-        // Nothing left to do once every step has fired or timed out.
-        if self.answers.iter().all(|a| a.fired || now > a.deadline) {
-            return;
+        if self.cursor >= self.steps.len() {
+            return; // plan complete
         }
         self.buf.extend_from_slice(chunk);
         if self.buf.len() > Self::MAX_BUFFER {
             let keep_from = self.buf.len() - 1024;
             self.buf.drain(..keep_from);
         }
-        for a in &mut self.answers {
-            if a.fired || now > a.deadline {
-                continue;
-            }
-            if find(&self.buf, &a.needle).is_some() {
-                a.fired = true;
-                // try_send is non-blocking; if the channel is full something
-                // is very wrong but it's not worth blocking the PTY pump for.
-                match self.input_tx.try_send(Bytes::copy_from_slice(&a.response)) {
-                    Ok(()) => tracing::info!(
-                        agent = %self.agent_id,
-                        needle = %String::from_utf8_lossy(&a.needle),
-                        "ready_plan: auto-answered dialog",
-                    ),
-                    Err(err) => tracing::warn!(
-                        agent = %self.agent_id,
-                        ?err,
-                        "ready_plan: answer try_send failed; user may need to dismiss the dialog manually",
-                    ),
-                }
-            }
-        }
-        // Free the buffer once all steps are done.
-        if self.answers.iter().all(|a| a.fired) {
+        self.advance();
+        if self.cursor >= self.steps.len() {
             self.buf.clear();
         }
     }
+
+    /// Progress the cursor as far as the current buffer allows. Stops at the
+    /// first needle step whose needle hasn't appeared yet (and hasn't timed
+    /// out). Each iteration clones the step's small byte fields so we can then
+    /// mutate `self` (cursor / captured / inject) without an aliasing borrow.
+    fn advance(&mut self) {
+        use crate::plugins::ReadyStepKind;
+        while self.cursor < self.steps.len() {
+            let now = Instant::now();
+            if let Some(dl) = self.deadline {
+                if now > dl {
+                    tracing::warn!(
+                        agent = %self.agent_id, step = self.cursor,
+                        "ready_plan: step timed out waiting for its needle; advancing",
+                    );
+                    self.cursor += 1;
+                    self.arm_deadline(now);
+                    continue;
+                }
+            }
+            let (kind, needle, response, into) = {
+                let s = &self.steps[self.cursor];
+                (s.kind, s.needle.clone(), s.response.clone(), s.into.clone())
+            };
+            match kind {
+                ReadyStepKind::Input => {
+                    self.inject(&response);
+                    self.cursor += 1;
+                    self.arm_deadline(now);
+                }
+                ReadyStepKind::AnswerDialog => {
+                    if find(&self.buf, &needle).is_some() {
+                        self.inject(&response);
+                        self.cursor += 1;
+                        self.arm_deadline(now);
+                    } else {
+                        break;
+                    }
+                }
+                ReadyStepKind::WaitFor => {
+                    if find(&self.buf, &needle).is_some() {
+                        self.cursor += 1;
+                        self.arm_deadline(now);
+                    } else {
+                        break;
+                    }
+                }
+                ReadyStepKind::ExtractSessionId => {
+                    if let Some(pos) = find(&self.buf, &needle) {
+                        let token = extract_token_after(&self.buf, pos + needle.len());
+                        tracing::info!(
+                            agent = %self.agent_id, into = %into, value = %token,
+                            "ready_plan: captured session id",
+                        );
+                        self.captured.insert(into, token);
+                        self.cursor += 1;
+                        self.arm_deadline(now);
+                    } else {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Take the first whitespace-delimited token starting at byte `start` in `buf`
+/// (skipping leading spaces/tabs), lossy-decoded. Used by `extract_session_id`
+/// to grab the value printed right after a marker like `Session id:`.
+fn extract_token_after(buf: &[u8], start: usize) -> String {
+    let tail = buf.get(start..).unwrap_or(&[]);
+    let trimmed: &[u8] = {
+        let lead = tail.iter().take_while(|b| **b == b' ' || **b == b'\t').count();
+        &tail[lead..]
+    };
+    let end = trimmed
+        .iter()
+        .position(|b| b.is_ascii_whitespace())
+        .unwrap_or(trimmed.len());
+    String::from_utf8_lossy(&trimmed[..end]).into_owned()
 }
 
 #[cfg(test)]
@@ -558,13 +672,20 @@ mod ready_plan_tests {
     use super::*;
     use crate::plugins::{ReadyStep, ReadyStepKind};
 
-    fn codex_hooks_step() -> ReadyStep {
+    fn step(kind: ReadyStepKind, needle: &str, response: &str, into: &str) -> ReadyStep {
         ReadyStep {
-            kind: ReadyStepKind::AnswerDialog,
-            needle: "Hooks need review".into(),
-            response: "2\r".into(),
+            kind,
+            needle: needle.into(),
+            response: response.into(),
             window_ms: 30_000,
+            into: into.into(),
         }
+    }
+    fn answer(needle: &str, response: &str) -> ReadyStep {
+        step(ReadyStepKind::AnswerDialog, needle, response, "")
+    }
+    fn codex_hooks_step() -> ReadyStep {
+        answer("Hooks need review", "2\r")
     }
 
     fn make_pair() -> (ReadyPlanRunner, mpsc::Receiver<Bytes>) {
@@ -588,11 +709,11 @@ mod ready_plan_tests {
         let (mut r, mut rx) = make_pair();
         r.scan(b"some noise before the dialog\n");
         r.scan(b"\nHooks need review\n1 hook is new\n");
-        // Should have sent "2\r" exactly once.
+        // Should have sent "2\r" exactly once, then advanced past the step.
         let got = rx.try_recv().expect("response should have been queued");
         assert_eq!(&got[..], b"2\r");
         assert!(rx.try_recv().is_err(), "no second response");
-        assert!(r.answers[0].fired, "fired flag should be set");
+        assert_eq!(r.cursor, 1, "cursor advanced past the only step");
     }
 
     #[tokio::test]
@@ -600,7 +721,7 @@ mod ready_plan_tests {
         let (mut r, mut rx) = make_pair();
         r.scan(b"Hooks need review");
         let _ = rx.try_recv().expect("first response sent");
-        // Even if the dialog text repeats, never fire again.
+        // Cursor already moved past; a repeat of the dialog text is ignored.
         r.scan(b"Hooks need review again somehow");
         assert!(
             rx.try_recv().is_err(),
@@ -626,17 +747,17 @@ mod ready_plan_tests {
         r.scan(b"Trust this folder? hook count: 0");
         r.scan(b"reviewing your code changes now");
         assert!(rx.try_recv().is_err(), "substring 'hook' / 'review' alone must NOT trigger");
-        assert!(!r.answers[0].fired);
+        assert_eq!(r.cursor, 0, "still waiting on the real needle");
     }
 
     #[tokio::test]
     async fn does_not_fire_after_window_expires() {
         let (mut r, mut rx) = make_pair();
         // Synthesize an expired deadline so we don't actually sleep 30s.
-        r.answers[0].deadline = Instant::now() - Duration::from_secs(1);
+        r.deadline = Some(Instant::now() - Duration::from_secs(1));
         r.scan(b"Hooks need review");
         assert!(rx.try_recv().is_err(), "expired window must not fire");
-        assert!(!r.answers[0].fired);
+        assert_eq!(r.cursor, 1, "timed-out step is skipped, not fired");
     }
 
     #[tokio::test]
@@ -656,23 +777,58 @@ mod ready_plan_tests {
     #[tokio::test]
     async fn multiple_dialogs_each_fire_once() {
         let (tx, mut rx) = mpsc::channel::<Bytes>(8);
-        let plan = vec![
-            ReadyStep {
-                kind: ReadyStepKind::AnswerDialog,
-                needle: "Trust this folder".into(),
-                response: "1\r".into(),
-                window_ms: 30_000,
-            },
-            codex_hooks_step(),
-        ];
+        let plan = vec![answer("Trust this folder", "1\r"), codex_hooks_step()];
         let mut r = ReadyPlanRunner::from_plan(&plan, tx, "multi").expect("runner");
-        // Needle match is case-sensitive (same as the old DialogAutoAnswer),
-        // so the chunk must carry the literal heading "Trust this folder".
+        // Sequential: the dialogs are declared (and here arrive) in order.
         r.scan(b"? Trust this folder ? [y/N]");
         assert_eq!(&rx.try_recv().expect("first dialog answered")[..], b"1\r");
         r.scan(b"... later ... Hooks need review ...");
         assert_eq!(&rx.try_recv().expect("second dialog answered")[..], b"2\r");
         assert!(rx.try_recv().is_err(), "no extra responses");
+        assert_eq!(r.cursor, 2, "both steps consumed");
+    }
+
+    #[tokio::test]
+    async fn wait_for_then_input_is_sequential() {
+        // wait_for gates the input: nothing is typed until the banner shows.
+        let (tx, mut rx) = mpsc::channel::<Bytes>(8);
+        let plan = vec![
+            step(ReadyStepKind::WaitFor, "READY", "", ""),
+            step(ReadyStepKind::Input, "", "go\r", ""),
+        ];
+        let mut r = ReadyPlanRunner::from_plan(&plan, tx, "seq").expect("runner");
+        r.scan(b"booting...\n");
+        assert!(rx.try_recv().is_err(), "input must NOT fire before the wait_for matches");
+        assert_eq!(r.cursor, 0);
+        r.scan(b"all systems READY now\n");
+        // wait_for matched → cursor advances → input fires immediately.
+        assert_eq!(&rx.try_recv().expect("input injected after wait")[..], b"go\r");
+        assert_eq!(r.cursor, 2, "plan complete");
+    }
+
+    #[tokio::test]
+    async fn input_first_fires_immediately() {
+        let (tx, mut rx) = mpsc::channel::<Bytes>(8);
+        let plan = vec![step(ReadyStepKind::Input, "", "hi\r", "")];
+        let mut r = ReadyPlanRunner::from_plan(&plan, tx, "in").expect("runner");
+        r.scan(b"any output at all");
+        assert_eq!(&rx.try_recv().expect("input fired on first scan")[..], b"hi\r");
+    }
+
+    #[tokio::test]
+    async fn extract_session_id_captures_token() {
+        let (tx, _rx) = mpsc::channel::<Bytes>(8);
+        let plan = vec![step(ReadyStepKind::ExtractSessionId, "Session id:", "", "sid")];
+        let mut r = ReadyPlanRunner::from_plan(&plan, tx, "ex").expect("runner");
+        r.scan(b"banner\nSession id:  abc-123-def \ntrailing output\n");
+        assert_eq!(r.captured().get("sid").map(String::as_str), Some("abc-123-def"));
+        assert_eq!(r.cursor, 1, "advanced after capture");
+    }
+
+    #[test]
+    fn extract_token_after_skips_leading_space_and_stops_at_whitespace() {
+        assert_eq!(extract_token_after(b"   tok-99\nrest", 0), "tok-99");
+        assert_eq!(extract_token_after(b"x", 1), ""); // start at EOF → empty
     }
 }
 
