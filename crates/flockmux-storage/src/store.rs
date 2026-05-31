@@ -333,17 +333,17 @@ impl Store {
         }
         let pool = self.pool.clone();
         tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<()> {
-            let tx = conn.transaction()?;
-            {
-                let mut stmt = tx.prepare(
-                    "UPDATE messages SET delivered_at = ?1 \
-                     WHERE id = ?2 AND delivered_at IS NULL",
-                )?;
-                for id in &ids {
-                    stmt.execute(params![at_ms, id])?;
-                }
-            }
-            tx.commit()?;
+            // Single statement instead of N (one execute per id). `?` for at_ms
+            // then one per id; params bound positionally via params_from_iter.
+            let placeholders = vec!["?"; ids.len()].join(",");
+            let sql = format!(
+                "UPDATE messages SET delivered_at = ? \
+                 WHERE delivered_at IS NULL AND id IN ({placeholders})"
+            );
+            let mut binds: Vec<rusqlite::types::Value> = Vec::with_capacity(ids.len() + 1);
+            binds.push(at_ms.into());
+            binds.extend(ids.iter().map(|id| (*id).into()));
+            conn.execute(&sql, rusqlite::params_from_iter(binds.iter()))?;
             Ok(())
         }))
         .await
@@ -365,23 +365,22 @@ impl Store {
         }
         let pool = self.pool.clone();
         tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<Vec<i64>> {
-            let tx = conn.transaction()?;
-            let mut marked = Vec::with_capacity(ids.len());
-            {
-                let mut stmt = tx.prepare(
-                    "UPDATE messages SET read_at = ?1 \
-                     WHERE id = ?2 AND to_agent = ?3 AND read_at IS NULL \
-                     RETURNING id",
-                )?;
-                for id in &ids {
-                    let mut rows = stmt.query(params![at_ms, id, to_agent])?;
-                    if let Some(row) = rows.next()? {
-                        marked.push(row.get::<_, i64>(0)?);
-                    }
-                }
-            }
-            tx.commit()?;
-            Ok(marked)
+            // Single UPDATE ... RETURNING instead of N round-trips. Params bound
+            // positionally: at_ms, to_agent, then one per id.
+            let placeholders = vec!["?"; ids.len()].join(",");
+            let sql = format!(
+                "UPDATE messages SET read_at = ? \
+                 WHERE read_at IS NULL AND to_agent = ? AND id IN ({placeholders}) \
+                 RETURNING id"
+            );
+            let mut binds: Vec<rusqlite::types::Value> = Vec::with_capacity(ids.len() + 2);
+            binds.push(at_ms.into());
+            binds.push(to_agent.clone().into());
+            binds.extend(ids.iter().map(|id| (*id).into()));
+            let mut stmt = conn.prepare(&sql)?;
+            let rows =
+                stmt.query_map(rusqlite::params_from_iter(binds.iter()), |r| r.get::<_, i64>(0))?;
+            rows.collect::<rusqlite::Result<Vec<i64>>>()
         }))
         .await
         .context("spawn_blocking mark_read")?
