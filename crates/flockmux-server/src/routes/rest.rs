@@ -2189,10 +2189,35 @@ pub async fn run_spell(
         // This guards against the race where a producer agent (e.g. BE)
         // is unbelievably fast and writes its handoff key before we get
         // around to subscribing this agent's deps.
+        // F2: render {workspace_id}/{task} into depends_on the SAME way the
+        // prompt is rendered, so a manifest can write a workspace-scoped key
+        // (e.g. "{workspace_id}/api.done") and have it match the producer's
+        // rendered handoff_signal — the wake match is exact-string, so an
+        // un-substituted placeholder would silently never match. role_to_id
+        // isn't built yet here (producers may not be spawned), so {<role>_id}
+        // in depends_on can't be resolved; the lint below flags any survivor.
+        let empty_roles: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        let rendered_deps: Vec<String> = resolved
+            .depends_on
+            .iter()
+            .map(|d| spells::render_prompt(d, &req.task, &workspace_id, &empty_roles))
+            .collect();
+        for d in &rendered_deps {
+            if d.contains('{') && d.contains('}') {
+                tracing::warn!(
+                    role = %resolved.role, dep = %d,
+                    "spell depends_on still has an unresolved {{...}} placeholder after \
+                     {{workspace_id}}/{{task}} substitution — a typo, or a {{<role>_id}} ref \
+                     (unsupported in depends_on: the producer's agent_id isn't known when deps \
+                     are registered). Wake matching is exact-string and will miss this key."
+                );
+            }
+        }
         crate::wake::register_wake_subs(
             &state.wake_subs,
             out.agent_id.clone(),
-            resolved.depends_on.clone(),
+            rendered_deps,
         )
         .await;
         // M6c step 5: also remember which signal THIS agent is supposed
@@ -2208,6 +2233,10 @@ pub async fn run_spell(
             .get(&resolved.role)
             .map(|r| r.manifest.handoff_signal.clone())
             .unwrap_or_default();
+        // Render the producer's signal the same way (F2) so a workspace-scoped
+        // handoff_signal lines up with dependents' rendered depends_on.
+        let handoff_signal =
+            spells::render_prompt(&handoff_signal, &req.task, &workspace_id, &empty_roles);
         crate::wake::register_exit_key(
             &state.exit_keys,
             out.agent_id.clone(),
