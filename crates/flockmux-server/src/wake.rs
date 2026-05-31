@@ -207,6 +207,26 @@ pub fn select_targets(
         .collect()
 }
 
+/// Pure (no IO/async) extracted for unit testing: pick the agents to auto-kill
+/// after a handoff write. An agent is reaped ONLY when it produced its OWN
+/// declared `handoff_signal` — i.e. the written `path` equals its
+/// `handoff_signal` AND it is the `writer` (F13). Without the writer guard, two
+/// agents that happen to declare the same `handoff_signal` would BOTH be killed
+/// when either writes it, silently reaping a sibling that hasn't finished. An
+/// unattributed write (`writer = None`, e.g. external editor / reconcile)
+/// reaps no one. Returns `(agent_id, role)` pairs.
+pub fn select_autokill_targets(
+    exit_keys: &HashMap<String, ExitKey>,
+    path: &str,
+    writer: Option<&str>,
+) -> Vec<(String, String)> {
+    exit_keys
+        .iter()
+        .filter(|(aid, ek)| ek.handoff_signal == path && writer == Some(aid.as_str()))
+        .map(|(aid, ek)| (aid.clone(), ek.role.clone()))
+        .collect()
+}
+
 /// Diagnose the dominant silent-stall failure mode: a blackboard write that
 /// IS some agent's declared `handoff_signal` yet matched ZERO `depends_on`
 /// subscribers. That means a producer just shipped its completion key but
@@ -518,7 +538,7 @@ impl WakeCoordinator {
                     // worker finish printing its final scroll, let the
                     // recording flush) so the agent list and DAG return
                     // to ground truth without operator action.
-                    self.maybe_auto_kill_on_handoff(&path).await;
+                    self.maybe_auto_kill_on_handoff(&path, writer.as_deref()).await;
                 }
                 Ok(SwarmEvent::AgentState { agent_id, state }) => {
                     if matches!(state, flockmux_protocol::ws_swarm::AgentState::Exited) {
@@ -565,20 +585,15 @@ impl WakeCoordinator {
     /// Race safety: we re-check the registry on the delayed tick.
     /// The agent may have been manually killed in the meantime, or its
     /// exit_keys entry may have been claimed by `handle_agent_exit`.
-    async fn maybe_auto_kill_on_handoff(&self, path: &str) {
+    async fn maybe_auto_kill_on_handoff(&self, path: &str, writer: Option<&str>) {
         // Capture (agent_id, role_label) pairs so the farewell message
         // can sign off with the worker's role instead of an opaque UUID.
+        // Only the agent that WROTE its own handoff_signal is reaped (F13):
+        // a sibling sharing the same signal string must not be killed when
+        // this one finishes. See `select_autokill_targets`.
         let targets: Vec<(String, String)> = {
             let map = self.exit_keys.read().await;
-            map.iter()
-                .filter_map(|(aid, ek)| {
-                    if ek.handoff_signal == path {
-                        Some((aid.clone(), ek.role.clone()))
-                    } else {
-                        None
-                    }
-                })
-                .collect()
+            select_autokill_targets(&map, path, writer)
         };
         if targets.is_empty() {
             return;
@@ -976,6 +991,55 @@ mod tests {
         let mut t = select_targets(&m, "k", None);
         t.sort();
         assert_eq!(t, vec!["a".to_string(), "b".to_string()]);
+    }
+
+    fn build_exit_keys(entries: &[(&str, &str, &str)]) -> HashMap<String, ExitKey> {
+        entries
+            .iter()
+            .map(|(aid, role, sig)| {
+                (
+                    aid.to_string(),
+                    ExitKey {
+                        role: role.to_string(),
+                        handoff_signal: sig.to_string(),
+                        spawned_at_ms: 0,
+                    },
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn autokill_reaps_only_the_writer_not_siblings_sharing_signal() {
+        // F13: worker-a and worker-b BOTH declare handoff "demo/out.done".
+        // worker-a writes it → only worker-a is reaped; worker-b (possibly
+        // still working) is left alone.
+        let ek = build_exit_keys(&[
+            ("worker-a", "writer", "demo/out.done"),
+            ("worker-b", "writer", "demo/out.done"),
+        ]);
+        let t = select_autokill_targets(&ek, "demo/out.done", Some("worker-a"));
+        assert_eq!(t, vec![("worker-a".to_string(), "writer".to_string())]);
+    }
+
+    #[test]
+    fn autokill_unattributed_write_reaps_nobody() {
+        // writer = None (external editor / reconcile) — never auto-kill.
+        let ek = build_exit_keys(&[("worker-a", "writer", "demo/out.done")]);
+        assert!(select_autokill_targets(&ek, "demo/out.done", None).is_empty());
+    }
+
+    #[test]
+    fn autokill_writer_with_unrelated_path_reaps_nobody() {
+        // worker-a wrote some OTHER key, not its own handoff_signal → not done.
+        let ek = build_exit_keys(&[("worker-a", "writer", "demo/out.done")]);
+        assert!(select_autokill_targets(&ek, "demo/progress.md", Some("worker-a")).is_empty());
+    }
+
+    #[test]
+    fn autokill_empty_map_returns_empty() {
+        let ek: HashMap<String, ExitKey> = HashMap::new();
+        assert!(select_autokill_targets(&ek, "x", Some("a")).is_empty());
     }
 
     #[test]
