@@ -360,7 +360,7 @@ agent 调 `swarm_write_blackboard` 那一瞬间的副作用。
 | `flockmux-cli` | ~50 | 薄入口（`flockmux up` 拉起 server + 打开面板）。 |
 | `cli-plugins/` | — | 每 CLI 一个 `.toml`：`claude.toml`、`codex.toml`。 |
 | `roles/` | — | 每个角色一个 `.md` SOP 模板：`frontend.md`、`backend.md`、`test.md`（M6a）；`planner.md`（M6c-2）、`critic.md`（M6c-6）、`architect.md`（M6c-7）。 |
-| `spells/` | — | 每个法术一个 `.md`：`critic-loop.md`（M5c）、`fullstack-feature.md`（M6a）、`auto-dispatch.md`（M6c-2）、`fullstack-feature-reviewed.md`（M6c-6）、`fullstack-feature-gated.md`（M6c-7）。 |
+| `spells/` | — | 每个法术一个 `.md`。**现状（刻意精简）**：磁盘上只有 `init.md`（建 workspace 时拉起单个 orchestrator）；下游全部由 orchestrator 用 `swarm_spawn_worker` 临时派活（Magentic-One 模型，不预设固定拓扑）。早期的 `critic-loop` / `fullstack-feature*` / `auto-dispatch` 等多 agent 法术已移除，`swarm_run_spell` MCP 工具也已移除。多 agent 法术机制（`role_ref` / `allow_cycles` / shared_workspace 等）仍完整实现+单测，备未来需要。 |
 | `docs/handoff-protocol.md` | — | `fullstack-feature` 及任何想约定 FE/BE/test 黑板契约的 spell 使用的 key 约定文档。 |
 | `web/` | — | Vite + React + xterm.js + asciinema-player 前端。 |
 

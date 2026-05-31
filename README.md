@@ -381,7 +381,7 @@ no role polls, no human pokes a PTY. Each `wake delivered` line is the
 | `flockmux-cli` | ~50 | Thin entry point (`flockmux up` launches server + opens dashboard). |
 | `cli-plugins/` | — | Per-CLI `.toml`: `claude.toml`, `codex.toml`. |
 | `roles/` | — | Per-role `.md` SOP templates: `frontend.md`, `backend.md`, `test.md` (M6a); `planner.md` (M6c-2), `critic.md` (M6c-6), `architect.md` (M6c-7). |
-| `spells/` | — | Per-spell `.md`: `critic-loop.md` (M5c), `fullstack-feature.md` (M6a), `auto-dispatch.md` (M6c-2), `fullstack-feature-reviewed.md` (M6c-6), `fullstack-feature-gated.md` (M6c-7). |
+| `spells/` | — | Per-spell `.md`. **Current state (deliberately minimal):** only `init.md` ships (spawns one orchestrator at workspace creation); everything downstream is dispatched ad-hoc by the orchestrator via `swarm_spawn_worker` (Magentic-One model — pick the team per task, no pre-declared topology). The earlier multi-agent spells (`critic-loop` / `fullstack-feature*` / `auto-dispatch`) and the `swarm_run_spell` MCP tool were removed. The multi-agent machinery (`role_ref` / `allow_cycles` / shared_workspace) stays fully implemented + unit-tested for future need. |
 | `docs/handoff-protocol.md` | — | Blackboard-key convention used by `fullstack-feature` and any spell that wants explicit FE/BE/test contracts. |
 | `web/` | — | Vite + React + xterm.js + asciinema-player frontend. |
 

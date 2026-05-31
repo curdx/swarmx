@@ -1,6 +1,21 @@
 //! Spell registry — markdown files with a TOML front-matter declaring the
 //! topology of a multi-agent flockmux session.
 //!
+//! STATUS (decision, 2026-05): this system is **deliberately minimal, not
+//! dead**. The full feature set — `role_ref` merge, `system_prompt_prefix`
+//! (HITL gate), `allow_cycles`, `{<role>_id}` cross-refs, shared-workspace
+//! layout, multi-agent spawn — is implemented and unit-tested, but ONLY the
+//! single `init` spell (one orchestrator) is driven in production, at
+//! workspace creation (see `routes::rest::run_spell` ← `main.rs`). Everything
+//! downstream is dispatched ad-hoc by the orchestrator via
+//! `swarm_spawn_worker` (Magentic-One model: decide the team per task, don't
+//! pre-declare a fixed topology), so the `swarm_run_spell` MCP tool was
+//! removed. Do NOT (a) delete this as "dead code" — `init` depends on it and
+//! the machinery is tested — nor (b) pad it with speculative spells. If a real
+//! multi-agent template need appears, add one spell + reuse this runner.
+//! (README's "M6c auto-dispatch / swarm_run_spell" sections predate this pivot
+//! and are historical.)
+//!
 //! Why TOML front-matter (not YAML, which plan §4.7 shows as an example):
 //!   - `toml` is already a workspace dep; adding `serde_yaml` (or its
 //!     post-archive forks) for the sake of three-deep config is overkill.

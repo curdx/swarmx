@@ -1,5 +1,11 @@
 //! Role registry — reusable per-agent SOP templates loaded from `roles/`.
 //!
+//! STATUS: like the spell registry, deliberately minimal — only the
+//! `orchestrator` role ships and is used (by the `init` spell). The role_ref
+//! merge machinery is fully implemented + tested but otherwise unexercised.
+//! See `spells.rs` header for the full decision rationale; don't delete it as
+//! "dead" nor pad it speculatively.
+//!
 //! A *role* is the spell-author-facing equivalent of MetaGPT's pinned
 //! "PM/Architect/Engineer/QA" team slots: a markdown file under `roles/`
 //! captures the default CLI to spawn, a system_prompt template, a handoff
