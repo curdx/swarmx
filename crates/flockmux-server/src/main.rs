@@ -22,6 +22,10 @@ mod routes;
 mod spawn;
 mod spells;
 mod wake;
+// P2: git worktree helpers for thread isolation. Wired into the thread REST
+// handlers in P3 — until then the fns are unused, so allow dead_code.
+#[allow(dead_code)]
+mod worktree;
 
 use anyhow::{Context, Result};
 use axum::{
