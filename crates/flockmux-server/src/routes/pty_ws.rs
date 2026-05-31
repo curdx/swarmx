@@ -304,7 +304,7 @@ async fn handle_socket(
                 // itself as input keystrokes (escape hatch for hand-testing
                 // with `websocat`).
                 match serde_json::from_str::<ClientControl>(&text) {
-                    Ok(ctrl) => apply_control(ctrl, &slot_arc, &input_tx).await,
+                    Ok(ctrl) => apply_control(ctrl, &slot_arc, &input_tx, &state, &agent_id).await,
                     Err(_) => {
                         if input_tx.send(Bytes::from(text.into_bytes())).await.is_err() {
                             break;
@@ -331,6 +331,8 @@ async fn apply_control(
     ctrl: ClientControl,
     slot: &std::sync::Arc<parking_lot::Mutex<crate::registry::AgentSlot>>,
     input_tx: &mpsc::Sender<Bytes>,
+    state: &AppState,
+    agent_id: &str,
 ) {
     match ctrl {
         ClientControl::Resize { cols, rows } => {
@@ -363,8 +365,10 @@ async fn apply_control(
             let _ = input_tx.send(Bytes::from(vec![byte])).await;
         }
         ClientControl::Kill => {
-            let bridge = slot.lock().bridge.clone();
-            bridge.kill();
+            // Full teardown — same path as REST DELETE /api/agent/:id (F1), so a
+            // WS Kill can't leave a "zombie" half-removed from registry / swarm /
+            // wake_subs. (Previously this only did bridge.kill().)
+            crate::routes::rest::teardown_agent(state, agent_id).await;
         }
         ClientControl::Detach => {
             // Detach is implicit when the WS closes; nothing to do here

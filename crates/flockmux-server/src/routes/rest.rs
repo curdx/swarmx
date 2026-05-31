@@ -519,11 +519,14 @@ pub async fn list_agents(State(state): State<AppState>) -> impl IntoResponse {
     Json(items)
 }
 
-pub async fn kill(
-    State(state): State<AppState>,
-    Path(agent_id): Path<String>,
-) -> impl IntoResponse {
-    match state.registry.remove(&agent_id) {
+/// Full agent teardown, shared by REST `DELETE /api/agent/:id` and the WS
+/// `ClientControl::Kill` path so the two can't diverge (F1): kill the PTY, drop
+/// the in-memory inbox, unregister the wake subscription, persist the kill, and
+/// broadcast `Exited`. Returns `true` if the agent existed (caller maps to
+/// 204 vs 404). NOTE: this does NOT post a farewell message or clear exit_keys
+/// — those are specific to the WakeCoordinator's auto-kill-on-handoff path.
+pub(crate) async fn teardown_agent(state: &AppState, agent_id: &str) -> bool {
+    match state.registry.remove(agent_id) {
         Some(slot) => {
             {
                 let slot = slot.lock();
@@ -532,27 +535,38 @@ pub async fn kill(
             // Drop the in-memory inbox before persisting the kill so any
             // in-flight send_message sees "no inbox" rather than racing
             // against a half-torn-down agent.
-            state.swarm.unregister_agent(&agent_id);
+            state.swarm.unregister_agent(agent_id);
             // M6b: tear down the wake subscription too so we don't try
             // to inject into a registry slot that's about to be dropped.
-            crate::wake::unregister_wake_subs(&state.wake_subs, &agent_id).await;
+            crate::wake::unregister_wake_subs(&state.wake_subs, agent_id).await;
             if let Err(e) = state
                 .store
-                .record_agent_kill(agent_id.clone(), now_ms())
+                .record_agent_kill(agent_id.to_string(), now_ms())
                 .await
             {
                 tracing::warn!(?e, agent = %agent_id, "record_agent_kill failed");
             }
             state.swarm.publish_event(SwarmEvent::AgentState {
-                agent_id: agent_id.clone(),
+                agent_id: agent_id.to_string(),
                 state: AgentState::Exited,
             });
-            (StatusCode::NO_CONTENT, Json(json!({"ok": true})))
+            true
         }
-        None => (
+        None => false,
+    }
+}
+
+pub async fn kill(
+    State(state): State<AppState>,
+    Path(agent_id): Path<String>,
+) -> impl IntoResponse {
+    if teardown_agent(&state, &agent_id).await {
+        (StatusCode::NO_CONTENT, Json(json!({"ok": true})))
+    } else {
+        (
             StatusCode::NOT_FOUND,
             Json(json!({"error": format!("agent {agent_id} not found")})),
-        ),
+        )
     }
 }
 
