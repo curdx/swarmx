@@ -345,28 +345,48 @@ fn parse_spell(content: &str, source_path: &Path) -> Result<Spell> {
 /// Returns (front_matter, body) if the content begins with a `+++` line
 /// and contains a closing `+++` line. Whitespace before the delimiter is
 /// tolerated (BOM, leading blank line, etc.).
+///
+/// F21: the closing fence is the first line that is EXACTLY `+++` (trailing
+/// whitespace / CR tolerated), not merely the first `\n+++` substring. A spell
+/// whose `system_prompt = """..."""` value embeds a diff line such as
+/// `+++ b/path` (very common — prompts quote diffs/code) used to be truncated
+/// there, breaking TOML parse and getting the whole spell silently warn-skipped.
+/// A diff line has content after `+++`, so requiring a standalone fence line
+/// fixes it. The one remaining constraint: don't put a BARE `+++` line on its
+/// own inside a TOML value.
 fn split_front_matter(content: &str) -> Option<(&str, &str)> {
     let trimmed_start = content.trim_start_matches(['\u{FEFF}', '\n', '\r', ' ', '\t']);
-    let offset = content.len() - trimmed_start.len();
     if !trimmed_start.starts_with("+++") {
         return None;
     }
     // Skip the opening fence line.
     let after_open = &trimmed_start["+++".len()..];
     let after_open = after_open.strip_prefix('\n').unwrap_or(after_open);
-    let close_idx = after_open.find("\n+++")?;
-    let fm = &after_open[..close_idx];
-    let body_start = close_idx + "\n+++".len();
-    let body = &after_open[body_start..];
-    // Strip a leading newline on body so it starts at the first markdown
-    // character, not a blank.
-    let body = body.strip_prefix('\n').unwrap_or(body);
-    // Untrim for return — the caller doesn't care about the leading offset,
-    // but the inferred slice should still be valid pointers into `content`.
-    // Rust slice ops on the trimmed input remain valid since they're still
-    // subslices of `content`.
-    let _ = offset; // suppress unused warning when not debugging
-    Some((fm, body))
+
+    // Scan line by line for a standalone `+++` fence. `line_start` is the byte
+    // offset of the current line within `after_open`; we only accept a fence at
+    // line_start > 0 (a preceding newline must exist, matching the old
+    // `\n+++` requirement — empty front matter stays unsupported).
+    let mut line_start = 0usize;
+    loop {
+        let rel_nl = after_open[line_start..].find('\n');
+        let line_end = rel_nl.map(|i| line_start + i).unwrap_or(after_open.len());
+        let line = after_open[line_start..line_end].trim_end_matches(['\r', ' ', '\t']);
+        if line_start > 0 && line == "+++" {
+            // fm excludes the newline immediately before this fence line.
+            let fm = &after_open[..line_start - 1];
+            // body starts after the fence line's terminating newline (if any).
+            let body = match rel_nl {
+                Some(i) => &after_open[line_start + i + 1..],
+                None => "", // fence is the last line, no body
+            };
+            return Some((fm, body));
+        }
+        match rel_nl {
+            Some(i) => line_start = line_start + i + 1,
+            None => return None, // ran out of lines without a closing fence
+        }
+    }
 }
 
 fn validate_manifest(m: &SpellManifest) -> Result<()> {
@@ -459,6 +479,41 @@ mod tests {
     fn split_front_matter_returns_none_when_no_fence() {
         assert!(split_front_matter("# just markdown\nno fence").is_none());
         assert!(split_front_matter("+++\nopen but never closed").is_none());
+    }
+
+    #[test]
+    fn split_front_matter_ignores_diff_lines_in_triple_quoted_value() {
+        // F21: a `+++ b/path` diff line inside a """...""" system_prompt must
+        // NOT be mistaken for the closing fence (it has content after `+++`).
+        let src = "+++\n\
+name = \"x\"\n\
+system_prompt = \"\"\"\n\
+apply this patch:\n\
+--- a/foo\n\
++++ b/foo\n\
+@@ -1 +1 @@\n\
+-old\n\
++new\n\
+\"\"\"\n\
++++\n\
+the real body\n";
+        let (fm, body) = split_front_matter(src).unwrap();
+        // The whole triple-quoted value (incl. the +++ diff line) stays in fm.
+        assert!(fm.contains("+++ b/foo"), "diff line must remain inside front matter");
+        assert!(fm.contains("system_prompt"));
+        assert_eq!(body, "the real body\n");
+        // And it actually parses as TOML now (the real regression).
+        let parsed: toml::Value = toml::from_str(fm).expect("fm parses as TOML");
+        assert!(parsed.get("system_prompt").and_then(|v| v.as_str()).unwrap().contains("+++ b/foo"));
+    }
+
+    #[test]
+    fn split_front_matter_fence_with_trailing_whitespace() {
+        // A closing fence line with trailing spaces / CRLF is still a fence.
+        let src = "+++\na = 1\n+++  \r\nbody\n";
+        let (fm, body) = split_front_matter(src).unwrap();
+        assert_eq!(fm.trim(), "a = 1");
+        assert_eq!(body, "body\n");
     }
 
     #[test]
