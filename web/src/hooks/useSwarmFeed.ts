@@ -193,6 +193,12 @@ export function useSwarmFeed({ onEvent, onReconnect }: Options): SwarmFeedStatus
       statusListeners.delete(setS);
       maybeDisconnect();
     };
+    // Mount-once by design: this registers/unregisters one subscriber on the
+    // module-level shared socket. The latest onEvent/onReconnect are read
+    // through cbRef (refreshed every render above), so they're deliberately
+    // NOT deps — adding them would re-run this effect on every render and
+    // thrash the shared WS connection. `status` is read for the join-time
+    // refetch only; a stale read is harmless (the listener still fires later).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

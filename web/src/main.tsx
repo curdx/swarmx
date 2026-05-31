@@ -1,3 +1,4 @@
+import { StrictMode } from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
 import { applyInitialTheme, setTheme, getThemeMode } from "./lib/theme";
@@ -39,9 +40,16 @@ if (import.meta.env.PROD) {
   });
 }
 
-// StrictMode intentionally disabled: PTY + WebSocket per agent are
-// single-consumer in M1 (server takes output_rx on attach, does not return it
-// on detach), so StrictMode's mount-unmount-remount cycle leaves the second
-// mount stranded with "agent already attached". M2's multi-attach (subscribe
-// via broadcast) will let us re-enable StrictMode.
-ReactDOM.createRoot(document.getElementById("root")!).render(<App />);
+// StrictMode re-enabled (M3+). It was disabled in M1 because PTY output was
+// single-consumer (server took output_rx on attach and didn't return it on
+// detach), so StrictMode's dev mount→unmount→remount stranded the 2nd mount
+// with "agent already attached". M3 made PTY output broadcast-based (multi-
+// attach via a shared PtyStream) and XtermPane guards its WS/WebGL teardown
+// with a `disposed` flag + seq-resume, so the double-invoke is now clean.
+// StrictMode is dev-only (no-op in prod) and surfaces effect-cleanup leaks
+// early — worth keeping on.
+ReactDOM.createRoot(document.getElementById("root")!).render(
+  <StrictMode>
+    <App />
+  </StrictMode>,
+);
