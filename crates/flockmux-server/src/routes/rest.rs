@@ -258,6 +258,9 @@ pub(crate) async fn spawn_with_bookkeeping(
             spawned_at,
             workspace_id: Some(workspace_id.clone()),
             spell_run_id: spell_run_id.clone(),
+            // P1: always main thread (None). P3 adds a thread_id param to
+            // spawn_with_bookkeeping and threads the real direction through.
+            thread_id: None,
         })
         .await
     {
@@ -421,6 +424,7 @@ pub async fn list_agents(State(state): State<AppState>) -> impl IntoResponse {
                 // authoritative source and we backfill from it below.
                 workspace_id: None,
                 spell_run_id: None,
+                thread_id: None, // backfilled from SQLite below
                 // parent_agent_id is derived from the spell_runs table after
                 // the SQLite union below — fills in once spell_run_id is set.
                 parent_agent_id: None,
@@ -442,6 +446,7 @@ pub async fn list_agents(State(state): State<AppState>) -> impl IntoResponse {
                     info.spawned_at = Some(row.spawned_at);
                     info.workspace_id = row.workspace_id;
                     info.spell_run_id = row.spell_run_id;
+                    info.thread_id = row.thread_id;
                     items.push(info);
                 } else {
                     // Historical row: depends_on is empty (subscription
@@ -462,6 +467,7 @@ pub async fn list_agents(State(state): State<AppState>) -> impl IntoResponse {
                         handoff_signal,
                         workspace_id: row.workspace_id,
                         spell_run_id: row.spell_run_id,
+                        thread_id: row.thread_id,
                         parent_agent_id: None,
                         paused: false,
                     });

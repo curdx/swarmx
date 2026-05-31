@@ -16,7 +16,8 @@ mod store;
 
 pub use models::{
     AgentRecord, BlackboardOpRecord, ListMessagesOpts, MessageRecord, NewAgent, NewBlackboardOp,
-    NewMessage, NewRecording, NewSpellRun, NewWorker, NewWorkspace, NewWorkspaceRoot,
-    RecordingRecord, SpellRunRecord, WorkerRecord, WorkspaceRecord, WorkspaceRootRecord,
+    NewMessage, NewRecording, NewSpellRun, NewThread, NewWorker, NewWorkspace, NewWorkspaceRoot,
+    RecordingRecord, SpellRunRecord, ThreadRecord, WorkerRecord, WorkspaceRecord,
+    WorkspaceRootRecord,
 };
 pub use store::{PruneStats, Store};

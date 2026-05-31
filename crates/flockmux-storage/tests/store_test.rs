@@ -2,7 +2,8 @@
 //! `TempDir` so they parallelise safely.
 
 use flockmux_storage::{
-    ListMessagesOpts, MessageRecord, NewAgent, NewBlackboardOp, NewMessage, NewRecording, Store,
+    ListMessagesOpts, MessageRecord, NewAgent, NewBlackboardOp, NewMessage, NewRecording, NewThread,
+    NewWorkspace, Store,
 };
 use tempfile::TempDir;
 
@@ -38,7 +39,7 @@ async fn agent_spawn_then_list() {
             spawned_at: ts(0),
             workspace_id: None,
             spell_run_id: None,
-        })
+            thread_id: None,        })
         .await
         .unwrap();
     let agents = store.list_agents().await.unwrap();
@@ -62,7 +63,7 @@ async fn agent_lifecycle_updates_idempotent() {
             spawned_at: ts(0),
             workspace_id: None,
             spell_run_id: None,
-        })
+            thread_id: None,        })
         .await
         .unwrap();
     store
@@ -608,7 +609,7 @@ async fn store_survives_reopen() {
                 spawned_at: ts(0),
                 workspace_id: None,
                 spell_run_id: None,
-            })
+                thread_id: None,            })
             .await
             .unwrap();
     }
@@ -632,7 +633,7 @@ async fn mark_orphan_agents_killed_only_alive_rows() {
             spawned_at: ts(0),
             workspace_id: None,
             spell_run_id: None,
-        })
+            thread_id: None,        })
         .await
         .unwrap();
     store
@@ -644,7 +645,7 @@ async fn mark_orphan_agents_killed_only_alive_rows() {
             spawned_at: ts(0),
             workspace_id: None,
             spell_run_id: None,
-        })
+            thread_id: None,        })
         .await
         .unwrap();
     store
@@ -853,4 +854,143 @@ async fn prune_keeps_every_load_bearing_row() {
     assert_eq!(stats2.messages, 1, "orphaned parent ages out next pass");
     assert_eq!(stats2.blackboard_ops, 0);
     assert_eq!(stats2.recordings, 0);
+}
+
+// ── threads (per-workspace directions) ───────────────────────────────────
+
+#[tokio::test]
+async fn threads_crud_roundtrip() {
+    let (_dir, store) = fresh_store().await;
+    let ws = store
+        .create_workspace(
+            NewWorkspace {
+                name: "proj".into(),
+                cwd: "/tmp/proj".into(),
+                accent: None,
+            },
+            ts(0),
+        )
+        .await
+        .unwrap();
+
+    // create the main thread (shared) + a second direction.
+    let main = store
+        .create_thread(
+            NewThread {
+                workspace_id: ws.id.clone(),
+                slug: "main".into(),
+                name: Some("主线".into()),
+                isolation: "shared".into(),
+                branch: None,
+                cwd: ws.cwd.clone(),
+                state: "ready".into(),
+            },
+            ts(1),
+        )
+        .await
+        .unwrap();
+    let dark = store
+        .create_thread(
+            NewThread {
+                workspace_id: ws.id.clone(),
+                slug: "t-abc123".into(),
+                name: None,
+                isolation: "shared".into(),
+                branch: None,
+                cwd: ws.cwd.clone(),
+                state: "ready".into(),
+            },
+            ts(2),
+        )
+        .await
+        .unwrap();
+
+    // list: oldest first (main before dark).
+    let listed = store.list_threads(ws.id.clone()).await.unwrap();
+    assert_eq!(listed.len(), 2);
+    assert_eq!(listed[0].slug, "main");
+    assert_eq!(listed[1].slug, "t-abc123");
+    assert_eq!(listed[1].name, None);
+
+    // update: AI names the direction + upgrades it to a worktree.
+    store
+        .update_thread(
+            dark.id.clone(),
+            Some("深色模式".into()),
+            Some("dark-mode".into()),
+            Some("worktree".into()),
+            Some("dark-mode".into()),
+            Some("/tmp/proj-dark-mode".into()),
+            Some("ready".into()),
+        )
+        .await
+        .unwrap();
+    let got = store.get_thread(dark.id.clone()).await.unwrap().unwrap();
+    assert_eq!(got.name.as_deref(), Some("深色模式"));
+    assert_eq!(got.slug, "dark-mode");
+    assert_eq!(got.isolation, "worktree");
+    assert_eq!(got.branch.as_deref(), Some("dark-mode"));
+    assert_eq!(got.cwd, "/tmp/proj-dark-mode");
+    // partial update leaves other columns untouched.
+    assert_eq!(got.workspace_id, ws.id);
+
+    // agent → thread reverse lookup.
+    store
+        .record_agent_spawn(NewAgent {
+            id: "ag-1".into(),
+            cli: "claude".into(),
+            role: "orchestrator".into(),
+            workspace: ws.cwd.clone(),
+            spawned_at: ts(3),
+            workspace_id: Some(ws.id.clone()),
+            spell_run_id: None,
+            thread_id: Some(dark.id.clone()),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        store.get_thread_id_for_agent("ag-1".into()).await.unwrap(),
+        Some(dark.id.clone())
+    );
+    // an agent with no thread → None (= main).
+    store
+        .record_agent_spawn(NewAgent {
+            id: "ag-2".into(),
+            cli: "claude".into(),
+            role: "x".into(),
+            workspace: ws.cwd.clone(),
+            spawned_at: ts(4),
+            workspace_id: Some(ws.id.clone()),
+            spell_run_id: None,
+            thread_id: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        store.get_thread_id_for_agent("ag-2".into()).await.unwrap(),
+        None
+    );
+
+    // soft-delete frees the slug + drops it from the alive list.
+    store.soft_delete_thread(main.id.clone(), ts(5)).await.unwrap();
+    let after = store.list_threads(ws.id.clone()).await.unwrap();
+    assert_eq!(after.len(), 1, "main soft-deleted; only dark remains");
+    assert_eq!(after[0].id, dark.id);
+    // slug 'main' is now reusable (alive-only UNIQUE index).
+    let main2 = store
+        .create_thread(
+            NewThread {
+                workspace_id: ws.id.clone(),
+                slug: "main".into(),
+                name: Some("主线2".into()),
+                isolation: "shared".into(),
+                branch: None,
+                cwd: ws.cwd.clone(),
+                state: "ready".into(),
+            },
+            ts(6),
+        )
+        .await
+        .unwrap();
+    assert_eq!(main2.slug, "main");
 }

@@ -99,6 +99,11 @@ pub struct AgentInfo {
     /// for a future "group by spell run" toggle.
     #[serde(default)]
     pub spell_run_id: Option<String>,
+    /// FK into the threads table (a workspace's "direction"). `None` = the
+    /// workspace's main thread (legacy rows + pre-thread spawns). Frontend
+    /// groups the chat/members/ledger by thread using this.
+    #[serde(default)]
+    pub thread_id: Option<String>,
     /// Derived from `spell_runs.caller_agent_id` of this agent's
     /// `spell_run_id`. Populates the GraphPanel "雇佣关系" (parent → child)
     /// edges. `None` for user-initiated spawns (no spell run) and for
