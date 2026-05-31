@@ -22,6 +22,17 @@ impl CustomizeConnection<Connection, r2d2_sqlite::rusqlite::Error> for Customize
         // statement — `pragma_update` would error. Use `query_row`.
         conn.query_row("PRAGMA journal_mode=WAL", [], |_| Ok(()))?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
+        // foreign_keys=ON enforces referential integrity (you can't insert a
+        // child pointing at a missing parent). The FK columns are intentionally
+        // declared with NO ACTION (the default), NOT ON DELETE CASCADE, and
+        // that's deliberate: no code path *physically* deletes a FK-parent row.
+        // workspaces are soft-deleted (deleted_at), agents are killed
+        // (killed_at), spell_runs/messages are append-only. The ONE physical
+        // delete — `delete_workspace_root` — walks + removes its own subtree
+        // explicitly (it predates FK pragmas and stays self-contained). So a
+        // CASCADE would be dormant, and adding one to existing tables needs a
+        // risky SQLite table-rebuild — not worth it until a hard-delete path
+        // actually exists. (Audit F-storage: reviewed + intentionally NO ACTION.)
         conn.pragma_update(None, "foreign_keys", "ON")?;
         Ok(())
     }

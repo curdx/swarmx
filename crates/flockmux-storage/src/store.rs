@@ -26,6 +26,15 @@ fn is_busy(e: &SqliteError) -> bool {
     )
 }
 
+/// True if `e` is a UNIQUE/constraint failure — used by `create_workspace` to
+/// retry on a (rare) generated-slug collision rather than surfacing a 500.
+fn is_constraint_violation(e: &SqliteError) -> bool {
+    matches!(
+        e,
+        SqliteError::SqliteFailure(f, _) if f.code == ErrorCode::ConstraintViolation
+    )
+}
+
 /// Run a DB op, re-running it on SQLITE_BUSY / SQLITE_LOCKED that `busy_timeout`
 /// didn't absorb (WAL checkpoint / snapshot edge cases). Safe to retry: a BUSY
 /// is returned BEFORE the statement/transaction takes effect, so no partial
@@ -798,24 +807,47 @@ impl Store {
             // INSERT with deterministic generation: lower(hex(randomblob(16)))
             // = 32-char id, substr(...,1,8) = the slug. RETURNING gives us
             // both back so the handler doesn't have to query again.
-            let mut stmt = conn.prepare(
-                "INSERT INTO workspaces (id, slug, name, cwd, accent, created_at) \
-                 VALUES (lower(hex(randomblob(16))), \
-                         substr(lower(hex(randomblob(16))), 1, 8), \
-                         ?1, ?2, ?3, ?4) \
-                 RETURNING id, slug, name, cwd, accent, created_at, deleted_at",
-            )?;
-            let mut rows = stmt.query(params![rec.name, rec.cwd, rec.accent, created_at])?;
-            let row = rows.next()?.ok_or(rusqlite::Error::QueryReturnedNoRows)?;
-            Ok(WorkspaceRecord {
-                id: row.get(0)?,
-                slug: row.get(1)?,
-                name: row.get(2)?,
-                cwd: row.get(3)?,
-                accent: row.get(4)?,
-                created_at: row.get(5)?,
-                deleted_at: row.get(6)?,
-            })
+            //
+            // The slug is only 32 bits of entropy (8 hex chars), so a UNIQUE
+            // collision, while rare, is non-zero. `with_busy_retry` only retries
+            // BUSY/LOCKED, NOT a ConstraintViolation — so without this loop a
+            // slug clash would 500 the create-workspace API and the user simply
+            // couldn't make a new workspace. Each INSERT regenerates a fresh
+            // random slug, so retrying on the (slug) UNIQUE violation almost
+            // always succeeds on the next spin.
+            const MAX_SLUG_ATTEMPTS: u32 = 5;
+            let mut attempt: u32 = 0;
+            loop {
+                let result: rusqlite::Result<WorkspaceRecord> = (|| {
+                    let mut stmt = conn.prepare(
+                        "INSERT INTO workspaces (id, slug, name, cwd, accent, created_at) \
+                         VALUES (lower(hex(randomblob(16))), \
+                                 substr(lower(hex(randomblob(16))), 1, 8), \
+                                 ?1, ?2, ?3, ?4) \
+                         RETURNING id, slug, name, cwd, accent, created_at, deleted_at",
+                    )?;
+                    let mut rows =
+                        stmt.query(params![rec.name, rec.cwd, rec.accent, created_at])?;
+                    let row = rows.next()?.ok_or(rusqlite::Error::QueryReturnedNoRows)?;
+                    Ok(WorkspaceRecord {
+                        id: row.get(0)?,
+                        slug: row.get(1)?,
+                        name: row.get(2)?,
+                        cwd: row.get(3)?,
+                        accent: row.get(4)?,
+                        created_at: row.get(5)?,
+                        deleted_at: row.get(6)?,
+                    })
+                })();
+                match result {
+                    Ok(rec) => return Ok(rec),
+                    Err(e) if is_constraint_violation(&e) && attempt + 1 < MAX_SLUG_ATTEMPTS => {
+                        attempt += 1;
+                        tracing::warn!(attempt, "workspace slug collision; regenerating");
+                    }
+                    Err(e) => return Err(e),
+                }
+            }
         }))
         .await
         .context("spawn_blocking create_workspace")?
