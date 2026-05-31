@@ -10,7 +10,7 @@
  * switch to replays → come back → selection is gone" annoyance.
  */
 
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
   Background,
@@ -321,14 +321,26 @@ export default function DagView() {
   const [bb, setBb] = useState<BlackboardEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
 
+  // F19: refresh runs from an effect AND from swarm-feed callbacks; guard its
+  // setState against a refresh that resolves after the view unmounts (tab
+  // switch) so we don't poke a dead component.
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
   const refresh = useCallback(async () => {
     try {
       const [a, b] = await Promise.all([api.listAgents(), api.listBlackboard()]);
+      if (!mountedRef.current) return;
       setAllAgents(a);
       setBb(b);
       setError(null);
     } catch (e) {
-      setError((e as Error).message);
+      if (mountedRef.current) setError((e as Error).message);
     }
   }, []);
 

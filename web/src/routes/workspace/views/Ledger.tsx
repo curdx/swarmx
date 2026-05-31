@@ -73,14 +73,29 @@ export default function LedgerView() {
     return () => window.clearInterval(i);
   }, []);
 
+  // F19: guard setState against a load that resolves after the view unmounts
+  // (tab switch). refresh/loadOne/loadBreadcrumbs all run from effects + swarm
+  // callbacks, so a mounted-ref gate keeps them from poking a dead component.
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
   const loadOne = useCallback(
     async (key: string, setter: (s: LedgerSnap) => void) => {
+      // Drop the result if we've since unmounted.
+      const set = (s: LedgerSnap) => {
+        if (mountedRef.current) setter(s);
+      };
       try {
         const snap = (await api.readBlackboard(key)) as BlackboardSnapshot | null;
         if (snap) {
-          setter({ content: snap.content, at: snap.at, error: null });
+          set({ content: snap.content, at: snap.at, error: null });
         } else {
-          setter({ content: "", at: null, error: null });
+          set({ content: "", at: null, error: null });
         }
       } catch (e) {
         // A never-written ledger key 404s — that's the normal "empty" state
@@ -88,9 +103,9 @@ export default function LedgerView() {
         // through request() which rejects on non-2xx), so we map 404 → empty
         // here. Anything else (500, network) is a real error worth surfacing.
         if (e instanceof ApiError && e.status === 404) {
-          setter({ content: "", at: null, error: null });
+          set({ content: "", at: null, error: null });
         } else {
-          setter({ content: "", at: null, error: (e as Error).message });
+          set({ content: "", at: null, error: (e as Error).message });
         }
       }
     },
@@ -122,9 +137,9 @@ export default function LedgerView() {
       );
       // newest first so the most recent worker activity is at the top
       rows.sort((a, b) => b.at - a.at);
-      setBreadcrumbs(rows);
+      if (mountedRef.current) setBreadcrumbs(rows);
     } catch {
-      setBreadcrumbs([]);
+      if (mountedRef.current) setBreadcrumbs([]);
     }
   }, [workspace.workspaceId]);
 
@@ -135,7 +150,7 @@ export default function LedgerView() {
       loadOne(progressKey, setProgress),
       loadBreadcrumbs(),
     ]);
-    setRefreshing(false);
+    if (mountedRef.current) setRefreshing(false);
   }, [loadOne, taskKey, progressKey, loadBreadcrumbs]);
 
   useEffect(() => {

@@ -50,11 +50,17 @@ async function request<T>(
   method: string,
   path: string,
   body?: unknown,
+  signal?: AbortSignal,
 ): Promise<T> {
+  // `signal` lets a caller abort an in-flight request when its component
+  // unmounts (pass an AbortController.signal). Components that don't care just
+  // omit it and instead guard their setState with a mounted-ref. Aborting
+  // rejects the fetch with an AbortError the caller can ignore.
   const res = await fetch(HTTP_BASE + path, {
     method,
     headers: body ? { "content-type": "application/json" } : undefined,
     body: body ? JSON.stringify(body) : undefined,
+    signal,
   });
   if (!res.ok) {
     // Read the body stream EXACTLY ONCE. The old code did `res.json()` then
