@@ -16,18 +16,14 @@
  * 和录像页各开了一个，重复请求 + 重复 ws 连接）。
  *
  * 拆分（god-file 治理）：侧栏 + 根源树 + 管理对话框搬到 WorkspaceSidebar，
- * tab 栏 + 视图过渡搬到 WorkspaceToolbar，WorkspaceSummary 类型搬到 ./types。
- * 本文件只剩"数据编排 + 布局"。WorkspaceList / WorkspaceSummary 在此 re-export，
- * 既有 import 站点（chat/Home）无需改动。
+ * tab 栏 + 视图过渡搬到 WorkspaceToolbar，WorkspaceSummary 类型搬到 ./types，
+ * 数据编排（agents/workspaces/unread + swarm 订阅 + 级联删除）搬到
+ * useWorkspaceShellData hook。本文件只剩"布局 + 导航 + Outlet context 组装"。
+ * WorkspaceList / WorkspaceSummary 在此 re-export，既有 import 站点
+ * （chat/Home）无需改动。
  */
 
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   Outlet,
   useLocation,
@@ -38,23 +34,16 @@ import {
 } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { FolderOpen } from "lucide-react";
-import { api } from "../../api/http";
-import type {
-  AgentInfo,
-  MessageRecord,
-  SwarmEvent,
-  Workspace,
-} from "../../api/types";
+import type { AgentInfo, MessageRecord } from "../../api/types";
 import { AgentDrawer } from "../../components/agent/AgentDrawer";
 import { CreateWizard } from "../../components/workspace/CreateWizard";
 import { ErrorBoundary } from "../../components/ErrorBoundary";
 import { Welcome } from "../../components/Welcome";
-import { useSwarmFeed } from "../../hooks/useSwarmFeed";
-import { accentToCssVar, splitWorkspacePath } from "../../lib/workspace";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { WorkspaceSummary } from "./types";
 import { WorkspaceList } from "./WorkspaceSidebar";
 import { WorkspaceToolbar, ViewTransition, buildTabs } from "./WorkspaceToolbar";
+import { useWorkspaceShellData } from "./useWorkspaceShellData";
 
 // Re-exported so existing import sites keep working unchanged (chat/Home.tsx
 // imports `WorkspaceList` + `WorkspaceSummary` from here; the child views below
@@ -137,235 +126,33 @@ export default function WorkspaceShell() {
       window.removeEventListener("flockmux:open-wizard", onOpen as EventListener);
   }, []);
 
-  // ── Shared state (was per-route before, now per-Shell) ──────────────
-  const [agents, setAgents] = useState<AgentInfo[]>([]);
-  const [workspaceRows, setWorkspaceRows] = useState<Workspace[]>([]);
-  const [liveMessage, setLiveMessage] = useState<MessageRecord | null>(null);
-  const [liveRead, setLiveRead] = useState<
-    { ids: number[]; to_agent: string; at: number } | null
-  >(null);
-  const [unreadByFrom, setUnreadByFrom] = useState<Record<string, number>>({});
+  // jumpUnread is a pure UI signal to MessagesPanel (scroll to first unread).
   const [jumpUnreadTick, setJumpUnreadTick] = useState(0);
-  const idToFromRef = useRef<Map<number, string>>(new Map());
 
-  const refreshWorkspaces = useCallback(async () => {
-    try {
-      const items = await api.listWorkspaces();
-      setWorkspaceRows(items);
-    } catch (err) {
-      // eslint-disable-next-line no-console
-      console.warn("listWorkspaces failed", err);
-    }
-  }, []);
+  // All data orchestration (agents / workspaces / unread, the single swarm
+  // subscription, the cascade delete) lives in the hook — Shell stays layout.
+  const {
+    workspaces,
+    activeWs,
+    allAliveAgents,
+    workspaceAgentIds,
+    liveMessage,
+    liveRead,
+    activeWorkspaceUnread,
+    totalUnread,
+    refreshAgents,
+    refreshWorkspaces,
+    deleteWorkspace,
+  } = useWorkspaceShellData(wsId);
 
-  const refreshAgents = useCallback(async () => {
-    try {
-      const items = await api.listAgents();
-      setAgents(items);
-    } catch (err) {
-      // eslint-disable-next-line no-console
-      console.warn("listAgents failed", err);
-    }
-  }, []);
-
-  const recomputeUnread = useCallback(async () => {
-    try {
-      const rows = await api.listMessages({ limit: 200 });
-      const counts: Record<string, number> = {};
-      const ids = new Map<number, string>();
-      for (const m of rows) {
-        ids.set(m.id, m.from_agent);
-        if (m.read_at === null && m.to_agent === "user") {
-          counts[m.from_agent] = (counts[m.from_agent] ?? 0) + 1;
-        }
-      }
-      idToFromRef.current = ids;
-      setUnreadByFrom(counts);
-    } catch {
-      /* best-effort */
-    }
-  }, []);
-
-  useEffect(() => {
-    refreshAgents();
-    recomputeUnread();
-    refreshWorkspaces();
-  }, [refreshAgents, recomputeUnread, refreshWorkspaces]);
-
-  const refreshTimerRef = useRef<number | null>(null);
-  const scheduleRefresh = useCallback(() => {
-    if (refreshTimerRef.current != null) {
-      window.clearTimeout(refreshTimerRef.current);
-    }
-    refreshTimerRef.current = window.setTimeout(() => {
-      refreshTimerRef.current = null;
-      refreshAgents();
-    }, 200);
-  }, [refreshAgents]);
-
-  useSwarmFeed({
-    onEvent: (ev: SwarmEvent) => {
-      switch (ev.type) {
-        case "agent_state":
-          scheduleRefresh();
-          break;
-        case "message": {
-          const rec: MessageRecord = {
-            id: ev.id,
-            from_agent: ev.from_agent,
-            to_agent: ev.to_agent,
-            kind: ev.kind,
-            body: ev.body,
-            sent_at: ev.sent_at,
-            delivered_at: null,
-            read_at: null,
-            in_reply_to: ev.in_reply_to ?? null,
-          };
-          setLiveMessage(rec);
-          idToFromRef.current.set(ev.id, ev.from_agent);
-          if (ev.to_agent === "user") {
-            setUnreadByFrom((prev) => ({
-              ...prev,
-              [ev.from_agent]: (prev[ev.from_agent] ?? 0) + 1,
-            }));
-          }
-          break;
-        }
-        case "message_read":
-          setLiveRead({ ids: ev.ids, to_agent: ev.to_agent, at: ev.at });
-          setUnreadByFrom((prev) => {
-            const next = { ...prev };
-            for (const id of ev.ids) {
-              const from = idToFromRef.current.get(id);
-              if (!from) continue;
-              const cur = next[from] ?? 0;
-              const dec = Math.max(0, cur - 1);
-              if (dec === 0) delete next[from];
-              else next[from] = dec;
-            }
-            return next;
-          });
-          break;
-        case "blackboard_changed":
-          // workspace name / accent now live in the `workspaces` table,
-          // not the blackboard, so we don't react to blackboard events
-          // for that any more. Member-count changes are picked up via
-          // `agent_state` → scheduleRefresh → refreshAgents → recompute.
-          break;
-      }
-    },
-    onReconnect: () => {
-      scheduleRefresh();
-      recomputeUnread();
-      refreshWorkspaces();
-    },
-  });
-
-  // ── Workspaces (server-side, alive only) ────────────────────────────
-  // Source of truth: GET /api/workspaces (deleted_at IS NULL only).
-  // Agents are grouped onto these via `agent.workspace_id`. The old
-  // "group by cwd path" trick is gone — that was the bug.
-  const workspaces = useMemo<WorkspaceSummary[]>(() => {
-    const aliveByWsId = new Map<string, AgentInfo[]>();
-    for (const a of agents) {
-      if (a.killed_at != null || a.shim_exit != null) continue;
-      if (!a.workspace_id) continue;
-      const arr = aliveByWsId.get(a.workspace_id) ?? [];
-      arr.push(a);
-      aliveByWsId.set(a.workspace_id, arr);
-    }
-    return workspaceRows.map<WorkspaceSummary>((w) => {
-      const { parent } = splitWorkspacePath(w.cwd);
-      return {
-        id: w.slug,
-        workspaceId: w.id,
-        path: w.cwd,
-        name: w.name,
-        parent,
-        accentColor: accentToCssVar(w.accent),
-        members: aliveByWsId.get(w.id) ?? [],
-        roots: w.roots ?? [],
-      };
-    });
-  }, [workspaceRows, agents]);
-
-  const activeWs = useMemo(
-    () => workspaces.find((w) => w.id === wsId) ?? null,
-    [workspaces, wsId],
-  );
-
-  // ── Per-workspace derivations passed down via OutletContext ─────────
-  const allAliveAgents = useMemo(
-    () => agents.filter((a) => a.killed_at == null && a.shim_exit == null),
-    [agents],
-  );
-
-  const workspaceAgentIds = useMemo(() => {
-    if (!activeWs) return [];
-    return agents
-      .filter((a) => a.workspace_id === activeWs.workspaceId)
-      .map((a) => a.agent_id);
-  }, [agents, activeWs]);
-
-  const activeWorkspaceUnread = useMemo(() => {
-    if (!activeWs) return {} as Record<string, number>;
-    const wsSet = new Set(workspaceAgentIds);
-    return Object.fromEntries(
-      Object.entries(unreadByFrom).filter(([from]) => wsSet.has(from)),
-    );
-  }, [unreadByFrom, activeWs, workspaceAgentIds]);
-  const totalUnread = Object.values(activeWorkspaceUnread).reduce(
-    (a, b) => a + b,
-    0,
-  );
-
-  // ── Soft-delete a workspace ────────────────────────────────────────
-  const handleDeleteWorkspace = useCallback(
+  // deleteWorkspace performs the kill+delete+optimistic-drop and returns where
+  // to navigate when the ACTIVE workspace was removed (router stays here).
+  const onDeleteWorkspace = useCallback(
     async (workspaceId: string) => {
-      // Kill any live agents belonging to this workspace before deleting
-      // the row, otherwise their PTYs survive and keep burning tokens
-      // with no UI handle to address them. Per-agent failure is logged
-      // but doesn't abort the batch (a half-dead PTY shouldn't block
-      // the user from removing the workspace).
-      try {
-        const all = await api.listAgents();
-        const live = all.filter(
-          (a) =>
-            a.workspace_id === workspaceId &&
-            a.killed_at == null &&
-            a.shim_exit == null,
-        );
-        await Promise.all(
-          live.map((a) =>
-            api.killAgent(a.agent_id).catch((e) => {
-              // eslint-disable-next-line no-console
-              console.warn("killAgent failed", a.agent_id, e);
-            }),
-          ),
-        );
-      } catch (err) {
-        // eslint-disable-next-line no-console
-        console.warn("listAgents before delete failed", err);
-      }
-      try {
-        await api.deleteWorkspace(workspaceId);
-      } catch (err) {
-        // eslint-disable-next-line no-console
-        console.warn("deleteWorkspace failed", err);
-        return;
-      }
-      // Optimistically drop it from local state — next listWorkspaces
-      // refresh would catch it anyway but UI shouldn't lag a roundtrip.
-      const remaining = workspaceRows.filter((w) => w.id !== workspaceId);
-      setWorkspaceRows(remaining);
-      // If we just deleted the active workspace, navigate to the first
-      // remaining one or back to /chat splash.
-      if (activeWs?.workspaceId === workspaceId) {
-        const next = remaining[0];
-        navigate(next ? `/chat/${next.slug}` : "/chat", { replace: true });
-      }
+      const navTo = await deleteWorkspace(workspaceId);
+      if (navTo) navigate(navTo, { replace: true });
     },
-    [workspaceRows, activeWs, navigate],
+    [deleteWorkspace, navigate],
   );
 
   // ── ⌘1-4 global shortcut ───────────────────────────────────────────
@@ -419,7 +206,7 @@ export default function WorkspaceShell() {
             workspaces={workspaces}
             activeId={wsId ?? null}
             onOpenWizard={() => setWizardOpen(true)}
-            onDelete={handleDeleteWorkspace}
+            onDelete={onDeleteWorkspace}
             onRootsChanged={refreshWorkspaces}
           />
           {workspaces.length === 0 ? (
@@ -473,7 +260,7 @@ export default function WorkspaceShell() {
           workspaces={workspaces}
           activeId={activeWs.id}
           onOpenWizard={() => setWizardOpen(true)}
-          onDelete={handleDeleteWorkspace}
+          onDelete={onDeleteWorkspace}
           onRootsChanged={refreshWorkspaces}
         />
         <section className="flex min-w-0 flex-1 flex-col bg-surface-primary">
