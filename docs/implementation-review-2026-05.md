@@ -10,8 +10,15 @@
 > - ✅ **F5 DB 无保留策略**：boot 时按保留窗口（`FLOCKMUX_RETENTION_DAYS`，默认 30、0=永久保留）prune 三张只增表，只删"不再承重"的行——黑板**被取代的旧历史**（永不删每 path 最新行，发现/reconcile 依赖）、**已消费 wake + 已投递已读**消息（未消费 wake 永不删，FK 引用的父消息跳过下轮再删）、**旧的已 finalize 录制**（顺带 best-effort unlink `.cast` 文件）。单事务 + 删后 `wal_checkpoint(TRUNCATE)`+`optimize`；新增 `(path,id)` 索引（迁移 0008，顺带提速 latest-per-path 发现）；不做写时 dedup（会破坏"重写同内容也发 wake"语义）、不强制 VACUUM（空闲页复用已封顶增长）。穷尽单测覆盖全部安全红线 + boot 冒烟验迁移/接线。
 > - ✅ **多 CLI L5/L4（详见 `multi-cli-redesign-plan.md`）**：L5a 分层 registry override（用户 `~/.flockmux/cli-plugins` 不 fork 即可改/加 CLI）、L5c model 与 CLI 解耦（数据驱动 model overlay，同 CLI 任意 model 不分叉 role）、L4 ACP 传输基础（单一可复用 JSON-RPC-over-stdio codec + transport 接缝，声明 acp 安全回退 PTY）。
 > - ✅ **前端 F15 两套 DAG 合并**：删 legacy GraphPanel，edge 推导抽成 `lib/dagEdgeDerivation` 单一来源（消除 satisfied/producer/live-filter 漂移）；SwarmPanel 去 graph tab。
-> - ✅ **前端 Shell.tsx 巨型文件拆分**：1438 → 516 行；侧栏树 + ManageRootsDialog → `WorkspaceSidebar`，tab 栏 + 过渡 → `WorkspaceToolbar`，类型 → `types.ts`；行为零变化，tsc + vite build + 浏览器走查通过。
-> - ⏳ **未做（远期）**：`ready_plan` 顺序 onboarding（wait_for/input/extract_session_id）、L4 ACP **session 驱动**（codec 已就位）；前端 `useWorkspaceShellData` 数据 hook 进一步抽离（高耦合，本轮按风险保留在 Shell）。
+> - ✅ **前端 Shell.tsx 巨型文件拆分**：1438 → 516 → **303 行**；侧栏树 + ManageRootsDialog → `WorkspaceSidebar`，tab 栏 + 过渡 → `WorkspaceToolbar`，类型 → `types.ts`，**数据编排 → `useWorkspaceShellData` hook**；行为零变化，tsc + vite build + 浏览器走查通过。
+> - ✅ **backlog 清扫（17 agent 逐项核实当前代码后逐一修，全测试绿 + 前端浏览器走查）**：
+>   - **协调**：F13 auto-kill 加 writer 比对（同信号 worker 不互相误杀）。
+>   - **进程/PTY**：F1 WS Kill 复用全量拆除（消除僵尸 agent）、F17 binary probe 加超时、pty_ws/pty 的 unwrap → 优雅降级。
+>   - **存储**：mark_delivered/read N+1 → `WHERE id IN`、slug 碰撞重试；FK NO-ACTION 经核实为有意（无物理父删）已文档化。
+>   - **spells**：F21 frontmatter 改"独占 +++ 行"（diff 行不再误截）、F2 depends_on 走 `{workspace_id}` 渲染 + lint；spells/roles 决策=保留(deliberately minimal)+文档化+清陈旧 README。
+>   - **多 CLI**：ready_plan 顺序 onboarding（wait_for/input/extract_session_id，runner 改顺序游标）、L4 `acp::Connection` 异步层（request/response 关联 + notification/对端 request channel，duplex 单测）。
+>   - **前端**：重启 StrictMode（M3 broadcast + disposed 守卫已就绪，dev double-invoke 零报错）、http.request 加 signal + Dag/Ledger mounted 守卫、eslint-disable 审计（exhaustive-deps 全确认有意 escape hatch）。
+> - ⏳ **未做（远期，需 live ACP CLI 定 schema）**：L4 ACP **session 驱动**（`initialize` 握手 + ACP notification→SwarmEvent 映射 + piped-stdio spawn 路径；`Connection` 层已就位，建其上）。
 >
 > ---
 >
