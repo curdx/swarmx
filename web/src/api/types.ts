@@ -109,6 +109,8 @@ export interface MessageRecord {
   delivered_at: number | null;
   read_at: number | null;
   in_reply_to: number | null;
+  /** Direction (thread) this message belongs to; null = main / untagged. */
+  thread_id?: string | null;
 }
 
 export interface SendMessageRequest {
@@ -315,6 +317,7 @@ export type SwarmEvent =
       body: string;
       sent_at: number;
       in_reply_to?: number | null;
+      thread_id?: string | null;
     }
   | {
       type: "message_read";
@@ -330,4 +333,10 @@ export type SwarmEvent =
       path: string;
       sha256: string;
       at: number;
+    }
+  | {
+      type: "thread_changed";
+      workspace_id: string;
+      thread_id: string;
+      op: string;
     };

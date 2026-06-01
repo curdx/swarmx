@@ -17,6 +17,7 @@ const MIGRATION_0006: &str = include_str!("../migrations/0006_workspace_roots.sq
 const MIGRATION_0007: &str = include_str!("../migrations/0007_workspace_root_parent.sql");
 const MIGRATION_0008: &str = include_str!("../migrations/0008_blackboard_path_id.sql");
 const MIGRATION_0009: &str = include_str!("../migrations/0009_threads.sql");
+const MIGRATION_0010: &str = include_str!("../migrations/0010_message_thread_id.sql");
 
 pub(crate) fn run_migrations(conn: &mut Connection) -> Result<()> {
     let current = current_version(conn).unwrap_or(0);
@@ -48,6 +49,9 @@ pub(crate) fn run_migrations(conn: &mut Connection) -> Result<()> {
     }
     if current < 9 {
         apply(conn, 9, MIGRATION_0009).context("apply migration 0009")?;
+    }
+    if current < 10 {
+        apply(conn, 10, MIGRATION_0010).context("apply migration 0010")?;
     }
     Ok(())
 }

@@ -222,6 +222,7 @@
     "newDirection": "New direction",
     "newDirectionTooltip": "Open an isolated direction (auto-isolated, won't touch main)",
     "directionPreparing": "isolating…",
+    "directionDegraded": "Isolation failed — sharing the main directory (files may clobber each other)",
     "deleteDirection": "Delete direction {{name}}",
     "directionDeleteConfirmTitle": "Delete direction \"{{name}}\"?",
     "directionDeleteConfirmBody": "Stops every AI running in this direction and removes its isolated copy (if any). Main and other directions are unaffected.",

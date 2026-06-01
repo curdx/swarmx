@@ -207,6 +207,8 @@ pub struct MessageRecord {
     pub read_at: Option<i64>,
     #[serde(default)]
     pub in_reply_to: Option<i64>,
+    #[serde(default)]
+    pub thread_id: Option<String>,
 }
 
 /// Filter options for [`crate::Store::list_messages`].

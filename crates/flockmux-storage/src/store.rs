@@ -219,19 +219,36 @@ impl Store {
 
     // ── messages ─────────────────────────────────────────────────────────
 
+    /// Persist a message with no direction tag (`thread_id = NULL`). Thin
+    /// wrapper over [`Self::insert_message_threaded`] — kept so existing
+    /// callers/tests that don't care about threads stay unchanged.
     pub async fn insert_message(&self, msg: NewMessage) -> Result<MessageRecord> {
+        self.insert_message_threaded(msg, None).await
+    }
+
+    /// Persist a message, stamping the direction (`thread_id`) it belongs to.
+    /// `Swarm::send_message` is the single choke point that derives this (from
+    /// the sender's, else the recipient's, thread) so every message — agent
+    /// chatter, user replies, wakes — is self-describing and the UI can hard-
+    /// gate a direction's chat instead of guessing from the agent set.
+    pub async fn insert_message_threaded(
+        &self,
+        msg: NewMessage,
+        thread_id: Option<String>,
+    ) -> Result<MessageRecord> {
         let pool = self.pool.clone();
         tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<MessageRecord> {
             conn.execute(
-                "INSERT INTO messages (from_agent, to_agent, kind, body, sent_at, in_reply_to) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                "INSERT INTO messages (from_agent, to_agent, kind, body, sent_at, in_reply_to, thread_id) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                 params![
                     msg.from_agent,
                     msg.to_agent,
                     msg.kind,
                     msg.body,
                     msg.sent_at,
-                    msg.in_reply_to
+                    msg.in_reply_to,
+                    thread_id
                 ],
             )?;
             let id = conn.last_insert_rowid();
@@ -247,10 +264,68 @@ impl Store {
                 delivered_at: None,
                 read_at: None,
                 in_reply_to: msg.in_reply_to,
+                thread_id: thread_id.clone(),
             })
         }))
         .await
-        .context("spawn_blocking insert_message")?
+        .context("spawn_blocking insert_message_threaded")?
+    }
+
+    /// The direction (thread) an agent belongs to, by agent id. `Ok(None)` when
+    /// the id isn't a known agent or the agent has no thread (main / untagged).
+    /// Used to derive a message's `thread_id` from its sender/recipient.
+    pub async fn agent_thread_id(&self, agent_id: String) -> Result<Option<String>> {
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<Option<String>> {
+            match conn.query_row(
+                "SELECT thread_id FROM agents WHERE id = ?1",
+                params![agent_id],
+                |row| row.get::<_, Option<String>>(0),
+            ) {
+                Ok(thread_id) => Ok(thread_id),
+                Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+                Err(e) => Err(e),
+            }
+        }))
+        .await
+        .context("spawn_blocking agent_thread_id")?
+    }
+
+    /// Re-address unread `user → <agent>` messages from a set of (now killed)
+    /// agents to a replacement agent. Used when a direction is re-rooted into a
+    /// worktree: the orchestrator that read the user's first message is torn
+    /// down and respawned with a NEW id, so an as-yet-unanswered user message
+    /// would otherwise orphan (the new orchestrator only lists messages
+    /// addressed to itself). Only `from_agent='user'` + unread move — agent-to-
+    /// agent traffic and already-read history stay put. Returns rows moved.
+    pub async fn reassign_unread_user_messages(
+        &self,
+        old_agents: Vec<String>,
+        new_agent: String,
+    ) -> Result<usize> {
+        if old_agents.is_empty() {
+            return Ok(0);
+        }
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<usize> {
+            let placeholders = std::iter::repeat("?")
+                .take(old_agents.len())
+                .collect::<Vec<_>>()
+                .join(",");
+            let sql = format!(
+                "UPDATE messages SET to_agent = ? \
+                 WHERE from_agent = 'user' AND read_at IS NULL \
+                   AND to_agent IN ({placeholders})"
+            );
+            let mut binds: Vec<rusqlite::types::Value> = Vec::with_capacity(old_agents.len() + 1);
+            binds.push(new_agent.clone().into());
+            for a in &old_agents {
+                binds.push(a.clone().into());
+            }
+            conn.execute(&sql, rusqlite::params_from_iter(binds.iter()))
+        }))
+        .await
+        .context("spawn_blocking reassign_unread_user_messages")?
     }
 
     pub async fn list_messages(&self, opts: ListMessagesOpts) -> Result<Vec<MessageRecord>> {
@@ -281,7 +356,7 @@ impl Store {
             bound.push(limit.into());
 
             let sql = format!(
-                "SELECT id, from_agent, to_agent, kind, body, sent_at, delivered_at, read_at, in_reply_to \
+                "SELECT id, from_agent, to_agent, kind, body, sent_at, delivered_at, read_at, in_reply_to, thread_id \
                  FROM messages \
                  {where_sql} \
                  ORDER BY id DESC \
@@ -299,6 +374,7 @@ impl Store {
                     delivered_at: row.get(6)?,
                     read_at: row.get(7)?,
                     in_reply_to: row.get(8)?,
+                    thread_id: row.get(9)?,
                 })
             })?;
             rows.collect::<rusqlite::Result<Vec<_>>>()
@@ -313,7 +389,7 @@ impl Store {
             // Join messages_fts → messages on rowid; order by FTS rank.
             let mut stmt = conn.prepare(
                 "SELECT m.id, m.from_agent, m.to_agent, m.kind, m.body, m.sent_at, \
-                        m.delivered_at, m.read_at, m.in_reply_to \
+                        m.delivered_at, m.read_at, m.in_reply_to, m.thread_id \
                  FROM messages_fts \
                  JOIN messages m ON m.id = messages_fts.rowid \
                  WHERE messages_fts MATCH ?1 \
@@ -331,6 +407,7 @@ impl Store {
                     delivered_at: row.get(6)?,
                     read_at: row.get(7)?,
                     in_reply_to: row.get(8)?,
+                    thread_id: row.get(9)?,
                 })
             })?;
             rows.collect::<rusqlite::Result<Vec<_>>>()
@@ -514,6 +591,27 @@ impl Store {
         }))
         .await
         .context("spawn_blocking list_blackboard_ops")?
+    }
+
+    /// Delete every blackboard op whose path is `prefix` or sits under
+    /// `prefix/…`. Used when a direction is deleted to drop its
+    /// `<workspace_id>/<thread_slug>/…` ledgers — otherwise the rows orphan
+    /// (the slug is gone but its ledgers still show in the blackboard panel).
+    /// GLOB (not LIKE) because thread slugs may contain `_`, a LIKE wildcard.
+    /// Returns the number of rows removed.
+    pub async fn delete_blackboard_prefix(&self, prefix: String) -> Result<usize> {
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<usize> {
+            // `prefix` itself (a bare key at the dir) + anything beneath it.
+            let under = format!("{prefix}/*");
+            let n = conn.execute(
+                "DELETE FROM blackboard_ops WHERE path = ?1 OR path GLOB ?2",
+                params![prefix, under],
+            )?;
+            Ok(n)
+        }))
+        .await
+        .context("spawn_blocking delete_blackboard_prefix")?
     }
 
     // ── pty recordings ───────────────────────────────────────────────────

@@ -162,6 +162,7 @@ export function useWorkspaceShellData(
             delivered_at: null,
             read_at: null,
             in_reply_to: ev.in_reply_to ?? null,
+            thread_id: ev.thread_id ?? null,
           };
           setLiveMessage(rec);
           idToFromRef.current.set(ev.id, ev.from_agent);
@@ -193,6 +194,14 @@ export function useWorkspaceShellData(
           // not the blackboard, so we don't react to blackboard events
           // for that any more. Member-count changes are picked up via
           // `agent_state` → scheduleRefresh → refreshAgents → recompute.
+          break;
+        case "thread_changed":
+          // A direction was created / renamed / isolated / deleted server-side
+          // (e.g. the orchestrator's swarm_name_thread → background worktree
+          // isolation). Threads live in the workspaces snapshot, which no other
+          // live event refetches — pull it so the sidebar's direction tree
+          // reflects the new name + branch icon without a manual reload.
+          refreshWorkspaces();
           break;
       }
     },

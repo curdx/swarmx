@@ -60,6 +60,7 @@ pub async fn list_messages(
                 delivered_at: r.delivered_at,
                 read_at: r.read_at,
                 in_reply_to: r.in_reply_to,
+                thread_id: r.thread_id,
             })
             .collect(),
     ))
@@ -92,6 +93,7 @@ pub async fn send_message(
         delivered_at: record.delivered_at,
         read_at: record.read_at,
         in_reply_to: record.in_reply_to,
+        thread_id: record.thread_id,
     }))
 }
 

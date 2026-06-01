@@ -73,6 +73,11 @@ interface Props {
    *  `to_agent === "system:<slug>"` 的用户消息,让它们只在所属 workspace
    *  显示,不串到别的房间。omit 时退化到老行为(user msg 总显示)。 */
   workspaceSlug?: string;
+  /** Active direction (thread) id. When set, a message tagged with a DIFFERENT
+   *  direction is hard-hidden — defense-in-depth over the agent-set scope so a
+   *  cross-direction leak can't surface. `null`/undefined disables the gate
+   *  (legacy / no-thread workspaces). Null-tagged messages are never hidden. */
+  activeThreadId?: string | null;
   /** Override for the composer's send action. When provided, the textarea is
    *  enabled even with no recipient and pressing Enter / 发送 calls this
    *  function instead of api.sendMessage. ChatRoute wires this for
@@ -175,6 +180,7 @@ export function MessagesPanel({
   allAliveAgents,
   workspaceAgentIds,
   workspaceSlug,
+  activeThreadId,
   onOpenAgent,
   jumpUnreadTick = 0,
   taskActivityBelow,
@@ -297,6 +303,19 @@ export function MessagesPanel({
       ) {
         return false;
       }
+      // Hard thread gate (defense-in-depth over the agent-set scope above):
+      // a message tagged with a DIFFERENT direction never shows here. Untagged
+      // (null — legacy rows, or a main-folded agent) is never hidden, so old
+      // chat history and the main direction keep rendering. Mirrors
+      // agentInThread(): main allows null|main-id, a direction allows only its
+      // own id (cross-direction null is already dropped by wsSet above).
+      if (
+        activeThreadId != null &&
+        m.thread_id != null &&
+        m.thread_id !== activeThreadId
+      ) {
+        return false;
+      }
       if (!f) return true;
       return (
         m.from_agent.toLowerCase().includes(f) ||
@@ -304,7 +323,7 @@ export function MessagesPanel({
         m.body.toLowerCase().includes(f)
       );
     });
-  }, [items, filter, wsSet, workspaceSlug]);
+  }, [items, filter, wsSet, workspaceSlug, activeThreadId]);
   const rows = useMemo(() => buildRows(visible), [visible]);
 
   // First agent→user unread message + total count. Drives the Slack-style

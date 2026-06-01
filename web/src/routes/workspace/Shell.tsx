@@ -23,7 +23,7 @@
  * （chat/Home）无需改动。
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Outlet,
   useLocation,
@@ -184,8 +184,14 @@ export default function WorkspaceShell() {
   // orchestrator there (run_spell with thread_id → backend runs it in the
   // direction's cwd). The orchestrator greets and names the direction from
   // the user's first message (swarm_name_thread → background git isolation).
+  //
+  // In-flight guard: a double-click would otherwise fire two createThread +
+  // two run_spell calls → two empty directions, each with its own orchestrator.
+  const creatingDirRef = useRef(false);
   const onNewDirection = useCallback(
     async (ws: WorkspaceSummary) => {
+      if (creatingDirRef.current) return;
+      creatingDirRef.current = true;
       try {
         const th = await api.createThread(ws.workspaceId, {});
         await refreshWorkspaces();
@@ -201,6 +207,8 @@ export default function WorkspaceShell() {
       } catch (e) {
         // eslint-disable-next-line no-console
         console.warn("new direction failed", e);
+      } finally {
+        creatingDirRef.current = false;
       }
     },
     [navigate, refreshWorkspaces, refreshAgents],

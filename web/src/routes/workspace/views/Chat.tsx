@@ -416,6 +416,7 @@ export default function ChatView() {
           allAliveAgents={allAliveAgents}
           workspaceAgentIds={threadAgentIds}
           workspaceSlug={workspace.id}
+          activeThreadId={activeThread?.id}
           jumpUnreadTick={jumpUnreadTick}
           onOpenAgent={openAgent}
           taskActivityBelow={

@@ -196,6 +196,9 @@ pub struct MessageRecord {
     pub read_at: Option<i64>,
     #[serde(default)]
     pub in_reply_to: Option<i64>,
+    /// Direction (thread) this message belongs to; `None` = main / untagged.
+    #[serde(default)]
+    pub thread_id: Option<String>,
 }
 
 /// `POST /api/message/read` payload. The server enforces `to` matches each

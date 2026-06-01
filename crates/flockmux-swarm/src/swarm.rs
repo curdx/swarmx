@@ -113,17 +113,37 @@ impl Swarm {
     }
 
     /// Persist + broadcast a message. Returns the persisted record.
+    ///
+    /// The single choke point for ALL sends, so it's where a message's
+    /// direction (`thread_id`) is derived: the sender's thread if it's a known
+    /// agent, else the recipient's. That keeps the chat hard-scoped per
+    /// direction without the caller (or the agent) having to know its thread.
     pub async fn send_message(&self, msg: NewMessage) -> Result<StoreMessageRecord> {
+        let thread_id = match self.store.agent_thread_id(msg.from_agent.clone()).await {
+            Ok(Some(t)) => Some(t),
+            // Sender isn't a thread-bound agent (e.g. "user"/"system") — fall
+            // back to the recipient's direction so a user→orchestrator message
+            // is tagged with that orchestrator's direction.
+            _ => self
+                .store
+                .agent_thread_id(msg.to_agent.clone())
+                .await
+                .ok()
+                .flatten(),
+        };
         let record = self
             .store
-            .insert_message(StoreNewMessage {
-                from_agent: msg.from_agent.clone(),
-                to_agent: msg.to_agent.clone(),
-                kind: msg.kind.clone(),
-                body: msg.body.clone(),
-                sent_at: msg.sent_at,
-                in_reply_to: msg.in_reply_to,
-            })
+            .insert_message_threaded(
+                StoreNewMessage {
+                    from_agent: msg.from_agent.clone(),
+                    to_agent: msg.to_agent.clone(),
+                    kind: msg.kind.clone(),
+                    body: msg.body.clone(),
+                    sent_at: msg.sent_at,
+                    in_reply_to: msg.in_reply_to,
+                },
+                thread_id,
+            )
             .await
             .context("store.insert_message")?;
 
@@ -136,6 +156,7 @@ impl Swarm {
             body: record.body.clone(),
             sent_at: record.sent_at,
             in_reply_to: record.in_reply_to,
+            thread_id: record.thread_id.clone(),
         });
 
         // Try the in-memory inbox; if absent or full, the message stays in

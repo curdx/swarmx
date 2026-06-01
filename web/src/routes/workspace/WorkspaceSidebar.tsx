@@ -23,6 +23,7 @@ import {
   Loader2,
   Plus,
   Trash2,
+  Unlink,
   X,
 } from "lucide-react";
 import { api, ApiError } from "../../api/http";
@@ -450,6 +451,9 @@ export function WorkspaceList({
                       const isMain = th.slug === "main";
                       const thActive = (activeThreadSlug ?? "main") === th.slug;
                       const isolated = th.isolation === "worktree";
+                      // Isolation was attempted but failed — sharing the main
+                      // cwd. Signal it so the user doesn't assume isolation.
+                      const degraded = th.isolation === "degraded";
                       const preparing = th.state === "preparing";
                       const label =
                         th.name?.trim() ||
@@ -466,7 +470,13 @@ export function WorkspaceList({
                         >
                           <NavLink
                             to={directionBase(ws.id, th.slug)}
-                            title={isolated && th.cwd ? th.cwd : undefined}
+                            title={
+                              isolated && th.cwd
+                                ? th.cwd
+                                : degraded
+                                  ? t("chat.directionDegraded")
+                                  : undefined
+                            }
                             className={cn(
                               "flex flex-1 items-center gap-1.5 py-1 pl-1 pr-6 text-[12px]",
                               thActive
@@ -478,6 +488,8 @@ export function WorkspaceList({
                               <Loader2 className="size-3 shrink-0 animate-spin text-foreground-tertiary" />
                             ) : isolated ? (
                               <GitBranch className="size-3 shrink-0 text-accent-purple" />
+                            ) : degraded ? (
+                              <Unlink className="size-3 shrink-0 text-state-warning" />
                             ) : (
                               <Hash className="size-3 shrink-0 text-foreground-tertiary" />
                             )}

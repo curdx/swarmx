@@ -1598,7 +1598,22 @@ pub async fn create_thread_handler(
                 Json(json!({"error": e.to_string()})),
             )
         })?;
-    Ok(Json(thread_record_to_info(rec)))
+    let info = thread_record_to_info(rec);
+    publish_thread_changed(&state, &workspace_id, &info.id, "created");
+    Ok(Json(info))
+}
+
+/// Broadcast that a workspace's direction (thread) list changed so subscribers
+/// (the sidebar) refetch `/api/workspaces`. The REST snapshot stays the source
+/// of truth; this is just the "now" signal for a change the snapshot can't push
+/// itself — notably `swarm_name_thread` → background worktree isolation, which
+/// renames + flips the branch icon without any UI-initiated request.
+fn publish_thread_changed(state: &AppState, workspace_id: &str, thread_id: &str, op: &str) {
+    state.swarm.publish_event(SwarmEvent::ThreadChanged {
+        workspace_id: workspace_id.to_string(),
+        thread_id: thread_id.to_string(),
+        op: op.to_string(),
+    });
 }
 
 /// `PATCH /api/workspaces/:id/threads/:tid` — (re)name a direction. Naming a
@@ -1710,6 +1725,10 @@ pub async fn update_thread_handler(
             })?;
     }
 
+    // Phase-1 rename / `preparing` flip is persisted now — tell the sidebar.
+    // (Isolation success/degrade fires a second `ThreadChanged` from phase 2.)
+    publish_thread_changed(&state, &workspace_id, &thread_id, "updated");
+
     let updated = state
         .store
         .get_thread(thread_id.clone())
@@ -1788,6 +1807,7 @@ fn spawn_thread_worktree(
                     // acceptable; it's reusable on a later same-slug retry).
                     tracing::warn!(?e, thread = %thread_id, "worktree built but thread update failed; degrading to shared");
                     degrade_thread_to_shared(&state, &thread_id).await;
+                    publish_thread_changed(&state, &workspace_id, &thread_id, "updated");
                 } else {
                     tracing::info!(thread = %thread_id, dest = %dest_str, "direction isolated in git worktree");
                     // P5-D: re-root the orchestrator into the fresh worktree.
@@ -1796,21 +1816,32 @@ fn spawn_thread_worktree(
                     // workers it dispatches would split-brain across two dirs.
                     reroot_thread_orchestrator(&state, &workspace_id, &thread_id, &dest_str)
                         .await;
+                    // worktree/ready + cwd repointed → sidebar flips to the
+                    // branch icon + worktree path live (no reload).
+                    publish_thread_changed(&state, &workspace_id, &thread_id, "isolated");
                 }
             }
             Ok(Err(e)) => {
                 tracing::warn!(?e, thread = %thread_id, "git isolation failed; direction stays shared");
                 degrade_thread_to_shared(&state, &thread_id).await;
+                publish_thread_changed(&state, &workspace_id, &thread_id, "updated");
             }
             Err(e) => {
                 tracing::warn!(?e, thread = %thread_id, "worktree task panicked; direction stays shared");
                 degrade_thread_to_shared(&state, &thread_id).await;
+                publish_thread_changed(&state, &workspace_id, &thread_id, "updated");
             }
         }
     });
 }
 
-/// Flip a direction back to `shared`/`ready` after a failed isolation attempt.
+/// Mark a direction `degraded`/`ready` after a failed isolation attempt. We use
+/// a distinct `isolation = "degraded"` (not plain `shared`) so the sidebar can
+/// SIGNAL that isolation was attempted and failed — otherwise it looks identical
+/// to a not-yet-isolated direction and the user wrongly believes their work is
+/// isolated when it's actually sharing the main cwd (two directions' agents then
+/// clobber each other's files). `degraded != "worktree"`, so a later rename
+/// still retries isolation, and the delete path still skips worktree removal.
 async fn degrade_thread_to_shared(state: &AppState, thread_id: &str) {
     let _ = state
         .store
@@ -1818,7 +1849,7 @@ async fn degrade_thread_to_shared(state: &AppState, thread_id: &str) {
             thread_id.to_string(),
             None,
             None,
-            Some("shared".to_string()),
+            Some("degraded".to_string()),
             None,
             None,
             Some("ready".to_string()),
@@ -1840,25 +1871,27 @@ async fn reroot_thread_orchestrator(
     thread_id: &str,
     new_cwd: &str,
 ) {
+    // Agents we tear down here — their as-yet-unread user messages get
+    // re-addressed to the fresh orchestrator below so nothing is dropped.
+    let mut killed_ids: Vec<String> = Vec::new();
     match state.store.list_agents().await {
         Ok(rows) => {
-            let mut killed = 0usize;
             for a in rows {
                 if a.thread_id.as_deref() == Some(thread_id)
                     && a.killed_at.is_none()
                     && a.shim_exit_at.is_none()
                 {
                     teardown_agent(state, &a.id).await;
-                    killed += 1;
+                    killed_ids.push(a.id);
                 }
             }
             // Naming is supposed to happen BEFORE any worker is dispatched
             // (orchestrator.md), so this should usually kill just the
             // orchestrator. If it killed more, a worker was torn down mid-task
             // (its old-cwd work is abandoned) — surface the invariant breach.
-            if killed > 1 {
+            if killed_ids.len() > 1 {
                 tracing::warn!(
-                    thread = %thread_id, killed,
+                    thread = %thread_id, killed = killed_ids.len(),
                     "re-root tore down >1 agent — a worker was dispatched before naming"
                 );
             }
@@ -1875,11 +1908,35 @@ async fn reroot_thread_orchestrator(
         caller_agent_id: None,
         thread_id: Some(thread_id.to_string()),
     };
-    if let Err((status, _)) = run_spell(State(state.clone()), Json(req)).await {
-        tracing::warn!(
-            %status, thread = %thread_id,
-            "re-root orchestrator after isolation failed (revive on demand)"
-        );
+    match run_spell(State(state.clone()), Json(req)).await {
+        Ok(Json(resp)) => {
+            // Hand the killed orchestrator's unanswered user messages to the
+            // fresh one (new agent id) so the first message that triggered the
+            // rename isn't stranded on a dead inbox.
+            if let Some(orch) = resp.agents.iter().find(|a| a.role == "orchestrator") {
+                match state
+                    .store
+                    .reassign_unread_user_messages(killed_ids.clone(), orch.agent_id.clone())
+                    .await
+                {
+                    Ok(n) if n > 0 => tracing::info!(
+                        thread = %thread_id, moved = n, new_orch = %orch.agent_id,
+                        "re-root: moved unread user messages to the new orchestrator"
+                    ),
+                    Ok(_) => {}
+                    Err(e) => tracing::warn!(
+                        ?e, thread = %thread_id,
+                        "re-root: reassigning unread user messages failed"
+                    ),
+                }
+            }
+        }
+        Err((status, _)) => {
+            tracing::warn!(
+                %status, thread = %thread_id,
+                "re-root orchestrator after isolation failed (revive on demand)"
+            );
+        }
     }
 }
 
@@ -1949,6 +2006,26 @@ pub async fn delete_thread_handler(
                 Json(json!({"error": e.to_string()})),
             )
         })?;
+    publish_thread_changed(&state, &workspace_id, &thread_id, "deleted");
+
+    // Drop the direction's blackboard ledgers (`<ws>/<slug>/…`) so they don't
+    // orphan in the panel once the slug is gone. Applies to shared directions
+    // too (they still wrote ledgers under the prefix). Best-effort: DB rows
+    // first, then the on-disk dir — the notify watcher just sees a removal.
+    let bb_prefix = format!("{}/{}", workspace_id, thread.slug);
+    if let Err(e) = state
+        .store
+        .delete_blackboard_prefix(bb_prefix.clone())
+        .await
+    {
+        tracing::warn!(?e, prefix = %bb_prefix, "failed to delete direction blackboard ops");
+    }
+    let bb_dir = state.blackboard_root.join(&workspace_id).join(&thread.slug);
+    let _ = tokio::task::spawn_blocking(move || {
+        let _ = std::fs::remove_dir_all(&bb_dir);
+    })
+    .await;
+
     // Best-effort worktree cleanup. repo = the workspace's primary cwd; dest =
     // the thread's worktree dir.
     if thread.isolation == "worktree" {

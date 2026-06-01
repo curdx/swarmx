@@ -25,6 +25,10 @@ pub enum SwarmEvent {
         /// (which serialize without the field) still round-trip.
         #[serde(default)]
         in_reply_to: Option<i64>,
+        /// Direction (thread) this message belongs to; `None` = main/untagged.
+        /// Lets the UI hard-gate a direction's chat on live messages too.
+        #[serde(default)]
+        thread_id: Option<String>,
     },
     /// A batch of messages was marked read on behalf of `to_agent`. Used by
     /// the UI to decrement the unread badge live without a REST poll.
@@ -44,6 +48,18 @@ pub enum SwarmEvent {
         path: String,
         sha256: String,
         at: i64,
+    },
+    /// A direction (thread) was created, renamed, isolated into a worktree,
+    /// degraded back to shared, or deleted — i.e. the workspace's thread list
+    /// changed in a way the REST `/api/workspaces` snapshot doesn't push on its
+    /// own. Subscribers (the sidebar) refetch workspaces so a direction named/
+    /// isolated by `swarm_name_thread` (a server-side PATCH, not a UI action)
+    /// shows its new name + branch icon live, without a reload.
+    ThreadChanged {
+        workspace_id: String,
+        thread_id: String,
+        /// "created" | "updated" | "isolated" | "deleted".
+        op: String,
     },
 }
 
