@@ -64,6 +64,10 @@ export interface WorkspaceShellData {
   totalUnread: number;
   refreshAgents: () => void;
   refreshWorkspaces: () => Promise<void>;
+  /** True once the first listWorkspaces has resolved — distinguishes "still
+   *  loading" from "loaded, genuinely zero workspaces", so a stale URL can be
+   *  normalized to /chat without bouncing a valid wsId mid-load. */
+  wsLoaded: boolean;
   /** Kill the workspace's live agents, soft-delete it, optimistically drop it
    *  from local state. Returns a path to navigate to when the ACTIVE workspace
    *  was deleted (`/chat/<next>` or `/chat`), else `null` (no nav needed). */
@@ -76,6 +80,7 @@ export function useWorkspaceShellData(
 ): WorkspaceShellData {
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [workspaceRows, setWorkspaceRows] = useState<Workspace[]>([]);
+  const [wsLoaded, setWsLoaded] = useState(false);
   const [liveMessage, setLiveMessage] = useState<MessageRecord | null>(null);
   const [liveRead, setLiveRead] = useState<LiveRead | null>(null);
   const [unreadByFrom, setUnreadByFrom] = useState<Record<string, number>>({});
@@ -97,6 +102,8 @@ export function useWorkspaceShellData(
     } catch (err) {
       // eslint-disable-next-line no-console
       console.warn("listWorkspaces failed", err);
+    } finally {
+      if (mountedRef.current) setWsLoaded(true);
     }
   }, []);
 
@@ -368,6 +375,7 @@ export function useWorkspaceShellData(
     totalUnread,
     refreshAgents,
     refreshWorkspaces,
+    wsLoaded,
     deleteWorkspace,
   };
 }

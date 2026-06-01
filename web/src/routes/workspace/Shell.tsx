@@ -166,6 +166,7 @@ export default function WorkspaceShell() {
     totalUnread,
     refreshAgents,
     refreshWorkspaces,
+    wsLoaded,
     deleteWorkspace,
   } = useWorkspaceShellData(wsId, threadSlugParam);
 
@@ -264,15 +265,17 @@ export default function WorkspaceShell() {
   // under React 18 concurrent rendering. This fires when a bookmark / refresh
   // points at a workspace that was since deleted while others still exist.
   useEffect(() => {
-    if (
-      !activeWs &&
-      workspaces.length > 0 &&
-      wsId &&
-      !workspaces.some((w) => w.id === wsId)
-    ) {
+    // Only normalize once the workspace list has loaded — otherwise the brief
+    // pre-fetch window (workspaces == []) would bounce a perfectly valid wsId.
+    if (activeWs || !wsId || !wsLoaded) return;
+    if (workspaces.length === 0) {
+      // No workspaces at all: a stale /chat/<id>[/t/<slug>] should land on the
+      // Welcome screen at /chat instead of sitting on a dead address.
+      navigate("/chat", { replace: true });
+    } else if (!workspaces.some((w) => w.id === wsId)) {
       navigate(`/chat/${workspaces[0].id}`, { replace: true });
     }
-  }, [activeWs, workspaces, wsId, navigate]);
+  }, [activeWs, workspaces, wsId, wsLoaded, navigate]);
 
   // ── Redirect a stale / unknown :threadSlug to the workspace's main ──
   // A `/chat/:wsId/t/<typo>/…` URL otherwise silently shows main content while

@@ -180,6 +180,17 @@ function isNoisyBlackboard(path: string): boolean {
   return path.endsWith(".progress.md");
 }
 
+/** Extract the numeric message id from a `msg-<N>` notification id, or null
+ *  for non-message notifs (blackboard / state). Used to sync notification
+ *  read-state down to the server's message.read_at so the chat unread badge
+ *  clears too — notification "read" used to be localStorage-only, leaving
+ *  /chat showing the same messages as unread after a reload. */
+function msgIdOf(notifId: string): number | null {
+  if (!notifId.startsWith("msg-")) return null;
+  const n = Number(notifId.slice(4));
+  return Number.isFinite(n) ? n : null;
+}
+
 export default function NotificationsRoute() {
   const { t } = useTranslation();
   const [items, setItems] = useState<Notif[]>([]);
@@ -284,6 +295,11 @@ export default function NotificationsRoute() {
       saveRead(next);
       return next;
     });
+    // Also clear the server-side message read state for message notifs so the
+    // chat unread badge stays in sync (to="user" only marks agent→user rows —
+    // the ones chat counts; other ids no-op server-side). Best-effort.
+    const mid = msgIdOf(id);
+    if (mid != null) api.markMessagesRead("user", [mid]).catch(() => {});
   };
   const markAllRead = () => {
     // 防误触：100 条 unread 一下全 mark read 是不可逆操作（read 状态
@@ -302,6 +318,12 @@ export default function NotificationsRoute() {
       saveRead(next);
       return next;
     });
+    // Sync server message read state in one batch (see markRead) so reloading
+    // /chat no longer re-surfaces these as unread.
+    const mids = items
+      .map((n) => msgIdOf(n.id))
+      .filter((x): x is number => x != null);
+    if (mids.length > 0) api.markMessagesRead("user", mids).catch(() => {});
   };
 
   const filtered = useMemo(
