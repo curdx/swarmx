@@ -17,6 +17,7 @@ import {
   Play,
 } from "lucide-react";
 import type { WorkspaceSummary } from "./types";
+import { directionBase } from "@/lib/thread";
 import { Badge } from "@/components/ui/badge";
 import {
   Tooltip,
@@ -38,10 +39,7 @@ export function buildTabs(wsId: string, threadSlug?: string): TabDef[] {
   // Non-main directions live under `/chat/:wsId/t/:threadSlug/*`; the main
   // direction keeps the bare `/chat/:wsId/*` URLs. Tabs preserve whichever
   // direction is active so switching views never drops you back to main.
-  const base =
-    threadSlug && threadSlug !== "main"
-      ? `/chat/${wsId}/t/${threadSlug}`
-      : `/chat/${wsId}`;
+  const base = directionBase(wsId, threadSlug);
   return [
     { to: `${base}`, labelKey: "chat.tabs.chat", icon: MessageSquare, shortcut: 1 },
     { to: `${base}/dag`, labelKey: "chat.tabs.dag", icon: GitBranch, shortcut: 2 },

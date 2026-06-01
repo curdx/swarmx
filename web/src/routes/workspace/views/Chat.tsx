@@ -165,6 +165,7 @@ export default function ChatView() {
   const {
     workspace,
     threadSlug,
+    activeThread,
     // Members + room are scoped to the ACTIVE direction (thread), not the whole
     // workspace, so each direction is its own self-contained chat.
     threadMembers: activeMembers,
@@ -198,6 +199,9 @@ export default function ChatView() {
         task: "",
         workspace_dir: workspace.path,
         workspace_id: workspace.workspaceId,
+        // Revive the orchestrator in THIS direction (backend runs it in the
+        // direction's cwd — the worktree once isolated).
+        thread_id: activeThread?.id,
       });
       refreshAgents();
     } catch (e) {

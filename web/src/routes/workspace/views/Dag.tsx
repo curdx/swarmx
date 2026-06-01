@@ -47,6 +47,7 @@ import type {
 } from "../../../api/types";
 import { useSwarmFeed } from "../../../hooks/useSwarmFeed";
 import { useWorkspaceContext } from "../Shell";
+import { agentInThread, directionBase } from "@/lib/thread";
 import { cn } from "@/lib/cn";
 import {
   roleColorClass as roleColor,
@@ -279,7 +280,7 @@ function Canvas({ agents, bbAt, selectedId, onSelect, showMinimap }: CanvasProps
 
 export default function DagView() {
   const { t } = useTranslation();
-  const { workspace, threadAgentIds } = useWorkspaceContext();
+  const { workspace, activeThread, mainThread } = useWorkspaceContext();
   // selectedId / roleFilter 用 URL 持久化，切走再回不丢。
   const [searchParams, setSearchParams] = useSearchParams();
   const selectedId = searchParams.get("node");
@@ -357,15 +358,17 @@ export default function DagView() {
     onReconnect: () => refresh(),
   });
 
-  // Scope the DAG to the ACTIVE direction (thread). threadAgentIds (from the
-  // shell) already folds `thread_id == null` into the main direction.
-  const threadAgentIdSet = useMemo(
-    () => new Set(threadAgentIds),
-    [threadAgentIds],
-  );
+  // Scope the DAG to the ACTIVE direction (thread) by filtering DagView's OWN
+  // allAgents with the shared predicate (folds `thread_id == null` into main).
+  // Filtering our own snapshot — rather than intersecting an id-set from the
+  // shell's separately-fetched (debounced) state — avoids transiently dropping
+  // a just-spawned node before the shell catches up.
   const agents = useMemo(
-    () => allAgents.filter((a) => threadAgentIdSet.has(a.agent_id)),
-    [allAgents, threadAgentIdSet],
+    () =>
+      allAgents.filter((a) =>
+        agentInThread(a, workspace.workspaceId, activeThread, mainThread),
+      ),
+    [allAgents, workspace.workspaceId, activeThread, mainThread],
   );
 
   const bbAt = useMemo(() => {
@@ -702,7 +705,7 @@ export default function DagView() {
             </dl>
             <div className="mt-auto flex flex-col gap-2">
               <Link
-                to={`/chat/${workspace.id}?agent=${encodeURIComponent(selected.agent_id)}`}
+                to={`${directionBase(workspace.id, activeThread?.slug)}?agent=${encodeURIComponent(selected.agent_id)}`}
                 className="flex h-9 items-center justify-center gap-1.5 rounded-md bg-accent-primary text-xs font-bold text-foreground-on-accent hover:bg-accent-primary-deep"
               >
                 {t("dag.openDrawer")}

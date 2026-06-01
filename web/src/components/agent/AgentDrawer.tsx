@@ -69,6 +69,7 @@ import {
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/cn";
 import { roleColorClass as roleColor } from "@/lib/agent";
+import { directionBase, directionSlugFromKey } from "@/lib/thread";
 
 type TabId = "terminal" | "recordings" | "messages" | "context";
 
@@ -605,11 +606,12 @@ function ContextTab({
       {history.map((h, i) => (
         <Link
           key={`${h.path}-${h.at}-${i}`}
-          // 跳到当前 workspace 的 context view 并选中这个 key；wsId 缺失
-          // 时回退到 chat 主页 (跳 /context 旧路径已死)。
+          // 跳到这个 key 所属【方向】的 context view 并选中它 —— 方向 slug 从
+          // key 自身 `{ws}/{slug}/…` 解析,所以 ledger 跳转落在正确方向而非 main;
+          // wsId 缺失时回退到 chat 主页 (跳 /context 旧路径已死)。
           to={
             wsId
-              ? `/chat/${wsId}/context?key=${encodeURIComponent(h.path)}`
+              ? `${directionBase(wsId, directionSlugFromKey(h.path))}/context?key=${encodeURIComponent(h.path)}`
               : "/chat"
           }
           className="flex items-center gap-2 rounded-md px-3 py-2 hover:bg-surface-tertiary"

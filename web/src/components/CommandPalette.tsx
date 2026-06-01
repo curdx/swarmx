@@ -38,6 +38,7 @@ import {
 import { api } from "../api/http";
 import type { AgentInfo } from "../api/types";
 import { setTheme, type ThemeMode } from "@/lib/theme";
+import { directionBase } from "@/lib/thread";
 import {
   CommandDialog,
   CommandEmpty,
@@ -92,6 +93,9 @@ export function CommandPalette() {
   // 白屏。CommandPalette 只在用户主动开 ⌘K 时关心 URL，所以读一次就够。
   const currentWsIdRef = useRef<string | null>(null);
   const [currentWsId, setCurrentWsId] = useState<string | null>(null);
+  // Active direction slug (captured alongside wsId) so view-jumps stay in the
+  // direction the user is looking at, matching the tab bar / ⌘1-4.
+  const [currentThreadSlug, setCurrentThreadSlug] = useState<string | null>(null);
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const navigate = useNavigate();
 
@@ -113,10 +117,11 @@ export function CommandPalette() {
   // 不订阅 router state，避免 nav 流量轰炸 CommandPalette。
   useEffect(() => {
     if (!open) return;
-    const m = window.location.pathname.match(/^\/chat\/([^/]+)/);
+    const m = window.location.pathname.match(/^\/chat\/([^/]+)(?:\/t\/([^/]+))?/);
     const ws = m ? m[1] : null;
     currentWsIdRef.current = ws;
     setCurrentWsId(ws);
+    setCurrentThreadSlug(m && m[2] ? m[2] : null);
     api
       .listAgents()
       .then(setAgents)
@@ -169,7 +174,7 @@ export function CommandPalette() {
           <CommandGroup heading={t("cmdk.groups.currentWsView")}>
             {WORKSPACE_VIEWS.map((v, i) => {
               const Icon = v.icon;
-              const href = `/chat/${currentWsId}${v.suffix}`;
+              const href = `${directionBase(currentWsId, currentThreadSlug)}${v.suffix}`;
               return (
                 <CommandItem
                   key={v.id}

@@ -34,6 +34,7 @@ import {
 } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { FolderOpen } from "lucide-react";
+import { api } from "../../api/http";
 import type { AgentInfo, MessageRecord, ThreadInfo } from "../../api/types";
 import { AgentDrawer } from "../../components/agent/AgentDrawer";
 import { CreateWizard } from "../../components/workspace/CreateWizard";
@@ -62,6 +63,9 @@ export interface ShellOutletContext {
    *  param, defaulting to the workspace's main thread. `null` only for a
    *  legacy/empty workspace with no thread rows. */
   activeThread: ThreadInfo | null;
+  /** The workspace's main direction. Views fold `thread_id == null` agents
+   *  into main when filtering their own agent fetches by direction. */
+  mainThread: ThreadInfo | null;
   /** Resolved slug of the active direction — `"main"` when none. Views build
    *  blackboard keys as `{workspace.workspaceId}/{threadSlug}/…`. */
   threadSlug: string;
@@ -150,6 +154,7 @@ export default function WorkspaceShell() {
     workspaces,
     activeWs,
     activeThread,
+    mainThread,
     activeThreadSlug,
     allAliveAgents,
     workspaceAgentIds,
@@ -172,6 +177,54 @@ export default function WorkspaceShell() {
       if (navTo) navigate(navTo, { replace: true });
     },
     [deleteWorkspace, navigate],
+  );
+
+  // ── Open a new direction (zero-friction) ───────────────────────────
+  // Create an unnamed shared thread, jump into it, then launch the
+  // orchestrator there (run_spell with thread_id → backend runs it in the
+  // direction's cwd). The orchestrator greets and names the direction from
+  // the user's first message (swarm_name_thread → background git isolation).
+  const onNewDirection = useCallback(
+    async (ws: WorkspaceSummary) => {
+      try {
+        const th = await api.createThread(ws.workspaceId, {});
+        await refreshWorkspaces();
+        navigate(`/chat/${ws.id}/t/${th.slug}`);
+        await api.runSpell({
+          name: "init",
+          task: "",
+          workspace_dir: ws.path,
+          workspace_id: ws.workspaceId,
+          thread_id: th.id,
+        });
+        refreshAgents();
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn("new direction failed", e);
+      }
+    },
+    [navigate, refreshWorkspaces, refreshAgents],
+  );
+
+  // ── Delete a direction ──────────────────────────────────────────────
+  // Server kills the direction's live agents first (kill-first), then
+  // soft-deletes + removes its worktree. If we were viewing it, fall to main.
+  const onDeleteThread = useCallback(
+    async (ws: WorkspaceSummary, threadId: string) => {
+      try {
+        await api.deleteThread(ws.workspaceId, threadId);
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn("delete direction failed", e);
+        return;
+      }
+      if (activeThread?.id === threadId) {
+        navigate(`/chat/${ws.id}`, { replace: true });
+      }
+      await refreshWorkspaces();
+      refreshAgents();
+    },
+    [activeThread, navigate, refreshWorkspaces, refreshAgents],
   );
 
   // ── ⌘1-4 global shortcut ───────────────────────────────────────────
@@ -212,6 +265,21 @@ export default function WorkspaceShell() {
       navigate(`/chat/${workspaces[0].id}`, { replace: true });
     }
   }, [activeWs, workspaces, wsId, navigate]);
+
+  // ── Redirect a stale / unknown :threadSlug to the workspace's main ──
+  // A `/chat/:wsId/t/<typo>/…` URL otherwise silently shows main content while
+  // the address bar + tabs point at a non-existent direction. Strip the
+  // `/t/<slug>` segment (keep the view + query) so URL and content agree.
+  useEffect(() => {
+    if (
+      activeWs &&
+      threadSlugParam &&
+      !activeWs.threads.some((th) => th.slug === threadSlugParam)
+    ) {
+      const fixed = location.pathname.replace(`/t/${threadSlugParam}`, "");
+      navigate(fixed + location.search, { replace: true });
+    }
+  }, [activeWs, threadSlugParam, location.pathname, location.search, navigate]);
 
   // ── Render ─────────────────────────────────────────────────────────
   if (!activeWs) {
@@ -262,6 +330,7 @@ export default function WorkspaceShell() {
   const ctx: ShellOutletContext = {
     workspace: activeWs,
     activeThread,
+    mainThread,
     threadSlug: activeThreadSlug,
     activeMembers: activeWs.members,
     threadMembers,
@@ -282,9 +351,12 @@ export default function WorkspaceShell() {
         <WorkspaceList
           workspaces={workspaces}
           activeId={activeWs.id}
+          activeThreadSlug={activeThreadSlug}
           onOpenWizard={() => setWizardOpen(true)}
           onDelete={onDeleteWorkspace}
           onRootsChanged={refreshWorkspaces}
+          onNewDirection={onNewDirection}
+          onDeleteThread={onDeleteThread}
         />
         <section className="flex min-w-0 flex-1 flex-col bg-surface-primary">
           <WorkspaceToolbar

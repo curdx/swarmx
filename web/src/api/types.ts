@@ -194,6 +194,15 @@ export interface RunSpellRequest {
   /** agent_id of the caller. Only set by the MCP tool; UI callers leave
    *  this empty. */
   caller_agent_id?: string;
+  /** The direction (thread) the spell should run in. UI launchers set this to
+   *  target a specific direction; omitted resolves to the main direction. */
+  thread_id?: string;
+}
+
+/** `POST /api/workspaces/:id/threads` — open a new direction. `name` optional
+ *  (zero-friction: the orchestrator names it from the first message). */
+export interface CreateThreadRequest {
+  name?: string | null;
 }
 
 export interface RunSpellAgent {

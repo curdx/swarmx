@@ -18,13 +18,17 @@ import {
   Folder,
   FolderOpen,
   FolderPlus,
+  GitBranch,
+  Hash,
+  Loader2,
   Plus,
   Trash2,
   X,
 } from "lucide-react";
 import { api, ApiError } from "../../api/http";
-import type { WorkspaceRoot } from "../../api/types";
+import type { ThreadInfo, WorkspaceRoot } from "../../api/types";
 import { splitWorkspacePath } from "../../lib/workspace";
+import { directionBase } from "../../lib/thread";
 import type { WorkspaceSummary } from "./types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -219,12 +223,18 @@ function RootTree({
 export function WorkspaceList({
   workspaces,
   activeId,
+  activeThreadSlug,
   onOpenWizard,
   onDelete,
   onRootsChanged,
+  onNewDirection,
+  onDeleteThread,
 }: {
   workspaces: WorkspaceSummary[];
   activeId: string | null;
+  /** Slug of the active direction in the active workspace (`main` default).
+   *  Highlights the current direction row in the active workspace's subtree. */
+  activeThreadSlug?: string;
   onOpenWizard: () => void;
   /** Soft-delete handler. Receives the full workspace UUID (NOT the slug)
    *  so the parent can call `DELETE /api/workspaces/:id` directly. */
@@ -232,6 +242,11 @@ export function WorkspaceList({
   /** Called after attached roots are added/removed so the parent refetches
    *  workspaces (keeps the sidebar tree in sync). */
   onRootsChanged?: () => void;
+  /** Open a new direction in this workspace (create + navigate + launch the
+   *  orchestrator). Owner (Shell) does the create/nav/spawn. */
+  onNewDirection?: (ws: WorkspaceSummary) => void;
+  /** Delete a direction (server kills its live agents first). */
+  onDeleteThread?: (ws: WorkspaceSummary, threadId: string) => void;
 }) {
   const { t } = useTranslation();
   // App-native delete confirm — replaces window.confirm() (which looked like
@@ -242,6 +257,12 @@ export function WorkspaceList({
   );
   // Workspace whose attached-source roots are being managed (Dialog open).
   const [manageRoots, setManageRoots] = useState<WorkspaceSummary | null>(null);
+  // Direction (thread) pending deletion → confirm dialog (server kills its
+  // live agents first, so this is a real action worth confirming).
+  const [pendingDeleteThread, setPendingDeleteThread] = useState<{
+    ws: WorkspaceSummary;
+    thread: ThreadInfo;
+  } | null>(null);
   // Workspace ids whose attached-source subtree is collapsed. Default is
   // expanded (a fresh id is absent from the set), so newly-attached deps are
   // visible without a click.
@@ -416,6 +437,93 @@ export function WorkspaceList({
                   />
                 </div>
               )}
+
+              {/* ── directions (threads): the active workspace's parallel
+               *  lines of work. Shown only for the active workspace to keep
+               *  the rail calm; the list itself only when there's >1 (a lone
+               *  "main" row would be noise — you're already in it). The
+               *  "+ new direction" affordance is always offered. ───────── */}
+              {active && (
+                <div className="ml-[0.9rem] mt-0.5 flex flex-col gap-px border-l border-border-subtle pl-1.5">
+                  {ws.threads.length > 1 &&
+                    ws.threads.map((th) => {
+                      const isMain = th.slug === "main";
+                      const thActive = (activeThreadSlug ?? "main") === th.slug;
+                      const isolated = th.isolation === "worktree";
+                      const preparing = th.state === "preparing";
+                      const label =
+                        th.name?.trim() ||
+                        (isMain ? t("chat.mainDirection") : th.slug);
+                      return (
+                        <div
+                          key={th.id}
+                          className={cn(
+                            "group/dir relative flex items-center rounded-md transition-colors",
+                            thActive
+                              ? "bg-accent-primary-soft"
+                              : "hover:bg-surface-tertiary",
+                          )}
+                        >
+                          <NavLink
+                            to={directionBase(ws.id, th.slug)}
+                            title={isolated && th.cwd ? th.cwd : undefined}
+                            className={cn(
+                              "flex flex-1 items-center gap-1.5 py-1 pl-1 pr-6 text-[12px]",
+                              thActive
+                                ? "text-foreground-primary"
+                                : "text-foreground-secondary",
+                            )}
+                          >
+                            {preparing ? (
+                              <Loader2 className="size-3 shrink-0 animate-spin text-foreground-tertiary" />
+                            ) : isolated ? (
+                              <GitBranch className="size-3 shrink-0 text-accent-purple" />
+                            ) : (
+                              <Hash className="size-3 shrink-0 text-foreground-tertiary" />
+                            )}
+                            <span className="truncate">{label}</span>
+                            {preparing && (
+                              <span className="ml-auto shrink-0 font-caption text-[9px] text-foreground-tertiary">
+                                {t("chat.directionPreparing")}
+                              </span>
+                            )}
+                          </NavLink>
+                          {!isMain && onDeleteThread && !preparing && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                setPendingDeleteThread({ ws, thread: th });
+                              }}
+                              className="absolute right-1 top-1/2 size-5 -translate-y-1/2 text-foreground-tertiary opacity-0 transition-opacity group-hover/dir:opacity-100 hover:text-state-danger"
+                              aria-label={t("chat.deleteDirection", { name: label })}
+                            >
+                              <X className="size-3" />
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })}
+                  {onNewDirection && (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button
+                          type="button"
+                          onClick={() => onNewDirection(ws)}
+                          className="flex items-center gap-1.5 rounded-md py-1 pl-1 pr-2 text-[12px] text-foreground-tertiary hover:bg-surface-tertiary hover:text-foreground-primary"
+                        >
+                          <Plus className="size-3 shrink-0" />
+                          <span>{t("chat.newDirection")}</span>
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent side="right">
+                        {t("chat.newDirectionTooltip")}
+                      </TooltipContent>
+                    </Tooltip>
+                  )}
+                </div>
+              )}
             </div>
           );
         })}
@@ -459,6 +567,52 @@ export function WorkspaceList({
                 const target = pendingDelete;
                 setPendingDelete(null);
                 if (target) onDelete?.(target.workspaceId);
+              }}
+            >
+              <Trash2 className="size-3.5" />
+              {t("common.delete")}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete-direction confirm — this kills the direction's live agents
+       *  server-side, so it gets the same app-native confirm as workspace
+       *  delete. */}
+      <Dialog
+        open={pendingDeleteThread != null}
+        onOpenChange={(next) => {
+          if (!next) setPendingDeleteThread(null);
+        }}
+      >
+        <DialogContent showCloseButton={false} className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>
+              {t("chat.directionDeleteConfirmTitle", {
+                name:
+                  pendingDeleteThread?.thread.name?.trim() ||
+                  pendingDeleteThread?.thread.slug ||
+                  "",
+              })}
+            </DialogTitle>
+            <DialogDescription>
+              {t("chat.directionDeleteConfirmBody")}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button
+              variant="outline"
+              onClick={() => setPendingDeleteThread(null)}
+            >
+              {t("common.cancel")}
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                const target = pendingDeleteThread;
+                setPendingDeleteThread(null);
+                if (target)
+                  onDeleteThread?.(target.ws, target.thread.id);
               }}
             >
               <Trash2 className="size-3.5" />

@@ -1682,7 +1682,13 @@ pub async fn update_thread_handler(
                 )
             })?;
         // Phase 2 (background): git takeover + worktree add → ready.
-        spawn_thread_worktree(state.clone(), thread_id.clone(), thread.cwd.clone(), branch);
+        spawn_thread_worktree(
+            state.clone(),
+            thread_id.clone(),
+            workspace_id.clone(),
+            thread.cwd.clone(),
+            branch,
+        );
     } else {
         state
             .store
@@ -1725,7 +1731,13 @@ pub async fn update_thread_handler(
 /// async runtime. On success the thread is repointed to the worktree dir and
 /// marked `worktree`/`ready`; on ANY failure it degrades to `shared`/`ready`
 /// (cwd unchanged) so the direction stays usable, just not isolated.
-fn spawn_thread_worktree(state: AppState, thread_id: String, project_cwd: String, branch: String) {
+fn spawn_thread_worktree(
+    state: AppState,
+    thread_id: String,
+    workspace_id: String,
+    project_cwd: String,
+    branch: String,
+) {
     tokio::spawn(async move {
         let cwd_for_git = project_cwd.clone();
         let branch_for_git = branch.clone();
@@ -1738,7 +1750,7 @@ fn spawn_thread_worktree(state: AppState, thread_id: String, project_cwd: String
         match git_result {
             Ok(Ok(dest)) => {
                 let dest_str = dest.to_string_lossy().into_owned();
-                if let Err(e) = state
+                let update = state
                     .store
                     .update_thread(
                         thread_id.clone(),
@@ -1749,8 +1761,27 @@ fn spawn_thread_worktree(state: AppState, thread_id: String, project_cwd: String
                         Some(dest_str.clone()),
                         Some("ready".to_string()),
                     )
-                    .await
-                {
+                    .await;
+                // Was the direction soft-deleted while we were isolating?
+                // `update_thread` guards on `deleted_at IS NULL`, so the write
+                // above no-ops on a mid-flight delete — detect it by re-reading
+                // and DON'T re-root into / leak a dead direction.
+                let deleted = !matches!(
+                    state.store.get_thread(thread_id.clone()).await,
+                    Ok(Some(t)) if t.deleted_at.is_none()
+                );
+                if deleted {
+                    tracing::info!(thread = %thread_id, "direction deleted during isolation; removing orphaned worktree");
+                    let repo = project_cwd.clone();
+                    let d = dest_str.clone();
+                    let _ = tokio::task::spawn_blocking(move || {
+                        crate::worktree::worktree_remove(
+                            std::path::Path::new(&repo),
+                            std::path::Path::new(&d),
+                        )
+                    })
+                    .await;
+                } else if let Err(e) = update {
                     // The worktree exists on disk but we couldn't record it.
                     // Degrade to shared/ready so the direction is never left
                     // stuck in `preparing` (the worktree dir is orphaned —
@@ -1759,6 +1790,12 @@ fn spawn_thread_worktree(state: AppState, thread_id: String, project_cwd: String
                     degrade_thread_to_shared(&state, &thread_id).await;
                 } else {
                     tracing::info!(thread = %thread_id, dest = %dest_str, "direction isolated in git worktree");
+                    // P5-D: re-root the orchestrator into the fresh worktree.
+                    // The orchestrator that named the direction is still
+                    // running in the OLD (shared) cwd, so its own edits + any
+                    // workers it dispatches would split-brain across two dirs.
+                    reroot_thread_orchestrator(&state, &workspace_id, &thread_id, &dest_str)
+                        .await;
                 }
             }
             Ok(Err(e)) => {
@@ -1787,6 +1824,63 @@ async fn degrade_thread_to_shared(state: &AppState, thread_id: &str) {
             Some("ready".to_string()),
         )
         .await;
+}
+
+/// P5-D: after a direction is isolated into a worktree, re-root its orchestrator
+/// there. The orchestrator that named the direction is still running in the OLD
+/// (shared) cwd; restarting it in the worktree keeps its self-edits + any
+/// workers it dispatches from splitting across two directories. We kill the
+/// direction's live agents (naming happens BEFORE any worker is dispatched, per
+/// orchestrator.md, so this is usually just the orchestrator) and re-run `init`
+/// in the new cwd — the fresh orchestrator reads the existing ledger (Phase A
+/// short-circuit) and continues. Only ever fires for a git-isolated direction.
+async fn reroot_thread_orchestrator(
+    state: &AppState,
+    workspace_id: &str,
+    thread_id: &str,
+    new_cwd: &str,
+) {
+    match state.store.list_agents().await {
+        Ok(rows) => {
+            let mut killed = 0usize;
+            for a in rows {
+                if a.thread_id.as_deref() == Some(thread_id)
+                    && a.killed_at.is_none()
+                    && a.shim_exit_at.is_none()
+                {
+                    teardown_agent(state, &a.id).await;
+                    killed += 1;
+                }
+            }
+            // Naming is supposed to happen BEFORE any worker is dispatched
+            // (orchestrator.md), so this should usually kill just the
+            // orchestrator. If it killed more, a worker was torn down mid-task
+            // (its old-cwd work is abandoned) — surface the invariant breach.
+            if killed > 1 {
+                tracing::warn!(
+                    thread = %thread_id, killed,
+                    "re-root tore down >1 agent — a worker was dispatched before naming"
+                );
+            }
+        }
+        Err(e) => {
+            tracing::warn!(?e, thread = %thread_id, "re-root: list_agents failed; old agents may linger in the shared cwd");
+        }
+    }
+    let req = RunSpellRequest {
+        name: "init".into(),
+        task: String::new(),
+        workspace_dir: Some(new_cwd.to_string()),
+        workspace_id: Some(workspace_id.to_string()),
+        caller_agent_id: None,
+        thread_id: Some(thread_id.to_string()),
+    };
+    if let Err((status, _)) = run_spell(State(state.clone()), Json(req)).await {
+        tracing::warn!(
+            %status, thread = %thread_id,
+            "re-root orchestrator after isolation failed (revive on demand)"
+        );
+    }
 }
 
 /// `DELETE /api/workspaces/:id/threads/:tid` — soft-delete a direction (its
@@ -1818,6 +1912,32 @@ pub async fn delete_thread_handler(
             StatusCode::BAD_REQUEST,
             Json(json!({"error": "the main direction cannot be deleted"})),
         ));
+    }
+    // Kill the direction's live agents FIRST. Otherwise, once the thread row is
+    // gone, those agents are orphaned: P4's strict thread-scoping hides them
+    // from chat/DAG/members so the user can't kill them, and `git worktree
+    // remove --force` below would yank a still-running agent's cwd out from
+    // under it. (Workspace delete deliberately does NOT kill its agents — a
+    // direction is the opposite: its agents have nowhere left to live.)
+    match state.store.list_agents().await {
+        Ok(rows) => {
+            for a in rows {
+                if a.thread_id.as_deref() == Some(thread_id.as_str())
+                    && a.killed_at.is_none()
+                    && a.shim_exit_at.is_none()
+                {
+                    teardown_agent(&state, &a.id).await;
+                }
+            }
+        }
+        Err(e) => {
+            // Don't soft-delete + force-remove the worktree while we may have
+            // failed to kill live agents in it — fail loud instead of orphaning.
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": format!("could not enumerate agents to stop before delete: {e}")})),
+            ));
+        }
     }
     state
         .store

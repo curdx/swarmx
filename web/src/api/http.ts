@@ -4,6 +4,7 @@ import type {
   BlackboardHistoryEntry,
   BlackboardSnapshot,
   CliPluginInfo,
+  CreateThreadRequest,
   CreateWorkspaceRequest,
   MarkReadResponse,
   MessageRecord,
@@ -14,6 +15,7 @@ import type {
   SpawnAgentRequest,
   SpawnAgentResponse,
   SpellInfo,
+  ThreadInfo,
   UnreadCountResponse,
   Workspace,
   WorkspaceRoot,
@@ -183,6 +185,20 @@ export const api = {
     request<Workspace>("POST", "/api/workspaces", req),
   deleteWorkspace: (id: string) =>
     request<void>("DELETE", `/api/workspaces/${id}`),
+  // threads (directions within a workspace). `id` here is the workspace UUID
+  // (workspaceId), matching the server's path param.
+  listThreads: (id: string) =>
+    request<ThreadInfo[]>("GET", `/api/workspaces/${id}/threads`),
+  createThread: (id: string, req: CreateThreadRequest) =>
+    request<ThreadInfo>("POST", `/api/workspaces/${id}/threads`, req),
+  updateThread: (id: string, threadId: string, req: { name: string }) =>
+    request<ThreadInfo>(
+      "PATCH",
+      `/api/workspaces/${id}/threads/${threadId}`,
+      req,
+    ),
+  deleteThread: (id: string, threadId: string) =>
+    request<void>("DELETE", `/api/workspaces/${id}/threads/${threadId}`),
   // attached dependency-source roots (post-create management)
   addWorkspaceRoot: (id: string, root: WorkspaceRoot) =>
     request<WorkspaceRoot>("POST", `/api/workspaces/${id}/roots`, root),

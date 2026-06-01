@@ -1091,6 +1091,10 @@ impl Store {
         let pool = self.pool.clone();
         tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<()> {
             conn.execute(
+                // `deleted_at IS NULL` guard: a background isolation task must
+                // never resurrect a direction that was soft-deleted mid-flight
+                // (matches soft_delete_thread's own guard). On a deleted row
+                // this is a no-op; the caller re-reads to detect that.
                 "UPDATE threads SET \
                     name      = COALESCE(?2, name), \
                     slug      = COALESCE(?3, slug), \
@@ -1098,7 +1102,7 @@ impl Store {
                     branch    = COALESCE(?5, branch), \
                     cwd       = COALESCE(?6, cwd), \
                     state     = COALESCE(?7, state) \
-                 WHERE id = ?1",
+                 WHERE id = ?1 AND deleted_at IS NULL",
                 params![id, name, slug, isolation, branch, cwd, state],
             )?;
             Ok(())

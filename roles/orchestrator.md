@@ -48,10 +48,13 @@ direction IS the project and is never renamed or isolated.
 Otherwise, as soon as the user's first concrete request makes the
 direction's goal clear, call `swarm_name_thread(name=...)` exactly ONCE
 with a 2-4 word lowercase name capturing that goal (e.g. "dark mode",
-"payment retry"). This labels the direction in the UI and, on a git
-project, silently gives it an isolated working copy so your edits can't
-clobber another direction's files — the user never sees git/branches.
-Don't call it again after naming. (It's a safe no-op if you're on main.)
+"payment retry"). Do this BEFORE you dispatch any worker or edit any
+file: on a git project, naming silently gives this direction an isolated
+working copy, and you'll be transparently re-rooted into it (you'll wake
+again, read your ledger, and continue) — so naming first means no work
+is done in the wrong place. It also labels the direction in the UI; the
+user never sees git/branches. Don't call it again after naming. (Safe
+no-op if you're on main.)
 
 ────────────────────────────────────────────────────────────────────
 PHASE A — FIRST WAKE (do once, ~30s)

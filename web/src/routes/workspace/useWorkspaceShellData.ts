@@ -25,6 +25,7 @@ import type {
 } from "../../api/types";
 import { useSwarmFeed } from "../../hooks/useSwarmFeed";
 import { accentToCssVar, splitWorkspacePath } from "../../lib/workspace";
+import { agentInThread, mainThreadOf } from "../../lib/thread";
 import type { WorkspaceSummary } from "./types";
 
 export interface LiveRead {
@@ -41,6 +42,10 @@ export interface WorkspaceShellData {
    *  defaulting to the workspace's main thread. `null` only for a legacy/empty
    *  workspace with no thread rows. */
   activeThread: ThreadInfo | null;
+  /** The workspace's main direction (slug `main`, else oldest). `null` only for
+   *  a legacy/empty workspace. Views use it to fold `thread_id == null` agents
+   *  into main when scoping by direction. */
+  mainThread: ThreadInfo | null;
   /** Resolved slug of the active direction — `"main"` when none/unresolved.
    *  Used to scope blackboard keys `{workspace_id}/{threadSlug}/…`. */
   activeThreadSlug: string;
@@ -247,10 +252,10 @@ export function useWorkspaceShellData(
   // Default to the main thread (slug "main", else the oldest row). `null`
   // only for a legacy/empty workspace with no thread rows — callers then fall
   // back to plain workspace-wide scoping (single implicit direction).
-  const mainThread = useMemo<ThreadInfo | null>(() => {
-    if (!activeWs || activeWs.threads.length === 0) return null;
-    return activeWs.threads.find((th) => th.slug === "main") ?? activeWs.threads[0];
-  }, [activeWs]);
+  const mainThread = useMemo<ThreadInfo | null>(
+    () => (activeWs ? mainThreadOf(activeWs.threads) : null),
+    [activeWs],
+  );
 
   const activeThread = useMemo<ThreadInfo | null>(() => {
     if (!activeWs || activeWs.threads.length === 0) return null;
@@ -262,19 +267,9 @@ export function useWorkspaceShellData(
 
   const activeThreadSlug = activeThread?.slug ?? "main";
 
-  // An agent belongs to the active direction if its `thread_id` matches. For
-  // the MAIN direction we also fold in `thread_id == null` (legacy rows +
-  // pre-thread spawns land on main). With no thread rows at all, every
-  // workspace agent counts (the workspace is one implicit direction).
   const agentInActiveThread = useCallback(
-    (a: AgentInfo): boolean => {
-      if (!activeWs || a.workspace_id !== activeWs.workspaceId) return false;
-      if (!activeThread) return true;
-      if (mainThread && activeThread.id === mainThread.id) {
-        return a.thread_id == null || a.thread_id === activeThread.id;
-      }
-      return a.thread_id === activeThread.id;
-    },
+    (a: AgentInfo): boolean =>
+      !!activeWs && agentInThread(a, activeWs.workspaceId, activeThread, mainThread),
     [activeWs, activeThread, mainThread],
   );
 
@@ -288,13 +283,17 @@ export function useWorkspaceShellData(
     [activeWs, agentInActiveThread],
   );
 
+  // Unread is scoped to the ACTIVE direction (not the whole workspace) so the
+  // toolbar badge + per-member counts match the room the user is looking at —
+  // a sibling direction's unread doesn't leak into this view. (For a main-only
+  // workspace threadAgentIds == workspaceAgentIds, so counts are unchanged.)
   const activeWorkspaceUnread = useMemo(() => {
     if (!activeWs) return {} as Record<string, number>;
-    const wsSet = new Set(workspaceAgentIds);
+    const threadSet = new Set(threadAgentIds);
     return Object.fromEntries(
-      Object.entries(unreadByFrom).filter(([from]) => wsSet.has(from)),
+      Object.entries(unreadByFrom).filter(([from]) => threadSet.has(from)),
     );
-  }, [unreadByFrom, activeWs, workspaceAgentIds]);
+  }, [unreadByFrom, activeWs, threadAgentIds]);
   const totalUnread = Object.values(activeWorkspaceUnread).reduce((a, b) => a + b, 0);
 
   const deleteWorkspace = useCallback(
@@ -348,6 +347,7 @@ export function useWorkspaceShellData(
     workspaces,
     activeWs,
     activeThread,
+    mainThread,
     activeThreadSlug,
     allAliveAgents,
     workspaceAgentIds,
