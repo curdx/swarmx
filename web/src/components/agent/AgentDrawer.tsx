@@ -55,6 +55,7 @@ import type {
   MessageRecord,
   RecordingInfo,
   SwarmEvent,
+  Workspace,
 } from "../../api/types";
 import { XtermPane } from "../XtermPane";
 import { useSwarmFeed } from "../../hooks/useSwarmFeed";
@@ -105,6 +106,7 @@ interface Props {
 
 export function AgentDrawer({ agentId, onClose }: Props) {
   const [info, setInfo] = useState<AgentInfo | null>(null);
+  const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [tab, setTab] = useState<TabId>("terminal");
   const [now, setNow] = useState(Date.now());
 
@@ -120,6 +122,9 @@ export function AgentDrawer({ agentId, onClose }: Props) {
 
   useEffect(() => {
     refreshInfo();
+    // Canonical workspace list — needed to map the agent's workspace_id (a
+    // full FK id) to the workspace's URL slug for Recordings/Context links.
+    api.listWorkspaces().then(setWorkspaces).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agentId]);
 
@@ -158,6 +163,15 @@ export function AgentDrawer({ agentId, onClose }: Props) {
     }
   };
 
+  // The URL slug (≠ id, and NOT the id's first 8 chars — slug is generated
+  // independently) is what /chat/:wsId routing expects. Map the agent's
+  // workspace_id FK to its workspace's slug via the canonical workspace list,
+  // so Recordings/Context links land on the right workspace instead of a
+  // garbled slice of the id/path.
+  const wsSlug = info?.workspace_id
+    ? (workspaces.find((w) => w.id === info.workspace_id)?.slug ?? null)
+    : null;
+
   return (
     <Sheet
       open
@@ -168,7 +182,12 @@ export function AgentDrawer({ agentId, onClose }: Props) {
     >
       <SheetContent
         side="right"
-        className="flex w-[540px] flex-col gap-0 border-l border-border-subtle bg-surface-elevated p-0 shadow-xl sm:max-w-[540px]"
+        // Radix SheetContent ships `data-[side=right]:sm:max-w-sm` (384px) — a
+        // data-attribute variant that out-specifies a plain `sm:max-w-[…]`, so
+        // a wider override MUST carry the same `data-[side=right]:` prefix to
+        // win. 880px fits claude's 120-col TUI (the PTY/recording width) so the
+        // terminal stops wrapping into garbage in the drawer.
+        className="flex w-[880px] max-w-[94vw] flex-col gap-0 border-l border-border-subtle bg-surface-elevated p-0 shadow-xl data-[side=right]:w-[880px] data-[side=right]:sm:max-w-[880px]"
         // modal=false 时 Radix 不渲染 overlay，但 SheetContent 默认 onInteractOutside
         // 会关 sheet — 我们希望用户点 chat 列表切 agent 不关 drawer，drawer
         // 跟着切新 agent_id 重新 mount 就行。
@@ -193,11 +212,11 @@ export function AgentDrawer({ agentId, onClose }: Props) {
               so we'd burn budget on idle panes. Switch-unmount instead. */}
           {tab === "terminal" && <TerminalTab agentId={agentId} />}
           {tab === "recordings" && (
-            <RecordingsTab agentId={agentId} wsId={info?.workspace ? info.workspace.slice(-8) : null} />
+            <RecordingsTab agentId={agentId} wsId={wsSlug} />
           )}
           {tab === "messages" && <MessagesTab agentId={agentId} />}
           {tab === "context" && (
-            <ContextTab agentId={agentId} wsId={info?.workspace ? info.workspace.slice(-8) : null} />
+            <ContextTab agentId={agentId} wsId={wsSlug} />
           )}
         </div>
         <StatBar info={info} now={now} />

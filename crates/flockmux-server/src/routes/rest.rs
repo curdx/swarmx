@@ -1342,7 +1342,18 @@ fn write_workspace_deps_context(cwd: &str, name: &str, roots: &[WorkspaceRoot]) 
                 } else {
                     format!("{}{}", before, after)
                 };
-                if let Err(e) = std::fs::write(&path, stripped) {
+                if stripped.trim().is_empty() {
+                    // The managed block was the file's only content — delete the
+                    // now-empty file instead of leaving a dangling 0-byte
+                    // CLAUDE.md/AGENTS.md behind (flockmux created it, flockmux
+                    // cleans it up). If the user had their own content around the
+                    // block, `stripped` is non-empty and we keep+rewrite it.
+                    match std::fs::remove_file(&path) {
+                        Ok(()) => tracing::info!(file = %path.display(), "removed empty workspace deps context file (no roots left)"),
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                        Err(e) => tracing::warn!(?e, file = %path.display(), "failed removing empty workspace deps context file"),
+                    }
+                } else if let Err(e) = std::fs::write(&path, stripped) {
                     tracing::warn!(?e, file = %path.display(), "failed stripping workspace deps context");
                 } else {
                     tracing::info!(file = %path.display(), "stripped workspace deps context (no roots left)");

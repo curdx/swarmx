@@ -450,6 +450,7 @@
     "markRead": "标记为已读",
     "replying": "正在回复 #{{id}}",
     "cancelReply": "取消回复",
+    "clearFilter": "清除过滤",
     "composerPlaceholder": "和 AI 说点啥…",
     "composerPlaceholderEmpty": "该工作空间还没有 AI 成员…",
     "composerPlaceholderInit": "和 AI 说点啥…",

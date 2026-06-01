@@ -189,9 +189,20 @@ impl PtyBridge {
                 unsafe {
                     let pgid = libc::getpgid(pid);
                     let own_pgid = libc::getpgid(0);
-                    if pgid > 0 && pgid != own_pgid {
+                    // portable-pty `setsid`'s the child at spawn, so the shim
+                    // (and the real CLI it forks) share a process group whose
+                    // id equals the shim pid. getpgid() can still return -1 if
+                    // the pid is racing teardown/reparenting — in that case fall
+                    // back to the shim pid itself as the group id rather than
+                    // giving up and SIGKILLing only the shim, which would orphan
+                    // the grandchild CLI (it stays alive, reparented to init,
+                    // still burning API tokens). killpg with a stale/own pid is
+                    // harmless (ESRCH); the own-group guard below stays so we
+                    // never signal flockmux-server's own group.
+                    let group = if pgid > 0 { pgid } else { pid };
+                    if group > 0 && group != own_pgid {
                         // Graceful: ask the whole group to terminate.
-                        libc::killpg(pgid, libc::SIGTERM);
+                        libc::killpg(group, libc::SIGTERM);
                         // Brief grace (~1s) for the CLI to flush; poll the
                         // direct child without holding the lock across sleeps.
                         let mut exited = false;
@@ -203,14 +214,14 @@ impl PtyBridge {
                             std::thread::sleep(std::time::Duration::from_millis(50));
                         }
                         if !exited {
-                            libc::killpg(pgid, libc::SIGKILL);
+                            libc::killpg(group, libc::SIGKILL);
                         }
                     } else {
-                        // Could not isolate a distinct group — fall back to
-                        // killing just the shim pid rather than risk signaling
-                        // our own group.
-                        warn!(pid, pgid, own_pgid, "kill: child not in its own \
-                            process group; falling back to pid-only SIGKILL");
+                        // group == own_pgid: child was never isolated into its
+                        // own session; killing the group would take down the
+                        // server itself. Last-resort pid-only SIGKILL.
+                        warn!(pid, pgid, own_pgid, "kill: child shares our process \
+                            group; falling back to pid-only SIGKILL");
                         libc::kill(pid, libc::SIGKILL);
                     }
                 }

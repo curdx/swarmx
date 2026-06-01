@@ -550,7 +550,7 @@ export function MessagesPanel({
                 setFilter("");
                 setFilterOpen(false);
               }}
-              title={t("messages.cancelReply")}
+              title={t("messages.clearFilter")}
               className="size-6 text-foreground-tertiary"
             >
               <X className="size-3" />
@@ -871,7 +871,6 @@ export function MessagesPanel({
             <PendingBubble
               key={`pending-${agentId}`}
               role={resolveRole(agentId, roleLookup)}
-              triggerId={trigger.id}
               label={t("messages.respondingTo", {
                 role: resolveRole(agentId, roleLookup),
               })}
@@ -985,12 +984,10 @@ function NewMessagesDivider({ label }: { label: string }) {
  *  upgraded to real server-side AgentState::Thinking events in UI/F.2-B. */
 function PendingBubble({
   role,
-  triggerId,
   label,
   replyHint,
 }: {
   role: string;
-  triggerId: number;
   label: string;
   replyHint: string;
 }) {
@@ -1011,7 +1008,7 @@ function PendingBubble({
         <span className="mb-0.5 flex items-baseline gap-2 px-0.5 font-heading text-[13px] font-semibold text-foreground-primary">
           {role}
           <span className="font-caption text-[10px] font-normal text-foreground-tertiary">
-            {label} · ↩#{triggerId}
+            {label}
           </span>
         </span>
         <span

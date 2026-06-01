@@ -764,6 +764,7 @@ function ThemeCard({
   preview: "light" | "dark" | "system";
   icon: React.ReactNode;
 }) {
+  const { t } = useTranslation();
   return (
     <button
       onClick={onClick}
@@ -791,7 +792,7 @@ function ThemeCard({
                 : "bg-black/50 text-white",
           )}
         >
-          Preview
+          {t("settings.appearance.preview")}
         </span>
       </div>
       <div className="flex items-center gap-2 px-3 py-2">
@@ -801,7 +802,7 @@ function ThemeCard({
         </span>
         {active && (
           <span className="ml-auto rounded-full bg-accent-primary px-2 py-0.5 font-caption text-[9px] text-foreground-on-accent">
-            当前
+            {t("settings.appearance.current")}
           </span>
         )}
       </div>

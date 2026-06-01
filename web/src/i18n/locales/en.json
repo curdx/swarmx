@@ -129,7 +129,7 @@
         "dark": "Dark",
         "system": "System"
       },
-      "current": "current",
+      "current": "Current",
       "preview": "Preview"
     },
     "shortcuts": {
@@ -450,6 +450,7 @@
     "markRead": "Mark read",
     "replying": "Replying to #{{id}}",
     "cancelReply": "Cancel reply",
+    "clearFilter": "Clear filter",
     "composerPlaceholder": "Say something to the AI…",
     "composerPlaceholderEmpty": "No AI members in this workspace yet…",
     "composerPlaceholderInit": "Say something to the AI…",

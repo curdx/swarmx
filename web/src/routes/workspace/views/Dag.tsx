@@ -553,8 +553,14 @@ export default function DagView() {
                   )}
                 >
                   <span
-                    className="size-2 rounded-full"
-                    style={{ background: roleHex(a.role) }}
+                    className={cn(
+                      "size-2 rounded-full",
+                      a.killed_at == null && a.shim_exit == null
+                        ? a.shim_ready
+                          ? "bg-state-success"
+                          : "bg-state-wake"
+                        : "bg-state-idle",
+                    )}
                   />
                   <span className="truncate font-heading text-xs text-foreground-primary">
                     {a.role}

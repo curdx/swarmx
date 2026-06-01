@@ -36,7 +36,7 @@ import {
   Zap,
 } from "lucide-react";
 import { api } from "../api/http";
-import type { AgentInfo } from "../api/types";
+import type { AgentInfo, Workspace } from "../api/types";
 import { setTheme, type ThemeMode } from "@/lib/theme";
 import { directionBase } from "@/lib/thread";
 import {
@@ -97,6 +97,7 @@ export function CommandPalette() {
   // direction the user is looking at, matching the tab bar / ⌘1-4.
   const [currentThreadSlug, setCurrentThreadSlug] = useState<string | null>(null);
   const [agents, setAgents] = useState<AgentInfo[]>([]);
+  const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const navigate = useNavigate();
 
   // Global ⌘K / Ctrl+K opens, Esc closes (handled by Dialog).
@@ -126,6 +127,14 @@ export function CommandPalette() {
       .listAgents()
       .then(setAgents)
       .catch(() => {});
+    // Canonical workspace list (server filters soft-deleted). Reverse-deriving
+    // workspaces from live agents — the old behaviour — surfaced orphan /
+    // cwd-missing workspaces of agents whose workspace was already deleted,
+    // diverging from the sidebar. Use the same source the sidebar does.
+    api
+      .listWorkspaces()
+      .then(setWorkspaces)
+      .catch(() => {});
   }, [open]);
 
   const close = useCallback(() => setOpen(false), []);
@@ -137,9 +146,16 @@ export function CommandPalette() {
     [navigate, close],
   );
 
-  const liveAgents = agents.filter((a) => a.killed_at == null && a.shim_exit == null);
-  const workspaces = Array.from(
-    new Set(liveAgents.map((a) => a.workspace || "(no workspace)")),
+  const wsIds = new Set(workspaces.map((w) => w.id));
+  // Live agents, scoped to those whose workspace still exists. Drops orphan
+  // agents whose workspace was deleted (they'd otherwise appear as phantom
+  // wake targets the sidebar no longer lists). Don't over-filter before the
+  // workspace list has loaded (wsIds empty).
+  const liveAgents = agents.filter(
+    (a) =>
+      a.killed_at == null &&
+      a.shim_exit == null &&
+      (wsIds.size === 0 || a.workspace_id == null || wsIds.has(a.workspace_id)),
   );
 
   return (
@@ -192,20 +208,17 @@ export function CommandPalette() {
 
         {workspaces.length > 0 && (
           <CommandGroup heading={t("cmdk.groups.workspaces")}>
-            {workspaces.map((ws) => {
-              const id = ws.slice(-8) || "default";
-              return (
-                <CommandItem
-                  key={ws}
-                  value={`ws ${ws}`}
-                  onSelect={() => go(`/chat/${id}`)}
-                >
-                  <Activity />
-                  <span>{ws.split("/").slice(-2).join("/") || ws}</span>
-                  <CommandShortcut>{t("cmdk.switchWs")}</CommandShortcut>
-                </CommandItem>
-              );
-            })}
+            {workspaces.map((ws) => (
+              <CommandItem
+                key={ws.id}
+                value={`ws ${ws.name} ${ws.cwd}`}
+                onSelect={() => go(`/chat/${ws.slug}`)}
+              >
+                <Activity />
+                <span>{ws.name}</span>
+                <CommandShortcut>{t("cmdk.switchWs")}</CommandShortcut>
+              </CommandItem>
+            ))}
           </CommandGroup>
         )}
 
