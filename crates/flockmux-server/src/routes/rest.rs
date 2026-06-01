@@ -1880,6 +1880,12 @@ fn spawn_thread_worktree(
                     publish_thread_changed(&state, &workspace_id, &thread_id, "updated");
                 } else {
                     tracing::info!(thread = %thread_id, dest = %dest_str, "direction isolated in git worktree");
+                    // Re-emit the workspace deps-context into the worktree so the
+                    // re-rooted orchestrator (whose new cwd is the worktree, a
+                    // copy of the cwd repo only) can still see the peer/dependency
+                    // projects at their real paths — otherwise it loses sight of
+                    // repos the user may be asking it to work on.
+                    write_deps_context_into_dir(&state, &workspace_id, &dest_str).await;
                     // P5-D: re-root the orchestrator into the fresh worktree.
                     // The orchestrator that named the direction is still
                     // running in the OLD (shared) cwd, so its own edits + any
@@ -1970,9 +1976,22 @@ async fn reroot_thread_orchestrator(
             tracing::warn!(?e, thread = %thread_id, "re-root: list_agents failed; old agents may linger in the shared cwd");
         }
     }
+    // The first orchestrator read the user's opening request to NAME this
+    // direction, then was torn down (above) BEFORE it wrote a ledger — so the
+    // fresh orchestrator would otherwise have neither the ledger nor the
+    // (already-read) message and would re-onboard from scratch. Seed its
+    // `{task}` with that request so its first turn acts on it instead of asking
+    // the user what they want all over again. Best-effort: empty seed on any
+    // error just reverts to the old first-wake greeting.
+    let seed_task = state
+        .store
+        .latest_user_message_for_agents(killed_ids.clone())
+        .await
+        .unwrap_or(None)
+        .unwrap_or_default();
     let req = RunSpellRequest {
         name: "init".into(),
-        task: String::new(),
+        task: seed_task,
         workspace_dir: Some(new_cwd.to_string()),
         workspace_id: Some(workspace_id.to_string()),
         caller_agent_id: None,
@@ -2181,6 +2200,50 @@ async fn refresh_workspace_deps_context(state: &AppState, workspace_id: &str) {
         }
     };
     write_workspace_deps_context(ws.cwd.trim(), &ws.name, &roots);
+}
+
+/// Write the managed deps-context block (CLAUDE.md / AGENTS.md) into an
+/// ARBITRARY directory — used when a direction is isolated into a git worktree.
+/// The worktree is a copy of the cwd repo ONLY; the peer/dependency roots live
+/// at their original absolute paths and are NOT carried in. Without re-emitting
+/// the context here, the re-rooted orchestrator's new cwd (the worktree) has no
+/// record that the peer projects exist, so it loses sight of repos the user may
+/// actually be asking it to work on. We list the worktree as the primary and the
+/// peers at their real paths (still readable), restoring multi-root visibility.
+async fn write_deps_context_into_dir(state: &AppState, workspace_id: &str, target_dir: &str) {
+    let ws = match state.store.get_workspace_by_id(workspace_id.to_string()).await {
+        Ok(Some(ws)) => ws,
+        _ => return,
+    };
+    if ws.deleted_at.is_some() {
+        return;
+    }
+    let roots: Vec<WorkspaceRoot> = match state
+        .store
+        .list_workspace_roots(workspace_id.to_string())
+        .await
+    {
+        Ok(rows) => rows
+            .into_iter()
+            .map(|r| WorkspaceRoot {
+                id: r.id,
+                path: r.path,
+                role: r.role,
+                label: r.label,
+                parent_id: r.parent_id,
+                branch: None,
+            })
+            .collect(),
+        Err(e) => {
+            tracing::warn!(?e, ws_id = %workspace_id, "worktree deps context: list_workspace_roots failed");
+            return;
+        }
+    };
+    // No peer/dependency roots → nothing worth re-emitting in the worktree.
+    if roots.is_empty() {
+        return;
+    }
+    write_workspace_deps_context(target_dir, &ws.name, &roots);
 }
 
 /// `POST /api/workspaces/:id/roots` — attach a dependency-source root to an

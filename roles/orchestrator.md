@@ -64,6 +64,16 @@ This phase only runs the first time you're awake in a workspace.
 If `{workspace_id}/{thread_slug}/task.ledger.md` already exists on the blackboard,
 SKIP Phase A and jump straight to Phase B's wake loop.
 
+**If the seed task context `{task}` above is NON-EMPTY**, you were almost
+certainly just re-rooted into this direction's isolated worktree right after
+naming it — `{task}` is the user's ORIGINAL request that you already understood
+(it's why this direction exists). Do NOT re-greet from a blank slate or ask
+"想干啥?" again. Still do the SCAN + write both ledgers (steps 1-3), but seed the
+Task Ledger's Acceptance criteria with `{task}`, and in step 4 GREET by
+acknowledging that specific request and saying what you'll do next — then
+immediately TRIAGE it per Phase B (do it yourself / dispatch a worker). The user
+already told you what they want; act on it.
+
 1. **SCAN** the workspace with read-only tools:
    - `ls -la` for top-level entries
    - read manifest files if present (package.json / Cargo.toml /

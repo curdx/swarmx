@@ -22,7 +22,12 @@ import {
   Settings as SettingsIcon,
 } from "lucide-react";
 import { api } from "../api/http";
-import type { AgentInfo, MessageRecord, SwarmEvent } from "../api/types";
+import type {
+  AgentInfo,
+  MessageRecord,
+  SwarmEvent,
+  Workspace,
+} from "../api/types";
 import { useSwarmFeed } from "../hooks/useSwarmFeed";
 import {
   Popover,
@@ -44,6 +49,54 @@ interface Item {
 }
 
 const MAX_ITEMS = 12;
+
+type Tr = (k: string, opts?: Record<string, unknown>) => string;
+
+/** A blackboard key is `{workspace_id}/{thread_slug}/{file}`. Render it as
+ *  human text — a friendly ledger label + the workspace/direction names —
+ *  instead of the raw 32-char UUID + slug + content hash the user can't read. */
+function humanizeBlackboard(
+  path: string,
+  workspaces: Workspace[],
+  t: Tr,
+): { title: string; context?: string } {
+  const segs = path.split("/").filter(Boolean);
+  if (segs.length < 3) {
+    return { title: segs[segs.length - 1] ?? path };
+  }
+  const [wsid, slug] = segs;
+  const file = segs.slice(2).join("/");
+  const title =
+    file === "task.ledger.md"
+      ? t("notifications.bb.taskLedger")
+      : file === "progress.ledger.md"
+        ? t("notifications.bb.progressLedger")
+        : t("notifications.bb.update", { name: segs[segs.length - 1] });
+  // Prefer an exact workspace-id match; fall back to locating the direction by
+  // its (workspace-unique) slug so this still resolves if the id scheme drifts.
+  const ws =
+    workspaces.find((w) => w.id === wsid) ??
+    workspaces.find((w) => (w.threads ?? []).some((th) => th.slug === slug));
+  const thread = (ws?.threads ?? []).find((th) => th.slug === slug);
+  const dirName = thread?.name?.trim()
+    ? thread.name.trim()
+    : slug === "main"
+      ? t("notifications.bb.mainDir")
+      : thread
+        ? slug
+        : undefined;
+  const context = [ws?.name, dirName].filter(Boolean).join(" · ");
+  return { title, context: context || undefined };
+}
+
+/** `user` / `system` are pseudo-agents, not roles — rendering them through the
+ *  AgentChip prints a doubled "user user" (role-prefix == short-id). Give them a
+ *  plain friendly label instead. Returns null for a real agent id. */
+function pseudoFrom(from: string, t: Tr): string | null {
+  if (from === "user") return t("notifications.fromUser");
+  if (from === "system") return t("notifications.fromSystem");
+  return null;
+}
 
 interface Props {
   hasUnseen: boolean;
@@ -71,14 +124,18 @@ export function NotificationPopover({ hasUnseen, onSeen }: Props) {
   const [agentWorkspaces, setAgentWorkspaces] = useState<Map<string, string>>(
     () => new Map(),
   );
+  // Workspaces + their directions — used to render blackboard keys as
+  // "{workspace} · {direction}" instead of the raw UUID/slug path.
+  const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
 
   // 拉一次最近事件 — popover 打开瞬间加载，不订阅常住的 fetch。
   const refresh = useCallback(async () => {
     try {
-      const [msgs, bb, agents] = await Promise.all([
+      const [msgs, bb, agents, wss] = await Promise.all([
         api.listMessages({ limit: 40 }),
         api.listBlackboard(),
         api.listAgents().catch(() => [] as AgentInfo[]),
+        api.listWorkspaces().catch(() => [] as Workspace[]),
       ]);
       const wsM = new Map<string, string>();
       for (const a of agents as AgentInfo[]) {
@@ -86,27 +143,38 @@ export function NotificationPopover({ hasUnseen, onSeen }: Props) {
       }
       setAgentWorkspaces(wsM);
       setRoleLookup(buildRoleLookup(agents as AgentInfo[]));
-      const fromMsgs: Item[] = (msgs as MessageRecord[]).map((m) => ({
-        id: `msg-${m.id}`,
-        kind: "message",
-        agent: m.from_agent,
-        workspace: wsM.get(m.from_agent),
-        title: m.from_agent,
-        body: m.body,
-        at: m.sent_at,
-      }));
+      setWorkspaces(wss as Workspace[]);
+      const fromMsgs: Item[] = (msgs as MessageRecord[]).map((m) => {
+        const pseudo = pseudoFrom(m.from_agent, t);
+        return {
+          id: `msg-${m.id}`,
+          kind: "message",
+          agent: pseudo ? undefined : m.from_agent,
+          workspace: wsM.get(m.from_agent),
+          title: pseudo ?? m.from_agent,
+          body: m.body,
+          at: m.sent_at,
+        };
+      });
       const fromBb: Item[] = bb
         // Skip worker heartbeats (`<wsId>/<role>.progress.md`) — they're
         // written on every milestone and would drown out real messages.
         .filter((e) => !e.path.endsWith(".progress.md"))
         .slice(0, 20)
-        .map((e) => ({
-          id: `bb-${e.path}-${e.at}`,
-          kind: "blackboard" as const,
-          title: e.path,
-          body: `${e.op} · ${e.sha256.slice(0, 8)}`,
-          at: e.at,
-        }));
+        .map((e) => {
+          const { title, context } = humanizeBlackboard(
+            e.path,
+            wss as Workspace[],
+            t,
+          );
+          return {
+            id: `bb-${e.path}-${e.at}`,
+            kind: "blackboard" as const,
+            title,
+            body: context,
+            at: e.at,
+          };
+        });
       const merged = [...fromMsgs, ...fromBb]
         .sort((a, b) => b.at - a.at)
         .slice(0, MAX_ITEMS);
@@ -114,7 +182,7 @@ export function NotificationPopover({ hasUnseen, onSeen }: Props) {
     } catch {
       /* best-effort */
     }
-  }, []);
+  }, [t]);
 
   // 打开 popover 时拉新数据 + 标 seen。
   useEffect(() => {
@@ -130,22 +198,24 @@ export function NotificationPopover({ hasUnseen, onSeen }: Props) {
       // popover 当前打开时把新事件 prepend，用户能看到实时滚动。
       let next: Item | null = null;
       if (ev.type === "message") {
+        const pseudo = pseudoFrom(ev.from_agent, t);
         next = {
           id: `msg-${ev.id}`,
           kind: "message",
-          agent: ev.from_agent,
+          agent: pseudo ? undefined : ev.from_agent,
           workspace: agentWorkspaces.get(ev.from_agent),
-          title: ev.from_agent,
+          title: pseudo ?? ev.from_agent,
           body: ev.body,
           at: ev.sent_at,
         };
       } else if (ev.type === "blackboard_changed") {
         if (ev.path.endsWith(".progress.md")) return; // skip heartbeats
+        const { title, context } = humanizeBlackboard(ev.path, workspaces, t);
         next = {
           id: `bb-${ev.path}-${ev.at}`,
           kind: "blackboard",
-          title: ev.path,
-          body: `${ev.op} · ${ev.sha256.slice(0, 8)}`,
+          title,
+          body: context,
           at: ev.at,
         };
       }

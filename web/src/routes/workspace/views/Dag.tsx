@@ -566,7 +566,7 @@ export default function DagView() {
                     {a.role}
                   </span>
                   <span className="ml-auto truncate font-mono text-[10px] text-foreground-tertiary">
-                    {a.agent_id.slice(-6)}
+                    {a.agent_id.slice(-8)}
                   </span>
                 </button>
               </li>

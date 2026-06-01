@@ -346,6 +346,14 @@
       "completedTitle": "Phase completed",
       "wakeTitle": "{{from}} woke {{to}}"
     },
+    "bb": {
+      "taskLedger": "Task ledger updated",
+      "progressLedger": "Progress updated",
+      "update": "{{name}} updated",
+      "mainDir": "main"
+    },
+    "fromUser": "You",
+    "fromSystem": "System",
     "time": {
       "now": "now",
       "minAgo": "{{n}}m ago",
@@ -403,10 +411,10 @@
     "namePlaceholder": "e.g. My Todo App",
     "aiNamed": "AI suggested",
     "step2": "Project folders",
-    "step2Hint": "First is the primary project (AI works here). Optionally attach the source of its dependency / tool projects so AI reads the source directly instead of decompiling.",
+    "step2Hint": "First is the primary project (where the AI's terminal lands). Optionally attach peer projects you develop alongside it, or the source of its dependencies / tools — each mount picks its own kind (peer / dependency / tool), and AI reads every source directly instead of decompiling.",
     "dirPlaceholder1": "e.g. /Users/<you>/code/my-project",
     "dirPlaceholder1Tauri": "Paste an absolute path, or click Browse… on the right",
-    "dirPlaceholderMore": "Attach a dependency / tool project's source dir (optional)",
+    "dirPlaceholderMore": "Attach a peer / dependency / tool project's source dir (optional)",
     "dirHint": "AI will work inside this folder",
     "primaryLabel": "Primary · AI works here",
     "attachedLabel": "Attached source",

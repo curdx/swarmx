@@ -328,6 +328,46 @@ impl Store {
         .context("spawn_blocking reassign_unread_user_messages")?
     }
 
+    /// Body of the most recent `user → <agent>` message addressed to any of the
+    /// given agents (newest by row id). Used on re-root: the first orchestrator
+    /// reads the user's opening request to NAME the direction, then is torn down
+    /// before writing a ledger — so the replacement orchestrator has neither the
+    /// ledger nor the (now-read) message and would re-greet from scratch. We seed
+    /// the replacement's `{task}` with this body so its first turn addresses the
+    /// real request instead of asking "想干啥?" again. Returns None if no such
+    /// message exists (e.g. the direction was named with no user message).
+    pub async fn latest_user_message_for_agents(
+        &self,
+        agents: Vec<String>,
+    ) -> Result<Option<String>> {
+        if agents.is_empty() {
+            return Ok(None);
+        }
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<Option<String>> {
+            let placeholders = std::iter::repeat("?")
+                .take(agents.len())
+                .collect::<Vec<_>>()
+                .join(",");
+            let sql = format!(
+                "SELECT body FROM messages \
+                 WHERE from_agent = 'user' AND to_agent IN ({placeholders}) \
+                 ORDER BY id DESC LIMIT 1"
+            );
+            let binds: Vec<rusqlite::types::Value> =
+                agents.iter().map(|a| a.clone().into()).collect();
+            match conn.query_row(&sql, rusqlite::params_from_iter(binds.iter()), |row| {
+                row.get::<_, String>(0)
+            }) {
+                Ok(body) => Ok(Some(body)),
+                Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+                Err(e) => Err(e),
+            }
+        }))
+        .await
+        .context("spawn_blocking latest_user_message_for_agents")?
+    }
+
     pub async fn list_messages(&self, opts: ListMessagesOpts) -> Result<Vec<MessageRecord>> {
         let pool = self.pool.clone();
         tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<Vec<MessageRecord>> {

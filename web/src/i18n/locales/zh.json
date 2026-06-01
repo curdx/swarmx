@@ -346,6 +346,14 @@
       "completedTitle": "阶段完成",
       "wakeTitle": "{{from}} 唤醒 {{to}}"
     },
+    "bb": {
+      "taskLedger": "任务台账更新",
+      "progressLedger": "进展状态更新",
+      "update": "{{name}} 更新",
+      "mainDir": "主线"
+    },
+    "fromUser": "你",
+    "fromSystem": "系统",
     "time": {
       "now": "刚刚",
       "minAgo": "{{n}}m 前",
@@ -403,10 +411,10 @@
     "namePlaceholder": "例如：我的待办 App",
     "aiNamed": "AI 起名",
     "step2": "项目文件夹",
-    "step2Hint": "第一个是主项目（AI 在这里工作）；可再挂上它依赖的源码/工具项目，AI 直接读源码、不反编译",
+    "step2Hint": "第一个是主项目（AI 的终端落在这里）；可再挂上平级的其它项目，或它依赖的源码/工具——每个挂载都能单独选「对等 / 依赖 / 工具」，AI 都直接读源码、不反编译",
     "dirPlaceholder1": "例如:/Users/你的用户名/code/我的项目",
     "dirPlaceholder1Tauri": "粘贴绝对路径，或点右边「选择…」",
-    "dirPlaceholderMore": "挂载依赖/工具项目的源码目录（可选）",
+    "dirPlaceholderMore": "挂载平级项目 / 依赖 / 工具的源码目录（可选）",
     "dirHint": "AI 会进入此文件夹工作",
     "primaryLabel": "主项目 · AI 在此工作",
     "attachedLabel": "挂载源码依赖",
