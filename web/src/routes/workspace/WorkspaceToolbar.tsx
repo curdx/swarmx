@@ -34,28 +34,38 @@ interface TabDef {
   shortcut: number;
 }
 
-export function buildTabs(wsId: string): TabDef[] {
+export function buildTabs(wsId: string, threadSlug?: string): TabDef[] {
+  // Non-main directions live under `/chat/:wsId/t/:threadSlug/*`; the main
+  // direction keeps the bare `/chat/:wsId/*` URLs. Tabs preserve whichever
+  // direction is active so switching views never drops you back to main.
+  const base =
+    threadSlug && threadSlug !== "main"
+      ? `/chat/${wsId}/t/${threadSlug}`
+      : `/chat/${wsId}`;
   return [
-    { to: `/chat/${wsId}`, labelKey: "chat.tabs.chat", icon: MessageSquare, shortcut: 1 },
-    { to: `/chat/${wsId}/dag`, labelKey: "chat.tabs.dag", icon: GitBranch, shortcut: 2 },
-    { to: `/chat/${wsId}/ledger`, labelKey: "chat.tabs.ledger", icon: ClipboardList, shortcut: 3 },
-    { to: `/chat/${wsId}/replays`, labelKey: "chat.tabs.replays", icon: Play, shortcut: 4 },
+    { to: `${base}`, labelKey: "chat.tabs.chat", icon: MessageSquare, shortcut: 1 },
+    { to: `${base}/dag`, labelKey: "chat.tabs.dag", icon: GitBranch, shortcut: 2 },
+    { to: `${base}/ledger`, labelKey: "chat.tabs.ledger", icon: ClipboardList, shortcut: 3 },
+    { to: `${base}/replays`, labelKey: "chat.tabs.replays", icon: Play, shortcut: 4 },
   ];
 }
 
 export function WorkspaceToolbar({
   workspace,
+  threadSlug,
   agentCount,
   totalUnread,
   onJumpUnread,
 }: {
   workspace: WorkspaceSummary;
+  /** Active direction slug; tabs stay within this direction. */
+  threadSlug: string;
   agentCount: number;
   totalUnread: number;
   onJumpUnread: () => void;
 }) {
   const { t } = useTranslation();
-  const tabs = buildTabs(workspace.id);
+  const tabs = buildTabs(workspace.id, threadSlug);
   const isMac =
     typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
   const modKey = isMac ? "⌘" : "Ctrl";

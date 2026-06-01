@@ -16,7 +16,13 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../api/http";
-import type { AgentInfo, MessageRecord, SwarmEvent, Workspace } from "../../api/types";
+import type {
+  AgentInfo,
+  MessageRecord,
+  SwarmEvent,
+  ThreadInfo,
+  Workspace,
+} from "../../api/types";
 import { useSwarmFeed } from "../../hooks/useSwarmFeed";
 import { accentToCssVar, splitWorkspacePath } from "../../lib/workspace";
 import type { WorkspaceSummary } from "./types";
@@ -31,8 +37,21 @@ export interface WorkspaceShellData {
   agents: AgentInfo[];
   workspaces: WorkspaceSummary[];
   activeWs: WorkspaceSummary | null;
+  /** The active direction (thread) resolved from the URL `:threadSlug` param,
+   *  defaulting to the workspace's main thread. `null` only for a legacy/empty
+   *  workspace with no thread rows. */
+  activeThread: ThreadInfo | null;
+  /** Resolved slug of the active direction — `"main"` when none/unresolved.
+   *  Used to scope blackboard keys `{workspace_id}/{threadSlug}/…`. */
+  activeThreadSlug: string;
   allAliveAgents: AgentInfo[];
   workspaceAgentIds: string[];
+  /** Historical id set (alive + killed) of agents in the ACTIVE direction.
+   *  MessagesPanel filters by it so each direction is a self-contained room.
+   *  For the main direction, `thread_id == null` agents fold in. */
+  threadAgentIds: string[];
+  /** Alive agents in the active direction (subset of `activeWs.members`). */
+  threadMembers: AgentInfo[];
   liveMessage: MessageRecord | null;
   liveRead: LiveRead | null;
   /** Unread tally already filtered to the active workspace's senders. */
@@ -46,7 +65,10 @@ export interface WorkspaceShellData {
   deleteWorkspace: (workspaceId: string) => Promise<string | null>;
 }
 
-export function useWorkspaceShellData(wsId: string | undefined): WorkspaceShellData {
+export function useWorkspaceShellData(
+  wsId: string | undefined,
+  threadSlug: string | undefined,
+): WorkspaceShellData {
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [workspaceRows, setWorkspaceRows] = useState<Workspace[]>([]);
   const [liveMessage, setLiveMessage] = useState<MessageRecord | null>(null);
@@ -199,6 +221,7 @@ export function useWorkspaceShellData(wsId: string | undefined): WorkspaceShellD
         accentColor: accentToCssVar(w.accent),
         members: aliveByWsId.get(w.id) ?? [],
         roots: w.roots ?? [],
+        threads: w.threads ?? [],
       };
     });
   }, [workspaceRows, agents]);
@@ -219,6 +242,51 @@ export function useWorkspaceShellData(wsId: string | undefined): WorkspaceShellD
       .filter((a) => a.workspace_id === activeWs.workspaceId)
       .map((a) => a.agent_id);
   }, [agents, activeWs]);
+
+  // ── Active direction (thread) resolution ────────────────────────────
+  // Default to the main thread (slug "main", else the oldest row). `null`
+  // only for a legacy/empty workspace with no thread rows — callers then fall
+  // back to plain workspace-wide scoping (single implicit direction).
+  const mainThread = useMemo<ThreadInfo | null>(() => {
+    if (!activeWs || activeWs.threads.length === 0) return null;
+    return activeWs.threads.find((th) => th.slug === "main") ?? activeWs.threads[0];
+  }, [activeWs]);
+
+  const activeThread = useMemo<ThreadInfo | null>(() => {
+    if (!activeWs || activeWs.threads.length === 0) return null;
+    if (threadSlug) {
+      return activeWs.threads.find((th) => th.slug === threadSlug) ?? mainThread;
+    }
+    return mainThread;
+  }, [activeWs, threadSlug, mainThread]);
+
+  const activeThreadSlug = activeThread?.slug ?? "main";
+
+  // An agent belongs to the active direction if its `thread_id` matches. For
+  // the MAIN direction we also fold in `thread_id == null` (legacy rows +
+  // pre-thread spawns land on main). With no thread rows at all, every
+  // workspace agent counts (the workspace is one implicit direction).
+  const agentInActiveThread = useCallback(
+    (a: AgentInfo): boolean => {
+      if (!activeWs || a.workspace_id !== activeWs.workspaceId) return false;
+      if (!activeThread) return true;
+      if (mainThread && activeThread.id === mainThread.id) {
+        return a.thread_id == null || a.thread_id === activeThread.id;
+      }
+      return a.thread_id === activeThread.id;
+    },
+    [activeWs, activeThread, mainThread],
+  );
+
+  const threadAgentIds = useMemo(
+    () => (activeWs ? agents.filter(agentInActiveThread).map((a) => a.agent_id) : []),
+    [agents, activeWs, agentInActiveThread],
+  );
+
+  const threadMembers = useMemo(
+    () => (activeWs ? activeWs.members.filter(agentInActiveThread) : []),
+    [activeWs, agentInActiveThread],
+  );
 
   const activeWorkspaceUnread = useMemo(() => {
     if (!activeWs) return {} as Record<string, number>;
@@ -279,8 +347,12 @@ export function useWorkspaceShellData(wsId: string | undefined): WorkspaceShellD
     agents,
     workspaces,
     activeWs,
+    activeThread,
+    activeThreadSlug,
     allAliveAgents,
     workspaceAgentIds,
+    threadAgentIds,
+    threadMembers,
     liveMessage,
     liveRead,
     activeWorkspaceUnread,

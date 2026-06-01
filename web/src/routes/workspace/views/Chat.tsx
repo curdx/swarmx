@@ -46,19 +46,18 @@ import type {
 import { useSwarmFeed } from "../../../hooks/useSwarmFeed";
 import { useWorkspaceContext } from "../Shell";
 
-/** Pull every `<workspace_id>/<role>.progress.md` breadcrumb the workers
- *  in this workspace have written, newest first. Same source the Ledger
- *  "近况" card uses — but here we render a slim version inline in the
- *  chat sidebar so users don't have to switch tabs to know a worker is
- *  alive during npm install / build / etc. */
-function useBreadcrumbs(workspaceId: string) {
+/** Pull every `<workspace_id>/<thread_slug>/<role>.progress.md` breadcrumb the
+ *  workers in this DIRECTION have written, newest first. `prefix` is the
+ *  direction key prefix (`<workspace_id>/<thread_slug>/`). Same source the
+ *  Ledger "近况" card uses — rendered slim inline in the chat sidebar so users
+ *  don't switch tabs to know a worker is alive during npm install / build. */
+function useBreadcrumbs(prefix: string) {
   const [rows, setRows] = useState<
     { role: string; content: string; at: number }[]
   >([]);
   const reload = useCallback(async () => {
     try {
       const all = (await api.listBlackboard()) as BlackboardEntry[];
-      const prefix = `${workspaceId}/`;
       const suffix = ".progress.md";
       const candidates = all.filter(
         (e) => e.path.startsWith(prefix) && e.path.endsWith(suffix),
@@ -83,7 +82,7 @@ function useBreadcrumbs(workspaceId: string) {
     } catch {
       setRows([]);
     }
-  }, [workspaceId]);
+  }, [prefix]);
   useEffect(() => {
     reload();
   }, [reload]);
@@ -92,7 +91,7 @@ function useBreadcrumbs(workspaceId: string) {
     onEvent: (ev: SwarmEvent) => {
       if (ev.type !== "blackboard_changed") return;
       if (ev.id === lastIdRef.current) return;
-      if (!ev.path.startsWith(`${workspaceId}/`)) return;
+      if (!ev.path.startsWith(prefix)) return;
       if (!ev.path.endsWith(".progress.md")) return;
       lastIdRef.current = ev.id;
       reload();
@@ -165,9 +164,12 @@ export default function ChatView() {
   const { t } = useTranslation();
   const {
     workspace,
-    activeMembers,
+    threadSlug,
+    // Members + room are scoped to the ACTIVE direction (thread), not the whole
+    // workspace, so each direction is its own self-contained chat.
+    threadMembers: activeMembers,
     allAliveAgents,
-    workspaceAgentIds,
+    threadAgentIds,
     liveMessage,
     liveRead,
     unreadByFrom: activeWorkspaceUnread,
@@ -256,7 +258,9 @@ export default function ChatView() {
   // worker 心跳 — orchestrator 让每个 worker 每完成一步覆写
   // `<workspace_id>/<role>.progress.md`,我们订阅这些 key 实时显示在右栏。
   // 同样的数据 Ledger 视图也用,但 chat 这边给个 slim 列表,用户不用切 tab。
-  const breadcrumbsRaw = useBreadcrumbs(workspace.workspaceId);
+  const breadcrumbsRaw = useBreadcrumbs(
+    `${workspace.workspaceId}/${threadSlug}/`,
+  );
 
   // 每 5s tick 让 statusDot 重新评估时间窗(responding/working 都有时间窗,
   // 没消息进来时也要让它们自然衰减成 idle/awaiting)。
@@ -406,7 +410,7 @@ export default function ChatView() {
           unreadByFrom={activeWorkspaceUnread}
           activeMembers={activeMembers}
           allAliveAgents={allAliveAgents}
-          workspaceAgentIds={workspaceAgentIds}
+          workspaceAgentIds={threadAgentIds}
           workspaceSlug={workspace.id}
           jumpUnreadTick={jumpUnreadTick}
           onOpenAgent={openAgent}

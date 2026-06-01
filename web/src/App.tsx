@@ -34,6 +34,23 @@ import ReplayPlayer from "./routes/replays/player";
 import SettingsRoute from "./routes/settings";
 import NotificationsRoute from "./routes/notifications";
 
+/** The view tabs nested under a workspace shell. Reused for both the
+ *  main-direction URL (`/chat/:wsId/*`) and an explicit direction
+ *  (`/chat/:wsId/t/:threadSlug/*`). A fresh fragment per call so the two
+ *  mount points don't share element instances. */
+function workspaceViewRoutes() {
+  return (
+    <>
+      <Route index element={<ChatView />} />
+      <Route path="dag" element={<DagView />} />
+      <Route path="ledger" element={<LedgerView />} />
+      <Route path="replays" element={<ReplaysView />} />
+      {/* `context` 路径保留(老书签) — redirect 到新 ledger 视图。 */}
+      <Route path="context" element={<Navigate to="../ledger" replace />} />
+    </>
+  );
+}
+
 export default function App() {
   return (
     <BrowserRouter>
@@ -42,12 +59,11 @@ export default function App() {
           <Route index element={<Navigate to="/chat" replace />} />
           <Route path="/chat" element={<ChatHome />} />
           <Route path="/chat/:wsId" element={<WorkspaceShell />}>
-            <Route index element={<ChatView />} />
-            <Route path="dag" element={<DagView />} />
-            <Route path="ledger" element={<LedgerView />} />
-            <Route path="replays" element={<ReplaysView />} />
-            {/* `context` 路径保留(老书签) — redirect 到新 ledger 视图。 */}
-            <Route path="context" element={<Navigate to="../ledger" replace />} />
+            {workspaceViewRoutes()}
+            {/* Explicit direction (thread). Element-less group: only adds the
+                `t/:threadSlug` path segment — WorkspaceShell stays the single
+                layout and resolves the active direction from useParams. */}
+            <Route path="t/:threadSlug">{workspaceViewRoutes()}</Route>
           </Route>
           <Route path="/notifications" element={<NotificationsRoute />} />
           <Route path="/settings" element={<SettingsRoute />} />

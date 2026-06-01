@@ -95,6 +95,7 @@ export default function ChatHome() {
         accentColor: accentToCssVar(w.accent),
         members: aliveByWsId.get(w.id) ?? [],
         roots: w.roots ?? [],
+        threads: w.threads ?? [],
       };
     });
   }, [workspaceRows, agents]);

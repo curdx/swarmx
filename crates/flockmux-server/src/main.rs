@@ -429,13 +429,26 @@ async fn auto_respawn_orchestrators(state: &AppState) -> Result<()> {
         // up; if we see it, leave the workspace member-less. The UI's
         // 0-member chat state offers a "wake orchestrator" button that runs
         // init on demand when the user actually returns to the project.
-        let progress_key = format!("{}/progress.ledger.md", ws.id);
-        if let Ok(Some(content)) = state.swarm.read_blackboard(&progress_key).await {
-            if content.contains("all_done") {
-                skipped += 1;
-                info!(workspace_id = %ws.id, "auto-respawn: task all_done, skipping (revive on demand)");
-                continue;
+        //
+        // Auto-respawn revives the MAIN direction, whose ledger now lives at
+        // `{ws}/main/progress.ledger.md` (per-direction prefix). Also check the
+        // legacy `{ws}/progress.ledger.md` so workspaces completed before the
+        // thread-prefix migration still skip (one-time; regenerates on wake).
+        let main_key = format!("{}/main/progress.ledger.md", ws.id);
+        let legacy_key = format!("{}/progress.ledger.md", ws.id);
+        let mut all_done = false;
+        for key in [&main_key, &legacy_key] {
+            if let Ok(Some(content)) = state.swarm.read_blackboard(key).await {
+                if content.contains("all_done") {
+                    all_done = true;
+                    break;
+                }
             }
+        }
+        if all_done {
+            skipped += 1;
+            info!(workspace_id = %ws.id, "auto-respawn: task all_done, skipping (revive on demand)");
+            continue;
         }
         let req = RunSpellRequest {
             name: "init".into(),

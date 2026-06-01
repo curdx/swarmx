@@ -87,6 +87,10 @@ export interface AgentInfo {
    *  Drives the parent → child spawn edges in the DAG view (see
    *  lib/dagEdgeDerivation deriveSpawnEdges). */
   parent_agent_id?: string | null;
+  /** FK into the threads table (a workspace's "direction"). Null = the
+   *  workspace's main direction (legacy rows + pre-thread spawns). The UI
+   *  groups chat/members/ledger by this; null is treated as the main thread. */
+  thread_id?: string | null;
   /** In-memory pause state. True when the operator has hit "暂停" — the
    *  WakeCoordinator skips auto-wake for this agent until resume. Manual
    *  ⚡ wakes still work. Resets on server restart. */
@@ -223,6 +227,26 @@ export interface WorkspaceRoot {
   parent_id?: string | null;
 }
 
+/** One "direction" inside a workspace: its own orchestrator + worker subtree +
+ *  dual ledger + (optionally) an isolated git worktree. Mirrors the server
+ *  `ThreadInfo`. `slug` is the per-direction blackboard / URL segment; the main
+ *  direction's slug is always `main`. */
+export interface ThreadInfo {
+  id: string;
+  workspace_id: string;
+  slug: string;
+  name?: string | null;
+  /** "shared" | "worktree" */
+  isolation: string;
+  branch?: string | null;
+  /** Working dir agents in this direction run in (= workspace cwd for a shared
+   *  thread; the worktree path once isolated). */
+  cwd: string;
+  /** "ready" | "preparing" | "failed" */
+  state: string;
+  created_at: number;
+}
+
 export interface Workspace {
   id: string;
   /** First 8 chars of `id`. Used as the URL slug `/chat/:slug`. */
@@ -236,6 +260,9 @@ export interface Workspace {
   member_count: number;
   /** Attached dependency-source roots (excludes the primary `cwd`). */
   roots?: WorkspaceRoot[];
+  /** The workspace's directions (always ≥1: an auto-created `main`).
+   *  Oldest-first; the first entry is the main thread. */
+  threads?: ThreadInfo[];
 }
 
 export interface CreateWorkspaceRequest {

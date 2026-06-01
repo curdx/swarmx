@@ -49,12 +49,13 @@ function emptySnap(): LedgerSnap {
 
 export default function LedgerView() {
   const { t } = useTranslation();
-  const { workspace } = useWorkspaceContext();
-  // Workspace-scoped blackboard paths — multiple workspaces share one
-  // blackboard tree, so the orchestrator writes (and we read) the ledger
-  // under `<workspace_id>/...` to avoid collision.
-  const taskKey = `${workspace.workspaceId}/task.ledger.md`;
-  const progressKey = `${workspace.workspaceId}/progress.ledger.md`;
+  const { workspace, threadSlug } = useWorkspaceContext();
+  // Direction-scoped blackboard paths. All workspaces + directions share one
+  // blackboard tree, so the orchestrator writes (and we read) the ledger under
+  // `<workspace_id>/<thread_slug>/...` — main direction's slug is `main`.
+  const keyPrefix = `${workspace.workspaceId}/${threadSlug}/`;
+  const taskKey = `${keyPrefix}task.ledger.md`;
+  const progressKey = `${keyPrefix}progress.ledger.md`;
   const [task, setTask] = useState<LedgerSnap>(emptySnap());
   const [progress, setProgress] = useState<LedgerSnap>(emptySnap());
   // 近况 (worker breadcrumbs) — { role_label: { content, at } } keyed by
@@ -115,7 +116,7 @@ export default function LedgerView() {
   const loadBreadcrumbs = useCallback(async () => {
     try {
       const all = (await api.listBlackboard()) as BlackboardEntry[];
-      const prefix = `${workspace.workspaceId}/`;
+      const prefix = keyPrefix;
       const suffix = ".progress.md";
       const candidates = all.filter(
         (e) => e.path.startsWith(prefix) && e.path.endsWith(suffix),
@@ -141,7 +142,7 @@ export default function LedgerView() {
     } catch {
       if (mountedRef.current) setBreadcrumbs([]);
     }
-  }, [workspace.workspaceId]);
+  }, [keyPrefix]);
 
   const refresh = useCallback(async () => {
     setRefreshing(true);
@@ -166,8 +167,7 @@ export default function LedgerView() {
       if (ev.id === lastEventIdRef.current) return;
       const isLedger = ev.path === taskKey || ev.path === progressKey;
       const isBreadcrumb =
-        ev.path.startsWith(`${workspace.workspaceId}/`) &&
-        ev.path.endsWith(".progress.md");
+        ev.path.startsWith(keyPrefix) && ev.path.endsWith(".progress.md");
       if (!isLedger && !isBreadcrumb) return;
       lastEventIdRef.current = ev.id;
       refresh();

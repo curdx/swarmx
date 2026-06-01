@@ -34,7 +34,7 @@ import {
 } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { FolderOpen } from "lucide-react";
-import type { AgentInfo, MessageRecord } from "../../api/types";
+import type { AgentInfo, MessageRecord, ThreadInfo } from "../../api/types";
 import { AgentDrawer } from "../../components/agent/AgentDrawer";
 import { CreateWizard } from "../../components/workspace/CreateWizard";
 import { ErrorBoundary } from "../../components/ErrorBoundary";
@@ -58,15 +58,27 @@ export { WorkspaceList } from "./WorkspaceSidebar";
  *  redundant fetches / subscriptions. */
 export interface ShellOutletContext {
   workspace: WorkspaceSummary;
+  /** The active direction (thread), resolved from the URL `:threadSlug`
+   *  param, defaulting to the workspace's main thread. `null` only for a
+   *  legacy/empty workspace with no thread rows. */
+  activeThread: ThreadInfo | null;
+  /** Resolved slug of the active direction — `"main"` when none. Views build
+   *  blackboard keys as `{workspace.workspaceId}/{threadSlug}/…`. */
+  threadSlug: string;
   /** Alive agents in the active workspace (= workspace.members alias). */
   activeMembers: AgentInfo[];
+  /** Alive agents in the ACTIVE direction (subset of activeMembers). The
+   *  members list + DAG render this so each direction is self-contained. */
+  threadMembers: AgentInfo[];
   /** Every alive agent across all workspaces — composer needs it to
    *  resolve cross-workspace mentions ("planner is responding…"). */
   allAliveAgents: AgentInfo[];
   /** Historical id set of agents that ever lived in this workspace
-   *  (alive + killed). MessagesPanel filters by it so each workspace
-   *  is a self-contained room. */
+   *  (alive + killed). Workspace-wide; kept for any non-thread consumers. */
   workspaceAgentIds: string[];
+  /** Historical id set (alive + killed) of agents in the ACTIVE direction.
+   *  MessagesPanel filters by it so each direction is a self-contained room. */
+  threadAgentIds: string[];
   /** Latest swarm message event, or null. Child re-broadcasts. */
   liveMessage: MessageRecord | null;
   /** Latest message_read event, or null. */
@@ -91,7 +103,10 @@ export function useWorkspaceContext(): ShellOutletContext {
 
 export default function WorkspaceShell() {
   const { t } = useTranslation();
-  const { wsId } = useParams<{ wsId: string }>();
+  const { wsId, threadSlug: threadSlugParam } = useParams<{
+    wsId: string;
+    threadSlug?: string;
+  }>();
   const navigate = useNavigate();
   const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -134,8 +149,12 @@ export default function WorkspaceShell() {
   const {
     workspaces,
     activeWs,
+    activeThread,
+    activeThreadSlug,
     allAliveAgents,
     workspaceAgentIds,
+    threadAgentIds,
+    threadMembers,
     liveMessage,
     liveRead,
     activeWorkspaceUnread,
@@ -143,7 +162,7 @@ export default function WorkspaceShell() {
     refreshAgents,
     refreshWorkspaces,
     deleteWorkspace,
-  } = useWorkspaceShellData(wsId);
+  } = useWorkspaceShellData(wsId, threadSlugParam);
 
   // deleteWorkspace performs the kill+delete+optimistic-drop and returns where
   // to navigate when the ACTIVE workspace was removed (router stays here).
@@ -158,7 +177,7 @@ export default function WorkspaceShell() {
   // ── ⌘1-4 global shortcut ───────────────────────────────────────────
   useEffect(() => {
     if (!activeWs) return;
-    const tabs = buildTabs(activeWs.id);
+    const tabs = buildTabs(activeWs.id, activeThreadSlug);
     const onKey = (e: KeyboardEvent) => {
       if (!(e.metaKey || e.ctrlKey)) return;
       if (e.target instanceof HTMLElement) {
@@ -175,7 +194,7 @@ export default function WorkspaceShell() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [activeWs, navigate]);
+  }, [activeWs, activeThreadSlug, navigate]);
 
   // ── Redirect a stale / unknown wsId to the first workspace ──────────
   // MUST be an effect, not render-phase. Calling navigate() while rendering
@@ -242,9 +261,13 @@ export default function WorkspaceShell() {
 
   const ctx: ShellOutletContext = {
     workspace: activeWs,
+    activeThread,
+    threadSlug: activeThreadSlug,
     activeMembers: activeWs.members,
+    threadMembers,
     allAliveAgents,
     workspaceAgentIds,
+    threadAgentIds,
     liveMessage,
     liveRead,
     unreadByFrom: activeWorkspaceUnread,
@@ -266,7 +289,8 @@ export default function WorkspaceShell() {
         <section className="flex min-w-0 flex-1 flex-col bg-surface-primary">
           <WorkspaceToolbar
             workspace={activeWs}
-            agentCount={activeWs.members.length}
+            threadSlug={activeThreadSlug}
+            agentCount={threadMembers.length}
             totalUnread={totalUnread}
             onJumpUnread={() => setJumpUnreadTick((v) => v + 1)}
           />

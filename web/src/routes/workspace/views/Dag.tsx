@@ -279,7 +279,7 @@ function Canvas({ agents, bbAt, selectedId, onSelect, showMinimap }: CanvasProps
 
 export default function DagView() {
   const { t } = useTranslation();
-  const { workspace } = useWorkspaceContext();
+  const { workspace, threadAgentIds } = useWorkspaceContext();
   // selectedId / roleFilter 用 URL 持久化，切走再回不丢。
   const [searchParams, setSearchParams] = useSearchParams();
   const selectedId = searchParams.get("node");
@@ -357,10 +357,15 @@ export default function DagView() {
     onReconnect: () => refresh(),
   });
 
+  // Scope the DAG to the ACTIVE direction (thread). threadAgentIds (from the
+  // shell) already folds `thread_id == null` into the main direction.
+  const threadAgentIdSet = useMemo(
+    () => new Set(threadAgentIds),
+    [threadAgentIds],
+  );
   const agents = useMemo(
-    () =>
-      allAgents.filter((a) => a.workspace_id === workspace.workspaceId),
-    [allAgents, workspace.workspaceId],
+    () => allAgents.filter((a) => threadAgentIdSet.has(a.agent_id)),
+    [allAgents, threadAgentIdSet],
   );
 
   const bbAt = useMemo(() => {

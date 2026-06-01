@@ -3,7 +3,7 @@
  *  Home page can all import `WorkspaceSummary` without a component-file
  *  cycle. */
 
-import type { AgentInfo, WorkspaceRoot } from "../../api/types";
+import type { AgentInfo, ThreadInfo, WorkspaceRoot } from "../../api/types";
 
 export interface WorkspaceSummary {
   /** URL slug used by `/chat/:slug`. Now = first 8 chars of the
@@ -26,4 +26,8 @@ export interface WorkspaceSummary {
   /** Attached dependency-source roots (excludes the primary `path`).
    *  Rendered as the workspace's file-tree children in the sidebar. */
   roots: WorkspaceRoot[];
+  /** The workspace's directions (always ≥1: an auto-created `main`).
+   *  Oldest-first; the first entry is the main thread. Used for thread-aware
+   *  routing (`/chat/:wsId/t/:threadSlug`) and per-direction key scoping. */
+  threads: ThreadInfo[];
 }
