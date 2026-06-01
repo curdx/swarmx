@@ -334,6 +334,12 @@ pub struct RunSpellRequest {
     /// `workspace_id` instead.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub caller_agent_id: Option<String>,
+    /// The thread (direction) the spell should run in. When omitted, the
+    /// server resolves the caller's own thread (via `caller_agent_id`), else
+    /// falls back to the workspace's main thread. Lets a UI launcher target a
+    /// specific direction explicitly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<String>,
 }
 
 /// `POST /api/spell/run` response. Lists the agents the runner actually
@@ -378,6 +384,30 @@ pub struct WorkspaceRoot {
     pub parent_id: Option<String>,
 }
 
+/// One "direction" inside a workspace: its own orchestrator + worker subtree
+/// + dual ledger + (optionally) an isolated git worktree. Mirrors the storage
+/// `ThreadRecord` minus `deleted_at` (the API only surfaces alive threads).
+/// `slug` is the blackboard / URL segment; the main thread's slug is `main`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThreadInfo {
+    pub id: String,
+    pub workspace_id: String,
+    pub slug: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    /// "shared" | "worktree"
+    pub isolation: String,
+    /// Git branch backing the worktree (None until/unless isolated).
+    #[serde(default)]
+    pub branch: Option<String>,
+    /// Working dir agents in this thread run in. Equals the workspace cwd for a
+    /// shared thread; the worktree path once isolated.
+    pub cwd: String,
+    /// "ready" | "preparing" | "failed"
+    pub state: String,
+    pub created_at: i64,
+}
+
 /// One row from `GET /api/workspaces`. `member_count` is computed at list
 /// time (live agents whose `workspace_id` points here). Soft-deleted
 /// workspaces aren't included by default.
@@ -396,6 +426,10 @@ pub struct Workspace {
     /// project dir stays in `cwd` and is NOT duplicated here.
     #[serde(default)]
     pub roots: Vec<WorkspaceRoot>,
+    /// The workspace's "directions" (always ≥1: an auto-created `main`).
+    /// Oldest-first; the first entry is the main thread.
+    #[serde(default)]
+    pub threads: Vec<ThreadInfo>,
 }
 
 /// `POST /api/workspaces` payload. CreateWizard sends this before launching
@@ -412,4 +446,22 @@ pub struct CreateWorkspaceRequest {
     /// default. The primary project dir goes in `cwd`, not here.
     #[serde(default)]
     pub roots: Vec<WorkspaceRoot>,
+}
+
+/// `POST /api/workspaces/:id/threads` — open a new direction. Zero-friction by
+/// design: `name` is optional (the orchestrator names it later from the first
+/// message via `swarm_name_thread`). The server mints a placeholder slug.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateThreadRequest {
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
+/// `PATCH /api/workspaces/:id/threads/:tid` — (re)name a direction. Setting a
+/// real name is ALSO the trigger that kicks off background git isolation: a
+/// git project gets a worktree on `<project>-<slug>` so directions don't
+/// clobber each other's working tree. Pure rename for non-git / already-named.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateThreadRequest {
+    pub name: String,
 }

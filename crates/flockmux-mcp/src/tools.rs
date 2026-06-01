@@ -174,6 +174,21 @@ pub fn tool_descriptors() -> Vec<Value> {
                 "additionalProperties": false
             }
         }),
+        json!({
+            "name": "swarm_name_thread",
+            "description": "Give THIS direction (thread) a short human name, ONCE, right after you read the user's first message. On a git project this also silently starts file isolation (a private git worktree) so this direction can't clobber another direction's working tree — the user never sees git/branches/checkout. No-op if you're on the workspace's main direction. Pick a 2-4 word lowercase name describing the goal, e.g. 'dark mode', 'payment retry', 'api v2 migration'.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Short human-readable direction name (2-4 words, e.g. 'dark mode'). Automatically derived into a filesystem-friendly slug + git branch."
+                    }
+                },
+                "required": ["name"],
+                "additionalProperties": false
+            }
+        }),
     ]
 }
 
@@ -189,6 +204,7 @@ pub async fn call_tool(ctx: &ToolContext, name: &str, args: &Value) -> Value {
         "swarm_read_blackboard" => read_blackboard(ctx, args).await,
         "swarm_write_blackboard" => write_blackboard(ctx, args).await,
         "swarm_spawn_worker" => spawn_worker(ctx, args).await,
+        "swarm_name_thread" => name_thread(ctx, args).await,
         other => Err(format!("unknown tool '{other}'")),
     };
     match result {
@@ -646,6 +662,79 @@ async fn spawn_worker(ctx: &ToolContext, args: &Value) -> Result<String, String>
     ))
 }
 
+/// Name (and thereby isolate) the caller's current direction. The orchestrator
+/// calls this once, after reading the first user message, to give the direction
+/// a human label — which on a git project also kicks off background worktree
+/// isolation. `thread_id` + `workspace_id` are reverse-resolved from
+/// `/api/agent`; the agent never plumbs them.
+async fn name_thread(ctx: &ToolContext, args: &Value) -> Result<String, String> {
+    let name = arg_str(args, "name")?;
+
+    // Reverse-resolve our own workspace_id + thread_id via /api/agent (server
+    // attaches both to every AgentInfo).
+    let agents_url = format!("{}/api/agent", ctx.server_url);
+    let agents_resp = ctx
+        .http
+        .get(&agents_url)
+        .send()
+        .await
+        .map_err(|e| format!("flockmux-server unreachable at {agents_url}: {e}"))?;
+    if !agents_resp.status().is_success() {
+        return Err(http_err_text(agents_resp).await);
+    }
+    let agents_body: Vec<Value> = agents_resp
+        .json()
+        .await
+        .map_err(|e| format!("malformed response from {agents_url}: {e}"))?;
+    let me = agents_body
+        .iter()
+        .find(|a| a.get("agent_id").and_then(|v| v.as_str()) == Some(ctx.agent_id.as_str()))
+        .ok_or_else(|| format!("could not find caller agent `{}` in /api/agent", ctx.agent_id))?;
+    let workspace_id = me
+        .get("workspace_id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "caller agent has no workspace_id (pre-Step3 spawn?)".to_string())?;
+    let thread_id = match me.get("thread_id").and_then(|v| v.as_str()) {
+        Some(tid) => tid,
+        None => {
+            // No thread row = the workspace's main direction. Main IS the
+            // project and is never renamed/isolated — no-op so the orchestrator
+            // doesn't treat it as an error.
+            return Ok(format!(
+                "You're on the main direction — it can't be renamed or isolated (it IS the \
+                 project). Naming only applies to additional directions. (requested: {name:?})"
+            ));
+        }
+    };
+
+    let url = format!(
+        "{}/api/workspaces/{}/threads/{}",
+        ctx.server_url, workspace_id, thread_id
+    );
+    let resp = ctx
+        .http
+        .patch(&url)
+        .json(&json!({ "name": name }))
+        .send()
+        .await
+        .map_err(|e| format!("flockmux-server unreachable at {url}: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(http_err_text(resp).await);
+    }
+    let body: Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("malformed response from {url}: {e}"))?;
+    let slug = body.get("slug").and_then(|v| v.as_str()).unwrap_or("?");
+    let state = body.get("state").and_then(|v| v.as_str()).unwrap_or("?");
+    let isolation = body.get("isolation").and_then(|v| v.as_str()).unwrap_or("?");
+    Ok(format!(
+        "Named this direction `{name}` (slug `{slug}`, state={state}, isolation={isolation}). \
+         On a git project, file isolation (a worktree) is prepared in the background — just \
+         keep working."
+    ))
+}
+
 // ── formatting helpers ───────────────────────────────────────────────────
 
 /// Format with awareness of which ids are newly-read this call.
@@ -987,8 +1076,9 @@ mod tests {
     fn tool_descriptors_have_required_fields() {
         let tools = tool_descriptors();
         // 7 swarm primitives + swarm_spawn_worker (Magentic-One 重构后唯一的
-        // 派活入口) = 8. Bump this when adding tools.
-        assert_eq!(tools.len(), 8);
+        // 派活入口) + swarm_name_thread (multi-direction naming/isolation) = 9.
+        // Bump this when adding tools.
+        assert_eq!(tools.len(), 9);
         for t in &tools {
             assert!(t["name"].is_string());
             assert!(t["description"].is_string());
@@ -999,6 +1089,7 @@ mod tests {
             .filter_map(|t| t["name"].as_str())
             .collect();
         assert!(names.contains(&"swarm_spawn_worker"));
+        assert!(names.contains(&"swarm_name_thread"));
         // 老 spell 工具已经退役;orchestrator 直接 spawn_worker。
         assert!(!names.contains(&"swarm_list_spells"));
         assert!(!names.contains(&"swarm_run_spell"));

@@ -59,6 +59,7 @@ fn git(cwd: &Path, args: &[&str]) -> Result<GitOut> {
 /// a worktree immediately or whether we need to `git init` first. A timeout /
 /// launch error is treated as "not a repo" (we'll try to init, which is safe —
 /// `git init` on an existing repo is a no-op).
+#[allow(dead_code)] // documented helper; current flow uses idempotent init
 pub fn is_git_repo(dir: &Path) -> bool {
     match git(dir, &["rev-parse", "--is-inside-work-tree"]) {
         Ok(o) => o.status_ok && o.stdout.trim() == "true",
@@ -120,7 +121,9 @@ pub fn git_init_with_commit(dir: &Path) -> Result<()> {
 /// the project basename. Git branch names are fairly permissive but a sibling
 /// DIRECTORY name should be filesystem-friendly: keep `[a-z0-9._-]`, collapse
 /// the rest to `-`, trim leading/trailing separators, lowercase. Empty → "dir".
-fn sanitize_suffix(branch: &str) -> String {
+/// Reused by the thread REST layer to derive a stable blackboard slug + branch
+/// from a human/AI-supplied direction name.
+pub(crate) fn sanitize_suffix(branch: &str) -> String {
     let mut s: String = branch
         .chars()
         .map(|c| {

@@ -12,14 +12,16 @@ use axum::{
     Json,
 };
 use flockmux_protocol::rest::{
-    AgentInfo, CliPluginInfo, CreateWorkspaceRequest, RunSpellAgent, RunSpellRequest,
-    RunSpellResponse, SpawnAgentRequest, SpawnAgentResponse, SpawnWorkerRequest,
-    SpawnWorkerResponse, SpellAgentInfo, SpellInfo, Workspace, WorkspaceRoot,
+    AgentInfo, CliPluginInfo, CreateThreadRequest, CreateWorkspaceRequest, RunSpellAgent,
+    RunSpellRequest, RunSpellResponse, SpawnAgentRequest, SpawnAgentResponse, SpawnWorkerRequest,
+    SpawnWorkerResponse, SpellAgentInfo, SpellInfo, ThreadInfo, UpdateThreadRequest, Workspace,
+    WorkspaceRoot,
 };
 use flockmux_protocol::ws_swarm::{AgentState, SwarmEvent};
 use flockmux_recorder::{Recorder, RecorderConfig};
 use flockmux_storage::{
-    NewAgent, NewRecording, NewSpellRun, NewWorker, NewWorkspace, NewWorkspaceRoot,
+    NewAgent, NewRecording, NewSpellRun, NewThread, NewWorker, NewWorkspace, NewWorkspaceRoot,
+    ThreadRecord,
 };
 use serde_json::json;
 use std::collections::HashMap;
@@ -32,6 +34,22 @@ fn now_ms() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
+}
+
+/// Map a storage `ThreadRecord` onto the wire `ThreadInfo` (drops the internal
+/// `deleted_at`; the API only ever surfaces alive threads).
+fn thread_record_to_info(t: ThreadRecord) -> ThreadInfo {
+    ThreadInfo {
+        id: t.id,
+        workspace_id: t.workspace_id,
+        slug: t.slug,
+        name: t.name,
+        isolation: t.isolation,
+        branch: t.branch,
+        cwd: t.cwd,
+        state: t.state,
+        created_at: t.created_at,
+    }
 }
 
 pub async fn list_plugins(State(state): State<AppState>) -> impl IntoResponse {
@@ -113,9 +131,12 @@ pub async fn spawn(
     let layout = WorkspaceLayout::PerAgent {
         root: workspace_root,
     };
-    let outcome = spawn_with_bookkeeping(&state, &req.cli, req.role, req.model, layout, ws.id, None)
-        .await
-        .map_err(|(status, msg)| (status, Json(json!({"error": msg}))))?;
+    // Trailing args: spell_run_id=None (standalone), thread_id=None (a single
+    // ad-hoc agent lands on the workspace's main thread).
+    let outcome =
+        spawn_with_bookkeeping(&state, &req.cli, req.role, req.model, layout, ws.id, None, None)
+            .await
+            .map_err(|(status, msg)| (status, Json(json!({"error": msg}))))?;
     Ok(Json(SpawnAgentResponse {
         agent_id: outcome.agent_id,
         cli: outcome.cli,
@@ -180,6 +201,7 @@ pub(crate) async fn spawn_with_bookkeeping(
     layout: WorkspaceLayout,
     workspace_id: String,
     spell_run_id: Option<String>,
+    thread_id: Option<String>,
 ) -> Result<SpawnOutcome, (StatusCode, String)> {
     // Fork-bomb guard (F4): a runaway/looping orchestrator — or a worker it
     // spawned — calling swarm_spawn_worker can otherwise fork unbounded real
@@ -258,9 +280,9 @@ pub(crate) async fn spawn_with_bookkeeping(
             spawned_at,
             workspace_id: Some(workspace_id.clone()),
             spell_run_id: spell_run_id.clone(),
-            // P1: always main thread (None). P3 adds a thread_id param to
-            // spawn_with_bookkeeping and threads the real direction through.
-            thread_id: None,
+            // Direction this agent belongs to. `None` = the workspace's main
+            // thread (resolved by callers; legacy/pre-thread spawns also None).
+            thread_id: thread_id.clone(),
         })
         .await
     {
@@ -798,8 +820,43 @@ pub async fn spawn_worker(
                 Json(json!({"error": format!("unknown workspace_id: {}", req.workspace_id)})),
             )
         })?;
+
+    // Inherit the caller's direction (thread): a worker runs in the same
+    // thread — and thus the same worktree cwd — as the orchestrator/worker
+    // that delegated it, so siblings on one direction don't clobber another
+    // direction's working tree. A genuine `None` (caller has no thread) = the
+    // workspace's main thread, whose cwd is the workspace cwd.
+    // A hard lookup error must NOT silently fall back to the workspace cwd:
+    // for an isolated direction that would run file work in the WRONG (shared)
+    // tree. So a DB error fails the spawn; only a genuine `None` (caller has no
+    // thread) maps to the main thread / workspace cwd.
+    let thread_id = state
+        .store
+        .get_thread_id_for_agent(req.caller_agent_id.clone())
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": format!("thread lookup failed: {e}")})),
+            )
+        })?;
+    let thread_cwd = match thread_id.as_ref() {
+        Some(tid) => match state.store.get_thread(tid.clone()).await {
+            Ok(Some(t)) => t.cwd,
+            // Thread row gone (deleted) → fall back to the main/project cwd.
+            Ok(None) => ws.cwd.clone(),
+            // Hard error: don't guess a directory; fail loudly.
+            Err(e) => {
+                return Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"error": format!("thread cwd lookup failed: {e}")})),
+                ))
+            }
+        },
+        None => ws.cwd.clone(),
+    };
     let layout = WorkspaceLayout::Shared {
-        dir: PathBuf::from(&ws.cwd),
+        dir: PathBuf::from(&thread_cwd),
     };
 
     // Fork-bomb guard (F4), recursion arm: bound the delegation depth so a
@@ -850,7 +907,8 @@ pub async fn spawn_worker(
         req.model.clone(),
         layout,
         req.workspace_id.clone(),
-        None, // ad-hoc workers don't belong to a spell run
+        None,             // ad-hoc workers don't belong to a spell run
+        thread_id.clone(), // P3③: inherit the caller's direction (None = main)
     )
     .await
     .map_err(|(status, msg)| (status, Json(json!({"error": msg}))))?;
@@ -1141,6 +1199,34 @@ pub async fn create_workspace_handler(
             )
         })?;
 
+    // Auto-create the workspace's `main` direction so every workspace owns at
+    // least one thread from birth. Zero-friction: shared isolation, cwd = the
+    // workspace cwd, ready immediately. A store failure here is non-fatal —
+    // agents simply fall back to the legacy `thread_id = None` (= main) path —
+    // so we log and return an empty thread list rather than 500 the creation.
+    let threads: Vec<ThreadInfo> = match state
+        .store
+        .create_thread(
+            NewThread {
+                workspace_id: rec.id.clone(),
+                slug: "main".to_string(),
+                name: Some("main".to_string()),
+                isolation: "shared".to_string(),
+                branch: None,
+                cwd: rec.cwd.clone(),
+                state: "ready".to_string(),
+            },
+            now_ms(),
+        )
+        .await
+    {
+        Ok(t) => vec![thread_record_to_info(t)],
+        Err(e) => {
+            tracing::warn!(?e, workspace = %rec.id, "create main thread failed; agents fall back to main = None");
+            Vec::new()
+        }
+    };
+
     // Attach any dependency-source roots the wizard sent. Each is validated
     // the same way as the primary cwd above (exists + is a dir → 4xx), then
     // persisted. The workspace row already exists at this point; a failed root
@@ -1213,6 +1299,7 @@ pub async fn create_workspace_handler(
         created_at: rec.created_at,
         member_count: 0,
         roots,
+        threads,
     }))
 }
 
@@ -1377,11 +1464,27 @@ pub async fn list_workspaces_handler(State(state): State<AppState>) -> impl Into
             parent_id: r.parent_id,
         });
     }
+    // Threads (directions) per workspace. Unlike roots there's no "list all"
+    // query; with a handful of workspaces locally, one list_threads each is
+    // cheap and keeps the store API minimal. Oldest-first (main leads).
+    let mut threads_by_ws: HashMap<String, Vec<ThreadInfo>> = HashMap::new();
+    for r in &rows {
+        let list = state
+            .store
+            .list_threads(r.id.clone())
+            .await
+            .unwrap_or_default();
+        threads_by_ws.insert(
+            r.id.clone(),
+            list.into_iter().map(thread_record_to_info).collect(),
+        );
+    }
     let items: Vec<Workspace> = rows
         .into_iter()
         .map(|r| Workspace {
             member_count: counts.get(&r.id).copied().unwrap_or(0),
             roots: roots_by_ws.remove(&r.id).unwrap_or_default(),
+            threads: threads_by_ws.remove(&r.id).unwrap_or_default(),
             id: r.id,
             slug: r.slug,
             name: r.name,
@@ -1391,6 +1494,359 @@ pub async fn list_workspaces_handler(State(state): State<AppState>) -> impl Into
         })
         .collect();
     Json(items)
+}
+
+// ── threads (directions) ─────────────────────────────────────────────────
+
+/// Ensure `base` is unique among a workspace's ALIVE thread slugs, appending
+/// `-2`, `-3`, … on collision. Best-effort: on a list error we return `base`
+/// and let the DB's unique index reject a genuine dup.
+async fn unique_thread_slug(state: &AppState, workspace_id: &str, base: &str) -> String {
+    let existing: std::collections::HashSet<String> = state
+        .store
+        .list_threads(workspace_id.to_string())
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|t| t.slug)
+        .collect();
+    if !existing.contains(base) {
+        return base.to_string();
+    }
+    let mut n = 2;
+    loop {
+        let cand = format!("{base}-{n}");
+        if !existing.contains(&cand) {
+            return cand;
+        }
+        n += 1;
+    }
+}
+
+/// `GET /api/workspaces/:id/threads` — list a workspace's directions
+/// (oldest-first; the first entry is the auto-created `main`).
+pub async fn list_threads_handler(
+    State(state): State<AppState>,
+    Path(workspace_id): Path<String>,
+) -> impl IntoResponse {
+    let list = state
+        .store
+        .list_threads(workspace_id)
+        .await
+        .unwrap_or_default();
+    Json(
+        list.into_iter()
+            .map(thread_record_to_info)
+            .collect::<Vec<_>>(),
+    )
+}
+
+/// `POST /api/workspaces/:id/threads` — open a new direction. Zero-friction:
+/// `name` optional; created `shared` + `ready` in the workspace's own cwd. Git
+/// isolation is DEFERRED until the direction is named (see
+/// `update_thread_handler`) so clicking "+ new direction" never blocks on git.
+/// The slug is FIXED at creation and never changes — renaming only moves the
+/// display name + git branch, so already-spawned agents' blackboard keys
+/// (`{workspace_id}/{slug}/…`) stay valid.
+pub async fn create_thread_handler(
+    State(state): State<AppState>,
+    Path(workspace_id): Path<String>,
+    Json(req): Json<CreateThreadRequest>,
+) -> Result<Json<ThreadInfo>, (StatusCode, Json<serde_json::Value>)> {
+    let ws = state
+        .store
+        .get_workspace_by_id(workspace_id.clone())
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": e.to_string()})),
+            )
+        })?
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": format!("unknown workspace_id: {workspace_id}")})),
+            )
+        })?;
+    let name = req.name.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    // A name (if any) yields a readable, stable slug; otherwise a short random
+    // placeholder. Slug is fixed for the thread's life (see doc above).
+    let base_slug = match name {
+        Some(n) => crate::worktree::sanitize_suffix(n),
+        None => format!("t-{}", &Uuid::new_v4().to_string()[..6]),
+    };
+    let slug = unique_thread_slug(&state, &workspace_id, &base_slug).await;
+    let rec = state
+        .store
+        .create_thread(
+            NewThread {
+                workspace_id: workspace_id.clone(),
+                slug,
+                name: name.map(|s| s.to_string()),
+                isolation: "shared".to_string(),
+                branch: None,
+                cwd: ws.cwd.clone(),
+                state: "ready".to_string(),
+            },
+            now_ms(),
+        )
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": e.to_string()})),
+            )
+        })?;
+    Ok(Json(thread_record_to_info(rec)))
+}
+
+/// `PATCH /api/workspaces/:id/threads/:tid` — (re)name a direction. Naming a
+/// previously-unnamed, non-`main` direction is ALSO the trigger for automatic
+/// git isolation: we persist the name + branch, flip state to `preparing`,
+/// return immediately, and a background task does git takeover + `worktree add`
+/// + repoints the thread cwd, finally → `ready`. If git isolation fails (or the
+/// project can't be a repo) the direction degrades gracefully to `shared` and
+/// stays usable. The `main` direction and already-isolated threads are a pure
+/// rename. The slug NEVER changes (keeps blackboard keys stable).
+///
+/// NOTE (P3 boundary): repointing the cwd does not migrate an ALREADY-running
+/// agent's process cwd. The intended flow names the direction from the first
+/// message (before file work) and the frontend gates orchestrator/worker spawns
+/// on `state == "ready"`, restarting into the new cwd. Sequencing lives in P4/P5.
+pub async fn update_thread_handler(
+    State(state): State<AppState>,
+    Path((workspace_id, thread_id)): Path<(String, String)>,
+    Json(req): Json<UpdateThreadRequest>,
+) -> Result<Json<ThreadInfo>, (StatusCode, Json<serde_json::Value>)> {
+    let name = req.name.trim();
+    if name.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "name must be non-empty"})),
+        ));
+    }
+    let thread = state
+        .store
+        .get_thread(thread_id.clone())
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": e.to_string()})),
+            )
+        })?
+        .filter(|t| t.workspace_id == workspace_id)
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": format!("unknown thread: {thread_id}")})),
+            )
+        })?;
+
+    // Kick off git isolation only for a not-yet-isolated, non-main direction
+    // that isn't already mid-isolation. The `state != "preparing"` guard makes
+    // a second concurrent PATCH (double-click / retried swarm_name_thread) a
+    // pure rename instead of racing a second `git worktree add` on the same
+    // dest. A degraded thread is back at `ready`, so it can still retry.
+    let should_isolate = thread.slug != "main"
+        && thread.isolation != "worktree"
+        && thread.state != "preparing";
+
+    if should_isolate {
+        // Branch (and thus the worktree dir `<project>-<branch>`) is derived
+        // from the STABLE per-workspace-unique slug, NOT the raw name: two
+        // directions sharing a display name still get distinct slugs, so they
+        // can't collide on the same branch/worktree dir. `name` only updates
+        // the display label.
+        let branch = thread.slug.clone();
+        // Phase 1 (sync, fast): name + `preparing`. branch/isolation/cwd are
+        // persisted in phase 2 only once the worktree actually exists, so a
+        // failed isolation never leaves a stale branch on a shared thread.
+        state
+            .store
+            .update_thread(
+                thread_id.clone(),
+                Some(name.to_string()),
+                None, // slug stays stable
+                None, // isolation flips in phase 2 on success
+                None, // branch persisted in phase 2 on success
+                None, // cwd repoints in phase 2 on success
+                Some("preparing".to_string()),
+            )
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"error": e.to_string()})),
+                )
+            })?;
+        // Phase 2 (background): git takeover + worktree add → ready.
+        spawn_thread_worktree(state.clone(), thread_id.clone(), thread.cwd.clone(), branch);
+    } else {
+        state
+            .store
+            .update_thread(
+                thread_id.clone(),
+                Some(name.to_string()),
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"error": e.to_string()})),
+                )
+            })?;
+    }
+
+    let updated = state
+        .store
+        .get_thread(thread_id.clone())
+        .await
+        .ok()
+        .flatten()
+        .map(thread_record_to_info)
+        .ok_or_else(|| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "thread vanished after update"})),
+            )
+        })?;
+    Ok(Json(updated))
+}
+
+/// Background git isolation for a freshly-named direction. The git calls block
+/// (each internally time-boxed at 30s) so they run on a blocking thread off the
+/// async runtime. On success the thread is repointed to the worktree dir and
+/// marked `worktree`/`ready`; on ANY failure it degrades to `shared`/`ready`
+/// (cwd unchanged) so the direction stays usable, just not isolated.
+fn spawn_thread_worktree(state: AppState, thread_id: String, project_cwd: String, branch: String) {
+    tokio::spawn(async move {
+        let cwd_for_git = project_cwd.clone();
+        let branch_for_git = branch.clone();
+        let git_result = tokio::task::spawn_blocking(move || {
+            let p = std::path::Path::new(&cwd_for_git);
+            crate::worktree::git_init_with_commit(p)?;
+            crate::worktree::worktree_add(p, &branch_for_git)
+        })
+        .await;
+        match git_result {
+            Ok(Ok(dest)) => {
+                let dest_str = dest.to_string_lossy().into_owned();
+                if let Err(e) = state
+                    .store
+                    .update_thread(
+                        thread_id.clone(),
+                        None,
+                        None,
+                        Some("worktree".to_string()),
+                        Some(branch.clone()),
+                        Some(dest_str.clone()),
+                        Some("ready".to_string()),
+                    )
+                    .await
+                {
+                    // The worktree exists on disk but we couldn't record it.
+                    // Degrade to shared/ready so the direction is never left
+                    // stuck in `preparing` (the worktree dir is orphaned —
+                    // acceptable; it's reusable on a later same-slug retry).
+                    tracing::warn!(?e, thread = %thread_id, "worktree built but thread update failed; degrading to shared");
+                    degrade_thread_to_shared(&state, &thread_id).await;
+                } else {
+                    tracing::info!(thread = %thread_id, dest = %dest_str, "direction isolated in git worktree");
+                }
+            }
+            Ok(Err(e)) => {
+                tracing::warn!(?e, thread = %thread_id, "git isolation failed; direction stays shared");
+                degrade_thread_to_shared(&state, &thread_id).await;
+            }
+            Err(e) => {
+                tracing::warn!(?e, thread = %thread_id, "worktree task panicked; direction stays shared");
+                degrade_thread_to_shared(&state, &thread_id).await;
+            }
+        }
+    });
+}
+
+/// Flip a direction back to `shared`/`ready` after a failed isolation attempt.
+async fn degrade_thread_to_shared(state: &AppState, thread_id: &str) {
+    let _ = state
+        .store
+        .update_thread(
+            thread_id.to_string(),
+            None,
+            None,
+            Some("shared".to_string()),
+            None,
+            None,
+            Some("ready".to_string()),
+        )
+        .await;
+}
+
+/// `DELETE /api/workspaces/:id/threads/:tid` — soft-delete a direction (its
+/// slug becomes reusable). A git worktree, if any, is removed best-effort in
+/// the background. The `main` direction cannot be deleted.
+pub async fn delete_thread_handler(
+    State(state): State<AppState>,
+    Path((workspace_id, thread_id)): Path<(String, String)>,
+) -> Result<StatusCode, (StatusCode, Json<serde_json::Value>)> {
+    let thread = state
+        .store
+        .get_thread(thread_id.clone())
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": e.to_string()})),
+            )
+        })?
+        .filter(|t| t.workspace_id == workspace_id)
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": format!("unknown thread: {thread_id}")})),
+            )
+        })?;
+    if thread.slug == "main" {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "the main direction cannot be deleted"})),
+        ));
+    }
+    state
+        .store
+        .soft_delete_thread(thread_id.clone(), now_ms())
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": e.to_string()})),
+            )
+        })?;
+    // Best-effort worktree cleanup. repo = the workspace's primary cwd; dest =
+    // the thread's worktree dir.
+    if thread.isolation == "worktree" {
+        if let Ok(Some(ws)) = state.store.get_workspace_by_id(workspace_id).await {
+            let repo = ws.cwd.clone();
+            let dest = thread.cwd.clone();
+            tokio::spawn(async move {
+                let _ = tokio::task::spawn_blocking(move || {
+                    crate::worktree::worktree_remove(
+                        std::path::Path::new(&repo),
+                        std::path::Path::new(&dest),
+                    )
+                })
+                .await;
+            });
+        }
+    }
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// `DELETE /api/workspaces/:id` — soft-delete a workspace. Live agents
@@ -2124,6 +2580,54 @@ pub async fn run_spell(
             )
         })?;
 
+    // Resolve the direction (thread) this spell runs in. Precedence:
+    //   1. explicit `req.thread_id` — a UI launcher targeting a direction;
+    //   2. the caller's own thread — a sub-spell inherits the orchestrator's;
+    //   3. the workspace's main thread — oldest row, auto-created at creation;
+    //   4. None — a legacy workspace with no thread rows (= main, cwd = ws.cwd).
+    // The resolved thread drives (a) the cwd for isolated directions, (b) the
+    // `thread_id` stamped on every spawned agent, and (c) the `{thread_slug}`
+    // blackboard prefix so two directions don't clobber each other's ledgers.
+    let resolved_thread: Option<ThreadRecord> = {
+        let explicit = req.thread_id.clone();
+        let caller_tid = if explicit.is_some() {
+            None
+        } else if let Some(caller) = req.caller_agent_id.as_ref() {
+            state
+                .store
+                .get_thread_id_for_agent(caller.clone())
+                .await
+                .ok()
+                .flatten()
+        } else {
+            None
+        };
+        match explicit.or(caller_tid) {
+            // `get_thread` returns deleted rows too ("caller checks"), and
+            // `req.thread_id` is an untrusted wire field — reject a soft-deleted
+            // or foreign-workspace thread. On rejection `resolved_thread` is
+            // None, which the rest of the handler treats as the main direction.
+            Some(tid) => state
+                .store
+                .get_thread(tid)
+                .await
+                .ok()
+                .flatten()
+                .filter(|t| t.deleted_at.is_none() && t.workspace_id == workspace.id),
+            None => state
+                .store
+                .list_threads(workspace.id.clone())
+                .await
+                .ok()
+                .and_then(|mut v| (!v.is_empty()).then(|| v.remove(0))),
+        }
+    };
+    let thread_id: Option<String> = resolved_thread.as_ref().map(|t| t.id.clone());
+    let thread_slug: String = resolved_thread
+        .as_ref()
+        .map(|t| t.slug.clone())
+        .unwrap_or_else(|| "main".to_string());
+
     // Pick the workspace layout. For shared_workspace spells we use the
     // explicit `workspace_dir` if the client sent one (M6a UX: the
     // SpellsLauncher exposes a text input); otherwise default to the
@@ -2132,11 +2636,18 @@ pub async fn run_spell(
     // `workspaces_root` as before — cwd and workspace_id are orthogonal
     // (filesystem layer vs. UI grouping layer).
     let layout: WorkspaceLayout = if spell.manifest.shared_workspace {
-        let dir = req
-            .workspace_dir
-            .as_deref()
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from(&workspace.cwd));
+        let dir = match resolved_thread.as_ref() {
+            // An isolated direction runs in its own git worktree, full stop —
+            // that copy is the whole reason the direction exists.
+            Some(t) if t.isolation == "worktree" => PathBuf::from(&t.cwd),
+            // Shared / main direction: preserve the M6a `workspace_dir` override
+            // (SpellsLauncher text input), else the workspace's own cwd.
+            _ => req
+                .workspace_dir
+                .as_deref()
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from(&workspace.cwd)),
+        };
         WorkspaceLayout::Shared { dir }
     } else {
         WorkspaceLayout::PerAgent {
@@ -2180,6 +2691,7 @@ pub async fn run_spell(
             layout.clone(),
             workspace.id.clone(),
             Some(spell_run_id.clone()),
+            thread_id.clone(),
         )
         .await
         .map_err(|(status, msg)| {
@@ -2207,7 +2719,7 @@ pub async fn run_spell(
         let rendered_deps: Vec<String> = resolved
             .depends_on
             .iter()
-            .map(|d| spells::render_prompt(d, &req.task, &workspace_id, &empty_roles))
+            .map(|d| spells::render_prompt(d, &req.task, &workspace_id, &thread_slug, &empty_roles))
             .collect();
         for d in &rendered_deps {
             if d.contains('{') && d.contains('}') {
@@ -2241,8 +2753,13 @@ pub async fn run_spell(
             .unwrap_or_default();
         // Render the producer's signal the same way (F2) so a workspace-scoped
         // handoff_signal lines up with dependents' rendered depends_on.
-        let handoff_signal =
-            spells::render_prompt(&handoff_signal, &req.task, &workspace_id, &empty_roles);
+        let handoff_signal = spells::render_prompt(
+            &handoff_signal,
+            &req.task,
+            &workspace_id,
+            &thread_slug,
+            &empty_roles,
+        );
         crate::wake::register_exit_key(
             &state.exit_keys,
             out.agent_id.clone(),
@@ -2269,7 +2786,8 @@ pub async fn run_spell(
         if raw_prompt.trim().is_empty() {
             continue;
         }
-        let prompt = spells::render_prompt(raw_prompt, &req.task, &workspace_id, &role_to_id);
+        let prompt =
+            spells::render_prompt(raw_prompt, &req.task, &workspace_id, &thread_slug, &role_to_id);
         // Bootstrap inject — shared with spawn_worker (see
         // spawn_bootstrap_inject). Spell agents inject the RENDERED prompt
         // ({task}/{workspace_id}/{<role>_id} substituted above) and pass the

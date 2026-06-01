@@ -446,18 +446,26 @@ fn validate_manifest(m: &SpellManifest) -> Result<()> {
     Ok(())
 }
 
-/// Substitute `{task}`, `{workspace_id}` and `{<role>_id}` placeholders in
-/// a system prompt. Unknown placeholders are left literal so we don't
-/// silently drop content the spell author cared about — bad data is more
+/// Substitute `{task}`, `{workspace_id}`, `{thread_slug}` and `{<role>_id}`
+/// placeholders in a system prompt. Unknown placeholders are left literal so we
+/// don't silently drop content the spell author cared about — bad data is more
 /// recoverable than missing.
+///
+/// `{thread_slug}` is the per-direction blackboard segment (`main` for the main
+/// thread). Role templates key their ledgers/signals as
+/// `{workspace_id}/{thread_slug}/…` so two directions in one workspace don't
+/// clobber each other; the SAME substitution is applied to `depends_on` and
+/// `handoff_signal` keys (F2) so cross-agent wake matching stays exact-string.
 pub fn render_prompt(
     prompt: &str,
     task: &str,
     workspace_id: &str,
+    thread_slug: &str,
     role_to_id: &HashMap<String, String>,
 ) -> String {
     let mut out = prompt.replace("{task}", task);
     out = out.replace("{workspace_id}", workspace_id);
+    out = out.replace("{thread_slug}", thread_slug);
     for (role, id) in role_to_id {
         let needle = format!("{{{}_id}}", role);
         out = out.replace(&needle, id);
@@ -939,6 +947,7 @@ cli = "claude"
             "Task: {task}. Writer is {writer_id}, critic is {critic_id}.",
             "build a parser",
             "",
+            "main",
             &map,
         );
         assert_eq!(
@@ -954,15 +963,28 @@ cli = "claude"
             "write ledger to {workspace_id}/task.ledger.md",
             "",
             "abc123",
+            "main",
             &map,
         );
         assert_eq!(out, "write ledger to abc123/task.ledger.md");
     }
 
     #[test]
+    fn render_prompt_substitutes_thread_slug() {
+        // The per-direction blackboard prefix: two directions in one workspace
+        // resolve the SAME template to distinct keys via {thread_slug}.
+        let map = HashMap::new();
+        let tmpl = "ledger at {workspace_id}/{thread_slug}/task.ledger.md";
+        let main = render_prompt(tmpl, "", "ws1", "main", &map);
+        let dark = render_prompt(tmpl, "", "ws1", "dark-mode", &map);
+        assert_eq!(main, "ledger at ws1/main/task.ledger.md");
+        assert_eq!(dark, "ledger at ws1/dark-mode/task.ledger.md");
+    }
+
+    #[test]
     fn render_prompt_leaves_unknown_placeholders_literal() {
         let map = HashMap::new();
-        let out = render_prompt("ref {unknown_id} here", "t", "", &map);
+        let out = render_prompt("ref {unknown_id} here", "t", "", "main", &map);
         // We deliberately don't strip unknown {…_id} substrings — silent
         // dropping would hide spell author bugs.
         assert!(out.contains("{unknown_id}"));

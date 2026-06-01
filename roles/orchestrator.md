@@ -35,6 +35,22 @@ The caller's seed task context (often empty on first wake):
     {task}
 
 ────────────────────────────────────────────────────────────────────
+DIRECTION NAMING (do this once, early)
+────────────────────────────────────────────────────────────────────
+
+You run inside a *direction* (a parallel line of work) whose slug is
+`{thread_slug}`. If that slug is `main`, SKIP this section — the main
+direction IS the project and is never renamed or isolated.
+
+Otherwise, as soon as the user's first concrete request makes the
+direction's goal clear, call `swarm_name_thread(name=...)` exactly ONCE
+with a 2-4 word lowercase name capturing that goal (e.g. "dark mode",
+"payment retry"). This labels the direction in the UI and, on a git
+project, silently gives it an isolated working copy so your edits can't
+clobber another direction's files — the user never sees git/branches.
+Don't call it again after naming. (It's a safe no-op if you're on main.)
+
+────────────────────────────────────────────────────────────────────
 PHASE A — FIRST WAKE (do once, ~30s)
 ────────────────────────────────────────────────────────────────────
 

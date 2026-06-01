@@ -22,9 +22,9 @@ mod routes;
 mod spawn;
 mod spells;
 mod wake;
-// P2: git worktree helpers for thread isolation. Wired into the thread REST
-// handlers in P3 — until then the fns are unused, so allow dead_code.
-#[allow(dead_code)]
+// Git worktree helpers for thread isolation, wired into the thread REST
+// handlers (rename → background `worktree add`). `is_git_repo` stays as a
+// documented helper even though the current flow relies on idempotent init.
 mod worktree;
 
 use anyhow::{Context, Result};
@@ -33,7 +33,7 @@ use axum::{
     http::{header, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{delete, get, post},
+    routing::{delete, get, patch, post},
     Router,
 };
 use flockmux_storage::Store;
@@ -315,6 +315,15 @@ async fn main() -> Result<()> {
             "/api/workspaces/:id/root-suggestions",
             get(routes::rest::suggest_workspace_roots_handler),
         )
+        // Threads (directions) within a workspace.
+        .route(
+            "/api/workspaces/:id/threads",
+            get(routes::rest::list_threads_handler).post(routes::rest::create_thread_handler),
+        )
+        .route(
+            "/api/workspaces/:id/threads/:tid",
+            patch(routes::rest::update_thread_handler).delete(routes::rest::delete_thread_handler),
+        )
         .route("/api/spells", get(routes::rest::list_spells))
         .route("/api/spell/run", post(routes::rest::run_spell))
         .route("/ws/swarm", get(routes::ws_swarm::ws_swarm))
@@ -434,6 +443,9 @@ async fn auto_respawn_orchestrators(state: &AppState) -> Result<()> {
             workspace_dir: Some(ws.cwd.clone()),
             workspace_id: Some(ws.id.clone()),
             caller_agent_id: None,
+            // Auto-respawn revives the orchestrator on the workspace's main
+            // thread; run_spell resolves it (oldest thread) when this is None.
+            thread_id: None,
         };
         match routes::rest::run_spell(State(state.clone()), AxJson(req)).await {
             Ok(resp) => {
