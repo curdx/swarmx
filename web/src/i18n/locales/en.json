@@ -219,6 +219,8 @@
     "deleteWorkspace": "Delete {{name}}",
     "deleteWorkspaceTooltip": "Delete workspace",
     "mainDirection": "main",
+    "directionUnnamed": "Unnamed direction",
+    "agentHome": "Agent runs here",
     "newDirection": "New direction",
     "newDirectionTooltip": "Open an isolated direction (auto-isolated, won't touch main)",
     "directionPreparing": "isolating…",

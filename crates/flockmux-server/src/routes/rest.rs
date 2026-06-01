@@ -1279,6 +1279,7 @@ pub async fn create_workspace_handler(
             role: saved.role,
             label: saved.label,
             parent_id: saved.parent_id,
+            branch: None, // filled at list time
         });
     }
 
@@ -1295,6 +1296,7 @@ pub async fn create_workspace_handler(
         slug: rec.slug,
         name: rec.name,
         cwd: rec.cwd,
+        cwd_branch: None, // filled at list time
         accent: rec.accent,
         created_at: rec.created_at,
         member_count: 0,
@@ -1473,6 +1475,7 @@ pub async fn list_workspaces_handler(State(state): State<AppState>) -> impl Into
             role: r.role,
             label: r.label,
             parent_id: r.parent_id,
+            branch: None, // filled below from branch_map
         });
     }
     // Threads (directions) per workspace. Unlike roots there's no "list all"
@@ -1490,12 +1493,37 @@ pub async fn list_workspaces_handler(State(state): State<AppState>) -> impl Into
             list.into_iter().map(thread_record_to_info).collect(),
         );
     }
+    // Live git branch per path (workspace cwds + every attached root), for the
+    // sidebar's branch chips. Batched off the async runtime (git shells out and
+    // blocks) and memoized with a short TTL so the frequent workspaces refetch
+    // doesn't re-run git every time. Best-effort: on a join error every chip is
+    // simply absent.
+    let mut paths: Vec<PathBuf> = rows.iter().map(|r| PathBuf::from(&r.cwd)).collect();
+    for roots in roots_by_ws.values() {
+        paths.extend(roots.iter().map(|rt| PathBuf::from(&rt.path)));
+    }
+    let branch_map = tokio::task::spawn_blocking(move || branches_for_paths(&paths))
+        .await
+        .unwrap_or_default();
+    // Fold the computed branches into the attached roots.
+    for roots in roots_by_ws.values_mut() {
+        for rt in roots.iter_mut() {
+            rt.branch = branch_map
+                .get(std::path::Path::new(&rt.path))
+                .cloned()
+                .flatten();
+        }
+    }
     let items: Vec<Workspace> = rows
         .into_iter()
         .map(|r| Workspace {
             member_count: counts.get(&r.id).copied().unwrap_or(0),
             roots: roots_by_ws.remove(&r.id).unwrap_or_default(),
             threads: threads_by_ws.remove(&r.id).unwrap_or_default(),
+            cwd_branch: branch_map
+                .get(std::path::Path::new(&r.cwd))
+                .cloned()
+                .flatten(),
             id: r.id,
             slug: r.slug,
             name: r.name,
@@ -1505,6 +1533,37 @@ pub async fn list_workspaces_handler(State(state): State<AppState>) -> impl Into
         })
         .collect();
     Json(items)
+}
+
+/// Live git branch for each of `paths`, memoized with a short TTL. Shelling out
+/// to git is blocking, so this runs under `spawn_blocking`; the TTL keeps the
+/// hot workspaces-list refetch (fired on every thread/agent event) from
+/// re-invoking git each time. A path maps to `Some(branch)` only when it's a
+/// git work tree on a named branch — `None`/absent renders no chip.
+fn branches_for_paths(paths: &[PathBuf]) -> HashMap<PathBuf, Option<String>> {
+    use parking_lot::Mutex;
+    use std::sync::OnceLock;
+    use std::time::{Duration, Instant};
+    const TTL: Duration = Duration::from_secs(3);
+    static CACHE: OnceLock<Mutex<HashMap<PathBuf, (Option<String>, Instant)>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+
+    let mut out: HashMap<PathBuf, Option<String>> = HashMap::new();
+    for p in paths {
+        if out.contains_key(p) {
+            continue; // de-dup: a path can appear as both a cwd and a root
+        }
+        if let Some((b, at)) = cache.lock().get(p) {
+            if at.elapsed() < TTL {
+                out.insert(p.clone(), b.clone());
+                continue;
+            }
+        }
+        let b = crate::worktree::current_branch(p);
+        cache.lock().insert(p.clone(), (b.clone(), Instant::now()));
+        out.insert(p.clone(), b);
+    }
+    out
 }
 
 // ── threads (directions) ─────────────────────────────────────────────────
@@ -2113,6 +2172,7 @@ async fn refresh_workspace_deps_context(state: &AppState, workspace_id: &str) {
                 role: r.role,
                 label: r.label,
                 parent_id: r.parent_id,
+                branch: None, // deps-context writer ignores branch
             })
             .collect(),
         Err(e) => {
@@ -2255,6 +2315,7 @@ pub async fn add_workspace_root_handler(
         role: saved.role,
         label: saved.label,
         parent_id: saved.parent_id,
+        branch: None, // filled on the next workspaces list refetch
     }))
 }
 
@@ -2532,6 +2593,7 @@ pub async fn suggest_workspace_roots_handler(
             role: "dependency".to_string(),
             label: Some(label),
             parent_id: None,
+            branch: None, // suggestion only — not attached yet
         });
     }
 

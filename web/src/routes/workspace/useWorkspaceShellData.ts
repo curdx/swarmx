@@ -237,6 +237,7 @@ export function useWorkspaceShellData(
         id: w.slug,
         workspaceId: w.id,
         path: w.cwd,
+        cwdBranch: w.cwd_branch ?? null,
         name: w.name,
         parent,
         accentColor: accentToCssVar(w.accent),

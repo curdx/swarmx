@@ -67,6 +67,22 @@ pub fn is_git_repo(dir: &Path) -> bool {
     }
 }
 
+/// The branch currently checked out in `dir`, for the sidebar's live branch
+/// chip. Returns `None` for a detached HEAD (rev-parse yields the literal
+/// "HEAD"), a non-git dir, or any git error/timeout — the caller renders no
+/// chip in that case. Blocking (shells out to git); call off the async path.
+pub fn current_branch(dir: &Path) -> Option<String> {
+    let o = git(dir, &["rev-parse", "--abbrev-ref", "HEAD"]).ok()?;
+    if !o.status_ok {
+        return None;
+    }
+    let b = o.stdout.trim();
+    if b.is_empty() || b == "HEAD" {
+        return None; // detached / no commit yet
+    }
+    Some(b.to_string())
+}
+
 /// Make `dir` a git repo and create an initial commit so `worktree add` has a
 /// base to branch from. Idempotent-ish: `git init` on an existing repo is a
 /// no-op; if there's already a commit we skip committing. Uses inline
@@ -240,13 +256,25 @@ mod tests {
         std::fs::write(proj.join("README.md"), b"hi").unwrap();
 
         assert!(!is_git_repo(&proj), "fresh dir is not a repo");
+        assert_eq!(current_branch(&proj), None, "non-repo has no branch");
         git_init_with_commit(&proj).expect("init+commit");
         assert!(is_git_repo(&proj), "now a repo");
+        // The default branch name varies (main/master) by git version/config,
+        // so just assert we read *some* non-empty branch on the committed repo.
+        assert!(
+            current_branch(&proj).is_some_and(|b| !b.is_empty()),
+            "committed repo reports a branch",
+        );
 
         let wt = worktree_add(&proj, "dark-mode").expect("worktree add");
         assert!(wt.exists(), "worktree dir created");
         assert!(wt.join("README.md").exists(), "worktree has the files");
         assert_eq!(wt.file_name().unwrap(), "proj-dark-mode");
+        assert_eq!(
+            current_branch(&wt).as_deref(),
+            Some("dark-mode"),
+            "worktree is on its own branch",
+        );
 
         worktree_remove(&proj, &wt).expect("worktree remove");
         assert!(!wt.exists(), "worktree dir gone after remove");

@@ -20,6 +20,7 @@ import {
   FolderPlus,
   GitBranch,
   Hash,
+  Home,
   Loader2,
   Plus,
   Trash2,
@@ -74,6 +75,24 @@ function RoleChip({ role, label }: { role: string; label: string }) {
   );
 }
 
+/** Live git-branch caption for a work repo (the cwd + peer projects) and the
+ *  main direction. Front-loads branch identity the way GitButler / worktree
+ *  tools do, and — by showing each peer repo's own branch — lets the multi-repo
+ *  roots read as equals instead of a "primary vs the rest" hierarchy. Renders
+ *  nothing when there's no branch (non-git dir / detached HEAD). */
+function BranchCaption({ branch }: { branch?: string | null }) {
+  if (!branch) return null;
+  return (
+    <span
+      className="flex items-center gap-1 truncate font-mono text-[9px] leading-tight text-foreground-tertiary"
+      title={branch}
+    >
+      <GitBranch className="size-2.5 shrink-0" />
+      <span className="truncate">{branch}</span>
+    </span>
+  );
+}
+
 // ── Workspace root tree (logical, parent_id based) ─────────────────────
 
 interface RootNode {
@@ -110,7 +129,9 @@ function buildWorkspaceRootForest(ws: WorkspaceSummary): RootNode[] {
   const peers = topLevel.filter((r) => r.role === "project").map(make);
   const { name, parent } = splitWorkspacePath(ws.path);
   const mainNode: RootNode = {
-    root: { path: ws.path, role: "project", parent_id: null },
+    // Carry the cwd's live branch so the branch caption renders through the same
+    // path as peers — the cwd reads as just another repo (+ an "AI home" mark).
+    root: { path: ws.path, role: "project", parent_id: null, branch: ws.cwdBranch },
     name,
     parent,
     children: mainDeps,
@@ -174,34 +195,53 @@ function RootTree({
                 />
               )}
               <span className="flex min-w-0 flex-1 flex-col">
-                <span
-                  className={cn(
-                    "truncate font-mono text-[11px]",
-                    isProject
-                      ? "font-semibold text-foreground-primary"
-                      : "text-foreground-secondary",
-                  )}
-                >
-                  {node.name}
-                </span>
-                {node.parent && (
-                  <span className="truncate font-mono text-[9px] leading-tight text-foreground-tertiary">
-                    {node.parent}
+                <span className="flex min-w-0 items-center gap-1">
+                  <span
+                    className={cn(
+                      "truncate font-mono text-[11px]",
+                      isProject
+                        ? "font-semibold text-foreground-primary"
+                        : "text-foreground-secondary",
+                    )}
+                  >
+                    {node.name}
                   </span>
+                  {/* cwd is where the AI's terminal opens — a functional marker,
+                      not a "primary" rank, so the multi-repo roots stay peers. */}
+                  {node.isMain && (
+                    <span
+                      className="flex shrink-0 items-center text-accent-primary"
+                      title={t("chat.agentHome")}
+                      aria-label={t("chat.agentHome")}
+                    >
+                      <Home className="size-2.5" />
+                    </span>
+                  )}
+                </span>
+                {/* Work repos (cwd + peers) front-load their live branch; mounts
+                    keep their path caption. */}
+                {isProject && node.root.branch ? (
+                  <BranchCaption branch={node.root.branch} />
+                ) : (
+                  node.parent && (
+                    <span className="truncate font-mono text-[9px] leading-tight text-foreground-tertiary">
+                      {node.parent}
+                    </span>
+                  )
                 )}
               </span>
-              <RoleChip
-                role={node.isMain ? "main" : node.root.role}
-                label={
-                  node.isMain
-                    ? t("chat.primaryProject")
-                    : node.root.role === "project"
-                      ? t("chat.roleProject")
-                      : node.root.role === "tool"
-                        ? t("chat.roleTool")
-                        : t("chat.roleDependency")
-                }
-              />
+              {/* Role chip only on source mounts (deps/tools) — they're
+                  read-only references, not branches you work on. */}
+              {!isProject && (
+                <RoleChip
+                  role={node.root.role}
+                  label={
+                    node.root.role === "tool"
+                      ? t("chat.roleTool")
+                      : t("chat.roleDependency")
+                  }
+                />
+              )}
             </div>
             {hasKids && open && (
               <div className="ml-[0.6rem] flex flex-col border-l border-border-subtle pl-1.5">
@@ -455,9 +495,19 @@ export function WorkspaceList({
                       // cwd. Signal it so the user doesn't assume isolation.
                       const degraded = th.isolation === "degraded";
                       const preparing = th.state === "preparing";
+                      // The main direction runs in the cwd, so its branch is the
+                      // workspace cwd branch; isolated directions carry their own.
+                      const branch = isMain ? ws.cwdBranch : th.branch;
+                      // Don't surface the raw `t-xxxxxx` placeholder slug — until
+                      // the orchestrator names it (swarm_name_thread), it's just
+                      // an unnamed direction.
                       const label =
                         th.name?.trim() ||
-                        (isMain ? t("chat.mainDirection") : th.slug);
+                        (isMain
+                          ? t("chat.mainDirection")
+                          : th.slug.startsWith("t-")
+                            ? t("chat.directionUnnamed")
+                            : th.slug);
                       return (
                         <div
                           key={th.id}
@@ -493,7 +543,10 @@ export function WorkspaceList({
                             ) : (
                               <Hash className="size-3 shrink-0 text-foreground-tertiary" />
                             )}
-                            <span className="truncate">{label}</span>
+                            <span className="flex min-w-0 flex-1 flex-col">
+                              <span className="truncate">{label}</span>
+                              <BranchCaption branch={branch} />
+                            </span>
                             {preparing && (
                               <span className="ml-auto shrink-0 font-caption text-[9px] text-foreground-tertiary">
                                 {t("chat.directionPreparing")}

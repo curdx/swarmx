@@ -14,6 +14,9 @@ export interface WorkspaceSummary {
   workspaceId: string;
   /** The workspace's cwd. */
   path: string;
+  /** Branch currently checked out at `path` (cwd), for the sidebar's branch
+   *  chip on the agent-home repo. null for a non-git cwd / detached HEAD. */
+  cwdBranch: string | null;
   /** Human name from CreateWizard (workspaces.name). */
   name: string;
   /** Path parent for the small mono caption under the name. */

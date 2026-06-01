@@ -219,6 +219,8 @@
     "deleteWorkspace": "删除 {{name}}",
     "deleteWorkspaceTooltip": "删除工作空间",
     "mainDirection": "主线",
+    "directionUnnamed": "未命名方向",
+    "agentHome": "AI 终端在此",
     "newDirection": "新方向",
     "newDirectionTooltip": "开一个独立方向（自动隔离，不碰主线）",
     "directionPreparing": "隔离中…",

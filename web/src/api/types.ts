@@ -236,6 +236,9 @@ export interface WorkspaceRoot {
    *  anywhere; parent_id only expresses the "depends on / belongs under"
    *  relationship the user chose. */
   parent_id?: string | null;
+  /** Branch currently checked out at `path`, filled by the workspaces list for
+   *  the sidebar's live branch chip. null for a non-git dir / detached HEAD. */
+  branch?: string | null;
 }
 
 /** One "direction" inside a workspace: its own orchestrator + worker subtree +
@@ -264,6 +267,10 @@ export interface Workspace {
   slug: string;
   name: string;
   cwd: string;
+  /** Branch currently checked out at `cwd` (the agent's terminal home), filled
+   *  by the workspaces list for the sidebar's branch chip. null for a non-git
+   *  cwd / detached HEAD. */
+  cwd_branch?: string | null;
   accent?: string | null;
   created_at: number;
   /** Live agents whose `workspace_id` points here. Computed server-side

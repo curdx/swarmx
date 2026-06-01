@@ -385,6 +385,12 @@ pub struct WorkspaceRoot {
     /// node. Decoupled from physical path nesting.
     #[serde(default)]
     pub parent_id: Option<String>,
+    /// The branch currently checked out at `path`, filled at list time for the
+    /// sidebar's live branch chip. `None` for a non-git dir / detached HEAD, and
+    /// always omitted on create/add payloads (server computes it). Same
+    /// fill-on-output, skip-on-input contract as `id`.
+    #[serde(default)]
+    pub branch: Option<String>,
 }
 
 /// One "direction" inside a workspace: its own orchestrator + worker subtree
@@ -421,6 +427,12 @@ pub struct Workspace {
     pub slug: String,
     pub name: String,
     pub cwd: String,
+    /// Branch currently checked out at `cwd` (the agent's terminal落脚点), filled
+    /// at list time for the sidebar's live branch chip. `cwd` is a synthetic
+    /// tree node — not a `WorkspaceRoot` row — so its branch rides here rather
+    /// than on `roots`. `None` for a non-git cwd / detached HEAD.
+    #[serde(default)]
+    pub cwd_branch: Option<String>,
     #[serde(default)]
     pub accent: Option<String>,
     pub created_at: i64,
