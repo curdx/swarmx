@@ -482,7 +482,7 @@ export default function ChatView() {
                 <Avatar
                   className={cn(
                     "size-8 shrink-0",
-                    // 金边告诉用户"这个是主理人,长期在线"。没有 ring
+                    // 金边告诉用户"这个是调度,长期在线"。没有 ring
                     // 的就是临时 worker — 干完一件事就会消失。
                     isOrchestrator &&
                       "ring-2 ring-accent-primary ring-offset-2 ring-offset-surface-secondary",
@@ -505,7 +505,7 @@ export default function ChatView() {
                     </span>
                     {isOrchestrator && (
                       <span className="shrink-0 rounded-full bg-accent-primary-soft px-1.5 py-0.5 font-caption text-[9px] font-semibold text-accent-primary">
-                        {t("chat.pmBadge", "主理人")}
+                        {t("chat.pmBadge", "调度")}
                       </span>
                     )}
                     {dot.typing ? (
