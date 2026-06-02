@@ -106,8 +106,42 @@ function qs(params: Record<string, string | number | boolean | undefined>): stri
   return parts.length ? `?${parts.join("&")}` : "";
 }
 
+/** One detected runtime (node / npm / uv) for the MCP env probe. */
+export interface RuntimeInfo {
+  present: boolean;
+  version: string | null;
+}
+export interface McpEnv {
+  node: RuntimeInfo;
+  npm: RuntimeInfo;
+  uv: RuntimeInfo;
+}
+/** Per-server API-key state: set?, masked preview, and whether claude/codex agree. */
+export interface McpKeyState {
+  present: boolean;
+  masked: string | null;
+  consistent: boolean;
+}
+/** Names of MCP servers already configured per CLI (user scope) + key states. */
+export interface McpStatus {
+  claude: string[];
+  codex: string[];
+  keys?: Record<string, McpKeyState>;
+}
+
 export const api = {
   listPlugins: () => request<CliPluginInfo[]>("GET", "/api/plugins"),
+  // MCP admin (「快捷装 MCP」页面)
+  mcpEnv: () => request<McpEnv>("GET", "/api/mcp/env"),
+  mcpStatus: () => request<McpStatus>("GET", "/api/mcp/status"),
+  mcpInstall: (name: string, cli: "claude" | "codex", apiKey?: string) =>
+    request<{ ok: boolean; output: string }>("POST", "/api/mcp/install", {
+      name,
+      cli,
+      ...(apiKey ? { api_key: apiKey } : {}),
+    }),
+  mcpUninstall: (name: string, cli: "claude" | "codex") =>
+    request<{ ok: boolean; output: string }>("POST", "/api/mcp/uninstall", { name, cli }),
   listAgents: () => request<AgentInfo[]>("GET", "/api/agent"),
   spawnAgent: (req: SpawnAgentRequest) =>
     request<SpawnAgentResponse>("POST", "/api/agent", req),

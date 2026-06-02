@@ -248,6 +248,12 @@ async fn main() -> Result<()> {
 
     let app = Router::new()
         .route("/api/plugins", get(routes::rest::list_plugins))
+        // MCP admin (「快捷装 MCP」页面): runtime probe + read/add/remove via the
+        // CLIs' own `mcp` subcommands.
+        .route("/api/mcp/env", get(routes::mcp_admin::mcp_env))
+        .route("/api/mcp/status", get(routes::mcp_admin::mcp_status))
+        .route("/api/mcp/install", post(routes::mcp_admin::mcp_install))
+        .route("/api/mcp/uninstall", post(routes::mcp_admin::mcp_uninstall))
         .route(
             "/api/agent",
             get(routes::rest::list_agents).post(routes::rest::spawn),

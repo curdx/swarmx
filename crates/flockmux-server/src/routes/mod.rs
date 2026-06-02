@@ -1,3 +1,4 @@
+pub mod mcp_admin;
 pub mod pty_ws;
 pub mod recording;
 pub mod rest;

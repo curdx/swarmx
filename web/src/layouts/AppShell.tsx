@@ -24,9 +24,9 @@
 import { Link, Outlet, useLocation } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useEffect } from "react";
-import { Boxes, Search, Settings } from "lucide-react";
-import { cn } from "@/lib/cn";
+import { Boxes, Search } from "lucide-react";
 import { CommandPalette } from "@/components/CommandPalette";
+import { McpActivityBar } from "@/components/mcp/McpActivityBar";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { NotificationPopover } from "@/components/NotificationPopover";
 import { useNotificationBadge } from "@/hooks/useNotificationBadge";
@@ -136,39 +136,21 @@ export function AppShell() {
               hasUnseen 触发右上红点；popover open 时自动 markSeen 清掉。 */}
           <NotificationPopover hasUnseen={hasUnseen} onSeen={markSeen} />
 
-          {/* Settings — 直接跳完整页，不做下拉杂物箱。GitHub / Slack /
-              Cursor 都是这模式：gear icon = 单击就走，theme / debug /
-              about 全部活在 /settings 内部 section。Debug 主入口走 ⌘K
-              (它是开发者后门，不该 first-class)。
-              不用 NavLink callable-className + Tooltip asChild 组合 —
-              Radix Slot 会把 callable className 当字符串落到 DOM，整套
-              CSS 失效，icon 直接超尺寸。改用普通 Link + useLocation
-              手动判 active。 */}
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Link
-                to="/settings"
-                className={cn(
-                  "flex size-7 items-center justify-center rounded-md transition-colors hover:bg-surface-tertiary hover:text-foreground-primary",
-                  location.pathname.startsWith("/settings")
-                    ? "text-foreground-primary"
-                    : "text-foreground-tertiary",
-                )}
-                aria-label={t("nav.settings")}
-              >
-                <Settings className="size-4" />
-              </Link>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">{t("nav.settings")}</TooltipContent>
-          </Tooltip>
+          {/* 设置已挪到最左导航菜单条(McpActivityBar)底部 — 顶栏只留
+              ⌘K + 通知,跟 VS Code 把设置放活动栏底一致。 */}
         </header>
-        <main className="min-h-0 flex-1 overflow-hidden">
+        <main className="flex min-h-0 flex-1 overflow-hidden">
+          {/* 最外层窄活动栏(VS Code 式)，常驻所有 AppShell 路由的内容区最左。
+              MCP 图标点开左侧 Sheet。全屏录像 / debug 在 AppShell 之外，不受影响。 */}
+          <McpActivityBar />
           {/* Contain a render throw to the content area — the header (and its
               ⌘K / bell / settings) stays usable, and the route key resets the
               boundary so navigating away clears a stuck error. */}
-          <ErrorBoundary resetKey={location.pathname}>
-            <Outlet />
-          </ErrorBoundary>
+          <div className="flex min-w-0 flex-1 flex-col">
+            <ErrorBoundary resetKey={location.pathname}>
+              <Outlet />
+            </ErrorBoundary>
+          </div>
         </main>
         <CommandPalette />
       </div>

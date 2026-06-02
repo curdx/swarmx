@@ -33,6 +33,7 @@ import LedgerView from "./routes/workspace/views/Ledger";
 import ReplayPlayer from "./routes/replays/player";
 import SettingsRoute from "./routes/settings";
 import NotificationsRoute from "./routes/notifications";
+import McpRoute from "./routes/mcp";
 
 /** The view tabs nested under a workspace shell. Reused for both the
  *  main-direction URL (`/chat/:wsId/*`) and an explicit direction
@@ -65,6 +66,7 @@ export default function App() {
                 layout and resolves the active direction from useParams. */}
             <Route path="t/:threadSlug">{workspaceViewRoutes()}</Route>
           </Route>
+          <Route path="/mcp" element={<McpRoute />} />
           <Route path="/notifications" element={<NotificationsRoute />} />
           <Route path="/settings" element={<SettingsRoute />} />
           <Route path="/settings/:section" element={<SettingsRoute />} />
