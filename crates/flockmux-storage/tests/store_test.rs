@@ -994,3 +994,152 @@ async fn threads_crud_roundtrip() {
         .unwrap();
     assert_eq!(main2.slug, "main");
 }
+
+// ── re-root: the user's request survives an orchestrator handoff ─────────────
+// Regression for fd45c14. Isolating a direction into a worktree kills the
+// orchestrator that named it and respawns it under a NEW id. Two store
+// guarantees keep the user's opening request from being dropped across that
+// swap, so the replacement never re-greets "想干啥?" over a real ask:
+//   1. reassign_unread_user_messages — an as-yet-UNREAD `user → old` message is
+//      re-addressed to the new orchestrator, and nothing else is disturbed.
+//   2. latest_user_message_for_agents — if the old orchestrator already READ the
+//      request (it had to, to name the direction), #1 finds nothing to move, so
+//      the request body is recovered from here instead.
+
+#[tokio::test]
+async fn reassign_unread_moves_only_the_user_request() {
+    let (_dir, store) = fresh_store().await;
+
+    // The unanswered request → must move to the new orchestrator.
+    let req = store
+        .insert_message(NewMessage {
+            from_agent: "user".into(),
+            to_agent: "orch-old".into(),
+            kind: "note".into(),
+            body: "build me a login page".into(),
+            sent_at: ts(1),
+            in_reply_to: None,
+        })
+        .await
+        .unwrap();
+    // An already-READ user message → stays put (it's been answered).
+    let answered = store
+        .insert_message(NewMessage {
+            from_agent: "user".into(),
+            to_agent: "orch-old".into(),
+            kind: "note".into(),
+            body: "earlier, already handled".into(),
+            sent_at: ts(2),
+            in_reply_to: None,
+        })
+        .await
+        .unwrap();
+    store
+        .mark_read(vec![answered.id], "orch-old".into(), ts(3))
+        .await
+        .unwrap();
+    // Agent→orchestrator traffic (not from the user) → stays put.
+    store
+        .insert_message(NewMessage {
+            from_agent: "worker-7".into(),
+            to_agent: "orch-old".into(),
+            kind: "note".into(),
+            body: "backend.done".into(),
+            sent_at: ts(4),
+            in_reply_to: None,
+        })
+        .await
+        .unwrap();
+    // A different direction's orchestrator (not in the killed set) → stays put.
+    store
+        .insert_message(NewMessage {
+            from_agent: "user".into(),
+            to_agent: "orch-other".into(),
+            kind: "note".into(),
+            body: "unrelated direction".into(),
+            sent_at: ts(5),
+            in_reply_to: None,
+        })
+        .await
+        .unwrap();
+
+    let moved = store
+        .reassign_unread_user_messages(vec!["orch-old".into()], "orch-new".into())
+        .await
+        .unwrap();
+    assert_eq!(moved, 1, "exactly the one unread user request moves");
+
+    // The request is now addressed to the fresh orchestrator…
+    let to_new = store
+        .list_messages(ListMessagesOpts {
+            to_agent: Some("orch-new".into()),
+            limit: 50,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(to_new.len(), 1);
+    assert_eq!(to_new[0].id, req.id);
+    assert_eq!(to_new[0].body, "build me a login page");
+
+    // …and the old orchestrator keeps exactly the read + agent rows, never the
+    // request.
+    let to_old = store
+        .list_messages(ListMessagesOpts {
+            to_agent: Some("orch-old".into()),
+            limit: 50,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(to_old.len(), 2, "read user msg + agent msg stay put");
+    assert!(to_old.iter().all(|m| m.id != req.id));
+
+    // The unrelated direction is untouched.
+    let to_other = store
+        .list_messages(ListMessagesOpts {
+            to_agent: Some("orch-other".into()),
+            limit: 50,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(to_other.len(), 1);
+}
+
+#[tokio::test]
+async fn already_read_request_is_recovered_by_latest_user_message() {
+    // The exact fd45c14 orphan: the old orchestrator READ the user's request to
+    // name the direction, so by re-root time there is nothing UNREAD left to
+    // reassign — a zero move is the bug condition, not a failure.
+    let (_dir, store) = fresh_store().await;
+    let req = store
+        .insert_message(NewMessage {
+            from_agent: "user".into(),
+            to_agent: "orch-old".into(),
+            kind: "note".into(),
+            body: "add a dark mode toggle".into(),
+            sent_at: ts(1),
+            in_reply_to: None,
+        })
+        .await
+        .unwrap();
+    store
+        .mark_read(vec![req.id], "orch-old".into(), ts(2))
+        .await
+        .unwrap();
+
+    let moved = store
+        .reassign_unread_user_messages(vec!["orch-old".into()], "orch-new".into())
+        .await
+        .unwrap();
+    assert_eq!(moved, 0, "a read message has nothing left to reassign");
+
+    // …but the request body is still recoverable, so the respawned orchestrator
+    // addresses the real ask instead of greeting from scratch.
+    let recovered = store
+        .latest_user_message_for_agents(vec!["orch-old".into()])
+        .await
+        .unwrap();
+    assert_eq!(recovered.as_deref(), Some("add a dark mode toggle"));
+}
