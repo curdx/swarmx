@@ -1143,3 +1143,63 @@ async fn already_read_request_is_recovered_by_latest_user_message() {
         .unwrap();
     assert_eq!(recovered.as_deref(), Some("add a dark mode toggle"));
 }
+
+// ── delete direction → its blackboard ledgers go too, nothing else ──────────
+// Regression for the "blackboard leak on direction delete" bug. Deleting a
+// direction must drop `<ws>/<slug>` and everything under `<ws>/<slug>/…`, but
+// must NOT touch sibling directions, other workspaces, or keys that merely
+// share a string prefix. The store uses GLOB (not LIKE) precisely so a slug
+// containing `_` can't act as a single-char wildcard — this pins that choice:
+// the `ws/darkXmode/leak.md` decoy would be wrongly deleted by a LIKE impl.
+
+#[tokio::test]
+async fn delete_blackboard_prefix_drops_only_the_direction_subtree() {
+    let (_dir, store) = fresh_store().await;
+    for p in [
+        "ws/dark_mode",             // the bare dir key      → deleted
+        "ws/dark_mode/ledger.md",   // under it              → deleted
+        "ws/dark_mode/sub/notes.md",// deeper under it       → deleted
+        "ws/dark_mode-old/x.md",    // shares prefix, not under → survives
+        "ws/darkXmode/leak.md",     // `_`-as-LIKE-wildcard footgun → survives
+        "ws/light/ledger.md",       // sibling direction     → survives
+        "ws2/dark_mode/ledger.md",  // different workspace    → survives
+    ] {
+        store
+            .insert_blackboard_op(NewBlackboardOp {
+                agent_id: Some("orch".into()),
+                op: "write".into(),
+                path: p.into(),
+                content: "x".into(),
+                sha256: "h".into(),
+                at: ts(1),
+            })
+            .await
+            .unwrap();
+    }
+
+    let removed = store
+        .delete_blackboard_prefix("ws/dark_mode".into())
+        .await
+        .unwrap();
+    assert_eq!(removed, 3, "only the bare key + the two keys under it");
+
+    let mut left: Vec<String> = store
+        .list_blackboard_ops(None)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|r| r.path)
+        .collect();
+    left.sort();
+    assert_eq!(
+        left,
+        vec![
+            // sorted ASCII: 'X' (0x58) precedes '_' (0x5F)
+            "ws/darkXmode/leak.md".to_string(),
+            "ws/dark_mode-old/x.md".to_string(),
+            "ws/light/ledger.md".to_string(),
+            "ws2/dark_mode/ledger.md".to_string(),
+        ],
+        "siblings, other workspaces, and prefix-sharing keys all survive",
+    );
+}
