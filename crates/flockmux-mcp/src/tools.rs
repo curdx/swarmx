@@ -158,7 +158,7 @@ pub fn tool_descriptors() -> Vec<Value> {
                     },
                     "model": {
                         "type": "string",
-                        "description": "Optional model override, e.g. 'opus' / 'sonnet'. Omit to use the role's default_model_tier. Use to match model strength to task weight WITHOUT changing cli."
+                        "description": "Optional model/tier override. An abstract TIER ('opus'/'sonnet'/'haiku') is resolved per-CLI by the user's model settings (so 'sonnet' picks the right concrete model for whichever cli runs, never a wrong name). A concrete model id is passed through as-is. Omit to use the role's default tier."
                     },
                     "produces": {
                         "type": "array",

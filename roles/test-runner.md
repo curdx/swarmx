@@ -3,9 +3,9 @@ id = "test-runner"
 name = "Test Runner"
 description = "跑测试、报告通过/失败,定位失败根因。"
 default_cli = "codex"
-# Empty: "sonnet" is a Claude tier codex can't resolve on its own provider;
-# let codex use its configured default model. (P1: per-(cli,model) cards.)
-default_model_tier = ""
+# Abstract tier — resolved PER-CLI by the model settings; on codex maps to your
+# configured model for "sonnet" or codex's own default (no bare-tier 503).
+default_model_tier = "sonnet"
 when_to_use = "需要真实跑测试并报告结果(PASS/FAIL + 根因)时选它;高 risk 改动应强制配一个。"
 modality = "shell"
 risk = "normal"

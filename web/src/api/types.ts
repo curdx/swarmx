@@ -347,3 +347,26 @@ export type SwarmEvent =
       thread_id: string;
       op: string;
     };
+
+// ── F1 model settings: per-CLI tier→concrete-model mapping ──────────────────
+export interface CliModels {
+  /** Concrete model id when a spawn resolves to NO tier. Empty = CLI default. */
+  default: string;
+  /** tier (opus/sonnet/haiku) → concrete model id. Empty value = CLI default
+   *  for that tier; absent key = fall back to `default`. */
+  tiers: Record<string, string>;
+}
+export interface ModelConfig {
+  version: number;
+  clis: Record<string, CliModels>;
+}
+export interface ModelCliInfo {
+  id: string;
+  display_name: string;
+  /** false ⇒ the CLI declares no model_args; the UI greys it out. */
+  supports_model: boolean;
+}
+export interface ModelsResponse {
+  config: ModelConfig;
+  clis: ModelCliInfo[];
+}

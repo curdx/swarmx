@@ -365,6 +365,20 @@ pub(crate) async fn spawn_with_bookkeeping(
         .cloned()
         .ok_or_else(|| (StatusCode::NOT_FOUND, format!("unknown cli plugin: {cli}")))?;
 
+    // F1: resolve the requested abstract tier into the concrete model for THIS
+    // cli, using the per-CLI model config. claude keeps its alias ("sonnet" →
+    // "sonnet"); codex gets the user's mapped model or — if unmapped — its own
+    // default (no bare "sonnet" forwarded to a custom provider → no 503). A raw
+    // model id passes through verbatim. This is the single chokepoint for all
+    // three spawn paths (/api/agent, /api/worker, run_spell).
+    let model = {
+        let resolved = state.models.read().await.resolve(cli, model.as_deref());
+        if resolved != model {
+            tracing::info!(cli = %cli, from = ?model, to = ?resolved, "model tier resolved per-CLI");
+        }
+        resolved
+    };
+
     let spawned_at = now_ms();
 
     // Mint the recording id + path up front so spawn_agent can hand the

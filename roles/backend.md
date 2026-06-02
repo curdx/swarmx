@@ -3,11 +3,10 @@ id = "backend"
 name = "Backend Engineer"
 description = "后端逻辑、API、数据层、系统/shell-heavy 活。"
 default_cli = "codex"
-# Empty: a model TIER like "sonnet" is Claude-specific. codex routes to its own
-# (possibly custom) provider, so we let codex use its configured default model
-# rather than forcing a Claude tier name it can't resolve. (P1 capability cards
-# will add per-(cli,model) tiering.)
-default_model_tier = ""
+# Abstract tier — resolved PER-CLI by the model settings (设置→模型 / /api/models).
+# On codex it maps to whatever model you mapped for "sonnet", or codex's own
+# default if unmapped (never forwards the bare Claude tier name → no 503).
+default_model_tier = "sonnet"
 when_to_use = "做后端逻辑 / API / 数据库 / 系统集成 / shell-heavy 任务时选它。"
 modality = "backend"
 risk = "normal"

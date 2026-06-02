@@ -8,6 +8,8 @@ import type {
   CreateWorkspaceRequest,
   MarkReadResponse,
   MessageRecord,
+  ModelConfig,
+  ModelsResponse,
   RecordingInfo,
   RunSpellRequest,
   RunSpellResponse,
@@ -252,4 +254,9 @@ export const api = {
       "GET",
       `/api/workspaces/${id}/root-suggestions${projectPath ? `?path=${encodeURIComponent(projectPath)}` : ""}`,
     ),
+
+  // F1 model settings: per-CLI tier→concrete-model mapping.
+  getModels: () => request<ModelsResponse>("GET", "/api/models"),
+  putModels: (config: ModelConfig) =>
+    request<{ config: ModelConfig }>("PUT", "/api/models", config),
 };

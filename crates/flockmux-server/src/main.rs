@@ -13,6 +13,7 @@
 //! CORS, so the CORS layer alone is not a security boundary).
 
 mod acp;
+mod models_config;
 mod plugins;
 mod pre_spawn;
 mod pty_stream;
@@ -57,6 +58,11 @@ pub struct AppState {
     /// semantics as spells. Empty registry is fine; spells without
     /// `role_ref` work without any roles loaded.
     pub roles: Arc<roles::RoleRegistry>,
+    /// F1 per-CLI model config: maps abstract tiers → concrete model ids per
+    /// CLI (user-editable via the 模型 settings page / `/api/models`). Read at
+    /// the spawn chokepoint to turn a role/spawn tier into the right concrete
+    /// model for whichever CLI is launching. `RwLock` so a PUT can hot-swap it.
+    pub models: Arc<tokio::sync::RwLock<models_config::ModelConfig>>,
     pub registry: registry::Registry,
     pub shim_path: PathBuf,
     /// Absolute path to the `flockmux-mcp` binary. Baked into per-spawn
@@ -130,6 +136,11 @@ async fn main() -> Result<()> {
         }
     }
     info!(count = role_registry.list().len(), "roles loaded");
+
+    // F1: per-CLI model config (tier → concrete model). Shipped defaults if no
+    // ~/.flockmux/models.json (≡ legacy behaviour). Hot-swapped on PUT /api/models.
+    let model_config = models_config::load_or_default();
+    info!(clis = model_config.clis.len(), "model config loaded");
 
     let shim_path = spawn::locate_shim().context("locate flockmux-shim")?;
     info!(shim = %shim_path.display(), "shim located");
@@ -229,6 +240,7 @@ async fn main() -> Result<()> {
         plugins: Arc::new(plugin_registry),
         spells: Arc::new(spell_registry),
         roles: Arc::new(role_registry),
+        models: Arc::new(tokio::sync::RwLock::new(model_config)),
         registry: registry::Registry::new(),
         shim_path,
         mcp_bin,
@@ -257,6 +269,11 @@ async fn main() -> Result<()> {
 
     let app = Router::new()
         .route("/api/plugins", get(routes::rest::list_plugins))
+        // F1 模型设置页: per-CLI tier→concrete-model mapping (read/write).
+        .route(
+            "/api/models",
+            get(routes::models_admin::get_models).put(routes::models_admin::put_models),
+        )
         // MCP admin (「快捷装 MCP」页面): runtime probe + read/add/remove via the
         // CLIs' own `mcp` subcommands.
         .route("/api/mcp/env", get(routes::mcp_admin::mcp_env))

@@ -163,7 +163,8 @@
       "shortcuts": "快捷键",
       "plugins": "插件",
       "privacy": "隐私 & 安全",
-      "about": "关于"
+      "about": "关于",
+      "models": "模型"
     },
     "general": {
       "title": "通用",
@@ -247,6 +248,16 @@
       "cratesHint": "9 个 crate 组成后端，src-tauri 是壳",
       "depsTitle": "前端依赖",
       "credits": "致谢"
+    },
+    "models": {
+      "title": "模型配给",
+      "hint": "为每个 CLI 把抽象档位(opus/sonnet/haiku)映射到它实际能用的具体模型。留空=用该 CLI 自己的默认模型。claude 默认认 opus/sonnet/haiku 别名;codex 等用自定义供应商的请在这里填它真实的模型 id。",
+      "default": "默认",
+      "noOverride": "该 CLI 不支持 --model 覆盖（其插件未声明 model_args），由它自己决定模型。",
+      "cliDefaultPlaceholder": "留空=用 CLI 自己的默认",
+      "tierPlaceholder": "具体模型 id（留空=用 CLI 默认）",
+      "save": "保存",
+      "saved": "已保存"
     }
   },
   "chat": {

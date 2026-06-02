@@ -78,6 +78,7 @@ const SETTINGS_SECTIONS = [
   { id: "general", labelKey: "settings.sections.general" },
   { id: "appearance", labelKey: "settings.sections.appearance" },
   { id: "shortcuts", labelKey: "settings.sections.shortcuts" },
+  { id: "models", labelKey: "settings.sections.models" },
   { id: "plugins", labelKey: "settings.sections.plugins" },
   { id: "privacy", labelKey: "settings.sections.privacy" },
   { id: "about", labelKey: "settings.sections.about" },

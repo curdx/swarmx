@@ -141,8 +141,9 @@ pub struct SpawnWorkerRequest {
     /// 可选 CLI 覆盖("claude"/"codex")。缺省取所选 role 的 default_cli。
     #[serde(default)]
     pub cli: Option<String>,
-    /// 可选 model overlay。缺省取 role 的 default_model_tier,再无则
-    /// plugin.default_model / CLI 自身默认。
+    /// 可选 model/tier 覆盖。抽象 tier(opus/sonnet/haiku)由服务端按 CLI 经
+    /// 模型设置(/api/models)解析成具体模型;具体模型 id 原样透传。缺省取 role
+    /// 的 default_model_tier,再无则 plugin.default_model / CLI 自身默认。
     #[serde(default)]
     pub model: Option<String>,
     /// 本 worker 产出的 typed output-kinds(P0-A)。空 → 取 role.produces →

@@ -18,10 +18,11 @@ import { useTranslation } from "react-i18next";
 import i18n from "@/i18n";
 import { setTheme } from "@/lib/theme";
 import { api } from "@/api/http";
-import type { CliPluginInfo } from "@/api/types";
+import type { CliPluginInfo, ModelConfig, ModelsResponse } from "@/api/types";
 import {
   Bell,
   CircleUser,
+  Cpu,
   Globe,
   Info,
   Keyboard,
@@ -82,6 +83,7 @@ const SECTIONS = [
   { id: "general", labelKey: "settings.sections.general", icon: SettingsIcon },
   { id: "appearance", labelKey: "settings.sections.appearance", icon: Palette },
   { id: "shortcuts", labelKey: "settings.sections.shortcuts", icon: Keyboard },
+  { id: "models", labelKey: "settings.sections.models", icon: Cpu },
   { id: "plugins", labelKey: "settings.sections.plugins", icon: Plug },
   { id: "privacy", labelKey: "settings.sections.privacy", icon: Shield },
   { id: "about", labelKey: "settings.sections.about", icon: Info },
@@ -191,6 +193,7 @@ export default function SettingsRoute() {
             <AppearancePanel settings={settings} update={update} />
           )}
           {activeId === "shortcuts" && <ShortcutsPanel />}
+          {activeId === "models" && <ModelsPanel />}
           {activeId === "plugins" && <PluginsPanel />}
           {activeId === "privacy" && <PrivacyPanel />}
           {activeId === "about" && <AboutPanel />}
@@ -387,6 +390,194 @@ function ShortcutsPanel() {
           </div>
         </Field>
       ))}
+    </div>
+  );
+}
+
+// ── Models panel (F1: per-CLI tier→concrete-model mapping) ───────────────
+
+const MODEL_TIERS = ["opus", "sonnet", "haiku"] as const;
+
+function ModelsPanel() {
+  const { t } = useTranslation();
+  const [data, setData] = useState<ModelsResponse | null>(null);
+  const [cfg, setCfg] = useState<ModelConfig | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .getModels()
+      .then((r) => {
+        if (!cancelled) {
+          setData(r);
+          setCfg(r.config);
+        }
+      })
+      .catch((e) => {
+        if (!cancelled) setError((e as Error).message);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const cliOf = (id: string) => cfg?.clis[id] ?? { default: "", tiers: {} };
+  const setDefault = (id: string, v: string) =>
+    setCfg((prev) =>
+      prev
+        ? {
+            ...prev,
+            clis: {
+              ...prev.clis,
+              [id]: { ...(prev.clis[id] ?? { default: "", tiers: {} }), default: v },
+            },
+          }
+        : prev,
+    );
+  const setTier = (id: string, tier: string, v: string) =>
+    setCfg((prev) => {
+      if (!prev) return prev;
+      const c = prev.clis[id] ?? { default: "", tiers: {} };
+      return {
+        ...prev,
+        clis: { ...prev.clis, [id]: { ...c, tiers: { ...c.tiers, [tier]: v } } },
+      };
+    });
+
+  const save = async () => {
+    if (!cfg) return;
+    setBusy(true);
+    setError(null);
+    setSaved(false);
+    try {
+      const r = await api.putModels(cfg);
+      setCfg(r.config);
+      setSaved(true);
+      window.setTimeout(() => setSaved(false), 2500);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="mx-auto flex max-w-2xl flex-col gap-6 p-8">
+      <PanelTitle
+        title={t("settings.models.title")}
+        hint={t("settings.models.hint")}
+      />
+      {error && (
+        <div className="rounded-md border border-state-danger/40 bg-status-danger-soft px-3 py-2 text-xs text-state-danger">
+          {error}
+        </div>
+      )}
+      {!data && !error && (
+        <p className="font-caption text-sm text-foreground-tertiary">
+          {t("common.loading")}
+        </p>
+      )}
+      {data &&
+        cfg &&
+        data.clis.map((cli) => (
+          <div
+            key={cli.id}
+            className="flex flex-col gap-4 rounded-lg border border-border-subtle bg-surface-elevated p-5"
+          >
+            <div className="flex items-center gap-2.5">
+              <span className="flex size-8 items-center justify-center rounded-md bg-accent-primary-soft text-accent-primary-deep">
+                <Cpu className="size-4" />
+              </span>
+              <div className="flex flex-col">
+                <span className="font-heading text-sm font-semibold text-foreground-primary">
+                  {cli.display_name}
+                </span>
+                <span className="font-mono text-[11px] text-foreground-tertiary">
+                  {cli.id}
+                </span>
+              </div>
+            </div>
+
+            {!cli.supports_model ? (
+              <p className="font-caption text-xs text-foreground-tertiary">
+                {t("settings.models.noOverride")}
+              </p>
+            ) : (
+              <div className="flex flex-col gap-3">
+                <ModelRow
+                  label={t("settings.models.default")}
+                  placeholder={t("settings.models.cliDefaultPlaceholder")}
+                  value={cliOf(cli.id).default}
+                  onChange={(v) => setDefault(cli.id, v)}
+                />
+                {MODEL_TIERS.map((tier) => (
+                  <ModelRow
+                    key={tier}
+                    label={tier}
+                    placeholder={t("settings.models.tierPlaceholder")}
+                    value={cliOf(cli.id).tiers[tier] ?? ""}
+                    onChange={(v) => setTier(cli.id, tier, v)}
+                    mono
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+        ))}
+
+      {data && cfg && (
+        <div className="flex items-center gap-3">
+          <Button onClick={save} disabled={busy} className="self-start">
+            {busy ? t("common.loading") : t("settings.models.save")}
+          </Button>
+          {saved && (
+            <span className="font-caption text-xs text-status-success">
+              {t("settings.models.saved")}
+            </span>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ModelRow({
+  label,
+  placeholder,
+  value,
+  onChange,
+  mono,
+}: {
+  label: string;
+  placeholder?: string;
+  value: string;
+  onChange: (v: string) => void;
+  mono?: boolean;
+}) {
+  const id = React.useId();
+  return (
+    <div className="flex items-center gap-3">
+      <Label
+        htmlFor={id}
+        className={cn(
+          "w-20 shrink-0 text-sm text-foreground-secondary",
+          mono && "font-mono",
+        )}
+      >
+        {label}
+      </Label>
+      <input
+        id={id}
+        type="text"
+        spellCheck={false}
+        value={value}
+        placeholder={placeholder}
+        onChange={(e) => onChange(e.target.value)}
+        className="flex-1 rounded-md border border-border-subtle bg-surface-primary px-3 py-1.5 font-mono text-xs text-foreground-primary outline-none focus:border-accent-primary"
+      />
     </div>
   );
 }

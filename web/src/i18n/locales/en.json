@@ -163,7 +163,8 @@
       "shortcuts": "Shortcuts",
       "plugins": "Plugins",
       "privacy": "Privacy & Security",
-      "about": "About"
+      "about": "About",
+      "models": "Models"
     },
     "general": {
       "title": "General",
@@ -247,6 +248,16 @@
       "cratesHint": "9 crates make up the backend; src-tauri is the desktop shell",
       "depsTitle": "Frontend dependencies",
       "credits": "Credits"
+    },
+    "models": {
+      "title": "Model allocation",
+      "hint": "Map each CLI's abstract tier (opus/sonnet/haiku) to the concrete model it can actually use. Empty = the CLI's own default. claude understands opus/sonnet/haiku aliases; for codex or any custom provider, put its real model id here.",
+      "default": "Default",
+      "noOverride": "This CLI does not support a --model override (its plugin declares no model_args); it picks its own model.",
+      "cliDefaultPlaceholder": "empty = the CLI's own default",
+      "tierPlaceholder": "concrete model id (empty = CLI default)",
+      "save": "Save",
+      "saved": "Saved"
     }
   },
   "chat": {
