@@ -10,13 +10,18 @@
 //     FLOCKMUX_DB_PATH=$D/d.db FLOCKMUX_WORKSPACES_DIR=$D/ws \
 //     FLOCKMUX_BLACKBOARD_DIR=$D/bb FLOCKMUX_RECORDINGS_DIR=$D/rec \
 //     RUST_LOG=warn ./target/debug/flockmux-server &
-//   FLOCKMUX_PORT=7799 node scripts/reroot-acceptance.mjs
+//   FLOCKMUX_PORT=7799 node scripts/reroot-acceptance.mjs [reassign|orphan|both]
 //
-// Flow: git workspace → non-main direction → init spell spawns orchestrator #1
-// → post an UNREAD user request to it → PATCH a name (== swarm_name_thread)
-// which triggers real worktree isolation + re-root (kills orch1, spawns orch2,
-// reassigns the unread request). We HARD-assert the deterministic plumbing and
-// OBSERVE the (timing-dependent) request-survival outcome.
+// Two scenarios for how the user's opening request survives the orchestrator
+// swap when a direction is named (== isolation + re-root):
+//   • reassign — the request is still UNREAD when re-root fires, so
+//     reassign_unread_user_messages re-addresses it to the new orchestrator.
+//   • orphan   — orch1 already READ the request before re-root (we force this
+//     deterministically via POST /api/message/read), so reassign finds nothing
+//     and recovery falls to the task-seed (latest_user_message_for_agents →
+//     the new orchestrator's {task}). This is the actual fd45c14 orphan.
+// Both HARD-assert the deterministic isolation/re-root plumbing with real
+// agents in the loop.
 
 import { execSync } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -28,6 +33,7 @@ const PORT = process.env.FLOCKMUX_PORT || "7799";
 const BASE = `http://127.0.0.1:${PORT}`;
 const WS_SWARM = `ws://127.0.0.1:${PORT}/ws/swarm`;
 const REQUEST = "Please add a dark mode toggle to the settings page.";
+const MODE = process.argv[2] || "both";
 
 const fails = [];
 const hard = (cond, msg) => {
@@ -46,7 +52,7 @@ async function req(method, url, body) {
   const text = await res.text();
   let json;
   try { json = text ? JSON.parse(text) : null; } catch { json = text; }
-  return { status: res.status, json };
+  return { status: res.status, json, text };
 }
 
 class Collector {
@@ -54,9 +60,7 @@ class Collector {
   async start() {
     this.ws = new WebSocket(WS_SWARM);
     this.ws.onmessage = (ev) => {
-      if (typeof ev.data === "string") {
-        try { this.events.push(JSON.parse(ev.data)); } catch {}
-      }
+      if (typeof ev.data === "string") { try { this.events.push(JSON.parse(ev.data)); } catch {} }
     };
     this.ws.onopen = () => this._r();
     await this.ready; await pause(50);
@@ -69,85 +73,109 @@ const agentsOnThread = async (tid) => {
   const { json } = await req("GET", `${BASE}/api/agent`);
   return Array.isArray(json) ? json.filter((a) => a.thread_id === tid) : [];
 };
+const inbox = async (agent) => {
+  const { json } = await req("GET", `${BASE}/api/message?to=${encodeURIComponent(agent)}&limit=50`);
+  return Array.isArray(json) ? json : [];
+};
 
-async function main() {
-  // 0. A real git project as the workspace cwd (worktree add needs a base).
-  const cwd = await mkdtemp(path.join(tmpdir(), "flockmux-reroot-"));
+async function runScenario(col, mode) {
+  console.log(`\n========== scenario: ${mode} ==========`);
+  const cwd = await mkdtemp(path.join(tmpdir(), `flockmux-reroot-${mode}-`));
   await writeFile(path.join(cwd, "README.md"), "# reroot acceptance\n");
   execSync('git init -q && git add -A && git -c user.email=t@t -c user.name=t commit -qm init', { cwd });
-  console.log(`git workspace: ${cwd}  (server ${BASE})`);
 
-  const col = new Collector();
-  await col.start();
-
-  const ws = await req("POST", `${BASE}/api/workspaces`, { name: `reroot-${Date.now().toString(36)}`, cwd });
+  const ws = await req("POST", `${BASE}/api/workspaces`, { name: `reroot-${mode}-${Date.now().toString(36)}`, cwd });
   const wsId = ws.json?.id;
-  hard(!!wsId, "workspace created");
+  hard(!!wsId, `[${mode}] workspace created`);
 
-  // 1. A non-main direction (shared, not yet isolated).
   const thr = await req("POST", `${BASE}/api/workspaces/${wsId}/threads`, {});
-  const tid = thr.json?.id;
-  const slug = thr.json?.slug;
-  hard(!!tid && slug && slug !== "main", `non-main direction created (slug=${slug})`);
+  const tid = thr.json?.id, slug = thr.json?.slug;
+  hard(!!tid && slug && slug !== "main", `[${mode}] non-main direction created (slug=${slug})`);
 
-  // 2. A real orchestrator ON that direction via the init spell.
   const spell = await req("POST", `${BASE}/api/spell/run`, {
     name: "init", task: REQUEST, workspace_dir: cwd, workspace_id: wsId, thread_id: tid,
   });
   const orch1 = spell.json?.agents?.find((a) => a.role === "orchestrator")?.agent_id;
-  hard(!!orch1, `orchestrator #1 spawned (${orch1})`);
+  hard(!!orch1, `[${mode}] orchestrator #1 spawned (${orch1})`);
 
-  // 3. An UNREAD user request addressed to orch1, then isolate FAST (before
-  //    orch1's ~30s Phase-A turn reads it — that maximizes the chance reassign,
-  //    not the task-seed fallback, carries it).
-  await req("POST", `${BASE}/api/message`, { from: "user", to: orch1, kind: "note", body: REQUEST });
-  await pause(1500);
+  // Post the unread user request to orch1.
+  const m = await req("POST", `${BASE}/api/message`, { from: "user", to: orch1, kind: "note", body: REQUEST });
+  const msgId = m.json?.id;
 
-  console.log("→ PATCH name (== swarm_name_thread): triggers worktree isolation + re-root");
-  const patch = await req("PATCH", `${BASE}/api/workspaces/${wsId}/threads/${tid}`, { name: "dark mode" });
-  hard(patch.status === 200, `PATCH …/threads → 200 (got ${patch.status})`);
+  if (mode === "orphan") {
+    // Force the orphan precondition deterministically: orch1 has "read" the
+    // request before re-root, so reassign_unread will find nothing.
+    await req("POST", `${BASE}/api/message/read`, { to: orch1, ids: [msgId] });
+    const read = (await inbox(orch1)).find((x) => x.id === msgId);
+    hard(read && read.read_at != null, `[orphan] precondition: orch1's request is READ before re-root`);
+  } else {
+    await pause(1500); // fast: PATCH before orch1's ~30s Phase-A reads the inbox
+  }
 
-  // 4. Wait for isolation to land: thread.isolation flips to "worktree" AND a
-  //    fresh orchestrator (≠ orch1) appears. Real CLI boot ⇒ generous poll.
+  console.log(`→ [${mode}] PATCH name (== swarm_name_thread): worktree isolation + re-root`);
+  const patch = await req("PATCH", `${BASE}/api/workspaces/${wsId}/threads/${tid}`, { name: `dark mode ${mode}` });
+  hard(patch.status === 200, `[${mode}] PATCH …/threads → 200 (got ${patch.status})`);
+
   let isolated = null, orch2 = null;
   for (let i = 0; i < 60; i++) {
     const threads = await req("GET", `${BASE}/api/workspaces/${wsId}/threads`);
     const t = Array.isArray(threads.json) ? threads.json.find((x) => x.id === tid) : null;
-    const live = (await agentsOnThread(tid)).filter((a) => a.role === "orchestrator" && a.killed_at == null && a.agent_id !== orch1);
     if (t?.isolation === "worktree") isolated = t;
+    const live = (await agentsOnThread(tid)).filter((a) => a.role === "orchestrator" && a.killed_at == null && a.agent_id !== orch1);
     if (live.length) orch2 = live[0].agent_id;
     if (isolated && orch2) break;
     await pause(2000);
   }
 
-  // 5. HARD assertions — the deterministic plumbing, with real agents in the loop.
-  hard(!!isolated, "thread isolation flipped to 'worktree'");
-  const wtDir = `${cwd}-${slug}`;
-  hard(existsSync(wtDir), `worktree dir exists on disk (${wtDir})`);
+  // Deterministic plumbing, real agents in the loop.
+  hard(!!isolated, `[${mode}] thread isolation flipped to 'worktree'`);
+  hard(existsSync(`${cwd}-${slug}`), `[${mode}] worktree dir exists (${cwd}-${slug})`);
   hard(col.has((e) => e.type === "thread_changed" && e.thread_id === tid && e.op === "isolated"),
-    "ws/swarm observed ThreadChanged{op:'isolated'}");
-  const all = await agentsOnThread(tid);
-  const o1 = all.find((a) => a.agent_id === orch1);
-  hard(o1 && o1.killed_at != null, "orchestrator #1 was torn down (killed_at set)");
-  hard(!!orch2, `a fresh orchestrator #2 was re-rooted in (${orch2})`);
+    `[${mode}] ws/swarm observed ThreadChanged{op:'isolated'}`);
+  const o1 = (await agentsOnThread(tid)).find((a) => a.agent_id === orch1);
+  hard(o1 && o1.killed_at != null, `[${mode}] orchestrator #1 torn down (killed_at set)`);
+  hard(!!orch2, `[${mode}] fresh orchestrator #2 re-rooted in (${orch2})`);
 
-  // 6. OBSERVE request survival (timing-dependent: reassign vs task-seed fallback).
+  // Request-survival, per mode.
   if (orch2) {
-    const toNew = await req("GET", `${BASE}/api/message?to=${encodeURIComponent(orch2)}&limit=50`);
-    const moved = Array.isArray(toNew.json) && toNew.json.some((m) => m.from_agent === "user" && m.body === REQUEST);
-    const toOld = await req("GET", `${BASE}/api/message?to=${encodeURIComponent(orch1)}&limit=50`);
-    const stranded = Array.isArray(toOld.json) && toOld.json.some((m) => m.from_agent === "user" && m.body === REQUEST && m.read_at == null);
-    if (moved) note("request SURVIVED: unread user message reassigned to orchestrator #2 (the fd45c14 guarantee)");
-    else if (stranded) note("⚠ request STRANDED on the dead orch1 inbox, unread — investigate");
-    else note("request not on orch2 inbox — orch1 likely READ it first; should be recovered via task-seed (latest_user_message_for_agents). Not stranded.");
+    const onNew = (await inbox(orch2)).some((x) => x.from_agent === "user" && x.body === REQUEST);
+    if (mode === "reassign") {
+      hard(onNew, `[reassign] unread request was reassigned to orchestrator #2`);
+    } else {
+      // Orphan: reassign must NOT move a read message; recovery is the task-seed.
+      hard(!onNew, `[orphan] read request was NOT (wrongly) reassigned to orch2`);
+      const o1read = (await inbox(orch1)).some((x) => x.id === msgId && x.read_at != null);
+      hard(o1read, `[orphan] request still accounted for on orch1 (read, not stranded-unread)`);
+      // Best-effort: confirm the request was seeded into orch2's bootstrap (the
+      // recovery mechanism). PTY echo can mangle it, so this is observational —
+      // the data path itself is unit-tested (store: latest_user_message_for_agents).
+      await pause(2500);
+      const recs = await req("GET", `${BASE}/api/recording?agent_id=${encodeURIComponent(orch2)}`);
+      const recId = Array.isArray(recs.json) && recs.json[0]?.id;
+      let seeded = false;
+      if (recId) {
+        const cast = await req("GET", `${BASE}/api/recording/${recId}`);
+        seeded = typeof cast.text === "string" && cast.text.includes("dark mode toggle");
+      }
+      note(seeded
+        ? `[orphan] task-seed CONFIRMED: the request reached orchestrator #2's bootstrap`
+        : `[orphan] task-seed not visible in recording (PTY echo) — data path is store-tested separately`);
+    }
   }
 
-  // cleanup
   for (const a of await agentsOnThread(tid)) await req("DELETE", `${BASE}/api/agent/${encodeURIComponent(a.agent_id)}`);
   await req("DELETE", `${BASE}/api/workspaces/${wsId}`);
-  col.close();
   await rm(cwd, { recursive: true, force: true });
   await rm(`${cwd}-${slug}`, { recursive: true, force: true });
+}
+
+async function main() {
+  console.log(`server ${BASE} · mode=${MODE}`);
+  const col = new Collector();
+  await col.start();
+  const modes = MODE === "both" ? ["reassign", "orphan"] : [MODE];
+  for (const mode of modes) await runScenario(col, mode);
+  col.close();
 
   if (fails.length === 0) { console.log("\nREROOT ACCEPTANCE: PASS"); process.exit(0); }
   console.error(`\nREROOT ACCEPTANCE: FAIL (${fails.length})`);
