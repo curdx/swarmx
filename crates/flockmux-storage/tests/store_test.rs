@@ -3,7 +3,7 @@
 
 use flockmux_storage::{
     ListMessagesOpts, MessageRecord, NewAgent, NewBlackboardOp, NewMessage, NewRecording, NewThread,
-    NewWorkspace, Store,
+    NewWorker, NewWorkspace, Store,
 };
 use tempfile::TempDir;
 
@@ -1202,4 +1202,96 @@ async fn delete_blackboard_prefix_drops_only_the_direction_subtree() {
         ],
         "siblings, other workspaces, and prefix-sharing keys all survive",
     );
+}
+
+// ── workers: P0 (F1) typed-handoff columns round-trip (migration 0011) ──────
+
+#[tokio::test]
+async fn worker_roundtrip_persists_p0_typed_fields() {
+    let (_dir, store) = fresh_store().await;
+    // workers.agent_id REFERENCES agents(id) — the agent row must exist first.
+    store
+        .record_agent_spawn(NewAgent {
+            id: "w-1".into(),
+            cli: "claude".into(),
+            role: "frontend".into(),
+            workspace: "/tmp/w".into(),
+            spawned_at: ts(0),
+            workspace_id: None,
+            spell_run_id: None,
+            thread_id: None,
+        })
+        .await
+        .unwrap();
+
+    store
+        .record_worker(NewWorker {
+            agent_id: "w-1".into(),
+            parent_agent_id: "orch-1".into(),
+            role_label: "Frontend Engineer".into(),
+            system_prompt: "build the UI".into(),
+            handoff_signal: "ws1/main/frontend.done".into(),
+            depends_on_json: "[\"ws1/main/designer.spec\"]".into(),
+            spawned_at: ts(1),
+            role_slug: "frontend".into(),
+            produces_json: "[\"done\"]".into(),
+            consumes_json: "[{\"from_role\":\"designer\",\"kind\":\"spec\"}]".into(),
+        })
+        .await
+        .unwrap();
+
+    let map = store
+        .list_workers_by_ids(vec!["w-1".into()])
+        .await
+        .unwrap();
+    let w = map.get("w-1").expect("worker row present");
+    assert_eq!(w.role_slug, "frontend");
+    assert_eq!(w.handoff_signal, "ws1/main/frontend.done");
+    assert_eq!(w.depends_on_json, "[\"ws1/main/designer.spec\"]");
+    assert_eq!(w.produces_json, "[\"done\"]");
+    assert_eq!(
+        w.consumes_json,
+        "[{\"from_role\":\"designer\",\"kind\":\"spec\"}]"
+    );
+}
+
+#[tokio::test]
+async fn worker_roundtrip_defaults_empty_typed_fields() {
+    // A worker with no typed deps/produces (NULL columns) maps back to the
+    // documented defaults, not to a panic — back-compat with pre-0011 rows.
+    let (_dir, store) = fresh_store().await;
+    store
+        .record_agent_spawn(NewAgent {
+            id: "w-2".into(),
+            cli: "codex".into(),
+            role: "backend".into(),
+            workspace: "/tmp/w".into(),
+            spawned_at: ts(0),
+            workspace_id: None,
+            spell_run_id: None,
+            thread_id: None,
+        })
+        .await
+        .unwrap();
+    store
+        .record_worker(NewWorker {
+            agent_id: "w-2".into(),
+            parent_agent_id: "orch-1".into(),
+            role_label: "Backend".into(),
+            system_prompt: "x".into(),
+            handoff_signal: String::new(),
+            depends_on_json: String::new(),
+            spawned_at: ts(1),
+            role_slug: String::new(),
+            produces_json: String::new(),
+            consumes_json: String::new(),
+        })
+        .await
+        .unwrap();
+    let map = store.list_workers_by_ids(vec!["w-2".into()]).await.unwrap();
+    let w = map.get("w-2").expect("worker row present");
+    assert_eq!(w.role_slug, "");
+    assert_eq!(w.depends_on_json, "[]");
+    assert_eq!(w.produces_json, "[]");
+    assert_eq!(w.consumes_json, "[]");
 }

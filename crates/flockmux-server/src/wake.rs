@@ -723,13 +723,14 @@ impl WakeCoordinator {
             return;
         }
 
-        // Naming: `<role>.error` matches the convention agents already
-        // self-write when they detect their own failure (see
-        // `roles/frontend.md` Upstream-failed branch). Using the same
-        // key for the auto-synthesised failure means downstream role
-        // prompts only need to check ONE key — they get the same value
-        // whether the producer aborted gracefully or crashed.
-        let error_key = format!("{}.error", ek.role);
+        // Naming (P0-A): the failure key is the producer's MINTED handoff key
+        // + `.error` (e.g. `ws/dir/frontend.done.error`), identical to what a
+        // worker is told to write on voluntary failure (see
+        // `build_worker_prompt`). One convention for both crash and graceful
+        // abort, and `base_key_aliases` fans `<signal>.error` → `<signal>` so
+        // even a passive consumer waiting on the success key is woken. `signal`
+        // is already the fully-scoped minted key, so no bare `<role>` drift.
+        let error_key = format!("{signal}.error");
         let body = serde_json::json!({
             "agent_id": agent_id,
             "role": ek.role,
@@ -1108,6 +1109,42 @@ mod tests {
     fn select_targets_no_match_returns_empty() {
         let m = build_subs(&[("a", &["foo.done"])]);
         assert!(select_targets(&m, "bar.done", None).is_empty());
+    }
+
+    // ── P0-A: minted keys match exactly; drift no longer silently no-wakes ──
+
+    #[test]
+    fn minted_key_matches_exactly_drift_does_not() {
+        // Consumer subscribes to the canonical minted key.
+        let minted = "ws_ab12/dark-mode/frontend.done";
+        let m = build_subs(&[("consumer", &[minted])]);
+        // The producer's minted write wakes it.
+        assert_eq!(select_targets(&m, minted, Some("frontend")), vec!["consumer"]);
+        // A drifted key (missing the workspace/thread prefix — the exact F3
+        // failure) matches NOTHING. Under the old free-string scheme this is
+        // how a dependent hung forever; under P0-A both sides are server-minted
+        // so this drift can't be produced, and if it somehow were, it's inert.
+        assert!(select_targets(&m, "frontend.done", None).is_empty());
+    }
+
+    #[test]
+    fn minted_error_key_fans_out_to_the_success_key() {
+        // A worker (or the death fallback) writing `<minted>.error` must wake
+        // the consumers that wait on `<minted>` (the success key), via the
+        // base-key alias fan-out — that's the fail-LOUD path.
+        let minted = "ws_ab12/dark-mode/frontend.done";
+        let error_key = format!("{minted}.error");
+        assert_eq!(base_key_aliases(&error_key), vec![minted.to_string()]);
+
+        let m = build_subs(&[("consumer", &[minted])]);
+        // Simulate the BlackboardChanged fan: literal key + its base aliases.
+        let mut woke: Vec<String> = Vec::new();
+        let mut keys = vec![error_key.clone()];
+        keys.extend(base_key_aliases(&error_key));
+        for k in &keys {
+            woke.extend(select_targets(&m, k, Some("frontend")));
+        }
+        assert_eq!(woke, vec!["consumer"], "the .done waiter is woken on .error");
     }
 
     #[tokio::test]

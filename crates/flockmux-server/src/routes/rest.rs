@@ -36,6 +36,109 @@ fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
+/// Closest candidate to `target` within edit distance 3 — drives the
+/// "did you mean 'frontend'?" hint when an unknown role slug is spawned.
+fn closest_match(target: &str, candidates: &[String]) -> Option<String> {
+    candidates
+        .iter()
+        .map(|c| (levenshtein(target, c), c))
+        .filter(|(d, _)| *d <= 3)
+        .min_by_key(|(d, _)| *d)
+        .map(|(_, c)| c.clone())
+}
+
+fn levenshtein(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    let mut cur = vec![0usize; b.len() + 1];
+    for (i, ca) in a.iter().enumerate() {
+        cur[0] = i + 1;
+        for (j, cb) in b.iter().enumerate() {
+            let cost = if ca == cb { 0 } else { 1 };
+            cur[j + 1] = (prev[j + 1] + 1).min(cur[j] + 1).min(prev[j] + cost);
+        }
+        std::mem::swap(&mut prev, &mut cur);
+    }
+    prev[b.len()]
+}
+
+/// Spawn-time dependency-graph validation + key minting (P0-A), pure so it can
+/// be unit-tested without an HTTP server. Resolves each typed `consumes` ref to
+/// the producer's minted blackboard key, after verifying the producer role
+/// exists and declares the requested output kind. Returns the minted
+/// `depends_on` keys, or a human error (mapped to 400 by the caller).
+fn resolve_consumes_to_deps(
+    registry: &crate::roles::RoleRegistry,
+    role_slug: &str,
+    consumes: &[flockmux_protocol::rest::ConsumeRef],
+    workspace_id: &str,
+    thread_slug: &str,
+) -> Result<Vec<String>, String> {
+    let mut depends_on = Vec::with_capacity(consumes.len());
+    for c in consumes {
+        let from = c.from_role.trim();
+        let kind = c.kind.trim();
+        if from.is_empty() {
+            return Err("consumes entry has empty from_role".to_string());
+        }
+        if from == role_slug {
+            return Err(format!(
+                "role '{role_slug}' cannot consume its own output (self-dependency)"
+            ));
+        }
+        let producer = registry.get(from).ok_or_else(|| {
+            let valid = registry.ids();
+            let mut msg = format!("consumes references unknown role '{from}'");
+            if let Some(s) = closest_match(from, &valid) {
+                msg.push_str(&format!(" — did you mean '{s}'?"));
+            }
+            msg.push_str(&format!(" valid roles: {valid:?}"));
+            msg
+        })?;
+        let producer_kinds: Vec<String> = if producer.manifest.produces.is_empty() {
+            vec!["done".to_string()]
+        } else {
+            producer.manifest.produces.clone()
+        };
+        if !producer_kinds.iter().any(|k| k == kind) {
+            return Err(format!(
+                "role '{from}' does not produce kind '{kind}' — it produces {producer_kinds:?}"
+            ));
+        }
+        depends_on.push(crate::roles::mint_handoff_key(
+            workspace_id,
+            thread_slug,
+            from,
+            kind,
+        ));
+    }
+    Ok(depends_on)
+}
+
+/// Append the server-minted handoff key(s) to the orchestrator-authored worker
+/// prompt, so the worker writes the canonical key verbatim instead of inventing
+/// one — the F3 drift class is designed away (P0-A).
+fn build_worker_prompt(base: &str, success_keys: &[String], error_key: &str) -> String {
+    if success_keys.is_empty() {
+        return base.to_string();
+    }
+    let keys = success_keys
+        .iter()
+        .map(|k| format!("  - {k}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!(
+        "{base}\n\n\
+         ──────────────────────────────────────────────────────────────\n\
+         HANDOFF (managed by flockmux — copy these keys VERBATIM via \
+         swarm_write_blackboard; do NOT invent or alter them):\n\
+         • On SUCCESS, write your result to:\n{keys}\n\
+         • On FAILURE/abort, write to `{error_key}` instead, so dependents \
+         fail loudly rather than hang forever.\n"
+    )
+}
+
 /// Map a storage `ThreadRecord` onto the wire `ThreadInfo` (drops the internal
 /// `deleted_at`; the API only ever surfaces alive threads).
 fn thread_record_to_info(t: ThreadRecord) -> ThreadInfo {
@@ -770,16 +873,10 @@ pub async fn spawn_worker(
     State(state): State<AppState>,
     Json(req): Json<SpawnWorkerRequest>,
 ) -> Result<Json<SpawnWorkerResponse>, (StatusCode, Json<serde_json::Value>)> {
-    if req.cli.trim().is_empty() {
+    if req.role.trim().is_empty() {
         return Err((
             StatusCode::BAD_REQUEST,
-            Json(json!({"error": "missing cli"})),
-        ));
-    }
-    if req.role_label.trim().is_empty() {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(json!({"error": "missing role_label"})),
+            Json(json!({"error": "missing role (pass a registry slug; see swarm_list_roles)"})),
         ));
     }
     if req.system_prompt.trim().is_empty() {
@@ -840,11 +937,15 @@ pub async fn spawn_worker(
                 Json(json!({"error": format!("thread lookup failed: {e}")})),
             )
         })?;
-    let thread_cwd = match thread_id.as_ref() {
+    // Both the cwd AND the slug: the slug is the blackboard namespace segment
+    // (`<workspace_id>/<thread_slug>/…`) that minted handoff keys are scoped by,
+    // so producer + consumer keys match within a direction and never collide
+    // across directions. Main thread (no row) → slug "main".
+    let (thread_cwd, thread_slug) = match thread_id.as_ref() {
         Some(tid) => match state.store.get_thread(tid.clone()).await {
-            Ok(Some(t)) => t.cwd,
+            Ok(Some(t)) => (t.cwd, t.slug),
             // Thread row gone (deleted) → fall back to the main/project cwd.
-            Ok(None) => ws.cwd.clone(),
+            Ok(None) => (ws.cwd.clone(), "main".to_string()),
             // Hard error: don't guess a directory; fail loudly.
             Err(e) => {
                 return Err((
@@ -853,11 +954,117 @@ pub async fn spawn_worker(
                 ))
             }
         },
-        None => ws.cwd.clone(),
+        None => (ws.cwd.clone(), "main".to_string()),
     };
     let layout = WorkspaceLayout::Shared {
         dir: PathBuf::from(&thread_cwd),
     };
+
+    // ── P0: role registry resolution + typed handoff minting ─────────────
+    // Effective registry = global (builtin + repo) overlaid by this
+    // workspace/direction's project `.flockmux/roles/` (override by slug).
+    let mut registry = (*state.roles).clone();
+    let project_roles_dir = PathBuf::from(&thread_cwd).join(".flockmux").join("roles");
+    if project_roles_dir.is_dir() {
+        match crate::roles::RoleRegistry::load_dir(&project_roles_dir) {
+            Ok(proj) => registry.overlay(proj),
+            Err(e) => {
+                tracing::warn!(?e, dir = %project_roles_dir.display(), "project roles overlay failed")
+            }
+        }
+    }
+
+    // Validate the role slug. Unknown → 400 with valid options + did-you-mean.
+    let role_slug = req.role.trim().to_string();
+    let role = registry.get(&role_slug).cloned().ok_or_else(|| {
+        let valid = registry.ids();
+        let mut msg = format!("unknown role '{role_slug}'");
+        if let Some(s) = closest_match(&role_slug, &valid) {
+            msg.push_str(&format!(" — did you mean '{s}'?"));
+        }
+        msg.push_str(&format!(" valid roles: {valid:?}"));
+        (StatusCode::BAD_REQUEST, Json(json!({ "error": msg })))
+    })?;
+    let manifest = &role.manifest;
+
+    // Resolve cli/model from the role's defaults unless explicitly overridden.
+    let resolved_cli = req
+        .cli
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(manifest.default_cli.as_str())
+        .to_string();
+    if resolved_cli.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": format!("role '{role_slug}' has no default_cli and no cli override was given")})),
+        ));
+    }
+    let resolved_model = req
+        .model
+        .clone()
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| {
+            let t = manifest.default_model_tier.trim();
+            (!t.is_empty()).then(|| t.to_string())
+        });
+    let role_label = if manifest.name.trim().is_empty() {
+        role_slug.clone()
+    } else {
+        manifest.name.clone()
+    };
+
+    // Effective produces: spawn override → role.produces → ["done"].
+    let produces: Vec<String> = if !req.produces.is_empty() {
+        req.produces
+            .iter()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect()
+    } else if !manifest.produces.is_empty() {
+        manifest.produces.clone()
+    } else {
+        vec!["done".to_string()]
+    };
+
+    // Mint the canonical handoff key(s) this worker writes (one per kind), plus
+    // the single primary signal (the "done" kind if present, else the first).
+    let minted_produces: Vec<String> = produces
+        .iter()
+        .map(|k| crate::roles::mint_handoff_key(&req.workspace_id, &thread_slug, &role_slug, k))
+        .collect();
+    let primary_kind = if produces.iter().any(|k| k == "done") {
+        "done"
+    } else {
+        produces[0].as_str()
+    };
+    let handoff_signal =
+        crate::roles::mint_handoff_key(&req.workspace_id, &thread_slug, &role_slug, primary_kind);
+    // The failure key is the primary handoff key + `.error`, so the existing
+    // `base_key_aliases` fan-out (`<key>.error` → `<key>`) wakes exactly the
+    // consumers that wait on the success key — no separate wiring needed.
+    let error_key = format!("{handoff_signal}.error");
+
+    // ── Spawn-time dependency-graph validation (fail LOUD, not silent) ───
+    // Resolve each typed `consumes` ref to the producer's minted key, after
+    // verifying the producer role exists AND declares that output kind. This
+    // is the structural fix for the F3 drift class: a typo/unknown dep is
+    // rejected here with valid options, never a silent never-wake. Pure logic
+    // lives in `resolve_consumes_to_deps` (unit-tested).
+    let depends_on = resolve_consumes_to_deps(
+        &registry,
+        &role_slug,
+        &req.consumes,
+        &req.workspace_id,
+        &thread_slug,
+    )
+    .map_err(|msg| (StatusCode::BAD_REQUEST, Json(json!({ "error": msg }))))?;
+
+    // The orchestrator's prompt + an explicit copy-verbatim handoff block.
+    let system_prompt = build_worker_prompt(&req.system_prompt, &minted_produces, &error_key);
+    let produces_json = serde_json::to_string(&produces).unwrap_or_else(|_| "[]".to_string());
+    let consumes_json = serde_json::to_string(&req.consumes).unwrap_or_else(|_| "[]".to_string());
 
     // Fork-bomb guard (F4), recursion arm: bound the delegation depth so a
     // worker that spawns a worker that spawns a worker… can't recurse without
@@ -902,9 +1109,9 @@ pub async fn spawn_worker(
 
     let out = spawn_with_bookkeeping(
         &state,
-        &req.cli,
-        Some(req.role_label.clone()),
-        req.model.clone(),
+        &resolved_cli,
+        Some(role_label.clone()),
+        resolved_model.clone(),
         layout,
         req.workspace_id.clone(),
         None,             // ad-hoc workers don't belong to a spell run
@@ -915,53 +1122,50 @@ pub async fn spawn_worker(
 
     // M6b: register wake subscription + exit-key BEFORE deferred bootstrap
     // inject (same ordering as run_spell — guards against fast producers).
-    crate::wake::register_wake_subs(
-        &state.wake_subs,
-        out.agent_id.clone(),
-        req.depends_on.clone(),
-    )
-    .await;
+    // All keys here are server-minted (P0-A), so producer + consumer match by
+    // construction — no LLM-typed string can drift.
+    crate::wake::register_wake_subs(&state.wake_subs, out.agent_id.clone(), depends_on.clone())
+        .await;
     crate::wake::register_exit_key(
         &state.exit_keys,
         out.agent_id.clone(),
-        req.role_label.clone(),
-        req.handoff_signal.clone(),
+        role_slug.clone(),
+        handoff_signal.clone(),
         now_ms(),
     )
     .await;
 
-    // Magentic-One closes the loop here: the orchestrator (the spawning
-    // agent) needs to be woken when this worker writes its handoff_signal,
-    // so it can read the artifact, update Progress Ledger, and decide
-    // what's next. `register_wake_subs` above already covers what the
-    // *worker* waits on, but not what the *spawner* waits on. Without
-    // this append the worker writes ui.done → blackboard event fires →
-    // no subscriber → orchestrator sleeps forever. Append-not-overwrite
-    // so the orchestrator can have many workers in flight at once.
-    if !req.handoff_signal.is_empty() && !req.caller_agent_id.is_empty() {
+    // Magentic-One closes the loop here: the orchestrator (the spawning agent)
+    // is woken when this worker writes its minted handoff key, so it can read
+    // the artifact, update the Progress Ledger, and decide what's next.
+    // Append-not-overwrite so it can have many workers in flight at once.
+    if !handoff_signal.is_empty() && !req.caller_agent_id.is_empty() {
         crate::wake::append_wake_sub(
             &state.wake_subs,
             req.caller_agent_id.clone(),
-            req.handoff_signal.clone(),
+            handoff_signal.clone(),
         )
         .await;
     }
 
     // Persist worker metadata. Failure is non-fatal (PTY is already live),
     // but the DAG view will miss the parent edge until next listAgents
-    // refresh after a successful retry.
-    let depends_on_json =
-        serde_json::to_string(&req.depends_on).unwrap_or_else(|_| "[]".to_string());
+    // refresh after a successful retry. We store the AUGMENTED prompt (what
+    // was actually injected) for faithful replay.
+    let depends_on_json = serde_json::to_string(&depends_on).unwrap_or_else(|_| "[]".to_string());
     if let Err(e) = state
         .store
         .record_worker(NewWorker {
             agent_id: out.agent_id.clone(),
             parent_agent_id: req.caller_agent_id.clone(),
-            role_label: req.role_label.clone(),
-            system_prompt: req.system_prompt.clone(),
-            handoff_signal: req.handoff_signal.clone(),
+            role_label: role_label.clone(),
+            system_prompt: system_prompt.clone(),
+            handoff_signal: handoff_signal.clone(),
             depends_on_json,
             spawned_at: now_ms(),
+            role_slug: role_slug.clone(),
+            produces_json,
+            consumes_json,
         })
         .await
     {
@@ -969,13 +1173,13 @@ pub async fn spawn_worker(
     }
 
     // Bootstrap inject — shared with run_spell (see spawn_bootstrap_inject).
-    // Ad-hoc workers inject the request's system_prompt raw (no render_prompt:
-    // the orchestrator authored it with concrete ids at call time).
+    // We inject the AUGMENTED prompt (orchestrator's text + the minted handoff
+    // block) so the worker is told the exact canonical key to write.
     spawn_bootstrap_inject(
         state.registry.clone(),
         out.lifecycle_rx.resubscribe(),
         out.agent_id.clone(),
-        req.system_prompt.clone(),
+        system_prompt.clone(),
         BootstrapCtx {
             source: "worker",
             spell: String::new(),
@@ -986,9 +1190,36 @@ pub async fn spawn_worker(
     Ok(Json(SpawnWorkerResponse {
         agent_id: out.agent_id,
         cli: out.cli,
-        role_label: req.role_label,
+        role_label,
         workspace: out.workspace,
+        handoff_signal,
+        depends_on,
     }))
+}
+
+/// `GET /api/roles` — the role registry catalog for `swarm_list_roles` and the
+/// UI. Returns the global (builtin + repo) registry; per-workspace
+/// `.flockmux/roles/` overrides are applied at spawn time, not here.
+pub async fn list_roles(State(state): State<AppState>) -> Json<serde_json::Value> {
+    let rows: Vec<serde_json::Value> = state
+        .roles
+        .list()
+        .iter()
+        .map(|r| {
+            let m = &r.manifest;
+            json!({
+                "id": m.id,
+                "name": m.name,
+                "when_to_use": m.when_to_use,
+                "default_cli": m.default_cli,
+                "default_model_tier": m.default_model_tier,
+                "produces": if m.produces.is_empty() { vec!["done".to_string()] } else { m.produces.clone() },
+                "modality": m.modality,
+                "risk": m.risk,
+            })
+        })
+        .collect();
+    Json(json!(rows))
 }
 
 // ────────────────────────────────────────────────────────────────────────
@@ -3152,3 +3383,91 @@ pub async fn run_spell(
     Ok(Json(resp))
 }
 
+
+#[cfg(test)]
+mod p0_tests {
+    use super::*;
+    use crate::roles::RoleRegistry;
+    use flockmux_protocol::rest::ConsumeRef;
+
+    fn consume(from: &str, kind: &str) -> ConsumeRef {
+        ConsumeRef { from_role: from.into(), kind: kind.into() }
+    }
+
+    #[test]
+    fn resolve_consumes_happy_mints_scoped_keys() {
+        let reg = RoleRegistry::builtin();
+        let deps = resolve_consumes_to_deps(
+            &reg,
+            "reviewer",
+            &[consume("backend", "done"), consume("frontend", "done")],
+            "ws1",
+            "dark-mode",
+        )
+        .unwrap();
+        assert_eq!(
+            deps,
+            vec![
+                "ws1/dark-mode/backend.done".to_string(),
+                "ws1/dark-mode/frontend.done".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn resolve_consumes_unknown_role_suggests_closest() {
+        let reg = RoleRegistry::builtin();
+        let err = resolve_consumes_to_deps(&reg, "reviewer", &[consume("bakend", "done")], "ws1", "main")
+            .unwrap_err();
+        assert!(err.contains("unknown role 'bakend'"), "got: {err}");
+        assert!(err.contains("did you mean 'backend'"), "got: {err}");
+    }
+
+    #[test]
+    fn resolve_consumes_rejects_kind_not_produced() {
+        let reg = RoleRegistry::builtin();
+        // builtin backend produces ["done"] only.
+        let err = resolve_consumes_to_deps(&reg, "reviewer", &[consume("backend", "spec")], "ws1", "main")
+            .unwrap_err();
+        assert!(err.contains("does not produce kind 'spec'"), "got: {err}");
+    }
+
+    #[test]
+    fn resolve_consumes_rejects_self_dependency() {
+        let reg = RoleRegistry::builtin();
+        let err = resolve_consumes_to_deps(&reg, "frontend", &[consume("frontend", "done")], "ws1", "main")
+            .unwrap_err();
+        assert!(err.contains("self-dependency"), "got: {err}");
+    }
+
+    #[test]
+    fn resolve_consumes_rejects_empty_from_role() {
+        let reg = RoleRegistry::builtin();
+        let err = resolve_consumes_to_deps(&reg, "frontend", &[consume("", "done")], "ws1", "main")
+            .unwrap_err();
+        assert!(err.contains("empty from_role"), "got: {err}");
+    }
+
+    #[test]
+    fn closest_match_within_threshold_only() {
+        let cands = vec!["frontend".to_string(), "backend".to_string(), "reviewer".to_string()];
+        assert_eq!(closest_match("fronend", &cands).as_deref(), Some("frontend"));
+        // Garbage far from everything → no suggestion.
+        assert_eq!(closest_match("zzzzzzzz", &cands), None);
+    }
+
+    #[test]
+    fn build_worker_prompt_injects_minted_keys_and_error_branch() {
+        let p = build_worker_prompt(
+            "do the thing",
+            &["ws1/main/frontend.done".to_string()],
+            "ws1/main/frontend.done.error",
+        );
+        assert!(p.starts_with("do the thing"));
+        assert!(p.contains("ws1/main/frontend.done"));
+        assert!(p.contains("ws1/main/frontend.done.error"));
+        assert!(p.contains("VERBATIM"));
+        // No minted keys → prompt is returned unchanged (fire-and-forget).
+        assert_eq!(build_worker_prompt("x", &[], "x.error"), "x");
+    }
+}

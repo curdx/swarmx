@@ -129,11 +129,10 @@ mod tests {
         let result = resp.result.unwrap();
         let arr = result["tools"].as_array().unwrap();
         // 7 swarm primitives (3 messages + 4 blackboard/agents) +
-        // swarm_spawn_worker (the sole delegation entry after the
-        // Magentic-One refactor removed the spell tools) + swarm_name_thread
-        // (multi-direction naming/isolation) = 9.
+        // swarm_spawn_worker (delegation entry) + swarm_list_roles (P0 role
+        // catalog) + swarm_name_thread (multi-direction naming/isolation) = 10.
         // Keep in sync with tools::tool_descriptors() (asserted at tools.rs).
-        assert_eq!(arr.len(), 9);
+        assert_eq!(arr.len(), 10);
     }
 
     #[tokio::test]

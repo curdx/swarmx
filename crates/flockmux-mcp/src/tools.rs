@@ -139,38 +139,56 @@ pub fn tool_descriptors() -> Vec<Value> {
         }),
         json!({
             "name": "swarm_spawn_worker",
-            "description": "Spawn an ad-hoc worker agent with a custom system prompt. This is the primary way an orchestrator delegates real work — pick the right CLI, write a focused prompt with task + deps + handoff signal + STOP condition, set role_label for UI display, and the worker is launched on the shared workspace cwd. Returns the new agent_id. Use this INSTEAD of swarm_run_spell when no canned spell pattern fits the user's task (which is most of the time now that spell templates are deprecated).",
+            "description": "Spawn a worker agent for a registry ROLE. This is the primary way an orchestrator delegates real work. Pick a role (call swarm_list_roles to see the catalog) — the role supplies the default CLI + model tier + tool affordances, so you usually omit `cli`/`model`. Declare dependencies TYPED via `consumes` ({from_role, kind}); the server mints the canonical blackboard handoff key and validates the whole dependency graph at spawn time — NEVER hand-type blackboard keys. The minted key your worker must write when done is appended to its system prompt automatically. Returns the new agent_id.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "cli": {
+                    "role": {
                         "type": "string",
-                        "description": "Which CLI to spawn (claude or codex). Pick claude for UI / docs / prose / open-ended thinking; codex for backend / system / shell-heavy tasks.",
-                        "enum": ["claude", "codex"]
-                    },
-                    "role_label": {
-                        "type": "string",
-                        "description": "Short noun describing what this worker does — shown in the UI member list. Examples: 'writer', 'ui-coder', 'test-runner', 'researcher', 'fixer'. Keep it lowercase, no spaces."
+                        "description": "Role slug from the registry (e.g. frontend, backend, reviewer, test-runner, docs-writer, researcher, fixer). Call swarm_list_roles to see each role's when_to_use + defaults. An unknown slug is rejected with the valid options (no silent mis-route)."
                     },
                     "system_prompt": {
                         "type": "string",
-                        "description": "Full system prompt for the worker. Should include: (1) what the task is, (2) which files / cwd to operate on, (3) which blackboard keys to wait for (depends_on hints in prose too), (4) what to write to blackboard when done (the handoff_signal), (5) explicit STOP instruction. Write it like you'd brief a contractor — concrete, terse, no fluff."
+                        "description": "Full system prompt for the worker: (1) the concrete task, (2) which files / cwd to operate on, (3) explicit STOP instruction. Do NOT write blackboard-key plumbing — the server appends the exact minted handoff key for you. Write it like briefing a contractor: concrete, terse, no fluff."
                     },
-                    "handoff_signal": {
+                    "cli": {
                         "type": "string",
-                        "description": "Blackboard key the worker writes when done (e.g. 'ui.done', 'tests.passed'). Used by WakeCoordinator for downstream wake-up + by you to know when this worker has shipped. Leave empty for fire-and-forget workers with no downstream dependents."
-                    },
-                    "depends_on": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Blackboard keys this worker waits for before doing real work. **MUST** be populated whenever the worker depends on another worker's output — do NOT only write 'wait for X' in the system_prompt text. This field drives (1) WakeCoordinator auto-wake the instant deps land, (2) the DAG view's dashed 'waiting' edges, (3) the workers DB row's depends_on_json. Pass the exact key strings that the upstream worker's handoff_signal produces (typically `<workspace_id>/<signal>`). Empty array means 'start immediately'."
+                        "description": "Optional CLI override (claude or codex). Omit to use the role's default_cli. Only set this to deliberately deviate from the role.",
+                        "enum": ["claude", "codex"]
                     },
                     "model": {
                         "type": "string",
-                        "description": "Optional model override for this worker, e.g. 'opus' / 'sonnet' for claude, or a codex model name. Lets you match model strength to the task (heavy reasoning vs. bulk execution) WITHOUT spawning a different cli. Omit to use the CLI's default."
+                        "description": "Optional model override, e.g. 'opus' / 'sonnet'. Omit to use the role's default_model_tier. Use to match model strength to task weight WITHOUT changing cli."
+                    },
+                    "produces": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional typed output-kinds this worker produces (e.g. ['done'] or ['spec','done']). Omit to use the role's declared produces (defaults to ['done']). The server mints one blackboard key per kind."
+                    },
+                    "consumes": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "from_role": {"type": "string", "description": "Upstream role slug whose output this worker waits on."},
+                                "kind": {"type": "string", "description": "Output-kind of that upstream role. Defaults to 'done'."}
+                            },
+                            "required": ["from_role"],
+                            "additionalProperties": false
+                        },
+                        "description": "Typed upstream dependencies. Instead of hand-typing blackboard keys, reference {from_role, kind}; the server resolves each to the producer's minted key, validates the producer exists & produces that kind (rejects unknown/typo with did-you-mean), and wires WakeCoordinator. Empty = start immediately."
                     }
                 },
-                "required": ["cli", "role_label", "system_prompt"],
+                "required": ["role", "system_prompt"],
+                "additionalProperties": false
+            }
+        }),
+        json!({
+            "name": "swarm_list_roles",
+            "description": "List the role registry catalog: each role's slug, when_to_use hint, default CLI + model tier, and produced output-kinds. Call this before swarm_spawn_worker to pick the right role instead of guessing cli/model. Read-only.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {},
                 "additionalProperties": false
             }
         }),
@@ -204,6 +222,7 @@ pub async fn call_tool(ctx: &ToolContext, name: &str, args: &Value) -> Value {
         "swarm_read_blackboard" => read_blackboard(ctx, args).await,
         "swarm_write_blackboard" => write_blackboard(ctx, args).await,
         "swarm_spawn_worker" => spawn_worker(ctx, args).await,
+        "swarm_list_roles" => list_roles(ctx).await,
         "swarm_name_thread" => name_thread(ctx, args).await,
         other => Err(format!("unknown tool '{other}'")),
     };
@@ -567,15 +586,15 @@ async fn write_blackboard(ctx: &ToolContext, args: &Value) -> Result<String, Str
 /// 直接拉 worker 的入口,不走 spell + role 模板。caller_agent_id 自动从
 /// ToolContext 注入,workspace_id 由 server 反查得到。
 async fn spawn_worker(ctx: &ToolContext, args: &Value) -> Result<String, String> {
-    let cli = arg_str(args, "cli")?;
-    let role_label = arg_str(args, "role_label")?;
+    let role = arg_str(args, "role")?;
     let system_prompt = arg_str(args, "system_prompt")?;
-    let handoff_signal = args
-        .get("handoff_signal")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    let depends_on: Vec<String> = args
-        .get("depends_on")
+    // Optional CLI override — omitted means "use the role's default_cli".
+    let cli = args.get("cli").and_then(|v| v.as_str());
+    // Optional model overlay — omitted means "use the role's default_model_tier".
+    let model = args.get("model").and_then(|v| v.as_str());
+    // Typed output-kinds; empty forwards as "use the role's produces".
+    let produces: Vec<String> = args
+        .get("produces")
         .and_then(|v| v.as_array())
         .map(|arr| {
             arr.iter()
@@ -583,9 +602,13 @@ async fn spawn_worker(ctx: &ToolContext, args: &Value) -> Result<String, String>
                 .collect()
         })
         .unwrap_or_default();
-    // Optional model overlay (L5c) — forwarded only when present so the server
-    // falls back to plugin.default_model / the CLI default otherwise.
-    let model = args.get("model").and_then(|v| v.as_str());
+    // Typed upstream deps {from_role, kind} — forwarded verbatim; the server
+    // resolves them to minted keys and validates the dependency graph.
+    let consumes: Vec<Value> = args
+        .get("consumes")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
 
     // Reverse-resolve our own workspace_id via /api/agent (server attaches
     // workspace_id to every AgentInfo). caller_agent_id is the orchestrator
@@ -619,14 +642,14 @@ async fn spawn_worker(ctx: &ToolContext, args: &Value) -> Result<String, String>
         })?;
 
     let payload = json!({
-        "cli": cli,
-        "role_label": role_label,
+        "role": role,
         "system_prompt": system_prompt,
-        "handoff_signal": handoff_signal,
-        "depends_on": depends_on,
+        "cli": cli,        // Option → null when omitted; server falls back to role.default_cli
+        "model": model,    // Option → null when omitted; server falls back to role.default_model_tier
+        "produces": produces,
+        "consumes": consumes,
         "caller_agent_id": ctx.agent_id,
         "workspace_id": workspace_id,
-        "model": model,
     });
 
     let url = format!("{}/api/worker", ctx.server_url);
@@ -638,6 +661,8 @@ async fn spawn_worker(ctx: &ToolContext, args: &Value) -> Result<String, String>
         .await
         .map_err(|e| format!("flockmux-server unreachable at {url}: {e}"))?;
     if !resp.status().is_success() {
+        // The server returns 400 with valid options + did-you-mean on an
+        // unknown role or an unresolvable consumes ref — surface it verbatim.
         return Err(http_err_text(resp).await);
     }
     let body: Value = resp
@@ -645,21 +670,61 @@ async fn spawn_worker(ctx: &ToolContext, args: &Value) -> Result<String, String>
         .await
         .map_err(|e| format!("malformed response from {url}: {e}"))?;
 
-    let agent_id = body
-        .get("agent_id")
-        .and_then(|v| v.as_str())
-        .unwrap_or("?");
-    let resolved_cli = body.get("cli").and_then(|v| v.as_str()).unwrap_or(cli);
+    let agent_id = body.get("agent_id").and_then(|v| v.as_str()).unwrap_or("?");
+    let resolved_cli = body.get("cli").and_then(|v| v.as_str()).unwrap_or("?");
+    let role_label = body.get("role_label").and_then(|v| v.as_str()).unwrap_or(role);
+    let handoff = body.get("handoff_signal").and_then(|v| v.as_str()).unwrap_or("");
+    let deps: Vec<&str> = body
+        .get("depends_on")
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
+        .unwrap_or_default();
     Ok(format!(
         "Spawned worker `{role_label}` ({resolved_cli}) agent_id={agent_id}\n\
-         handoff_signal={}\n\
-         depends_on={depends_on:?}",
-        if handoff_signal.is_empty() {
-            "(none)"
-        } else {
-            handoff_signal
-        }
+         handoff_signal={}  (server-minted — your worker was told to write this)\n\
+         depends_on={deps:?}",
+        if handoff.is_empty() { "(none)" } else { handoff }
     ))
+}
+
+/// `swarm_list_roles` — GET /api/roles. Returns the role catalog so the
+/// orchestrator can pick a role (and inherit its cli/model defaults) instead
+/// of guessing. Read-only.
+async fn list_roles(ctx: &ToolContext) -> Result<String, String> {
+    let url = format!("{}/api/roles", ctx.server_url);
+    let resp = ctx
+        .http
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("flockmux-server unreachable at {url}: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(http_err_text(resp).await);
+    }
+    let rows: Vec<Value> = resp
+        .json()
+        .await
+        .map_err(|e| format!("malformed response from {url}: {e}"))?;
+    if rows.is_empty() {
+        return Ok("No roles registered.".to_string());
+    }
+    let mut out = format!("{} role(s):\n", rows.len());
+    for r in &rows {
+        let id = r.get("id").and_then(|v| v.as_str()).unwrap_or("?");
+        let cli = r.get("default_cli").and_then(|v| v.as_str()).unwrap_or("?");
+        let tier = r.get("default_model_tier").and_then(|v| v.as_str()).unwrap_or("");
+        let when = r.get("when_to_use").and_then(|v| v.as_str()).unwrap_or("");
+        let produces: Vec<&str> = r
+            .get("produces")
+            .and_then(|v| v.as_array())
+            .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
+            .unwrap_or_default();
+        out.push_str(&format!(
+            "  • {id}  [cli={cli}{}]  produces={produces:?}\n      {when}\n",
+            if tier.is_empty() { String::new() } else { format!(", model={tier}") }
+        ));
+    }
+    Ok(out)
 }
 
 /// Name (and thereby isolate) the caller's current direction. The orchestrator
@@ -1075,10 +1140,10 @@ mod tests {
     #[test]
     fn tool_descriptors_have_required_fields() {
         let tools = tool_descriptors();
-        // 7 swarm primitives + swarm_spawn_worker (Magentic-One 重构后唯一的
-        // 派活入口) + swarm_name_thread (multi-direction naming/isolation) = 9.
+        // 7 swarm primitives + swarm_spawn_worker (派活入口) + swarm_list_roles
+        // (P0 角色目录) + swarm_name_thread (multi-direction naming/isolation) = 10.
         // Bump this when adding tools.
-        assert_eq!(tools.len(), 9);
+        assert_eq!(tools.len(), 10);
         for t in &tools {
             assert!(t["name"].is_string());
             assert!(t["description"].is_string());
@@ -1089,6 +1154,7 @@ mod tests {
             .filter_map(|t| t["name"].as_str())
             .collect();
         assert!(names.contains(&"swarm_spawn_worker"));
+        assert!(names.contains(&"swarm_list_roles"));
         assert!(names.contains(&"swarm_name_thread"));
         // 老 spell 工具已经退役;orchestrator 直接 spawn_worker。
         assert!(!names.contains(&"swarm_list_spells"));

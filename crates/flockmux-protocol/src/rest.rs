@@ -130,40 +130,67 @@ pub struct AgentInfo {
 /// 同时写 `workers` 表 + `wake_subs` / `exit_keys` 注册。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SpawnWorkerRequest {
-    /// CLI plugin id, 必须是 "claude" 或 "codex"(或未来其他 cli-plugins)。
-    pub cli: String,
-    /// UI 显示的角色名,例如 "writer" / "ui-coder" / "test-runner"。
-    pub role_label: String,
+    /// 角色注册表 slug(P0-B),例如 "frontend" / "backend" / "reviewer"。
+    /// 服务端对注册表校验:未知 slug → 400 + valid options + did-you-mean。
+    /// 携带 default_cli / default_model_tier / produces 等默认值。
+    pub role: String,
     /// 完整 system prompt,会通过 PTY bootstrap 注入给 worker。Orchestrator
-    /// 负责把任务描述、依赖、handoff 信号、终止条件都写清楚。
+    /// 负责把任务描述、终止条件写清楚;handoff key 由服务端 mint 后追加注入,
+    /// 不再由 LLM 自己编。
     pub system_prompt: String,
-    /// worker 完成后该写入的黑板 key。留空表示无 handoff(纯执行性任务)。
+    /// 可选 CLI 覆盖("claude"/"codex")。缺省取所选 role 的 default_cli。
     #[serde(default)]
-    pub handoff_signal: String,
-    /// worker 要等的黑板 key 数组。WakeCoordinator 看到这些 key 被写就 wake
-    /// worker。
+    pub cli: Option<String>,
+    /// 可选 model overlay。缺省取 role 的 default_model_tier,再无则
+    /// plugin.default_model / CLI 自身默认。
     #[serde(default)]
-    pub depends_on: Vec<String>,
+    pub model: Option<String>,
+    /// 本 worker 产出的 typed output-kinds(P0-A)。空 → 取 role.produces →
+    /// 再空则 ["done"]。服务端按 (workspace,thread,role,kind) mint 黑板 key。
+    #[serde(default)]
+    pub produces: Vec<String>,
+    /// typed 上游依赖(P0-A):本 worker 等的「某角色的某产出种类」。服务端
+    /// 解析成 minted key 填入 depends_on,杜绝裸串漂移。
+    #[serde(default)]
+    pub consumes: Vec<ConsumeRef>,
     /// 谁拉起来的(orchestrator agent_id 或上一级 worker)。MCP 工具调用时
     /// 由 `ToolContext.agent_id` 自动填充;直接 REST 调用时调用方必须填。
     pub caller_agent_id: String,
     /// Worker 所属 workspace。MCP 工具自动从 caller 反查;直接 REST 调用
     /// 时必填。
     pub workspace_id: String,
-    /// 可选 model overlay(L5c)。orchestrator 可给不同 worker 指定不同模型
-    /// (例如规划用 opus、批量执行用 sonnet),无需 fork CLI id 或 role。留空
-    /// 用 plugin.default_model,再无则 CLI 自身默认。
-    #[serde(default)]
-    pub model: Option<String>,
+}
+
+/// Typed 上游依赖引用(P0-A)。orchestrator 引用「角色 + 产出种类」,服务端在
+/// spawn 时解析成生产者的 minted 黑板 key —— 人读稳定、机器侧 typed。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConsumeRef {
+    /// 上游角色 slug。
+    pub from_role: String,
+    /// 上游角色的产出种类,缺省 "done"。
+    #[serde(default = "default_consume_kind")]
+    pub kind: String,
+}
+
+fn default_consume_kind() -> String {
+    "done".to_string()
 }
 
 /// `POST /api/worker` 返回 — 新 spawn 的 PTY agent 元数据。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SpawnWorkerResponse {
     pub agent_id: String,
+    /// 解析后的实际 CLI(req.cli 覆盖 or role.default_cli)。
     pub cli: String,
+    /// UI 显示名,由 role 派生(role.name 或 slug)。
     pub role_label: String,
     pub workspace: String,
+    /// 服务端 mint 的主 handoff key(已注入 worker prompt)。无 handoff 留空。
+    #[serde(default)]
+    pub handoff_signal: String,
+    /// consumes 解析后的 minted 依赖 key 列表(已注册到 WakeCoordinator)。
+    #[serde(default)]
+    pub depends_on: Vec<String>,
 }
 
 // ── swarm REST DTOs (M3 #18) ─────────────────────────────────────────────

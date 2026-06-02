@@ -1525,10 +1525,25 @@ impl Store {
             } else {
                 Some(rec.depends_on_json.clone())
             };
+            let role_slug = if rec.role_slug.is_empty() {
+                None
+            } else {
+                Some(rec.role_slug.clone())
+            };
+            let produces_json = if rec.produces_json.is_empty() || rec.produces_json == "[]" {
+                None
+            } else {
+                Some(rec.produces_json.clone())
+            };
+            let consumes_json = if rec.consumes_json.is_empty() || rec.consumes_json == "[]" {
+                None
+            } else {
+                Some(rec.consumes_json.clone())
+            };
             conn.execute(
                 "INSERT INTO workers (agent_id, parent_agent_id, role_label, system_prompt, \
-                 handoff_signal, depends_on_json, spawned_at) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                 handoff_signal, depends_on_json, spawned_at, role_slug, produces_json, consumes_json) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
                 params![
                     rec.agent_id,
                     rec.parent_agent_id,
@@ -1537,6 +1552,9 @@ impl Store {
                     handoff_signal,
                     depends_on_json,
                     rec.spawned_at,
+                    role_slug,
+                    produces_json,
+                    consumes_json,
                 ],
             )?;
             Ok(())
@@ -1564,13 +1582,17 @@ impl Store {
                         std::iter::repeat("?").take(ids.len()).collect::<Vec<_>>().join(",");
                     let sql = format!(
                         "SELECT agent_id, parent_agent_id, role_label, system_prompt, \
-                                handoff_signal, depends_on_json, spawned_at \
+                                handoff_signal, depends_on_json, spawned_at, \
+                                role_slug, produces_json, consumes_json \
                          FROM workers WHERE agent_id IN ({placeholders})"
                     );
                     let mut stmt = conn.prepare(&sql)?;
                     let rows = stmt.query_map(rusqlite::params_from_iter(ids.iter()), |row| {
                         let handoff: Option<String> = row.get(4)?;
                         let deps: Option<String> = row.get(5)?;
+                        let role_slug: Option<String> = row.get(7)?;
+                        let produces: Option<String> = row.get(8)?;
+                        let consumes: Option<String> = row.get(9)?;
                         Ok(WorkerRecord {
                             agent_id: row.get(0)?,
                             parent_agent_id: row.get(1)?,
@@ -1579,6 +1601,9 @@ impl Store {
                             handoff_signal: handoff.unwrap_or_default(),
                             depends_on_json: deps.unwrap_or_else(|| "[]".to_string()),
                             spawned_at: row.get(6)?,
+                            role_slug: role_slug.unwrap_or_default(),
+                            produces_json: produces.unwrap_or_else(|| "[]".to_string()),
+                            consumes_json: consumes.unwrap_or_else(|| "[]".to_string()),
                         })
                     })?;
                     let mut out = std::collections::HashMap::with_capacity(ids.len());

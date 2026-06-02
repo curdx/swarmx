@@ -38,9 +38,25 @@
 //! Bad files are skipped with a `warn!` at load time — never panic.
 
 use anyhow::{anyhow, Context, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+
+/// A typed upstream dependency: "this role consumes the `kind` output of
+/// `from_role`". Resolved at spawn time to the producer's *minted* blackboard
+/// key (see [`mint_handoff_key`]) so the consumer never hand-types a key.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct RoleConsume {
+    /// Slug of the upstream role whose output this role waits on.
+    pub from_role: String,
+    /// Output-kind of that upstream role. Defaults to `"done"`.
+    #[serde(default = "default_kind")]
+    pub kind: String,
+}
+
+fn default_kind() -> String {
+    "done".to_string()
+}
 
 /// Parsed front-matter for one role file.
 #[derive(Debug, Clone, Deserialize)]
@@ -78,6 +94,39 @@ pub struct RoleManifest {
     /// `{<role>_id}` placeholders as a spell's inline system_prompt
     /// (rendered by `spells::render_prompt`).
     pub system_prompt_template: String,
+
+    // ── P0 (F1 角色/任务感知配给) ──────────────────────────────────────
+    /// Thin, router-facing descriptor: when SHOULD an orchestrator pick this
+    /// role? Kept separate from `system_prompt_template` (worker-facing) so
+    /// role selection reads a short hint, not the heavy prompt.
+    #[serde(default)]
+    pub when_to_use: String,
+    /// Default model tier for this role (`opus` | `sonnet` | `haiku`), unless
+    /// the spawn overrides it. Placeholder until the P1 capability cards take
+    /// over model selection.
+    #[serde(default)]
+    pub default_model_tier: String,
+    /// Typed output-kinds this role produces. The server mints one canonical
+    /// blackboard key per kind (see [`mint_handoff_key`]). Empty in the
+    /// manifest means "fall back to a single `done` kind at spawn time".
+    #[serde(default)]
+    pub produces: Vec<String>,
+    /// Typed upstream dependencies. Resolved at spawn time against declared /
+    /// live producers; the orchestrator usually overrides this per-spawn.
+    #[serde(default)]
+    pub consumes: Vec<RoleConsume>,
+
+    // ── P1 前向保留(P0 不读,先占位防 schema 漂移) ───────────────────
+    /// Tool / MCP allowlist for this role (P1-B hard capability gating).
+    #[serde(default)]
+    pub tool_allowlist: Vec<String>,
+    /// Declared modality (`ui` | `backend` | `docs` | `shell`) — a P1-A rule
+    /// signal. Declared, never inferred from free text.
+    #[serde(default)]
+    pub modality: String,
+    /// Risk level (`normal` | `high`) — P1-D forces a verifier when high.
+    #[serde(default)]
+    pub risk: String,
 }
 
 #[derive(Debug, Clone)]
@@ -139,16 +188,74 @@ impl RoleRegistry {
         Ok(Self { roles })
     }
 
+    /// Built-in role catalog, compiled into the binary so a deployed server
+    /// (whose cwd has no `roles/` dir) still ships a vetted default set. Bad
+    /// embeds `warn!` + skip — a parse slip in one role never aborts startup.
+    pub fn builtin() -> Self {
+        const BUILTIN: &[(&str, &str)] = &[
+            ("orchestrator.md", include_str!("../../../roles/orchestrator.md")),
+            ("frontend.md", include_str!("../../../roles/frontend.md")),
+            ("backend.md", include_str!("../../../roles/backend.md")),
+            ("reviewer.md", include_str!("../../../roles/reviewer.md")),
+            ("test-runner.md", include_str!("../../../roles/test-runner.md")),
+            ("docs-writer.md", include_str!("../../../roles/docs-writer.md")),
+            ("researcher.md", include_str!("../../../roles/researcher.md")),
+            ("fixer.md", include_str!("../../../roles/fixer.md")),
+        ];
+        let mut roles = HashMap::new();
+        for (name, content) in BUILTIN {
+            match parse_role(content, Path::new(name)) {
+                Ok(role) => {
+                    roles.insert(role.manifest.id.clone(), role);
+                }
+                Err(err) => {
+                    tracing::warn!(?err, role = name, "skip builtin role: parse failed");
+                }
+            }
+        }
+        Self { roles }
+    }
+
+    /// Overlay `other`'s roles onto self, overriding by id (other wins). Used
+    /// to layer: built-ins → repo `roles/` dir → project `.flockmux/roles/`.
+    pub fn overlay(&mut self, other: RoleRegistry) {
+        for (id, role) in other.roles {
+            self.roles.insert(id, role);
+        }
+    }
+
     pub fn get(&self, id: &str) -> Option<&Role> {
         self.roles.get(id)
     }
 
-    #[allow(dead_code)]
+    /// All known role ids, sorted — for `unknown role` error messages and the
+    /// `swarm_list_roles` tool.
+    pub fn ids(&self) -> Vec<String> {
+        let mut v: Vec<_> = self.roles.keys().cloned().collect();
+        v.sort();
+        v
+    }
+
     pub fn list(&self) -> Vec<&Role> {
         let mut v: Vec<_> = self.roles.values().collect();
         v.sort_by(|a, b| a.manifest.id.cmp(&b.manifest.id));
         v
     }
+}
+
+/// Mint the canonical blackboard key a role writes for one output kind. This
+/// is the SINGLE source of truth for a handoff key: both the producer's prompt
+/// injection and the consumer's resolved `depends_on` derive from it, so the
+/// two sides cannot drift (the F3 bug class). Format matches the per-direction
+/// blackboard namespace documented in the orchestrator role:
+/// `<workspace_id>/<thread_slug>/<role_slug>.<kind>`.
+pub fn mint_handoff_key(
+    workspace_id: &str,
+    thread_slug: &str,
+    role_slug: &str,
+    kind: &str,
+) -> String {
+    format!("{workspace_id}/{thread_slug}/{role_slug}.{kind}")
 }
 
 /// Locate the `roles/` directory: env override > workspace-relative.
@@ -354,5 +461,99 @@ system_prompt_template = "ok"
         let reg = RoleRegistry::load_dir(dir.path()).unwrap();
         assert!(reg.get("frontend").is_some());
         assert!(reg.get("backend").is_none());
+    }
+
+    // ── P0: typed handoff key + extended schema ──────────────────────────
+
+    #[test]
+    fn mint_handoff_key_format() {
+        assert_eq!(
+            mint_handoff_key("ws_ab12", "dark-mode", "frontend", "done"),
+            "ws_ab12/dark-mode/frontend.done"
+        );
+        // Deterministic / idempotent: same inputs → same key (no Date/rand).
+        assert_eq!(
+            mint_handoff_key("w", "main", "backend", "spec"),
+            mint_handoff_key("w", "main", "backend", "spec")
+        );
+    }
+
+    #[test]
+    fn manifest_new_fields_default_when_absent() {
+        // An old-style minimal role (no P0 fields) must still parse, with the
+        // new fields defaulting empty — backward compatibility.
+        let src = r#"+++
+id = "legacy"
+default_cli = "claude"
+system_prompt_template = "x"
++++"#;
+        let r = parse_role(src, Path::new("/tmp/legacy.md")).unwrap();
+        assert!(r.manifest.when_to_use.is_empty());
+        assert!(r.manifest.default_model_tier.is_empty());
+        assert!(r.manifest.produces.is_empty());
+        assert!(r.manifest.consumes.is_empty());
+        assert!(r.manifest.tool_allowlist.is_empty());
+        assert!(r.manifest.modality.is_empty());
+    }
+
+    #[test]
+    fn manifest_parses_produces_and_consumes() {
+        let src = r#"+++
+id = "frontend"
+default_cli = "claude"
+default_model_tier = "sonnet"
+when_to_use = "ui work"
+produces = ["done", "spec"]
+consumes = [{ from_role = "designer", kind = "spec" }, { from_role = "planner" }]
+system_prompt_template = "x"
++++"#;
+        let r = parse_role(src, Path::new("/tmp/f.md")).unwrap();
+        assert_eq!(r.manifest.produces, vec!["done", "spec"]);
+        assert_eq!(r.manifest.default_model_tier, "sonnet");
+        assert_eq!(r.manifest.consumes.len(), 2);
+        assert_eq!(r.manifest.consumes[0].from_role, "designer");
+        assert_eq!(r.manifest.consumes[0].kind, "spec");
+        // kind omitted → defaults to "done"
+        assert_eq!(r.manifest.consumes[1].from_role, "planner");
+        assert_eq!(r.manifest.consumes[1].kind, "done");
+    }
+
+    #[test]
+    fn overlay_overrides_by_id() {
+        let dir = tempdir().unwrap();
+        write(
+            dir.path(),
+            "frontend.md",
+            "+++\nid=\"frontend\"\ndefault_cli=\"codex\"\nsystem_prompt_template=\"override\"\n+++",
+        );
+        let mut base = RoleRegistry::builtin();
+        let before = base.get("frontend").unwrap().manifest.default_cli.clone();
+        assert_eq!(before, "claude", "builtin frontend defaults to claude");
+        base.overlay(RoleRegistry::load_dir(dir.path()).unwrap());
+        assert_eq!(
+            base.get("frontend").unwrap().manifest.default_cli,
+            "codex",
+            "dir overlay wins by id"
+        );
+    }
+
+    #[test]
+    fn builtin_ships_the_vetted_set() {
+        let reg = RoleRegistry::builtin();
+        for id in [
+            "orchestrator",
+            "frontend",
+            "backend",
+            "reviewer",
+            "test-runner",
+            "docs-writer",
+            "researcher",
+            "fixer",
+        ] {
+            assert!(reg.get(id).is_some(), "builtin role `{id}` should load");
+        }
+        // Built-in worker roles declare a typed `produces`.
+        assert_eq!(reg.get("frontend").unwrap().manifest.produces, vec!["done"]);
+        assert_eq!(reg.get("backend").unwrap().manifest.default_cli, "codex");
     }
 }

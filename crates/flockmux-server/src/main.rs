@@ -116,10 +116,19 @@ async fn main() -> Result<()> {
         .with_context(|| format!("load spells from {}", spells_dir.display()))?;
     info!(count = spell_registry.list().len(), "spells loaded");
 
+    // Two-layer role registry: built-ins compiled into the binary (so a
+    // deployed server with no `roles/` dir still works) overlaid by the repo's
+    // `roles/` dir (dev override by slug). Per-workspace `.flockmux/roles/`
+    // overlay happens at spawn time, where the workspace cwd is known.
     let roles_dir = roles::default_roles_dir();
-    info!(dir = %roles_dir.display(), "loading roles");
-    let role_registry = roles::RoleRegistry::load_dir(&roles_dir)
-        .with_context(|| format!("load roles from {}", roles_dir.display()))?;
+    info!(dir = %roles_dir.display(), "loading roles (builtin + dir overlay)");
+    let mut role_registry = roles::RoleRegistry::builtin();
+    match roles::RoleRegistry::load_dir(&roles_dir) {
+        Ok(dir_roles) => role_registry.overlay(dir_roles),
+        Err(e) => {
+            tracing::warn!(?e, dir = %roles_dir.display(), "roles dir overlay failed; using builtins only")
+        }
+    }
     info!(count = role_registry.list().len(), "roles loaded");
 
     let shim_path = spawn::locate_shim().context("locate flockmux-shim")?;
@@ -259,6 +268,7 @@ async fn main() -> Result<()> {
             get(routes::rest::list_agents).post(routes::rest::spawn),
         )
         .route("/api/worker", post(routes::rest::spawn_worker))
+        .route("/api/roles", get(routes::rest::list_roles))
         .route("/api/agent/:id", delete(routes::rest::kill))
         .route("/api/agent/:id/wake", post(routes::rest::wake_agent))
         .route("/api/agent/:id/interrupt", post(routes::rest::interrupt))

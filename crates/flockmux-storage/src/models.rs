@@ -158,11 +158,25 @@ pub struct NewWorker {
     pub role_label: String,
     /// 注入给 worker 的完整 system prompt,留档便于回放。
     pub system_prompt: String,
-    /// 完成后该写的黑板 key;无 handoff 留空字符串。
+    /// 完成后该写的黑板 key;无 handoff 留空字符串。P0-A 起由服务端 mint
+    /// (`<workspace_id>/<thread_slug>/<role>.<kind>`),不再是 LLM 自选串。
     pub handoff_signal: String,
-    /// JSON 序列化的 string array,等待的黑板 key。空数组 = 无依赖。
+    /// JSON 序列化的 string array,等待的黑板 key。空数组 = 无依赖。P0-A 起
+    /// 由 `consumes_json` 解析成的 minted keys 填入。
     pub depends_on_json: String,
     pub spawned_at: i64,
+
+    // ── P0 (F1 角色/任务感知配给) ──────────────────────────────────────
+    /// 校验过的角色注册表 slug(P0-B)。`role_label` 保留作 UI 显示(由 slug 派生)。
+    #[serde(default)]
+    pub role_slug: String,
+    /// JSON 数组:本 worker 产出的 typed output-kinds(P0-A)。空 = ["done"]。
+    #[serde(default)]
+    pub produces_json: String,
+    /// JSON 数组:{from_role, kind} typed 上游依赖(P0-A)。解析后的 minted key
+    /// 落在 `depends_on_json`。
+    #[serde(default)]
+    pub consumes_json: String,
 }
 
 /// 同 NewWorker,加上 spawned_at(已经在 NewWorker 里)— 用一个 struct
