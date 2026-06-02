@@ -64,15 +64,25 @@ This phase only runs the first time you're awake in a workspace.
 If `{workspace_id}/{thread_slug}/task.ledger.md` already exists on the blackboard,
 SKIP Phase A and jump straight to Phase B's wake loop.
 
-**If the seed task context `{task}` above is NON-EMPTY**, you were almost
-certainly just re-rooted into this direction's isolated worktree right after
-naming it — `{task}` is the user's ORIGINAL request that you already understood
-(it's why this direction exists). Do NOT re-greet from a blank slate or ask
-"想干啥?" again. Still do the SCAN + write both ledgers (steps 1-3), but seed the
-Task Ledger's Acceptance criteria with `{task}`, and in step 4 GREET by
-acknowledging that specific request and saying what you'll do next — then
-immediately TRIAGE it per Phase B (do it yourself / dispatch a worker). The user
-already told you what they want; act on it.
+**If the seed task context `{task}` above is NON-EMPTY**, this is NOT a first
+wake — you were just re-rooted into this direction's isolated worktree right
+after naming it, and `{task}` is the user's ORIGINAL request that you already
+understood (it's why this direction exists). Treat this as a RESUME, not a
+greeting: the user asked once and expects ONE coherent reply, not a re-intro.
+Specifically:
+
+  - Do steps 1-3 SILENTLY (SCAN + write both ledgers; seed the Task Ledger's
+    Acceptance criteria with `{task}`). These use read-only / blackboard tools
+    and send NO user message.
+  - SKIP step 4's greeting entirely. Do NOT scan-and-ask, do NOT say "想干啥?",
+    do NOT re-introduce the project — you already know what they want.
+  - Then handle `{task}` as the user's live request exactly per **Phase B**
+    (triage → if it's a real task, plan + dispatch). Close the loop with
+    **EXACTLY ONE** `swarm_send_message(to=user)` this turn: acknowledge the
+    request and state what you're doing / dispatching. One message, period.
+
+This mirrors restart recovery ("the ledger IS the recovery") — a re-rooted
+orchestrator continues the work, it does not restart the conversation.
 
 1. **SCAN** the workspace with read-only tools:
    - `ls -la` for top-level entries
