@@ -34,6 +34,39 @@ jobs:
         run: cargo fmt --all -- --check
         continue-on-error: true
 
+  smoke:
+    name: E2E smoke (server · directions live-refresh)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          # global WebSocket (used by the .mjs smokes) is stable on Node 22.
+          node-version: 22
+      - name: Build server
+        run: cargo build -p flockmux-server --locked
+      - name: Boot isolated server + run directions smoke
+        # No real CLI needed: directions-smoke drives create/rename/delete over
+        # REST and asserts the ThreadChanged broadcasts on /ws/swarm. Data dirs
+        # are throwaway (FLOCKMUX_*), so nothing touches a real ~/.flockmux. The
+        # agent-spawning smokes (swarm/resume/stress) need claude/codex on PATH +
+        # login, so they stay manual — see scripts/golden-cli-test.sh.
+        run: |
+          set -euo pipefail
+          D="$(mktemp -d)"
+          FLOCKMUX_PORT=7799 FLOCKMUX_SERVER_URL=http://127.0.0.1:7799 \
+            FLOCKMUX_DB_PATH="$D/d.db" FLOCKMUX_WORKSPACES_DIR="$D/ws" \
+            FLOCKMUX_BLACKBOARD_DIR="$D/bb" FLOCKMUX_RECORDINGS_DIR="$D/rec" \
+            RUST_LOG=error ./target/debug/flockmux-server &
+          SRV=$!
+          trap 'kill "$SRV" 2>/dev/null || true' EXIT
+          for _ in $(seq 1 60); do
+            curl -sf http://127.0.0.1:7799/api/workspaces >/dev/null 2>&1 && break
+            sleep 0.5
+          done
+          FLOCKMUX_PORT=7799 node scripts/directions-smoke.mjs
+
   web:
     name: Web (typecheck · build)
     runs-on: ubuntu-latest
