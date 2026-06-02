@@ -210,6 +210,25 @@ pub fn spawn_agent(
     env.insert("FLOCKMUX_AGENT_ID".into(), agent_id.clone());
     env.insert("FLOCKMUX_SERVER_URL".into(), server_url.to_string());
 
+    // codex: point the worker at its per-agent CODEX_HOME (written by
+    // pre_spawn) so it loads an ISOLATED config with ONLY flockmux-swarm —
+    // not the user's personal ~/.codex MCP servers (chrome-devtools, pencil,
+    // …), which stall a headless worker at startup. Mirrors claude's
+    // `--strict-mcp-config`. Gated on the per-agent config.toml existing;
+    // otherwise codex falls back to the global ~/.codex (still has the block).
+    if plugin.mcp_format == crate::plugins::McpFormat::CodexGlobalToml && plugin.auto_inject_mcp {
+        if let Some(home) = crate::pre_spawn::codex_per_agent_home_path(&agent_id) {
+            if home.join("config.toml").is_file() {
+                env.insert("CODEX_HOME".into(), home.to_string_lossy().into_owned());
+                tracing::info!(
+                    agent = %agent_id,
+                    codex_home = %home.display(),
+                    "codex per-agent CODEX_HOME injected (isolates MCP from user's global ~/.codex)"
+                );
+            }
+        }
+    }
+
     let argv_strings: Vec<String> = argv;
 
     let PtyHandles { bridge, output_rx } = PtyBridge::spawn(SpawnOpts {

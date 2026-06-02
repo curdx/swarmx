@@ -342,6 +342,105 @@ fn render_codex_mcp_section(mcp_bin: &Path) -> String {
     )
 }
 
+/// Per-agent `CODEX_HOME` directory. spawn.rs points the codex worker at this
+/// via the `CODEX_HOME` env so it loads an ISOLATED config instead of the
+/// user's global `~/.codex` — which carries the user's personal MCP servers
+/// (chrome-devtools, pencil, …). Those heavy/interactive servers stall a
+/// headless worker at startup ("Starting MCP servers (n/4)… Reconnecting…").
+/// Mirrors claude's `--strict-mcp-config` isolation.
+pub fn codex_per_agent_home_path(agent_id: &str) -> Option<PathBuf> {
+    home_path().map(|h| h.join(".flockmux").join("codex-home").join(agent_id))
+}
+
+/// Remove every `[mcp_servers...]` AND `[projects...]` section from a codex
+/// `config.toml`, keeping the preamble and all OTHER sections (model /
+/// model_providers / endpoint settings the worker still needs) intact.
+///
+/// - mcp_servers: the user's personal servers stall a headless worker.
+/// - projects: these are per-dir trust entries. A worker only needs its OWN
+///   workspace trusted (re-appended by the caller). Stripping them also avoids
+///   a `duplicate key` crash when the workspace was already trusted globally
+///   (run_patches step 1) in the config we copy from.
+///
+/// String-based so the user's formatting and other config survive verbatim.
+fn strip_codex_mcp_sections(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut skipping = false;
+    for line in text.split_inclusive('\n') {
+        let t = line.trim_end_matches(['\n', '\r']).trim();
+        if t.starts_with('[') && t.ends_with(']') {
+            // New section header: skip mcp_servers + projects tables.
+            skipping = t.starts_with("[mcp_servers]")
+                || t.starts_with("[mcp_servers.")
+                || t.starts_with("[projects]")
+                || t.starts_with("[projects.");
+        }
+        if !skipping {
+            out.push_str(line);
+        }
+    }
+    out
+}
+
+/// Write the per-agent `CODEX_HOME`: an isolated `config.toml` (the user's
+/// config minus their `mcp_servers`, plus ONLY flockmux-swarm + this
+/// workspace's trust), a symlink to the shared `auth.json` (so token refreshes
+/// stay shared), and a copy of the already-dismissed `version.json`. Idempotent.
+pub fn write_codex_per_agent_home(agent_id: &str, workspace: &Path, mcp_bin: &Path) -> Result<()> {
+    let home = codex_per_agent_home_path(agent_id)
+        .context("home not found; cannot write per-agent codex home")?;
+    fs::create_dir_all(&home).with_context(|| format!("create {}", home.display()))?;
+
+    let user_codex = home_path().map(|h| h.join(".codex"));
+    let user_cfg_text = match user_codex.as_ref().map(|d| d.join("config.toml")) {
+        Some(p) if p.is_file() => fs::read_to_string(&p).unwrap_or_default(),
+        _ => String::new(),
+    };
+
+    // Base = user's config minus their MCP servers; then append ours + trust.
+    let mut cfg = strip_codex_mcp_sections(&user_cfg_text).trim_end().to_string();
+    if !cfg.is_empty() {
+        cfg.push_str("\n\n");
+    }
+    cfg.push_str(&render_codex_mcp_section(mcp_bin));
+    cfg.push('\n');
+    cfg.push_str(&format!(
+        "[projects.\"{}\"]\ntrust_level = \"trusted\"\n",
+        workspace.to_string_lossy()
+    ));
+
+    let cfg_path = home.join("config.toml");
+    let tmp = cfg_path.with_extension("toml.flockmux-tmp");
+    {
+        let mut f = fs::File::create(&tmp).with_context(|| format!("create {}", tmp.display()))?;
+        f.write_all(cfg.as_bytes())?;
+        f.sync_all().ok();
+    }
+    fs::rename(&tmp, &cfg_path).with_context(|| format!("rename to {}", cfg_path.display()))?;
+
+    // Carry over auth (symlink → shared token) + dismissed-update marker (copy).
+    if let Some(dir) = user_codex {
+        let src_auth = dir.join("auth.json");
+        if src_auth.is_file() {
+            let dst_auth = home.join("auth.json");
+            let _ = fs::remove_file(&dst_auth);
+            #[cfg(unix)]
+            {
+                let _ = std::os::unix::fs::symlink(&src_auth, &dst_auth);
+            }
+            #[cfg(not(unix))]
+            {
+                let _ = fs::copy(&src_auth, &dst_auth);
+            }
+        }
+        let src_ver = dir.join("version.json");
+        if src_ver.is_file() {
+            let _ = fs::copy(&src_ver, home.join("version.json"));
+        }
+    }
+    Ok(())
+}
+
 /// Locate `header` (matched against `line.trim()`) and return the half-open
 /// byte range `[start, end)` covering the entire section: header line through
 /// the line just before the next `[...]` header (or EOF).
@@ -597,8 +696,17 @@ pub fn run_patches(
                 }
             }
             McpFormat::CodexGlobalToml => {
-                // Global [mcp_servers.flockmux-swarm] in ~/.codex/config.toml;
-                // per-spawn identity rides in via FLOCKMUX_AGENT_ID env.
+                // Preferred: a per-agent CODEX_HOME with ONLY flockmux-swarm, so
+                // the worker doesn't inherit the user's personal ~/.codex MCP
+                // servers (which stall a headless worker at startup). spawn.rs
+                // sets CODEX_HOME when the per-agent config.toml exists.
+                if let Err(err) =
+                    write_codex_per_agent_home(&ctx.agent_id, workspace, &ctx.mcp_bin)
+                {
+                    tracing::warn!(?err, "codex: per-agent CODEX_HOME write failed");
+                }
+                // Fallback: also ensure the global block, so a worker that (for
+                // any reason) falls back to ~/.codex still gets swarm_* tools.
                 if let Err(err) = ensure_codex_mcp_global(&ctx.mcp_bin) {
                     tracing::warn!(?err, "codex: mcp-inject patch failed");
                 }
@@ -700,6 +808,38 @@ mod tests {
     use super::*;
     use serde_json::json;
     use tempfile::tempdir;
+
+    #[test]
+    fn strip_codex_mcp_sections_drops_mcp_and_projects_keeps_provider() {
+        let cfg = "\
+model = \"gpt-5.5\"\n\
+model_provider = \"custom\"\n\
+\n\
+[model_providers.custom]\n\
+base_url = \"https://nowcoding.ai/v1\"\n\
+\n\
+[mcp_servers.chrome-devtools]\n\
+command = \"npx\"\n\
+args = [\"chrome-devtools-mcp@latest\"]\n\
+\n\
+[mcp_servers.flockmux-swarm]\n\
+command = \"/old/path\"\n\
+\n\
+[projects.\"/some/dir\"]\n\
+trust_level = \"trusted\"\n";
+        let out = strip_codex_mcp_sections(cfg);
+        // model + custom provider survive (worker still reaches the model)
+        assert!(out.contains("model = \"gpt-5.5\""));
+        assert!(out.contains("[model_providers.custom]"));
+        assert!(out.contains("nowcoding.ai"));
+        // ALL mcp_servers (incl. stale flockmux-swarm) AND all projects gone —
+        // the latter prevents the duplicate-key crash on re-append.
+        assert!(!out.contains("[mcp_servers"));
+        assert!(!out.contains("chrome-devtools"));
+        assert!(!out.contains("/old/path"));
+        assert!(!out.contains("[projects"));
+        assert!(!out.contains("/some/dir"));
+    }
 
     #[test]
     fn claude_trust_sets_flag_for_new_workspace() {

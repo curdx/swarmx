@@ -3,7 +3,9 @@ id = "fixer"
 name = "Fixer"
 description = "定位并修复失败(测试红、构建坏、bug),最小改动收敛。"
 default_cli = "codex"
-default_model_tier = "sonnet"
+# Empty: "sonnet" is a Claude tier codex can't resolve on its own provider;
+# let codex use its configured default model. (P1: per-(cli,model) cards.)
+default_model_tier = ""
 when_to_use = "需要定位并修复一个失败(测试红/构建坏/明确 bug)时选它;通常 consumes 上游的 .error 或测试失败信号。"
 modality = "backend"
 risk = "normal"
