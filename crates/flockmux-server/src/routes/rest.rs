@@ -119,24 +119,58 @@ fn resolve_consumes_to_deps(
 /// Append the server-minted handoff key(s) to the orchestrator-authored worker
 /// prompt, so the worker writes the canonical key verbatim instead of inventing
 /// one — the F3 drift class is designed away (P0-A).
-fn build_worker_prompt(base: &str, success_keys: &[String], error_key: &str) -> String {
-    if success_keys.is_empty() {
-        return base.to_string();
+fn build_worker_prompt(
+    base: &str,
+    success_keys: &[String],
+    error_key: &str,
+    dep_keys: &[String],
+) -> String {
+    let mut out = base.to_string();
+
+    // INPUTS / wait-gate: a worker is bootstrapped immediately on spawn, but its
+    // typed dependencies may not be on the blackboard yet. Without this block it
+    // would act prematurely (and, worse, write its handoff key → auto-killed
+    // before the real work). Tell it to check its inputs first and STOP (without
+    // writing handoff) if any are missing; the WakeCoordinator re-wakes it when
+    // they land. A `<key>.error` means the upstream failed — handle, don't hang.
+    if !dep_keys.is_empty() {
+        let deps = dep_keys
+            .iter()
+            .map(|k| format!("  - {k}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        out.push_str(&format!(
+            "\n\n──────────────────────────────────────────────────────────────\n\
+             INPUTS — this task depends on other agents' output. BEFORE doing \
+             anything, use swarm_list_blackboard / swarm_read_blackboard to check \
+             for ALL of these keys:\n{deps}\n\
+             If ANY key is missing: do NOT start the task and do NOT write your \
+             handoff key. Reply in one line that you are waiting for inputs, then \
+             STOP — flockmux re-wakes you automatically the moment they appear. \
+             A `<key>.error` (instead of the key) means that upstream FAILED: \
+             handle the failure path, do not wait forever. Only proceed with the \
+             task once EVERY input key is present.\n"
+        ));
     }
-    let keys = success_keys
-        .iter()
-        .map(|k| format!("  - {k}"))
-        .collect::<Vec<_>>()
-        .join("\n");
-    format!(
-        "{base}\n\n\
-         ──────────────────────────────────────────────────────────────\n\
-         HANDOFF (managed by flockmux — copy these keys VERBATIM via \
-         swarm_write_blackboard; do NOT invent or alter them):\n\
-         • On SUCCESS, write your result to:\n{keys}\n\
-         • On FAILURE/abort, write to `{error_key}` instead, so dependents \
-         fail loudly rather than hang forever.\n"
-    )
+
+    // HANDOFF: the server-minted keys this worker writes. Copy verbatim.
+    if !success_keys.is_empty() {
+        let keys = success_keys
+            .iter()
+            .map(|k| format!("  - {k}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        out.push_str(&format!(
+            "\n──────────────────────────────────────────────────────────────\n\
+             HANDOFF (managed by flockmux — copy these keys VERBATIM via \
+             swarm_write_blackboard; do NOT invent or alter them):\n\
+             • On SUCCESS (only when the task is actually done), write your result to:\n{keys}\n\
+             • On FAILURE/abort, write to `{error_key}` instead, so dependents \
+             fail loudly rather than hang forever.\n"
+        ));
+    }
+
+    out
 }
 
 /// Map a storage `ThreadRecord` onto the wire `ThreadInfo` (drops the internal
@@ -1061,8 +1095,10 @@ pub async fn spawn_worker(
     )
     .map_err(|msg| (StatusCode::BAD_REQUEST, Json(json!({ "error": msg }))))?;
 
-    // The orchestrator's prompt + an explicit copy-verbatim handoff block.
-    let system_prompt = build_worker_prompt(&req.system_prompt, &minted_produces, &error_key);
+    // The orchestrator's prompt + an INPUTS wait-gate (if it has deps) + an
+    // explicit copy-verbatim handoff block.
+    let system_prompt =
+        build_worker_prompt(&req.system_prompt, &minted_produces, &error_key, &depends_on);
     let produces_json = serde_json::to_string(&produces).unwrap_or_else(|_| "[]".to_string());
     let consumes_json = serde_json::to_string(&req.consumes).unwrap_or_else(|_| "[]".to_string());
 
@@ -3462,12 +3498,35 @@ mod p0_tests {
             "do the thing",
             &["ws1/main/frontend.done".to_string()],
             "ws1/main/frontend.done.error",
+            &[],
         );
         assert!(p.starts_with("do the thing"));
         assert!(p.contains("ws1/main/frontend.done"));
         assert!(p.contains("ws1/main/frontend.done.error"));
         assert!(p.contains("VERBATIM"));
-        // No minted keys → prompt is returned unchanged (fire-and-forget).
-        assert_eq!(build_worker_prompt("x", &[], "x.error"), "x");
+        assert!(!p.contains("INPUTS"), "no deps → no inputs gate");
+        // No keys at all → prompt returned unchanged (fire-and-forget, no deps).
+        assert_eq!(build_worker_prompt("x", &[], "x.error", &[]), "x");
+    }
+
+    #[test]
+    fn build_worker_prompt_adds_inputs_wait_gate_when_deps_present() {
+        let p = build_worker_prompt(
+            "review it",
+            &["ws1/main/reviewer.done".to_string()],
+            "ws1/main/reviewer.done.error",
+            &["ws1/main/backend.done".to_string()],
+        );
+        // The wait-gate must name the dep and forbid acting / writing handoff early.
+        assert!(p.contains("INPUTS"));
+        assert!(p.contains("ws1/main/backend.done"));
+        assert!(p.contains("do NOT write your"));
+        assert!(p.contains("STOP"));
+        // Still carries its own handoff block.
+        assert!(p.contains("ws1/main/reviewer.done"));
+        // A dep-only worker with no produces still gets the inputs gate.
+        let q = build_worker_prompt("x", &[], "x.error", &["ws1/main/dep.done".to_string()]);
+        assert!(q.contains("INPUTS"));
+        assert!(q.contains("ws1/main/dep.done"));
     }
 }
