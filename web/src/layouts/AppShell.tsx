@@ -24,7 +24,7 @@
 import { Link, Outlet, useLocation } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useEffect } from "react";
-import { Boxes, Search } from "lucide-react";
+import { Boxes, Command, Search } from "lucide-react";
 import { CommandPalette } from "@/components/CommandPalette";
 import { McpActivityBar } from "@/components/mcp/McpActivityBar";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
@@ -72,7 +72,6 @@ export function AppShell() {
 
   const isMac =
     typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
-  const modKey = isMac ? "⌘" : "Ctrl";
 
   return (
     <TooltipProvider delayDuration={300}>
@@ -121,8 +120,17 @@ export function AppShell() {
                 aria-label={t("shell.cmdkHint")}
               >
                 <Search className="size-4" />
-                <span className="hidden font-mono text-[10px] text-foreground-tertiary sm:inline">
-                  {modKey}K
+                {/* ⌘ as a crisp lucide SVG (not the U+2318 font glyph, which
+                    renders thin/small next to a cap "K"). Non-mac falls back
+                    to a "Ctrl" label. Borderless to match the bell / search
+                    icon-button weight. */}
+                <span className="hidden items-center gap-0.5 font-mono text-[11px] leading-none text-foreground-tertiary sm:inline-flex">
+                  {isMac ? (
+                    <Command className="size-3" strokeWidth={2.25} />
+                  ) : (
+                    <span>Ctrl</span>
+                  )}
+                  K
                 </span>
               </button>
             </TooltipTrigger>

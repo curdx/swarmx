@@ -9,7 +9,7 @@
  */
 
 import { useState, type ReactElement } from "react";
-import { NavLink } from "react-router-dom";
+import { NavLink, useLocation } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { Blocks, ChevronsLeft, ChevronsRight, Settings } from "lucide-react";
 import {
@@ -37,7 +37,18 @@ const itemIdle =
 
 export function McpActivityBar() {
   const { t } = useTranslation();
+  const { pathname } = useLocation();
   const [collapsed, setCollapsed] = useState(() => readFlag(MENU_KEY));
+
+  // NOTE: NavLink's function-style className ({isActive}) => ... does NOT
+  // survive Radix `asChild`/Slot. In the collapsed state each NavLink is
+  // wrapped by <TooltipTrigger asChild>, and Slot only merges *string*
+  // classNames — a function gets String()'d into the DOM `class` attribute
+  // verbatim, so itemBase/justify-center never apply and the icons sit
+  // unaligned. Compute active from the location ourselves and pass a plain
+  // string so it merges correctly in both collapsed and expanded states.
+  const linkClass = (active: boolean) =>
+    cn(itemBase, collapsed && "justify-center px-0", active ? itemActive : itemIdle);
 
   const setCollapsedPersist = (v: boolean) => {
     setCollapsed(v);
@@ -72,9 +83,7 @@ export function McpActivityBar() {
         <NavLink
           to="/mcp"
           aria-label={t("mcp.title", "MCP")}
-          className={({ isActive }) =>
-            cn(itemBase, collapsed && "justify-center px-0", isActive ? itemActive : itemIdle)
-          }
+          className={linkClass(pathname.startsWith("/mcp"))}
         >
           <Blocks className="size-[18px] shrink-0" />
           {!collapsed && <span className="font-heading">{t("mcp.title", "MCP")}</span>}
@@ -87,9 +96,7 @@ export function McpActivityBar() {
         <NavLink
           to="/settings"
           aria-label={t("nav.settings", "设置")}
-          className={({ isActive }) =>
-            cn(itemBase, collapsed && "justify-center px-0", isActive ? itemActive : itemIdle)
-          }
+          className={linkClass(pathname.startsWith("/settings"))}
         >
           <Settings className="size-[18px] shrink-0" />
           {!collapsed && <span className="font-heading">{t("nav.settings", "设置")}</span>}
