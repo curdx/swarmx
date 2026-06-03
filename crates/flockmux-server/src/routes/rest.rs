@@ -839,6 +839,10 @@ fn spawn_bootstrap_inject(
     // alias). Empty ⇒ inject immediately (orchestrators / dep-less workers).
     deps: Vec<String>,
     swarm: std::sync::Arc<flockmux_swarm::Swarm>,
+    // This worker's spawn time (unix-ms). A dep only satisfies the gate if its
+    // latest blackboard write is at/after this — so a STALE key left on disk by
+    // a PRIOR run on the same thread can't bypass the gate.
+    spawned_at: i64,
 ) {
     tokio::spawn(async move {
         // Short-circuit if ShimReady already fired in the gap between
@@ -925,34 +929,55 @@ fn spawn_bootstrap_inject(
         if !deps.is_empty() {
             const POLL: std::time::Duration = std::time::Duration::from_millis(750);
             const LOG_EVERY: std::time::Duration = std::time::Duration::from_secs(30);
+            // Bound: if a declared producer is NEVER spawned (and so never writes
+            // a key OR a `.error`), don't poll forever as a phantom-alive agent.
+            // On timeout, inject anyway — the prompt INPUTS block then catches the
+            // missing input and the worker fails LOUD (surfacing the mistake to
+            // the orchestrator) instead of hanging invisibly.
+            const MAX_WAIT: std::time::Duration = std::time::Duration::from_secs(300);
+            let start = std::time::Instant::now();
             let mut since_log = LOG_EVERY; // log once immediately on first wait
             loop {
                 if registry.get(&agent_id).is_none() {
                     tracing::info!(agent = %agent_id, "readiness gate: agent gone before deps satisfied; aborting bootstrap");
                     return;
                 }
-                // Read which of the deps + their failure aliases are present,
-                // then decide via the pure helper (unit-tested).
+                // A dep counts as present only if its latest blackboard write is
+                // FRESH (`at >= spawned_at`). A stale key left by a prior run on
+                // the same thread must NOT satisfy the gate — else the premature-
+                // execution bug silently returns against stale inputs. `.error`/
+                // `.failed` aliases count (fail-loud on producer death).
                 let mut present = std::collections::HashSet::new();
                 for key in &deps {
                     for probe in [key.clone(), format!("{key}.error"), format!("{key}.failed")] {
-                        if matches!(swarm.read_blackboard(&probe).await, Ok(Some(_))) {
+                        let fresh = swarm
+                            .store()
+                            .list_blackboard_ops(Some(probe.clone()))
+                            .await
+                            .ok()
+                            .and_then(|ops| ops.first().map(|r| r.at))
+                            .is_some_and(|at| at >= spawned_at);
+                        if fresh {
                             present.insert(probe);
                         }
                     }
                 }
                 let missing = first_unsatisfied_dep(&deps, &present);
                 if missing.is_none() {
+                    tracing::info!(agent = %agent_id, deps = ?deps, "readiness gate: deps satisfied; injecting first turn");
+                    break;
+                }
+                if start.elapsed() >= MAX_WAIT {
+                    tracing::warn!(agent = %agent_id, waiting_for = ?missing, max_wait_s = MAX_WAIT.as_secs(), "readiness gate: timed out; injecting anyway (producer may never have spawned) — worker's INPUTS block will fail loud");
                     break;
                 }
                 if since_log >= LOG_EVERY {
-                    tracing::info!(agent = %agent_id, waiting_for = ?missing, deps = ?deps, "readiness gate: holding first turn until deps land");
+                    tracing::info!(agent = %agent_id, waiting_for = ?missing, deps = ?deps, elapsed_s = start.elapsed().as_secs(), "readiness gate: holding first turn until deps land");
                     since_log = std::time::Duration::ZERO;
                 }
                 tokio::time::sleep(POLL).await;
                 since_log += POLL;
             }
-            tracing::info!(agent = %agent_id, deps = ?deps, "readiness gate: all deps present; injecting first turn");
         }
 
         let input_tx = slot_lock.lock().input_tx.clone();
@@ -1227,6 +1252,9 @@ pub async fn spawn_worker(
         }
     }
 
+    // Readiness-gate baseline: any dep written at/after this counts as a
+    // CURRENT-run input; earlier writes are stale (prior run) and ignored.
+    let worker_spawn_ms = now_ms();
     let out = spawn_with_bookkeeping(
         &state,
         &resolved_cli,
@@ -1310,6 +1338,7 @@ pub async fn spawn_worker(
         },
         depends_on.clone(), // P1-D: gate the first turn on these minted keys
         state.swarm.clone(),
+        worker_spawn_ms,
     );
 
     Ok(Json(SpawnWorkerResponse {
@@ -3497,6 +3526,7 @@ pub async fn run_spell(
             // resolved keys here to gate them too.
             Vec::new(),
             state.swarm.clone(),
+            now_ms(),
         );
     }
 
