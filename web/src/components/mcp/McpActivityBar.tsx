@@ -8,7 +8,7 @@
  * MCP 现在是独立页面(routes/mcp.tsx)，不再是滑出/停靠面板，所以这里只是导航。
  */
 
-import { useState, type ReactElement } from "react";
+import { useEffect, useState, type ReactElement } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { Blocks, ChevronsLeft, ChevronsRight, Settings } from "lucide-react";
@@ -38,7 +38,20 @@ const itemIdle =
 export function McpActivityBar() {
   const { t } = useTranslation();
   const { pathname } = useLocation();
-  const [collapsed, setCollapsed] = useState(() => readFlag(MENU_KEY));
+  const [collapsedPref, setCollapsedPref] = useState(() => readFlag(MENU_KEY));
+  // Below `lg` the workspace column + chat need the width, so force the rail to
+  // its icon-only state regardless of the saved preference (R2-004); widening
+  // back restores the user's choice. CSS can't do this alone — the labels are
+  // rendered conditionally on `collapsed`, not just hidden.
+  const [narrow, setNarrow] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 1023.98px)");
+    const sync = () => setNarrow(mq.matches);
+    sync();
+    mq.addEventListener("change", sync);
+    return () => mq.removeEventListener("change", sync);
+  }, []);
+  const collapsed = collapsedPref || narrow;
 
   // NOTE: NavLink's function-style className ({isActive}) => ... does NOT
   // survive Radix `asChild`/Slot. In the collapsed state each NavLink is
@@ -51,7 +64,7 @@ export function McpActivityBar() {
     cn(itemBase, collapsed && "justify-center px-0", active ? itemActive : itemIdle);
 
   const setCollapsedPersist = (v: boolean) => {
-    setCollapsed(v);
+    setCollapsedPref(v);
     try {
       window.localStorage.setItem(MENU_KEY, v ? "1" : "0");
     } catch {

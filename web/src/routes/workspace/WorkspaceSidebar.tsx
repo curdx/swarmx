@@ -324,7 +324,7 @@ export function WorkspaceList({
       return next;
     });
   return (
-    <aside className="flex w-[264px] shrink-0 flex-col gap-3 border-r border-border-subtle bg-surface-secondary px-2 py-3">
+    <aside className="hidden w-[264px] shrink-0 flex-col gap-3 border-r border-border-subtle bg-surface-secondary px-2 py-3 md:flex">
       <div className="flex items-center justify-between px-2">
         <h2 className="font-heading text-xs font-semibold uppercase tracking-wider text-foreground-tertiary">
           {t("chat.workspaces")}

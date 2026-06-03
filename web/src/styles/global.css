@@ -74,25 +74,30 @@
   --color-state-warning: #F59E0B;
   --color-state-idle: #94A3B8;
 
-  --color-status-running: #10B981;
+  /* Status TEXT/dot colors. These double as pill text on the *-soft bg below,
+   * so they must clear WCAG AA (≥4.5:1) on that soft bg — the old mid-tones
+   * (emerald-500 on emerald-100 = 2.24) failed. Darkened to the Tailwind 700
+   * shade per hue (canonical accessible "bg-100 + text-700" badge pair); dark
+   * mode overrides these back to a light 300/400 shade on its dark soft bg. */
+  --color-status-running: #047857;       /* emerald-700 on #D1FAE5 ≈ 5.3:1 */
   --color-status-running-soft: #D1FAE5;
-  --color-status-busy: #F59E0B;
+  --color-status-busy: #B45309;          /* amber-700 */
   --color-status-busy-soft: #F59E0B1F;
-  --color-status-waiting: #F59E0B;
+  --color-status-waiting: #B45309;
   --color-status-waiting-soft: #FEF3C7;
-  --color-status-success: #16A34A;
+  --color-status-success: #15803D;       /* green-700 on #DCFCE7 */
   --color-status-success-soft: #DCFCE7;
-  --color-status-danger: #DC2626;
+  --color-status-danger: #B91C1C;        /* red-700 on #FEE2E2 */
   --color-status-danger-soft: #FEE2E2;
-  --color-status-error: #EF4444;
+  --color-status-error: #B91C1C;
   --color-status-error-soft: #EF44441F;
-  --color-status-warning: #F59E0B;
+  --color-status-warning: #B45309;
   --color-status-warning-soft: #FEF3C7;
-  --color-status-info: #3B82F6;
-  --color-status-wake: #06B6D4;
-  --color-status-idle: #22C55E;
+  --color-status-info: #1D4ED8;          /* blue-700 */
+  --color-status-wake: #0E7490;          /* cyan-700 */
+  --color-status-idle: #15803D;          /* green-700 on #E5E5E5 */
   --color-status-idle-soft: #E5E5E5;
-  --color-status-exit: #71717A;
+  --color-status-exit: #52525B;          /* zinc-600 */
 
   /* Role colors stay distinctive so DAG / avatar legends read clearly. */
   --color-agent-planner: #2563EB;     /* blue-600 — matches primary */
@@ -189,6 +194,22 @@
   --color-status-error-soft: #450A0A;
   --color-status-warning-soft: #78350F;
   --color-status-idle-soft: #1F2937;
+
+  /* Status TEXT/dot colors on dark: light 300/400 shades so pill text clears
+   * AA on the dark *-soft bgs above (and dots read on the dark panel). The
+   * light :root values are dark 700 shades meant for light soft bgs, so they
+   * MUST be overridden here or they'd be dark-on-dark. */
+  --color-status-running: #34D399;       /* emerald-400 on #052E16 */
+  --color-status-busy: #FBBF24;          /* amber-400 on #78350F */
+  --color-status-waiting: #FBBF24;
+  --color-status-success: #4ADE80;       /* green-400 on #052E16 */
+  --color-status-danger: #F87171;        /* red-400 on #450A0A */
+  --color-status-error: #F87171;
+  --color-status-warning: #FBBF24;
+  --color-status-info: #60A5FA;          /* blue-400 */
+  --color-status-wake: #22D3EE;          /* cyan-400 */
+  --color-status-idle: #4ADE80;          /* green-400 on #1F2937 */
+  --color-status-exit: #A1A1AA;          /* zinc-400 */
 
   /* Role colors keep their hue but bump value for visibility on dark bg. */
   --color-agent-planner: #60A5FA;

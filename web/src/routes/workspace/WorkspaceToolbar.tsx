@@ -81,7 +81,7 @@ export function WorkspaceToolbar({
             end
             className={({ isActive }) =>
               cn(
-                "relative flex items-center gap-1.5 px-3 py-2 text-xs transition-colors",
+                "relative flex shrink-0 items-center gap-1.5 px-3 py-2 text-xs transition-colors",
                 isActive
                   ? "text-foreground-primary after:absolute after:inset-x-0 after:-bottom-px after:h-0.5 after:bg-accent-primary"
                   : "text-foreground-secondary hover:text-foreground-primary",
@@ -89,8 +89,11 @@ export function WorkspaceToolbar({
             }
             title={`${t(tab.labelKey)}  ${modKey}${tab.shortcut}`}
           >
-            <Icon className="size-3.5" />
-            {t(tab.labelKey)}
+            <Icon className="size-3.5 shrink-0" />
+            {/* Label collapses to icon-only below lg so the bar never wraps the
+                text vertically on a narrow chat column (R2-004); the title attr
+                keeps the name discoverable on hover. */}
+            <span className="hidden whitespace-nowrap lg:inline">{t(tab.labelKey)}</span>
           </NavLink>
         );
       })}
