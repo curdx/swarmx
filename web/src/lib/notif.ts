@@ -48,3 +48,21 @@ export function humanizeBlackboard(
   const context = [ws?.name, dirName].filter(Boolean).join(" · ");
   return { title, context: context || undefined };
 }
+
+/** The server's wake-ping body is `blackboard \`{key}\` updated; please check`
+ *  (flockmux-server `wake.rs`). The {key} is the raw 32-hex storage path — the
+ *  agent receiving the ping needs it, but it's noise to a human reading the
+ *  notification feed. For DISPLAY ONLY, rewrite that one pattern through
+ *  `humanizeBlackboard` so the feed reads "reviewer.done 更新 · {workspace} ·
+ *  {direction}" instead of the UUID. The message delivered to the agent (and
+ *  the chat transcript) is untouched; non-matching bodies pass through. */
+export function humanizeWakeBody(
+  body: string,
+  workspaces: Workspace[],
+  t: Tr,
+): string {
+  const m = body.match(/blackboard `([^`]+)` updated/);
+  if (!m) return body;
+  const { title, context } = humanizeBlackboard(m[1], workspaces, t);
+  return context ? `${title} · ${context}` : title;
+}

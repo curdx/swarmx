@@ -38,7 +38,7 @@ import { useSwarmFeed } from "../hooks/useSwarmFeed";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
-import { humanizeBlackboard } from "@/lib/notif";
+import { humanizeBlackboard, humanizeWakeBody } from "@/lib/notif";
 
 type NotifKind = "message" | "blackboard" | "state" | "error" | "completed";
 
@@ -224,7 +224,7 @@ export default function NotificationsRoute() {
           kind: c.kind,
           agent: m.from_agent,
           title: c.title,
-          body: m.body,
+          body: m.kind === "wake" ? humanizeWakeBody(m.body, wss, t) : m.body,
           at: m.sent_at,
         };
       });
@@ -274,7 +274,10 @@ export default function NotificationsRoute() {
             kind: c.kind,
             agent: ev.from_agent,
             title: c.title,
-            body: ev.body,
+            body:
+              ev.kind === "wake"
+                ? humanizeWakeBody(ev.body, wsRef.current, t)
+                : ev.body,
             at: ev.sent_at,
           };
         } else if (ev.type === "blackboard_changed") {

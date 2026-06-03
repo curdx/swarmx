@@ -35,7 +35,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { cn } from "@/lib/cn";
-import { humanizeBlackboard } from "@/lib/notif";
+import { humanizeBlackboard, humanizeWakeBody } from "@/lib/notif";
 import { AgentChip } from "@/components/agent/AgentChip";
 import { buildRoleLookup } from "@/lib/agent";
 
@@ -119,7 +119,10 @@ export function NotificationPopover({ hasUnseen, onSeen }: Props) {
           agent: pseudo ? undefined : m.from_agent,
           workspace: wsM.get(m.from_agent),
           title: pseudo ?? m.from_agent,
-          body: m.body,
+          body:
+            m.kind === "wake"
+              ? humanizeWakeBody(m.body, wss as Workspace[], t)
+              : m.body,
           at: m.sent_at,
         };
       });
@@ -172,7 +175,10 @@ export function NotificationPopover({ hasUnseen, onSeen }: Props) {
           agent: pseudo ? undefined : ev.from_agent,
           workspace: agentWorkspaces.get(ev.from_agent),
           title: pseudo ?? ev.from_agent,
-          body: ev.body,
+          body:
+            ev.kind === "wake"
+              ? humanizeWakeBody(ev.body, workspaces, t)
+              : ev.body,
           at: ev.sent_at,
         };
       } else if (ev.type === "blackboard_changed") {
