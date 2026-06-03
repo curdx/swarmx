@@ -63,6 +63,25 @@ fn levenshtein(a: &str, b: &str) -> usize {
     prev[b.len()]
 }
 
+/// First dependency not yet satisfied — neither the key itself NOR its
+/// `.error`/`.failed` failure alias is present on the blackboard — or `None` if
+/// all are satisfied. Pure (unit-tested); drives the P1-D readiness gate's
+/// "are this worker's inputs ready?" decision. A `.error`/`.failed` alias counts
+/// as satisfied so a downstream worker wakes to handle an upstream FAILURE
+/// rather than waiting forever for a key the dead producer will never write.
+fn first_unsatisfied_dep(
+    deps: &[String],
+    present: &std::collections::HashSet<String>,
+) -> Option<String> {
+    deps.iter()
+        .find(|k| {
+            !present.contains(k.as_str())
+                && !present.contains(format!("{k}.error").as_str())
+                && !present.contains(format!("{k}.failed").as_str())
+        })
+        .cloned()
+}
+
 /// Spawn-time dependency-graph validation + key minting (P0-A), pure so it can
 /// be unit-tested without an HTTP server. Resolves each typed `consumes` ref to
 /// the producer's minted blackboard key, after verifying the producer role
@@ -815,6 +834,11 @@ fn spawn_bootstrap_inject(
     agent_id: String,
     prompt: String,
     ctx: BootstrapCtx,
+    // P1-D readiness gate: blackboard keys this agent depends on. The first
+    // prompt is NOT injected until all are present (or their `.error`/`.failed`
+    // alias). Empty ⇒ inject immediately (orchestrators / dep-less workers).
+    deps: Vec<String>,
+    swarm: std::sync::Arc<flockmux_swarm::Swarm>,
 ) {
     tokio::spawn(async move {
         // Short-circuit if ShimReady already fired in the gap between
@@ -885,6 +909,52 @@ fn spawn_bootstrap_inject(
                 }
             }
         }
+
+        // ── P1-D readiness gate ───────────────────────────────────────────
+        // Do NOT inject the worker's first prompt until every declared
+        // dependency (or its `.error`/`.failed` failure alias) is on the
+        // blackboard. A dependent worker therefore CANNOT run its first turn on
+        // inputs that don't exist yet — the premature-execution bug (observed:
+        // a reviewer judged FAIL before its producer wrote the file) is made
+        // structurally impossible at the mechanism level; the prompt INPUTS
+        // block becomes a secondary catch. The PTY sits idle (no tokens) while
+        // waiting; the producer's write lands the key and the next poll
+        // proceeds. A producer that DIES writes `<key>.error` (M6c), accepted by
+        // the alias check so the worker wakes to handle the failure rather than
+        // hang. Aborts if the agent is killed meanwhile.
+        if !deps.is_empty() {
+            const POLL: std::time::Duration = std::time::Duration::from_millis(750);
+            const LOG_EVERY: std::time::Duration = std::time::Duration::from_secs(30);
+            let mut since_log = LOG_EVERY; // log once immediately on first wait
+            loop {
+                if registry.get(&agent_id).is_none() {
+                    tracing::info!(agent = %agent_id, "readiness gate: agent gone before deps satisfied; aborting bootstrap");
+                    return;
+                }
+                // Read which of the deps + their failure aliases are present,
+                // then decide via the pure helper (unit-tested).
+                let mut present = std::collections::HashSet::new();
+                for key in &deps {
+                    for probe in [key.clone(), format!("{key}.error"), format!("{key}.failed")] {
+                        if matches!(swarm.read_blackboard(&probe).await, Ok(Some(_))) {
+                            present.insert(probe);
+                        }
+                    }
+                }
+                let missing = first_unsatisfied_dep(&deps, &present);
+                if missing.is_none() {
+                    break;
+                }
+                if since_log >= LOG_EVERY {
+                    tracing::info!(agent = %agent_id, waiting_for = ?missing, deps = ?deps, "readiness gate: holding first turn until deps land");
+                    since_log = std::time::Duration::ZERO;
+                }
+                tokio::time::sleep(POLL).await;
+                since_log += POLL;
+            }
+            tracing::info!(agent = %agent_id, deps = ?deps, "readiness gate: all deps present; injecting first turn");
+        }
+
         let input_tx = slot_lock.lock().input_tx.clone();
         // Diagnostic: flag a surviving `{task}` / `{<role>_id}` placeholder
         // (computed before `prompt` is consumed by `into_bytes`).
@@ -1170,12 +1240,15 @@ pub async fn spawn_worker(
     .await
     .map_err(|(status, msg)| (status, Json(json!({"error": msg}))))?;
 
-    // M6b: register wake subscription + exit-key BEFORE deferred bootstrap
-    // inject (same ordering as run_spell — guards against fast producers).
-    // All keys here are server-minted (P0-A), so producer + consumer match by
-    // construction — no LLM-typed string can drift.
-    crate::wake::register_wake_subs(&state.wake_subs, out.agent_id.clone(), depends_on.clone())
-        .await;
+    // P1-D: the worker's dependencies are enforced by the readiness GATE inside
+    // spawn_bootstrap_inject (it won't inject the first prompt until every dep —
+    // or its `.error` alias — is on the blackboard). So we deliberately do NOT
+    // register the worker in wake_subs for its OWN deps: that old re-wake path
+    // would fire a PTY kick at the still-un-prompted worker the instant a dep
+    // landed, racing the gate's inject and risking a spurious empty turn. The
+    // gate polls the blackboard itself and delivers the single first turn.
+    // (register_exit_key + the orchestrator's append_wake_sub below stay — they
+    // fire when THIS worker writes its handoff, unrelated to its inputs.)
     crate::wake::register_exit_key(
         &state.exit_keys,
         out.agent_id.clone(),
@@ -1235,6 +1308,8 @@ pub async fn spawn_worker(
             spell: String::new(),
             role_keys: Vec::new(),
         },
+        depends_on.clone(), // P1-D: gate the first turn on these minted keys
+        state.swarm.clone(),
     );
 
     Ok(Json(SpawnWorkerResponse {
@@ -3416,6 +3491,12 @@ pub async fn run_spell(
                 spell: spell_name.clone(),
                 role_keys: role_to_id.keys().cloned().collect(),
             },
+            // Spell agents (today: the init orchestrator) carry no blackboard
+            // deps → empty gate = inject immediately, unchanged behaviour. If a
+            // future spell defines dep-bearing role agents, thread their
+            // resolved keys here to gate them too.
+            Vec::new(),
+            state.swarm.clone(),
         );
     }
 
@@ -3521,6 +3602,41 @@ mod p0_tests {
         assert!(!p.contains("INPUTS"), "no deps → no inputs gate");
         // No keys at all → prompt returned unchanged (fire-and-forget, no deps).
         assert_eq!(build_worker_prompt("x", &[], "x.error", &[]), "x");
+    }
+
+    #[test]
+    fn readiness_gate_first_unsatisfied_dep() {
+        use std::collections::HashSet;
+        let deps = vec!["ws/main/backend.done".to_string(), "ws/main/db.ready".to_string()];
+
+        // nothing present → first dep is unsatisfied
+        let empty = HashSet::new();
+        assert_eq!(
+            first_unsatisfied_dep(&deps, &empty).as_deref(),
+            Some("ws/main/backend.done")
+        );
+
+        // first present, second missing → returns the second
+        let mut p1: HashSet<String> = HashSet::new();
+        p1.insert("ws/main/backend.done".into());
+        assert_eq!(
+            first_unsatisfied_dep(&deps, &p1).as_deref(),
+            Some("ws/main/db.ready")
+        );
+
+        // both present → all satisfied
+        let mut p2 = p1.clone();
+        p2.insert("ws/main/db.ready".into());
+        assert_eq!(first_unsatisfied_dep(&deps, &p2), None);
+
+        // a `.error` alias counts as satisfied (fail-loud: wake to handle it)
+        let mut p3: HashSet<String> = HashSet::new();
+        p3.insert("ws/main/backend.done.error".into());
+        p3.insert("ws/main/db.ready.failed".into());
+        assert_eq!(first_unsatisfied_dep(&deps, &p3), None);
+
+        // empty deps → never blocks
+        assert_eq!(first_unsatisfied_dep(&[], &empty), None);
     }
 
     #[test]
