@@ -190,11 +190,14 @@ export default function WorkspaceShell() {
   // two run_spell calls → two empty directions, each with its own orchestrator.
   const creatingDirRef = useRef(false);
   const onNewDirection = useCallback(
-    async (ws: WorkspaceSummary) => {
+    async (ws: WorkspaceSummary, name?: string) => {
       if (creatingDirRef.current) return;
       creatingDirRef.current = true;
       try {
-        const th = await api.createThread(ws.workspaceId, {});
+        const th = await api.createThread(
+          ws.workspaceId,
+          name ? { name } : {},
+        );
         await refreshWorkspaces();
         navigate(`/chat/${ws.id}/t/${th.slug}`);
         await api.runSpell({

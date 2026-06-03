@@ -13,6 +13,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { NavLink } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import {
+  AlertTriangle,
   ChevronDown,
   ChevronRight,
   Folder,
@@ -284,8 +285,9 @@ export function WorkspaceList({
    *  workspaces (keeps the sidebar tree in sync). */
   onRootsChanged?: () => void;
   /** Open a new direction in this workspace (create + navigate + launch the
-   *  orchestrator). Owner (Shell) does the create/nav/spawn. */
-  onNewDirection?: (ws: WorkspaceSummary) => void;
+   *  orchestrator). Owner (Shell) does the create/nav/spawn. `name` is the
+   *  optional user-chosen direction name (blank → orchestrator auto-names it). */
+  onNewDirection?: (ws: WorkspaceSummary, name?: string) => void;
   /** Delete a direction (server kills its live agents first). */
   onDeleteThread?: (ws: WorkspaceSummary, threadId: string) => void;
 }) {
@@ -304,6 +306,12 @@ export function WorkspaceList({
     ws: WorkspaceSummary;
     thread: ThreadInfo;
   } | null>(null);
+  // New-direction dialog target (null = closed) + the in-progress name. Opening
+  // a direction spawns a real orchestrator process, so it gets a name + confirm
+  // step instead of firing on a single (mis)click. Also the place we warn when
+  // the workspace cwd isn't a git repo (directions can't be isolated then).
+  const [newDirFor, setNewDirFor] = useState<WorkspaceSummary | null>(null);
+  const [newDirName, setNewDirName] = useState("");
   // Workspace ids whose attached-source subtree is collapsed. Default is
   // expanded (a fresh id is absent from the set), so newly-attached deps are
   // visible without a click.
@@ -575,7 +583,10 @@ export function WorkspaceList({
                       <TooltipTrigger asChild>
                         <button
                           type="button"
-                          onClick={() => onNewDirection(ws)}
+                          onClick={() => {
+                            setNewDirName("");
+                            setNewDirFor(ws);
+                          }}
                           className="flex items-center gap-1.5 rounded-md py-1 pl-1 pr-2 text-[12px] text-foreground-tertiary hover:bg-surface-tertiary hover:text-foreground-primary"
                         >
                           <Plus className="size-3 shrink-0" />
@@ -682,6 +693,66 @@ export function WorkspaceList({
             >
               <Trash2 className="size-3.5" />
               {t("common.delete")}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* New-direction dialog — opening a direction spawns a real orchestrator
+       *  process, so it gets a name + confirm step instead of firing on one
+       *  (mis)click. Also warns when the cwd isn't a git repo: directions then
+       *  share the same files (no worktree isolation) and clobber each other. */}
+      <Dialog
+        open={newDirFor != null}
+        onOpenChange={(next) => {
+          if (!next) setNewDirFor(null);
+        }}
+      >
+        <DialogContent showCloseButton={false} className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>
+              {t("chat.newDirectionDialogTitle", { name: newDirFor?.name ?? "" })}
+            </DialogTitle>
+            <DialogDescription>
+              {t("chat.newDirectionSpawnNote")}
+            </DialogDescription>
+          </DialogHeader>
+          <Input
+            autoFocus
+            value={newDirName}
+            onChange={(e) => setNewDirName(e.target.value)}
+            placeholder={t("chat.newDirectionNamePlaceholder")}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                const target = newDirFor;
+                setNewDirFor(null);
+                if (target)
+                  onNewDirection?.(target, newDirName.trim() || undefined);
+              }
+            }}
+          />
+          {newDirFor?.cwdBranch == null && (
+            <div className="flex items-start gap-2 rounded-lg border border-status-warning/40 bg-status-warning-soft px-3 py-2">
+              <AlertTriangle className="size-4 shrink-0 text-status-warning" />
+              <span className="font-caption text-xs text-foreground-secondary">
+                {t("chat.newDirectionNonGit")}
+              </span>
+            </div>
+          )}
+          <div className="flex justify-end gap-2 pt-1">
+            <Button variant="outline" onClick={() => setNewDirFor(null)}>
+              {t("common.cancel")}
+            </Button>
+            <Button
+              onClick={() => {
+                const target = newDirFor;
+                setNewDirFor(null);
+                if (target)
+                  onNewDirection?.(target, newDirName.trim() || undefined);
+              }}
+            >
+              <Plus className="size-3.5" />
+              {t("chat.newDirectionConfirm")}
             </Button>
           </div>
         </DialogContent>
