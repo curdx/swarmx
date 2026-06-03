@@ -29,6 +29,7 @@ import {
 } from "lucide-react";
 import { api } from "../api/http";
 import type {
+  AgentInfo,
   BlackboardEntry,
   MessageRecord,
   SwarmEvent,
@@ -39,6 +40,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
 import { humanizeBlackboard, isHiddenWake } from "@/lib/notif";
+import { buildRoleLookup, resolveRole } from "@/lib/agent";
 
 type NotifKind = "message" | "blackboard" | "state" | "error" | "completed";
 
@@ -111,9 +113,25 @@ type TabId = (typeof TABS)[number]["id"];
 //   2. otherwise an explicit success marker (✅ passed 完成 通过 …) means
 //      completed — even if the body also says "error" somewhere;
 //   3. only a *soft* failure word with NO success marker counts as an error.
+/** A human label for an agent id in a notification title: "你"/"系统" for the
+ *  user/system pseudo-agents, else the agent's role ("orchestrator", "Backend
+ *  Engineer", …) resolved from /api/agent — never the raw `codex-7508c707`
+ *  id, which means nothing to a user. Mirrors the chat's AgentChip. */
+function friendlyAgent(
+  id: string,
+  roleLookup: Map<string, string>,
+  t: TFunction,
+): string {
+  const r = resolveRole(id, roleLookup);
+  if (r === "user") return t("notifications.fromUser");
+  if (r === "system") return t("notifications.fromSystem");
+  return r;
+}
+
 function classifyMessage(
   m: MessageRecord,
   t: TFunction,
+  roleLookup: Map<string, string>,
 ): { kind: NotifKind; title: string } {
   // Structured first: server-stamped `meta.subtype` is ground truth, so we
   // never regex the prose body for messages the server controls (the
@@ -129,8 +147,8 @@ function classifyMessage(
     return {
       kind: "state",
       title: t("notifications.kinds.wakeTitle", {
-        from: m.from_agent,
-        to: m.to_agent,
+        from: friendlyAgent(m.from_agent, roleLookup, t),
+        to: friendlyAgent(m.to_agent, roleLookup, t),
       }),
     };
   }
@@ -186,7 +204,10 @@ function classifyMessage(
     return error();
   }
 
-  return { kind: "message", title: `${m.from_agent} → ${m.to_agent}` };
+  return {
+    kind: "message",
+    title: `${friendlyAgent(m.from_agent, roleLookup, t)} → ${friendlyAgent(m.to_agent, roleLookup, t)}`,
+  };
 }
 
 /** Worker heartbeats (`<wsId>/<role>.progress.md`) are written on every
@@ -218,23 +239,29 @@ export default function NotificationsRoute() {
   // sees the latest list without re-subscribing; nothing renders off it
   // directly (titles are baked into each Notif when it's built).
   const wsRef = useRef<Workspace[]>([]);
+  // agent_id → role label, for friendly "{role} → {role}" titles + source
+  // chips (covers exited agents too — /api/agent returns them). Same ref
+  // pattern as wsRef so the live SwarmFeed closure sees the latest map.
+  const roleRef = useRef<Map<string, string>>(new Map());
 
   const seed = useCallback(async () => {
     try {
-      const [msgs, bb, wss] = await Promise.all([
+      const [msgs, bb, wss, agents] = await Promise.all([
         api.listMessages({ limit: 50 }),
         api.listBlackboard(),
         api.listWorkspaces().catch(() => [] as Workspace[]),
+        api.listAgents().catch(() => [] as AgentInfo[]),
       ]);
       wsRef.current = wss;
+      roleRef.current = buildRoleLookup(agents);
       const fromMsg: Notif[] = (msgs as MessageRecord[])
         .filter((m) => !isHiddenWake(m))
         .map((m) => {
-          const c = classifyMessage(m, t);
+          const c = classifyMessage(m, t, roleRef.current);
           return {
             id: `msg-${m.id}`,
             kind: c.kind,
-            agent: m.from_agent,
+            agent: friendlyAgent(m.from_agent, roleRef.current, t),
             title: c.title,
             body: m.body,
             at: m.sent_at,
@@ -282,11 +309,11 @@ export default function NotificationsRoute() {
             in_reply_to: ev.in_reply_to ?? null,
             meta: ev.meta,
           };
-          const c = classifyMessage(rec, t);
+          const c = classifyMessage(rec, t, roleRef.current);
           next = {
             id: `msg-${ev.id}`,
             kind: c.kind,
-            agent: ev.from_agent,
+            agent: friendlyAgent(ev.from_agent, roleRef.current, t),
             title: c.title,
             body: ev.body,
             at: ev.sent_at,
