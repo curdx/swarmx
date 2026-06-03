@@ -586,6 +586,7 @@ export default function ChatView() {
                     <Button
                       variant="ghost"
                       size="icon"
+                      aria-label={t("chat.wake")}
                       className="size-7 text-foreground-tertiary hover:text-state-wake"
                       onClick={(e) => {
                         e.stopPropagation();

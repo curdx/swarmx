@@ -23,6 +23,7 @@ import { useTranslation } from "react-i18next";
 import {
   Activity,
   Bell,
+  Bug,
   ClipboardList,
   GitBranch,
   MessageSquare,
@@ -56,8 +57,11 @@ const NAV = [
   { labelKey: "nav.chat", href: "/chat", icon: MessageSquare, hintKey: "cmdk.navHint.chat" },
   { labelKey: "nav.notifications", href: "/notifications", icon: Bell, hintKey: "cmdk.navHint.notifications" },
   { labelKey: "nav.settings", href: "/settings", icon: SettingsIcon, hintKey: "cmdk.navHint.settings" },
-  // /debug is a dev-only legacy dashboard — not surfaced as a first-class
-  // command (reachable by typing the URL when debugging). See FAULT-006.
+  // /debug isn't purely dev tooling — it hosts the blackboard editor (operator
+  // writes HITL approval keys) + spells launcher, which have no other home yet.
+  // Keep it reachable; the misleading "Legacy M2 grid" hint was fixed to
+  // "调试面板" instead (FAULT-005/006).
+  { labelKey: "nav.debug", href: "/debug", icon: Bug, hintKey: "cmdk.navHint.debug" },
 ] as const;
 
 // Keep in sync with buildTabs() in routes/workspace/Shell.tsx — same order,
