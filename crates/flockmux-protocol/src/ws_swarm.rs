@@ -29,6 +29,14 @@ pub enum SwarmEvent {
         /// Lets the UI hard-gate a direction's chat on live messages too.
         #[serde(default)]
         thread_id: Option<String>,
+        /// Structured metadata for system-generated messages (Slack
+        /// `event_payload`-style), e.g. `{"subtype":"wake","reason":"blackboard",
+        /// "key":"…"}` or `{"subtype":"completion","signal":"reviewer.done"}`.
+        /// The UI renders/filters from `meta.subtype` instead of regex-parsing
+        /// the prose `body`. `None` for agent free-text (UI falls back to
+        /// heuristics there). Optional so old clients still round-trip.
+        #[serde(default)]
+        meta: Option<serde_json::Value>,
     },
     /// A batch of messages was marked read on behalf of `to_agent`. Used by
     /// the UI to decrement the unread badge live without a REST poll.

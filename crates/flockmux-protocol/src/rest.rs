@@ -227,6 +227,11 @@ pub struct MessageRecord {
     /// Direction (thread) this message belongs to; `None` = main / untagged.
     #[serde(default)]
     pub thread_id: Option<String>,
+    /// Structured metadata for system-generated messages (see
+    /// `flockmux_storage::NewMessage::meta`). The UI renders / filters from
+    /// `meta.subtype` instead of regex-parsing the prose `body`.
+    #[serde(default)]
+    pub meta: Option<serde_json::Value>,
 }
 
 /// `POST /api/message/read` payload. The server enforces `to` matches each

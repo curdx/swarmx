@@ -34,7 +34,7 @@ async fn register_send_receive() {
             body: "hi b".into(),
             sent_at: 1,
             in_reply_to: None,
-        })
+            meta: None,        })
         .await
         .unwrap();
     assert_eq!(rec.body, "hi b");
@@ -75,7 +75,7 @@ async fn message_persists_even_without_inbox() {
             body: "queued for later".into(),
             sent_at: 1,
             in_reply_to: None,
-        })
+            meta: None,        })
         .await
         .unwrap();
 
@@ -224,7 +224,7 @@ async fn mark_read_broadcasts_event() {
             body: "ping".into(),
             sent_at: 1,
             in_reply_to: None,
-        })
+            meta: None,        })
         .await
         .unwrap();
     // Drain the Message broadcast first.
@@ -264,7 +264,7 @@ async fn send_message_with_in_reply_to_threads() {
             body: "first".into(),
             sent_at: 1,
             in_reply_to: None,
-        })
+            meta: None,        })
         .await
         .unwrap();
     // Drain parent's broadcast.
@@ -278,7 +278,7 @@ async fn send_message_with_in_reply_to_threads() {
             body: "pong".into(),
             sent_at: 2,
             in_reply_to: Some(parent.id),
-        })
+            meta: None,        })
         .await
         .unwrap();
     assert_eq!(reply.in_reply_to, Some(parent.id));

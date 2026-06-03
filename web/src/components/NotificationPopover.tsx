@@ -35,7 +35,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { cn } from "@/lib/cn";
-import { humanizeBlackboard, humanizeWakeBody } from "@/lib/notif";
+import { humanizeBlackboard, isHiddenWake } from "@/lib/notif";
 import { AgentChip } from "@/components/agent/AgentChip";
 import { buildRoleLookup } from "@/lib/agent";
 
@@ -111,21 +111,20 @@ export function NotificationPopover({ hasUnseen, onSeen }: Props) {
       setAgentWorkspaces(wsM);
       setRoleLookup(buildRoleLookup(agents as AgentInfo[]));
       setWorkspaces(wss as Workspace[]);
-      const fromMsgs: Item[] = (msgs as MessageRecord[]).map((m) => {
-        const pseudo = pseudoFrom(m.from_agent, t);
-        return {
-          id: `msg-${m.id}`,
-          kind: "message",
-          agent: pseudo ? undefined : m.from_agent,
-          workspace: wsM.get(m.from_agent),
-          title: pseudo ?? m.from_agent,
-          body:
-            m.kind === "wake"
-              ? humanizeWakeBody(m.body, wss as Workspace[], t)
-              : m.body,
-          at: m.sent_at,
-        };
-      });
+      const fromMsgs: Item[] = (msgs as MessageRecord[])
+        .filter((m) => !isHiddenWake(m))
+        .map((m) => {
+          const pseudo = pseudoFrom(m.from_agent, t);
+          return {
+            id: `msg-${m.id}`,
+            kind: "message" as const,
+            agent: pseudo ? undefined : m.from_agent,
+            workspace: wsM.get(m.from_agent),
+            title: pseudo ?? m.from_agent,
+            body: m.body,
+            at: m.sent_at,
+          };
+        });
       const fromBb: Item[] = bb
         // Skip worker heartbeats (`<wsId>/<role>.progress.md`) — they're
         // written on every milestone and would drown out real messages.
@@ -168,6 +167,7 @@ export function NotificationPopover({ hasUnseen, onSeen }: Props) {
       // popover 当前打开时把新事件 prepend，用户能看到实时滚动。
       let next: Item | null = null;
       if (ev.type === "message") {
+        if (isHiddenWake(ev)) return;
         const pseudo = pseudoFrom(ev.from_agent, t);
         next = {
           id: `msg-${ev.id}`,
@@ -175,10 +175,7 @@ export function NotificationPopover({ hasUnseen, onSeen }: Props) {
           agent: pseudo ? undefined : ev.from_agent,
           workspace: agentWorkspaces.get(ev.from_agent),
           title: pseudo ?? ev.from_agent,
-          body:
-            ev.kind === "wake"
-              ? humanizeWakeBody(ev.body, workspaces, t)
-              : ev.body,
+          body: ev.body,
           at: ev.sent_at,
         };
       } else if (ev.type === "blackboard_changed") {

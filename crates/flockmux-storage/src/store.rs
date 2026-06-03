@@ -238,9 +238,11 @@ impl Store {
     ) -> Result<MessageRecord> {
         let pool = self.pool.clone();
         tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<MessageRecord> {
+            // `meta` is a structured JSON value persisted as TEXT.
+            let meta_txt = msg.meta.as_ref().map(|v| v.to_string());
             conn.execute(
-                "INSERT INTO messages (from_agent, to_agent, kind, body, sent_at, in_reply_to, thread_id) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                "INSERT INTO messages (from_agent, to_agent, kind, body, sent_at, in_reply_to, thread_id, meta) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                 params![
                     msg.from_agent,
                     msg.to_agent,
@@ -248,7 +250,8 @@ impl Store {
                     msg.body,
                     msg.sent_at,
                     msg.in_reply_to,
-                    thread_id
+                    thread_id,
+                    meta_txt
                 ],
             )?;
             let id = conn.last_insert_rowid();
@@ -265,6 +268,7 @@ impl Store {
                 read_at: None,
                 in_reply_to: msg.in_reply_to,
                 thread_id: thread_id.clone(),
+                meta: msg.meta.clone(),
             })
         }))
         .await
@@ -396,7 +400,7 @@ impl Store {
             bound.push(limit.into());
 
             let sql = format!(
-                "SELECT id, from_agent, to_agent, kind, body, sent_at, delivered_at, read_at, in_reply_to, thread_id \
+                "SELECT id, from_agent, to_agent, kind, body, sent_at, delivered_at, read_at, in_reply_to, thread_id, meta \
                  FROM messages \
                  {where_sql} \
                  ORDER BY id DESC \
@@ -415,6 +419,9 @@ impl Store {
                     read_at: row.get(7)?,
                     in_reply_to: row.get(8)?,
                     thread_id: row.get(9)?,
+                    meta: row
+                        .get::<_, Option<String>>(10)?
+                        .and_then(|s| serde_json::from_str(&s).ok()),
                 })
             })?;
             rows.collect::<rusqlite::Result<Vec<_>>>()
@@ -429,7 +436,7 @@ impl Store {
             // Join messages_fts → messages on rowid; order by FTS rank.
             let mut stmt = conn.prepare(
                 "SELECT m.id, m.from_agent, m.to_agent, m.kind, m.body, m.sent_at, \
-                        m.delivered_at, m.read_at, m.in_reply_to, m.thread_id \
+                        m.delivered_at, m.read_at, m.in_reply_to, m.thread_id, m.meta \
                  FROM messages_fts \
                  JOIN messages m ON m.id = messages_fts.rowid \
                  WHERE messages_fts MATCH ?1 \
@@ -448,6 +455,9 @@ impl Store {
                     read_at: row.get(7)?,
                     in_reply_to: row.get(8)?,
                     thread_id: row.get(9)?,
+                    meta: row
+                        .get::<_, Option<String>>(10)?
+                        .and_then(|s| serde_json::from_str(&s).ok()),
                 })
             })?;
             rows.collect::<rusqlite::Result<Vec<_>>>()

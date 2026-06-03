@@ -99,6 +99,21 @@ export interface AgentInfo {
 
 // ── M3 swarm DTOs ────────────────────────────────────────────────────────
 
+/** Structured metadata the server stamps on system-generated messages
+ *  (typed-payload pattern; see flockmux-storage migration 0012). The UI
+ *  renders / filters from `subtype` instead of regex-parsing the prose body.
+ *  Absent (undefined/null) for agent free-text messages. */
+export interface MessageMeta {
+  /** "wake" (coordination ping) | "completion" (worker delivered + disbanded). */
+  subtype?: string;
+  /** For wakes: "blackboard" (auto, redundant → UI filters) | "manual" (operator). */
+  reason?: string;
+  /** For blackboard wakes: the raw blackboard key the agent must check. */
+  key?: string;
+  /** For completions: the handoff signal that was delivered. */
+  signal?: string;
+}
+
 export interface MessageRecord {
   id: number;
   from_agent: string;
@@ -111,6 +126,7 @@ export interface MessageRecord {
   in_reply_to: number | null;
   /** Direction (thread) this message belongs to; null = main / untagged. */
   thread_id?: string | null;
+  meta?: MessageMeta | null;
 }
 
 export interface SendMessageRequest {
@@ -325,6 +341,7 @@ export type SwarmEvent =
       sent_at: number;
       in_reply_to?: number | null;
       thread_id?: string | null;
+      meta?: MessageMeta | null;
     }
   | {
       type: "message_read";

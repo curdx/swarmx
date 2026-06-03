@@ -100,7 +100,7 @@ async fn message_insert_list_filter() {
             body: "hello b".into(),
             sent_at: ts(1),
             in_reply_to: None,
-        })
+            meta: None,        })
         .await
         .unwrap();
     let _m2 = store
@@ -111,7 +111,7 @@ async fn message_insert_list_filter() {
             body: "hi a".into(),
             sent_at: ts(2),
             in_reply_to: None,
-        })
+            meta: None,        })
         .await
         .unwrap();
 
@@ -140,7 +140,7 @@ async fn message_search_fts5() {
             body: "schedule a meeting tomorrow about the planner".into(),
             sent_at: ts(1),
             in_reply_to: None,
-        })
+            meta: None,        })
         .await
         .unwrap();
     store
@@ -151,7 +151,7 @@ async fn message_search_fts5() {
             body: "just a chatty hello, nothing planned".into(),
             sent_at: ts(2),
             in_reply_to: None,
-        })
+            meta: None,        })
         .await
         .unwrap();
 
@@ -175,7 +175,7 @@ async fn mark_delivered_only_undelivered() {
             body: "one".into(),
             sent_at: ts(1),
             in_reply_to: None,
-        })
+            meta: None,        })
         .await
         .unwrap();
     let m2 = store
@@ -186,7 +186,7 @@ async fn mark_delivered_only_undelivered() {
             body: "two".into(),
             sent_at: ts(2),
             in_reply_to: None,
-        })
+            meta: None,        })
         .await
         .unwrap();
 
@@ -219,7 +219,7 @@ async fn mark_read_sets_timestamp_and_returns_ids() {
             body: "one".into(),
             sent_at: ts(1),
             in_reply_to: None,
-        })
+            meta: None,        })
         .await
         .unwrap();
     let m2 = store
@@ -230,7 +230,7 @@ async fn mark_read_sets_timestamp_and_returns_ids() {
             body: "two".into(),
             sent_at: ts(2),
             in_reply_to: None,
-        })
+            meta: None,        })
         .await
         .unwrap();
 
@@ -270,7 +270,7 @@ async fn mark_read_refuses_cross_agent() {
             body: "for b only".into(),
             sent_at: ts(1),
             in_reply_to: None,
-        })
+            meta: None,        })
         .await
         .unwrap();
 
@@ -305,7 +305,7 @@ async fn count_unread_excludes_read() {
             body: "one".into(),
             sent_at: ts(1),
             in_reply_to: None,
-        })
+            meta: None,        })
         .await
         .unwrap();
     let _m2 = store
@@ -316,7 +316,7 @@ async fn count_unread_excludes_read() {
             body: "two".into(),
             sent_at: ts(2),
             in_reply_to: None,
-        })
+            meta: None,        })
         .await
         .unwrap();
     // Unrelated recipient — must not count.
@@ -328,7 +328,7 @@ async fn count_unread_excludes_read() {
             body: "for c".into(),
             sent_at: ts(3),
             in_reply_to: None,
-        })
+            meta: None,        })
         .await
         .unwrap();
 
@@ -356,7 +356,7 @@ async fn consume_wakes_atomically_returns_wake_ids_and_marks_read() {
         body: "blackboard `frontend.done` updated".into(),
         sent_at: ts(1),
         in_reply_to: None,
-    }).await.unwrap();
+        meta: None,    }).await.unwrap();
     let _note = store.insert_message(NewMessage {
         from_agent: "frontend".into(),
         to_agent: "critic".into(),
@@ -364,7 +364,7 @@ async fn consume_wakes_atomically_returns_wake_ids_and_marks_read() {
         body: "fyi".into(),
         sent_at: ts(2),
         in_reply_to: None,
-    }).await.unwrap();
+        meta: None,    }).await.unwrap();
     let wake2 = store.insert_message(NewMessage {
         from_agent: "system".into(),
         to_agent: "critic".into(),
@@ -372,7 +372,7 @@ async fn consume_wakes_atomically_returns_wake_ids_and_marks_read() {
         body: "blackboard `backend.done` updated".into(),
         sent_at: ts(3),
         in_reply_to: None,
-    }).await.unwrap();
+        meta: None,    }).await.unwrap();
     // Different agent — must not be touched.
     let other_wake = store.insert_message(NewMessage {
         from_agent: "system".into(),
@@ -381,7 +381,7 @@ async fn consume_wakes_atomically_returns_wake_ids_and_marks_read() {
         body: "for test".into(),
         sent_at: ts(4),
         in_reply_to: None,
-    }).await.unwrap();
+        meta: None,    }).await.unwrap();
 
     let ids = store.consume_wakes("critic".into(), ts(100)).await.unwrap();
     assert_eq!(ids.len(), 2);
@@ -411,7 +411,7 @@ async fn insert_and_list_round_trip_in_reply_to() {
             body: "first ping".into(),
             sent_at: ts(1),
             in_reply_to: None,
-        })
+            meta: None,        })
         .await
         .unwrap();
     let reply = store
@@ -422,7 +422,7 @@ async fn insert_and_list_round_trip_in_reply_to() {
             body: "pong".into(),
             sent_at: ts(2),
             in_reply_to: Some(parent.id),
-        })
+            meta: None,        })
         .await
         .unwrap();
     assert_eq!(reply.in_reply_to, Some(parent.id));
@@ -748,46 +748,39 @@ async fn prune_keeps_every_load_bearing_row() {
     // m1: old normal note, delivered+read → deletable.
     let m1 = id(store.insert_message(NewMessage {
         from_agent: "x".into(), to_agent: "a".into(), kind: "note".into(),
-        body: "old read".into(), sent_at: ts(0), in_reply_to: None,
-    }).await.unwrap());
+        body: "old read".into(), sent_at: ts(0), in_reply_to: None, meta: None,    }).await.unwrap());
     store.mark_delivered(vec![m1], ts(1)).await.unwrap();
     store.mark_read(vec![m1], "a".into(), ts(2)).await.unwrap();
     // m2: old normal note, NOT delivered/read → KEPT (conservative).
     store.insert_message(NewMessage {
         from_agent: "x".into(), to_agent: "a".into(), kind: "note".into(),
-        body: "old unread".into(), sent_at: ts(0), in_reply_to: None,
-    }).await.unwrap();
+        body: "old unread".into(), sent_at: ts(0), in_reply_to: None, meta: None,    }).await.unwrap();
     // m3: old wake, UN-consumed (different agent so consume below misses it) → KEPT.
     store.insert_message(NewMessage {
         from_agent: "x".into(), to_agent: "keep".into(), kind: "wake".into(),
-        body: "pending wake".into(), sent_at: ts(0), in_reply_to: None,
-    }).await.unwrap();
+        body: "pending wake".into(), sent_at: ts(0), in_reply_to: None, meta: None,    }).await.unwrap();
     // m4: old wake, consumed → deletable.
     store.insert_message(NewMessage {
         from_agent: "x".into(), to_agent: "cons".into(), kind: "wake".into(),
-        body: "spent wake".into(), sent_at: ts(0), in_reply_to: None,
-    }).await.unwrap();
+        body: "spent wake".into(), sent_at: ts(0), in_reply_to: None, meta: None,    }).await.unwrap();
     let consumed = store.consume_wakes("cons".into(), ts(3)).await.unwrap();
     assert_eq!(consumed.len(), 1, "only the 'cons' wake is consumed");
     // m5: recent normal note, delivered+read → KEPT (newer than cutoff).
     let m5 = id(store.insert_message(NewMessage {
         from_agent: "x".into(), to_agent: "a".into(), kind: "note".into(),
-        body: "recent".into(), sent_at: ts(2000), in_reply_to: None,
-    }).await.unwrap());
+        body: "recent".into(), sent_at: ts(2000), in_reply_to: None, meta: None,    }).await.unwrap());
     store.mark_delivered(vec![m5], ts(2001)).await.unwrap();
     store.mark_read(vec![m5], "a".into(), ts(2002)).await.unwrap();
     // m6 parent + m7 child: both old, delivered+read. m6 is referenced by m7
     // → m6 KEPT this pass (FK-safe), m7 deletable.
     let m6 = id(store.insert_message(NewMessage {
         from_agent: "x".into(), to_agent: "a".into(), kind: "note".into(),
-        body: "parent".into(), sent_at: ts(0), in_reply_to: None,
-    }).await.unwrap());
+        body: "parent".into(), sent_at: ts(0), in_reply_to: None, meta: None,    }).await.unwrap());
     store.mark_delivered(vec![m6], ts(1)).await.unwrap();
     store.mark_read(vec![m6], "a".into(), ts(2)).await.unwrap();
     let m7 = id(store.insert_message(NewMessage {
         from_agent: "x".into(), to_agent: "a".into(), kind: "note".into(),
-        body: "child".into(), sent_at: ts(0), in_reply_to: Some(m6),
-    }).await.unwrap());
+        body: "child".into(), sent_at: ts(0), in_reply_to: Some(m6), meta: None,    }).await.unwrap());
     store.mark_delivered(vec![m7], ts(1)).await.unwrap();
     store.mark_read(vec![m7], "a".into(), ts(2)).await.unwrap();
 
@@ -1019,7 +1012,7 @@ async fn reassign_unread_moves_only_the_user_request() {
             body: "build me a login page".into(),
             sent_at: ts(1),
             in_reply_to: None,
-        })
+            meta: None,        })
         .await
         .unwrap();
     // An already-READ user message → stays put (it's been answered).
@@ -1031,7 +1024,7 @@ async fn reassign_unread_moves_only_the_user_request() {
             body: "earlier, already handled".into(),
             sent_at: ts(2),
             in_reply_to: None,
-        })
+            meta: None,        })
         .await
         .unwrap();
     store
@@ -1047,7 +1040,7 @@ async fn reassign_unread_moves_only_the_user_request() {
             body: "backend.done".into(),
             sent_at: ts(4),
             in_reply_to: None,
-        })
+            meta: None,        })
         .await
         .unwrap();
     // A different direction's orchestrator (not in the killed set) → stays put.
@@ -1059,7 +1052,7 @@ async fn reassign_unread_moves_only_the_user_request() {
             body: "unrelated direction".into(),
             sent_at: ts(5),
             in_reply_to: None,
-        })
+            meta: None,        })
         .await
         .unwrap();
 
@@ -1121,7 +1114,7 @@ async fn already_read_request_is_recovered_by_latest_user_message() {
             body: "add a dark mode toggle".into(),
             sent_at: ts(1),
             in_reply_to: None,
-        })
+            meta: None,        })
         .await
         .unwrap();
     store

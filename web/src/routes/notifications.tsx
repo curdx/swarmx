@@ -38,7 +38,7 @@ import { useSwarmFeed } from "../hooks/useSwarmFeed";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
-import { humanizeBlackboard, humanizeWakeBody } from "@/lib/notif";
+import { humanizeBlackboard, isHiddenWake } from "@/lib/notif";
 
 type NotifKind = "message" | "blackboard" | "state" | "error" | "completed";
 
@@ -115,6 +115,16 @@ function classifyMessage(
   m: MessageRecord,
   t: TFunction,
 ): { kind: NotifKind; title: string } {
+  // Structured first: server-stamped `meta.subtype` is ground truth, so we
+  // never regex the prose body for messages the server controls (the
+  // worker-disband farewell). Agent free-text (meta absent) still falls back
+  // to the keyword heuristic below.
+  if (m.meta?.subtype === "completion") {
+    return {
+      kind: "completed",
+      title: t("notifications.kinds.completedTitle"),
+    };
+  }
   if (m.kind === "wake") {
     return {
       kind: "state",
@@ -217,17 +227,19 @@ export default function NotificationsRoute() {
         api.listWorkspaces().catch(() => [] as Workspace[]),
       ]);
       wsRef.current = wss;
-      const fromMsg: Notif[] = (msgs as MessageRecord[]).map((m) => {
-        const c = classifyMessage(m, t);
-        return {
-          id: `msg-${m.id}`,
-          kind: c.kind,
-          agent: m.from_agent,
-          title: c.title,
-          body: m.kind === "wake" ? humanizeWakeBody(m.body, wss, t) : m.body,
-          at: m.sent_at,
-        };
-      });
+      const fromMsg: Notif[] = (msgs as MessageRecord[])
+        .filter((m) => !isHiddenWake(m))
+        .map((m) => {
+          const c = classifyMessage(m, t);
+          return {
+            id: `msg-${m.id}`,
+            kind: c.kind,
+            agent: m.from_agent,
+            title: c.title,
+            body: m.body,
+            at: m.sent_at,
+          };
+        });
       const fromBb: Notif[] = (bb as BlackboardEntry[])
         .filter((e) => !isNoisyBlackboard(e.path))
         .map((e) => {
@@ -257,6 +269,7 @@ export default function NotificationsRoute() {
       setItems((prev) => {
         let next: Notif | null = null;
         if (ev.type === "message") {
+          if (isHiddenWake(ev)) return prev;
           const rec: MessageRecord = {
             id: ev.id,
             from_agent: ev.from_agent,
@@ -267,6 +280,7 @@ export default function NotificationsRoute() {
             delivered_at: null,
             read_at: null,
             in_reply_to: ev.in_reply_to ?? null,
+            meta: ev.meta,
           };
           const c = classifyMessage(rec, t);
           next = {
@@ -274,10 +288,7 @@ export default function NotificationsRoute() {
             kind: c.kind,
             agent: ev.from_agent,
             title: c.title,
-            body:
-              ev.kind === "wake"
-                ? humanizeWakeBody(ev.body, wsRef.current, t)
-                : ev.body,
+            body: ev.body,
             at: ev.sent_at,
           };
         } else if (ev.type === "blackboard_changed") {

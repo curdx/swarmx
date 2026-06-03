@@ -394,6 +394,10 @@ pub async fn deliver_manual_wake(
         body: "操作员手动唤醒——请重新检查共享区里的输入，确认就绪后继续".into(),
         sent_at: now,
         in_reply_to: None,
+        // Operator-initiated wake → keep it visible in the feed (a real
+        // intervention worth recording), distinct from the high-volume
+        // auto blackboard wakes the UI filters out.
+        meta: Some(serde_json::json!({ "subtype": "wake", "reason": "manual" })),
     };
     swarm
         .send_message(msg)
@@ -636,6 +640,13 @@ impl WakeCoordinator {
                     body,
                     sent_at: now_ms_local(),
                     in_reply_to: None,
+                    // Structured completion → the UI classifies this as a
+                    // "completed" notification from meta, not by regex-sniffing
+                    // the prose body for ✅/已交付.
+                    meta: Some(serde_json::json!({
+                        "subtype": "completion",
+                        "signal": signal_label,
+                    })),
                 };
                 if let Err(e) = swarm.send_message(farewell).await {
                     tracing::warn!(?e, agent = %agent_id, "auto-kill: farewell send failed");
@@ -853,6 +864,15 @@ impl WakeCoordinator {
             body: format!("共享区 `{key}` 有更新，请查看"),
             sent_at: now,
             in_reply_to: None,
+            // Auto wake fired by a blackboard change → redundant with the
+            // BlackboardChanged event the UI already shows, so the UI filters
+            // these out of the feed (it's agent-coordination plumbing). The
+            // key stays in the body for the agent that receives it.
+            meta: Some(serde_json::json!({
+                "subtype": "wake",
+                "reason": "blackboard",
+                "key": key,
+            })),
         };
         if let Err(err) = self.swarm.send_message(msg).await {
             tracing::warn!(?err, target, key, "wake send_message failed");

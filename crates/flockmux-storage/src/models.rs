@@ -206,6 +206,13 @@ pub struct NewMessage {
     /// Optional parent message id to thread this reply to.
     #[serde(default)]
     pub in_reply_to: Option<i64>,
+    /// Optional structured metadata for system-generated messages (Slack
+    /// `event_payload`-style). e.g. `{"subtype":"wake","reason":"blackboard",
+    /// "key":"<bb key>"}` or `{"subtype":"completion","signal":"reviewer.done"}`.
+    /// The UI renders/filters from this instead of regex-parsing the prose body.
+    /// `None` for agent free-text messages (UI falls back to heuristics there).
+    #[serde(default)]
+    pub meta: Option<serde_json::Value>,
 }
 
 /// Full message row.
@@ -223,6 +230,9 @@ pub struct MessageRecord {
     pub in_reply_to: Option<i64>,
     #[serde(default)]
     pub thread_id: Option<String>,
+    /// Structured metadata for system messages (see [`NewMessage::meta`]).
+    #[serde(default)]
+    pub meta: Option<serde_json::Value>,
 }
 
 /// Filter options for [`crate::Store::list_messages`].

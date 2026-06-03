@@ -61,6 +61,7 @@ pub async fn list_messages(
                 read_at: r.read_at,
                 in_reply_to: r.in_reply_to,
                 thread_id: r.thread_id,
+                meta: r.meta,
             })
             .collect(),
     ))
@@ -80,6 +81,9 @@ pub async fn send_message(
             body: req.body,
             sent_at: now_ms(),
             in_reply_to: req.in_reply_to,
+            // Agent / user free-text via REST carries no server-stamped
+            // structure; the UI classifies these with its body heuristics.
+            meta: None,
         })
         .await
         .map_err(internal_err)?;
@@ -94,6 +98,7 @@ pub async fn send_message(
         read_at: record.read_at,
         in_reply_to: record.in_reply_to,
         thread_id: record.thread_id,
+        meta: record.meta,
     }))
 }
 

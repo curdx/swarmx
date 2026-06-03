@@ -8,9 +8,22 @@
  * key, which is meaningless to a user. One source of truth prevents that.
  */
 
-import type { Workspace } from "@/api/types";
+import type { MessageMeta, Workspace } from "@/api/types";
 
 type Tr = (k: string, opts?: Record<string, unknown>) => string;
+
+/** Auto blackboard wakes (and legacy untyped wakes, meta absent) are internal
+ *  agent-coordination plumbing — redundant with the BlackboardChanged event the
+ *  feed already shows. Both the bell popover and the full /notifications page
+ *  hide them; only operator-initiated manual wakes (meta.reason === "manual")
+ *  stay, since they record a real intervention. Shared so the two surfaces
+ *  filter identically. */
+export function isHiddenWake(m: {
+  kind: string;
+  meta?: MessageMeta | null;
+}): boolean {
+  return m.kind === "wake" && m.meta?.reason !== "manual";
+}
 
 /** A blackboard key is `{workspace_id}/{thread_slug}/{file}`. Render it as
  *  human text — a friendly ledger label + the workspace/direction names —
@@ -47,24 +60,4 @@ export function humanizeBlackboard(
         : undefined;
   const context = [ws?.name, dirName].filter(Boolean).join(" · ");
   return { title, context: context || undefined };
-}
-
-/** The server's wake-ping body embeds a raw blackboard key (flockmux-server
- *  `wake.rs`). Current zh form: 共享区 `{key}` 有更新; legacy/historical rows in
- *  the DB are the old English `blackboard \`{key}\` updated; please check`. The
- *  {key} is the raw 32-hex storage path — the agent receiving the ping needs
- *  it, but it's noise to a human reading the notification feed. For DISPLAY
- *  ONLY, rewrite either form through `humanizeBlackboard` so the feed reads
- *  "reviewer.done 更新 · {workspace} · {direction}" instead of the UUID. The
- *  message delivered to the agent (and the chat transcript) is untouched;
- *  non-matching bodies pass through. */
-export function humanizeWakeBody(
-  body: string,
-  workspaces: Workspace[],
-  t: Tr,
-): string {
-  const m = body.match(/(?:blackboard|共享区) `([^`]+)` (?:updated|有更新)/);
-  if (!m) return body;
-  const { title, context } = humanizeBlackboard(m[1], workspaces, t);
-  return context ? `${title} · ${context}` : title;
 }

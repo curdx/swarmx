@@ -47,6 +47,9 @@ pub struct NewMessage {
     pub body: String,
     pub sent_at: i64,
     pub in_reply_to: Option<i64>,
+    /// Structured metadata for system-generated messages (see
+    /// `flockmux_storage::NewMessage::meta`). `None` for agent free-text.
+    pub meta: Option<serde_json::Value>,
 }
 
 pub struct Swarm {
@@ -141,6 +144,7 @@ impl Swarm {
                     body: msg.body.clone(),
                     sent_at: msg.sent_at,
                     in_reply_to: msg.in_reply_to,
+                    meta: msg.meta.clone(),
                 },
                 thread_id,
             )
@@ -157,6 +161,7 @@ impl Swarm {
             sent_at: record.sent_at,
             in_reply_to: record.in_reply_to,
             thread_id: record.thread_id.clone(),
+            meta: record.meta.clone(),
         });
 
         // Try the in-memory inbox; if absent or full, the message stays in
