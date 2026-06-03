@@ -28,7 +28,7 @@ type Tab = "messages" | "blackboard" | "recordings";
 // 渲染时映射到中文。
 const TAB_LABELS: Record<Tab, string> = {
   messages: "消息",
-  blackboard: "黑板",
+  blackboard: "共享区",
   recordings: "录像",
 };
 

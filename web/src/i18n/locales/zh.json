@@ -6,18 +6,18 @@
     "menuExpand": "展开菜单",
     "menuCollapse": "收起菜单",
     "pageTitle": "MCP",
-    "pageSubtitle": "给 agent 装 MCP server · 对所有工作区生效 · 仅存本机",
+    "pageSubtitle": "为 agent 安装 MCP server · 对所有工作区生效 · 仅保存在本机",
     "runtimeTitle": "运行环境",
     "serversTitle": "服务器",
     "needsNode": "需 Node.js LTS",
     "nodeMissing": "未检测到 Node.js — npx 类 MCP（含 chrome-devtools）无法运行，请先安装 Node.js LTS。",
     "realWriteHint": "开关直接改 claude / codex 的 MCP 配置（用户级，对所有工作区的 agent 生效）。更多 MCP 陆续接入。",
     "keyTitle": "填写 API Key",
-    "keyDesc": "claude 和 codex 共用同一把 key，填一次即可；保存会同步到两边已启用的 CLI。",
+    "keyDesc": "claude 与 codex 共用同一个 key，填写一次即可；保存后会同步到双方已启用的 CLI。",
     "keyShared": "· claude / codex 共用",
-    "keyDrift": "· 两边 key 不一致",
-    "changeKey": "改密钥",
-    "keyUnset": "密钥未设置（打开开关时填写一次，两边通用）",
+    "keyDrift": "· 双方 key 不一致",
+    "changeKey": "修改密钥",
+    "keyUnset": "密钥未设置（启用时填写一次，双方通用）",
     "syncing": "同步中…",
     "save": "保存",
     "scopeHint": "装的 MCP 对所有工作区生效，仅保存在本机。",
@@ -33,7 +33,7 @@
     "needsKey": "需要密钥",
     "docs": "文档",
     "installedTag": "已添加",
-    "install": "装",
+    "install": "安装",
     "tagStdio": "stdio",
     "tagRemote": "远程",
     "configureTitle": "配置并添加",
@@ -78,30 +78,30 @@
     "about": "关于"
   },
   "welcome": {
-    "title": "让 Claude / Codex 在你的项目里组队",
-    "subtitle": "把你已经登录的 AI CLI 拉成一支团队 — 你下需求，它们自己分工、互相协作、把活干完。",
+    "title": "让 Claude / Codex 在你的项目里协同工作",
+    "subtitle": "把你已登录的 AI CLI 组成一支团队——你下达需求，它们自动分工、相互协作、完成交付。",
     "primary": "新建工作空间",
-    "secondary": "看看文档了解原理",
+    "secondary": "查阅文档了解原理",
     "highlight": {
       "chat": {
-        "title": "群聊式协作",
-        "body": "每个 agent 一个房间成员，互相 @ 互相提问"
+        "title": "对话式协作",
+        "body": "每个 agent 都是房间成员，可相互 @、相互提问"
       },
       "spell": {
-        "title": "配方编排",
-        "body": "用一个 spell 文件描述「谁干啥、谁等谁」"
+        "title": "声明式编排",
+        "body": "用一个 spell 文件声明「谁负责什么、谁依赖谁」"
       },
       "auto": {
-        "title": "自然语言派活",
-        "body": "把任务用人话讲清楚，自动挑配方启动"
+        "title": "自然语言派发任务",
+        "body": "用自然语言描述任务，自动匹配编排并启动"
       }
     },
     "sidebarEmpty": "还没有工作空间"
   },
   "task": {
-    "pending": "等待 AI 反应…",
-    "spawning_one": "✨ 拉起 {{roles}}",
-    "spawning_other": "✨ 拉起 {{count}} 个 agent · {{roles}}",
+    "pending": "等待 AI 响应…",
+    "spawning_one": "✨ 正在启动 {{roles}}",
+    "spawning_other": "✨ 正在启动 {{count}} 个 agent · {{roles}}",
     "ready_one": "✓ {{roles}} 就绪",
     "ready_other": "✓ {{count}} 个 agent 就绪 · {{roles}}",
     "triggered": "「{{msg}}」",
@@ -116,19 +116,19 @@
     "done": "知道了",
     "sidebar": {
       "title": "左边是你的工作空间",
-      "body": "每个工作空间 = 一个项目 + 一支 AI 团队。你可以同时开几个，sidebar 切换；右键改名 / 删除（即将上线）。"
+      "body": "每个工作空间 = 一个项目 + 一支 AI 团队。可同时打开多个，在侧栏切换；右键重命名 / 删除（即将上线）。"
     },
     "tabs": {
       "title": "中间有 4 个视角",
-      "body": "聊天看消息、协作图看 agent 怎么互相等、录像回放每个 agent 的终端、上下文看它们共享的黑板。⌘1-4 直接切。"
+      "body": "聊天查看消息、协作图查看 agent 间的等待关系、录像回放每个 agent 的终端、上下文查看它们的共享区。⌘1-4 快速切换。"
     },
     "composer": {
-      "title": "底下输入框 — 用人话告诉 AI 干啥",
-      "body": "「帮我加个登录页」「把这个 bug 修了」就行，planner 会自动挑配方拉起合适的 agent 去做。"
+      "title": "底部输入框——用自然语言告诉 AI 要做什么",
+      "body": "「帮我加个登录页」「修复这个 bug」即可，planner 会自动匹配编排、启动合适的 agent 来完成。"
     },
     "cmdk": {
       "title": "⌘K 随时呼出命令面板",
-      "body": "搜索命令、跳工作空间、唤醒卡住的 agent、切主题…几乎所有操作都能直接打字到达，不用找按钮。"
+      "body": "搜索命令、跳转工作空间、唤醒卡住的 agent、切换主题……几乎所有操作都能直接键入到达，无需翻找按钮。"
     }
   },
   "common": {
@@ -265,7 +265,7 @@
     "newWorkspace": "新建工作空间",
     "noActiveAgents": "暂无活跃 agent · 去",
     "emptyStateTitle": "新建一个工作空间",
-    "emptyStateHint": "给工作空间起个名、选项目所在文件夹，AI 会自己进去看一眼",
+    "emptyStateHint": "为工作空间命名、选择项目所在文件夹，AI 会进入目录先了解一下",
     "tabs": {
       "chat": "聊天",
       "dag": "协作图",
@@ -273,8 +273,8 @@
       "replays": "录像"
     },
     "backToChat": "← 返回 {{name}}",
-    "globalScopeHint": "当前显示所有工作空间数据 · 从聊天里选某个工作空间可只看那个的",
-    "runSpell": "运行配方",
+    "globalScopeHint": "当前显示所有工作空间的数据 · 在聊天中选择某个工作空间可仅查看该工作空间",
+    "runSpell": "运行编排",
     "noConversation": "暂无对话",
     "noWorkspaceName": "（未指定工作空间）",
     "agentCountWs": "{{count}} 个 agent · WS {{status}}",
@@ -296,11 +296,11 @@
     "directionUnnamed": "未命名方向",
     "agentHome": "AI 终端在此",
     "newDirection": "新方向",
-    "newDirectionTooltip": "开一个新方向（git 项目自动隔离，不碰主线）",
-    "newDirectionDialogTitle": "在「{{name}}」开新方向",
-    "newDirectionNamePlaceholder": "给方向起个名字（可留空，AI 会按你第一句话自动命名）",
-    "newDirectionConfirm": "开方向",
-    "newDirectionSpawnNote": "开方向会立刻起一个新的 orchestrator AI 接管这条线。",
+    "newDirectionTooltip": "开启一个新方向（git 项目自动隔离，不影响主线）",
+    "newDirectionDialogTitle": "在「{{name}}」中开启新方向",
+    "newDirectionNamePlaceholder": "为方向命名（可留空，AI 会根据你的第一句话自动命名）",
+    "newDirectionConfirm": "开启方向",
+    "newDirectionSpawnNote": "开启方向会立即启动一个新的 orchestrator AI 来接管这条线。",
     "newDirectionNonGit": "这个项目不是 git 仓库——多个方向会共用同一份文件、无法隔离，它们的改动会互相覆盖、互相影响。",
     "directionPreparing": "隔离中…",
     "directionDegraded": "隔离失败，正与主线共用同一目录（文件可能互相覆盖）",
@@ -345,9 +345,9 @@
     "dependsOn": "depends_on",
     "openDrawer": "打开 Agent Drawer",
     "ready": "READY",
-    "killed": "已杀",
+    "killed": "已终止",
     "startingShort": "启动中",
-    "spawn": "雇佣",
+    "spawn": "派生",
     "interruptAll": "全停",
     "resumeAll": "全恢复",
     "pausedCount": "{{count}} 已暂停",
@@ -391,9 +391,9 @@
   },
   "context": {
     "title": "上下文",
-    "subtitle": "{{count}} 个 key · 浏览 + 历史（编辑去 /debug）",
+    "subtitle": "{{count}} 个 key · 浏览 + 历史（编辑请前往 /debug）",
     "search": "按 key 搜索",
-    "empty": "暂无 blackboard 内容",
+    "empty": "共享区暂无内容",
     "selectKey": "左侧选一个 key 查看",
     "rendered": "渲染",
     "raw": "Raw",
@@ -412,7 +412,7 @@
     "tabs": {
       "all": "全部",
       "message": "消息",
-      "blackboard": "黑板",
+      "blackboard": "共享区",
       "state": "状态",
       "error": "异常",
       "completed": "完成"
@@ -458,7 +458,7 @@
     "noMessages": "该 agent 暂无收发消息",
     "toolsWip": "工具调用流 WIP",
     "toolsWipHint": "需要 shim 层 emit tool_call 事件，目前 SwarmEvent type 里只有 agent_state / message / blackboard_changed。排进 Phase D。",
-    "noBlackboard": "该 agent 还没写过黑板",
+    "noBlackboard": "该 agent 还没向共享区写入过内容",
     "injectLabel": "注入 prompt:",
     "injectPlaceholder": "给 agent 发一条 note，下回合 wake 后收到",
     "send": "发送",
@@ -485,7 +485,7 @@
   },
   "wizard": {
     "title": "创建工作空间",
-    "subtitle": "工作空间 = 给一个项目配的群聊房间 + AI 团队",
+    "subtitle": "工作空间 = 为一个项目配备的协作房间 + AI 团队",
     "step1": "给工作空间起个名字",
     "namePlaceholder": "例如：我的待办 App",
     "aiNamed": "AI 起名",
@@ -516,14 +516,14 @@
       "green": "绿",
       "orange": "橙"
     },
-    "defaultInfo": "点开始后 AI 会先看一眼你的项目",
+    "defaultInfo": "点击「开始」后，AI 会先了解一下你的项目",
     "cancel": "取消",
     "create": "开始",
-    "scanning": "AI 正在看你的项目…",
-    "scanningHint": "AI 会扫描你刚选的项目目录，搞清楚是什么技术栈、什么类型的项目。准备好后会在聊天里跟你打招呼，问你想做什么。",
-    "scanningElapsed": "已等 {{s}}s · 通常 20-40s",
-    "scanningFootHint": "通常 20-40 秒，可以先进群等",
-    "enterAnyway": "直接进群"
+    "scanning": "AI 正在了解你的项目…",
+    "scanningHint": "AI 会扫描你选择的项目目录，识别它的技术栈与项目类型。准备就绪后，会在聊天中与你打招呼并询问你的需求。",
+    "scanningElapsed": "已等待 {{s}}s · 通常 20-40s",
+    "scanningFootHint": "通常 20-40 秒，可先进入房间等待",
+    "enterAnyway": "直接进入房间"
   },
   "messages": {
     "filter": "过滤 发送方 / 接收方 / 正文",
@@ -540,9 +540,9 @@
     "replying": "正在回复 #{{id}}",
     "cancelReply": "取消回复",
     "clearFilter": "清除过滤",
-    "composerPlaceholder": "和 AI 说点啥…",
+    "composerPlaceholder": "向 AI 描述你的需求…",
     "composerPlaceholderEmpty": "该工作空间还没有 AI 成员…",
-    "composerPlaceholderInit": "和 AI 说点啥…",
+    "composerPlaceholderInit": "向 AI 描述你的需求…",
     "responding": "回复 #{{id}} 中",
     "respondingTo": "{{role}} 在回复",
     "you": "我",
@@ -570,7 +570,7 @@
       "chat": "Chat 三栏",
       "dag": "DAG",
       "replays": "Replays",
-      "context": "Blackboard",
+      "context": "共享区",
       "notifications": "Notification Center",
       "settings": "Preferences",
       "debug": "Legacy M2 grid"
@@ -581,7 +581,7 @@
     "switchToDark": "切换到深色",
     "followSystem": "跟随系统",
     "newWorkspace": "新建工作空间…",
-    "runSpell": "运行配方…",
+    "runSpell": "运行编排…",
     "openWizard": "打开 Wizard",
     "kbd": {
       "navigate": "选择",

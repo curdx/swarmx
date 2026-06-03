@@ -235,7 +235,7 @@ export default function NotificationsRoute() {
           return {
             id: `bb-${e.path}-${e.at}`,
             kind: "blackboard" as const,
-            agent: "blackboard",
+            agent: t("notifications.tabs.blackboard"),
             title: h.title,
             body: h.context ?? `sha256 ${e.sha256.slice(0, 8)}`,
             at: e.at,
@@ -286,7 +286,7 @@ export default function NotificationsRoute() {
           next = {
             id: `bb-${ev.path}-${ev.at}`,
             kind: "blackboard",
-            agent: ev.agent_id ?? "blackboard",
+            agent: ev.agent_id ?? t("notifications.tabs.blackboard"),
             title: h.title,
             body: h.context ?? `sha256 ${ev.sha256.slice(0, 8)}`,
             at: ev.at,
