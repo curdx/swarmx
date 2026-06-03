@@ -212,6 +212,48 @@ export default function ChatView() {
     }
   }, [reviving, workspace.path, workspace.workspaceId, refreshAgents]);
 
+  // 发消息即上线：工作空间没有活的 orchestrator 时，用户直接发消息——自动
+  // 拉起 orchestrator(init spell)、把这条消息投给它、唤醒它干活，省去先手点
+  // 「唤醒调度」。MessagesPanel 在 defaultRecipient 为空(无活成员)时调用本函数。
+  const bootstrapRef = useRef(false);
+  const sendBootstrappingOrchestrator = useCallback(
+    async (body: string) => {
+      if (bootstrapRef.current) return;
+      bootstrapRef.current = true;
+      try {
+        const resp = await api.runSpell({
+          name: "init",
+          task: "",
+          workspace_dir: workspace.path,
+          workspace_id: workspace.workspaceId,
+          thread_id: activeThread?.id,
+        });
+        const orch =
+          resp.agents.find((a) => a.role === "orchestrator") ?? resp.agents[0];
+        if (orch) {
+          // Persist the user's message to the freshly-spawned orchestrator so it
+          // shows in chat AND lands in its mailbox; then nudge it to read now
+          // (sendMessage only persists, doesn't wake).
+          await api.sendMessage({
+            from: "user",
+            to: orch.agent_id,
+            kind: "note",
+            body,
+          });
+          api.wakeAgent(orch.agent_id).catch(() => {});
+        }
+        refreshAgents();
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn("send-to-revive orchestrator failed", e);
+        throw e; // let MessagesPanel surface the error inline
+      } finally {
+        bootstrapRef.current = false;
+      }
+    },
+    [workspace.path, workspace.workspaceId, activeThread?.id, refreshAgents],
+  );
+
   // ── Task activity state machine ──────────────────────────────────
   // 解决业界说的 "doomscrolling gap" — 用户发完消息后 5-30 秒 UI 黑盒。
   // 简化版状态机:
@@ -419,6 +461,7 @@ export default function ChatView() {
           activeThreadId={activeThread?.id}
           jumpUnreadTick={jumpUnreadTick}
           onOpenAgent={openAgent}
+          onSend={sendBootstrappingOrchestrator}
           taskActivityBelow={
             <TaskActivity tasks={tasks} onDismiss={dismissTask} />
           }

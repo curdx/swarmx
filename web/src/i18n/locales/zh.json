@@ -542,6 +542,7 @@
     "clearFilter": "清除过滤",
     "composerPlaceholder": "向 AI 描述你的需求…",
     "composerPlaceholderEmpty": "该工作空间还没有 AI 成员…",
+    "composerPlaceholderRevive": "发条消息，AI 会自动上线开工…",
     "composerPlaceholderInit": "向 AI 描述你的需求…",
     "responding": "回复 #{{id}} 中",
     "respondingTo": "{{role}} 在回复",

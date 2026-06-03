@@ -85,6 +85,7 @@ interface Props {
    *  auto-dispatch (rather than getting swallowed by a STOPped scout).
    *  Note: override receives the trimmed body — it's responsible for any
    *  side effects (running spells, persisting a user message, etc.). */
+  onSend?: (body: string) => Promise<void> | void;
   /** Click-handler when the user taps an avatar — typically opens AgentDrawer. */
   onOpenAgent?: (agentId: string) => void;
   /** Parent bumps this counter when the user clicks the "N 未读" badge in
@@ -182,6 +183,7 @@ export function MessagesPanel({
   workspaceSlug,
   activeThreadId,
   onOpenAgent,
+  onSend,
   jumpUnreadTick = 0,
   taskActivityBelow,
 }: Props) {
@@ -415,7 +417,25 @@ export function MessagesPanel({
   const send = async () => {
     const trimmed = body.trim();
     if (!trimmed) return;
-    if (!defaultRecipient) return;
+    // No live recipient (workspace's orchestrator has exited). If the parent
+    // wired `onSend`, route the message through it — it spawns the orchestrator
+    // and delivers — so the user just types instead of first clicking 唤醒.
+    if (!defaultRecipient) {
+      if (!onSend) return;
+      setSending(true);
+      try {
+        await onSend(trimmed);
+        setBody("");
+        setInReplyTo(null);
+        setError(null);
+        composerRef.current?.focus();
+      } catch (e) {
+        setError((e as Error).message);
+      } finally {
+        setSending(false);
+      }
+      return;
+    }
     setSending(true);
     try {
       const rec = await api.sendMessage({
@@ -515,13 +535,18 @@ export function MessagesPanel({
   };
 
   const senders = Object.entries(unreadByFrom).filter(([, n]) => n > 0);
-  const sendDisabled = sending || !body.trim() || !defaultRecipient;
+  // Composer is usable when there's a live recipient OR the parent wired
+  // `onSend` (which spawns one on send) — so an exited orchestrator no longer
+  // dead-ends the input behind a manual 唤醒 click.
+  const canCompose = !!defaultRecipient || !!onSend;
+  const sendDisabled = sending || !body.trim() || !canCompose;
   // 所有 workspace 用同一句 placeholder —— 用户视角永远是"跟 AI 说话",
-  // 不再区分 init-only / 普通 ws。messages.composerPlaceholder i18n key
-  // 保留兼容,但 init-only 那条 init-specific 的话术不再用。
+  // 不再区分 init-only / 普通 ws。无活成员但能 onSend 唤醒时，提示发消息即上线。
   const composerPlaceholder = defaultRecipient
     ? t("messages.composerPlaceholder")
-    : t("messages.composerPlaceholderEmpty");
+    : onSend
+      ? t("messages.composerPlaceholderRevive")
+      : t("messages.composerPlaceholderEmpty");
 
   return (
     <div className="flex h-full flex-col bg-surface-primary">
@@ -917,7 +942,7 @@ export function MessagesPanel({
             }}
             onKeyDown={onComposerKey}
             placeholder={composerPlaceholder}
-            disabled={!defaultRecipient}
+            disabled={!canCompose}
             rows={1}
             className="min-w-0 flex-1 resize-none rounded-2xl px-3 py-2 font-body text-[13px] leading-snug"
           />

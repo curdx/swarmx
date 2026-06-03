@@ -542,6 +542,7 @@
     "clearFilter": "Clear filter",
     "composerPlaceholder": "Say something to the AI…",
     "composerPlaceholderEmpty": "No AI members in this workspace yet…",
+    "composerPlaceholderRevive": "Send a message — the AI spins up automatically…",
     "composerPlaceholderInit": "Say something to the AI…",
     "responding": "replying to #{{id}}",
     "respondingTo": "{{role}} is typing",
