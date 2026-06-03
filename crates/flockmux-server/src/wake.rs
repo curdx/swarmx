@@ -295,7 +295,7 @@ pub async fn inject_wake_kick(
     // the agent is the *producer* of the overdue key (not a subscriber),
     // the caller should use `inject_with_kick_text` directly so the
     // message reads as "you're blocking <waiter>" instead.
-    let kick_text = format!("blackboard `{key}` updated; please check");
+    let kick_text = format!("共享区 `{key}` 有更新，请查看");
     inject_with_kick_text(registry, agent_id, &kick_text, key).await
 }
 
@@ -391,7 +391,7 @@ pub async fn deliver_manual_wake(
         from_agent: "system".into(),
         to_agent: target.into(),
         kind: "wake".into(),
-        body: "manual wake from operator — please re-check your blackboard inputs and proceed if ready".into(),
+        body: "操作员手动唤醒——请重新检查共享区里的输入，确认就绪后继续".into(),
         sent_at: now,
         in_reply_to: None,
     };
@@ -405,7 +405,7 @@ pub async fn deliver_manual_wake(
     if let Err(err) = inject_with_kick_text(
         registry,
         target,
-        "manual wake from operator — please re-check blackboard and continue",
+        "操作员手动唤醒——请重新检查共享区后继续",
         "manual-wake",
     )
     .await
@@ -850,7 +850,7 @@ impl WakeCoordinator {
             from_agent: "system".into(),
             to_agent: target.into(),
             kind: "wake".into(),
-            body: format!("blackboard `{key}` updated; please check"),
+            body: format!("共享区 `{key}` 有更新，请查看"),
             sent_at: now,
             in_reply_to: None,
         };

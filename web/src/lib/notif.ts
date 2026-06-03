@@ -49,19 +49,21 @@ export function humanizeBlackboard(
   return { title, context: context || undefined };
 }
 
-/** The server's wake-ping body is `blackboard \`{key}\` updated; please check`
- *  (flockmux-server `wake.rs`). The {key} is the raw 32-hex storage path — the
- *  agent receiving the ping needs it, but it's noise to a human reading the
- *  notification feed. For DISPLAY ONLY, rewrite that one pattern through
- *  `humanizeBlackboard` so the feed reads "reviewer.done 更新 · {workspace} ·
- *  {direction}" instead of the UUID. The message delivered to the agent (and
- *  the chat transcript) is untouched; non-matching bodies pass through. */
+/** The server's wake-ping body embeds a raw blackboard key (flockmux-server
+ *  `wake.rs`). Current zh form: 共享区 `{key}` 有更新; legacy/historical rows in
+ *  the DB are the old English `blackboard \`{key}\` updated; please check`. The
+ *  {key} is the raw 32-hex storage path — the agent receiving the ping needs
+ *  it, but it's noise to a human reading the notification feed. For DISPLAY
+ *  ONLY, rewrite either form through `humanizeBlackboard` so the feed reads
+ *  "reviewer.done 更新 · {workspace} · {direction}" instead of the UUID. The
+ *  message delivered to the agent (and the chat transcript) is untouched;
+ *  non-matching bodies pass through. */
 export function humanizeWakeBody(
   body: string,
   workspaces: Workspace[],
   t: Tr,
 ): string {
-  const m = body.match(/blackboard `([^`]+)` updated/);
+  const m = body.match(/(?:blackboard|共享区) `([^`]+)` (?:updated|有更新)/);
   if (!m) return body;
   const { title, context } = humanizeBlackboard(m[1], workspaces, t);
   return context ? `${title} · ${context}` : title;
