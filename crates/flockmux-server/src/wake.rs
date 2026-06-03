@@ -391,7 +391,7 @@ pub async fn deliver_manual_wake(
         from_agent: "system".into(),
         to_agent: target.into(),
         kind: "wake".into(),
-        body: "操作员手动唤醒——请重新检查共享区里的输入，确认就绪后继续".into(),
+        body: "操作员唤醒——请先查收邮箱里的新消息（可能是用户的新指令），再检查共享区，然后继续".into(),
         sent_at: now,
         in_reply_to: None,
         // Operator-initiated wake → keep it visible in the feed (a real
@@ -409,7 +409,7 @@ pub async fn deliver_manual_wake(
     if let Err(err) = inject_with_kick_text(
         registry,
         target,
-        "操作员手动唤醒——请重新检查共享区后继续",
+        "操作员唤醒——请先查收邮箱新消息再检查共享区后继续",
         "manual-wake",
     )
     .await

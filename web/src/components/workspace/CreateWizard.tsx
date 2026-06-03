@@ -202,6 +202,18 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
   const submit = async () => {
     if (!canSubmit) return;
     setError(null);
+    // Client-side precheck: a relative/garbage path can't be a workspace cwd.
+    // Catch it here with a clear hint instead of round-tripping for a 400
+    // (existence still needs the server — that path's error is translated below).
+    if (!/^(\/|[A-Za-z]:[\\/])/.test(mainPath)) {
+      setError(
+        t(
+          "wizard.errAbsolutePath",
+          "Please enter an absolute path (starting with /), e.g. /Users/you/code/project",
+        ),
+      );
+      return;
+    }
     const startedAt = Date.now();
     const wsName = name.trim();
     let created: Workspace | null = null;
@@ -280,8 +292,17 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
         api.deleteWorkspace(created.id).catch(() => {});
       }
       // Show the server's plain error string, not the `METHOD path → status`
-      // wrapper — friendlier for "目录不存在" style validation failures.
-      setError(e instanceof ApiError ? e.detail : (e as Error).message);
+      // wrapper. Translate the common "directory does not exist" validation
+      // failure into Chinese (the server message is English; FAULT-007).
+      const raw = e instanceof ApiError ? e.detail : (e as Error).message;
+      setError(
+        /directory does not exist/i.test(raw)
+          ? t(
+              "wizard.errDirMissing",
+              "That directory doesn't exist — check the path is correct and points to an existing absolute path.",
+            )
+          : raw,
+      );
     }
   };
 

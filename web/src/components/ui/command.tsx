@@ -46,10 +46,6 @@ function CommandDialog({
 }) {
   return (
     <Dialog {...props}>
-      <DialogHeader className="sr-only">
-        <DialogTitle>{title}</DialogTitle>
-        <DialogDescription>{description}</DialogDescription>
-      </DialogHeader>
       <DialogContent
         className={cn(
           "top-1/3 translate-y-0 overflow-hidden rounded-xl! p-0",
@@ -57,6 +53,14 @@ function CommandDialog({
         )}
         showCloseButton={showCloseButton}
       >
+        {/* sr-only title/description MUST live inside DialogContent so Radix
+            only mounts them while the palette is open. Outside it they render
+            unconditionally → a screen reader hears two stray headings even when
+            the palette is closed (FAULT-003). */}
+        <DialogHeader className="sr-only">
+          <DialogTitle>{title}</DialogTitle>
+          <DialogDescription>{description}</DialogDescription>
+        </DialogHeader>
         {/* shadcn 的 cmdk wrapper 要求 CommandInput / List / Item 必须在
          *  <Command> (即 cmdk Root) 内才能拿到 store context；否则 cmdk 内
          *  部 useStore 拿到 undefined，触发 "Cannot read properties of

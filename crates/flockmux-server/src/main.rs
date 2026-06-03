@@ -42,7 +42,9 @@ use flockmux_swarm::{Swarm, WatcherHandle};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tower::ServiceExt; // ServeDir::oneshot in the path-aware SPA fallback
 use tower_http::cors::CorsLayer;
+use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
 use tracing::info;
 
@@ -228,8 +230,18 @@ async fn main() -> Result<()> {
     std::fs::create_dir_all(&recordings_root)?;
     info!(recordings = %recordings_root.display(), "recordings root");
 
+    // FLOCKMUX_PORT is parsed here (not just at bind time) because it also
+    // drives the URL we bake into spawned agents' wake-check hook + swarm MCP.
+    // A parallel instance set with only FLOCKMUX_PORT used to leave agents
+    // pointing at the 7777 default (their messages then invisible to this
+    // server). Derive SERVER_URL from PORT so PORT alone is sufficient;
+    // an explicit FLOCKMUX_SERVER_URL still wins.
+    let port: u16 = std::env::var("FLOCKMUX_PORT")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(7777);
     let server_url = std::env::var("FLOCKMUX_SERVER_URL")
-        .unwrap_or_else(|_| "http://127.0.0.1:7777".into());
+        .unwrap_or_else(|_| format!("http://127.0.0.1:{port}"));
 
     let wake_subs: wake::WakeSubs =
         std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new()));
@@ -267,7 +279,7 @@ async fn main() -> Result<()> {
     );
     info!("wake coordinator started");
 
-    let app = Router::new()
+    let mut app = Router::new()
         .route("/api/plugins", get(routes::rest::list_plugins))
         // F1 模型设置页: per-CLI tier→concrete-model mapping (read/write).
         .route(
@@ -360,7 +372,33 @@ async fn main() -> Result<()> {
         .route("/api/spells", get(routes::rest::list_spells))
         .route("/api/spell/run", post(routes::rest::run_spell))
         .route("/ws/swarm", get(routes::ws_swarm::ws_swarm))
-        .route("/ws/pty/:agent_id", get(routes::pty_ws::pty_ws))
+        .route("/ws/pty/:agent_id", get(routes::pty_ws::pty_ws));
+
+    // Serve the built web bundle so `http://127.0.0.1:<port>` actually shows the
+    // UI (apiBase.ts / require_local_origin already assume the server hosts it;
+    // it was never wired → bare 404). The fallback serves static assets and, for
+    // unknown client-routes, index.html (SPA history routing) — BUT a path under
+    // /api or /ws must 404 cleanly instead of being swallowed into a 200
+    // index.html (that would hand API callers HTML + a confusing JSON parse
+    // error). No bundle on disk (a dev-only checkout) → stay API-only.
+    if let Some(web_dir) = resolve_web_dir() {
+        let serve = ServeDir::new(&web_dir).fallback(ServeFile::new(web_dir.join("index.html")));
+        app = app.fallback(move |req: Request| {
+            let serve = serve.clone();
+            async move {
+                let p = req.uri().path();
+                if p.starts_with("/api/") || p.starts_with("/ws/") {
+                    return StatusCode::NOT_FOUND.into_response();
+                }
+                serve.oneshot(req).await.into_response()
+            }
+        });
+        info!(web = %web_dir.display(), "serving web bundle");
+    } else {
+        info!("no web bundle on disk; API-only (serve UI via `npm run dev` or Tauri)");
+    }
+
+    let app = app
         // CORS stays permissive so the Tauri webview's cross-origin fetch
         // (tauri://localhost → 127.0.0.1:7777) keeps working. The actual
         // security boundary is `require_local_origin` below, which rejects
@@ -373,14 +411,7 @@ async fn main() -> Result<()> {
         .layer(middleware::from_fn(require_local_origin))
         .with_state(state.clone());
 
-    // FLOCKMUX_PORT env override — used to stand up a parallel test
-    // instance (e.g. the .app sidecar) without colliding with a dev
-    // backend already bound to 7777. Frontend defaults already assume
-    // 7777, so do NOT set this in production.
-    let port: u16 = std::env::var("FLOCKMUX_PORT")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(7777);
+    // `port` parsed above (it also derives server_url). Bind loopback only.
     let addr: SocketAddr = ([127, 0, 0, 1], port).into();
     info!(%addr, "flockmux-server listening (loopback only; cross-origin requests rejected)");
     let listener = tokio::net::TcpListener::bind(addr).await?;
@@ -635,6 +666,34 @@ fn acquire_singleton_lock(db_path: &std::path::Path) -> Result<()> {
     Box::leak(Box::new(lock_file));
     info!(lock = %lock_path.display(), "acquired singleton lock");
     Ok(())
+}
+
+/// Locate the built web bundle (`dist/` with an `index.html`) to serve at the
+/// server root. Resolution order: `FLOCKMUX_WEB_DIR` (explicit, e.g. the Tauri
+/// bundle's resource dir) → `<cwd>/web/dist` or `<cwd>/dist` (running from the
+/// repo) → next to / two levels up from the executable (`target/release` →
+/// repo `web/dist`). Returns `None` when nothing is found, so a bare dev
+/// checkout stays API-only instead of crashing.
+fn resolve_web_dir() -> Option<PathBuf> {
+    let has_index = |p: &PathBuf| p.join("index.html").is_file();
+    if let Ok(p) = std::env::var("FLOCKMUX_WEB_DIR") {
+        let pb = PathBuf::from(p);
+        if has_index(&pb) {
+            return Some(pb);
+        }
+    }
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Ok(cwd) = std::env::current_dir() {
+        candidates.push(cwd.join("web/dist"));
+        candidates.push(cwd.join("dist"));
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            candidates.push(dir.join("web/dist"));
+            candidates.push(dir.join("../../web/dist")); // target/release → repo/web/dist
+        }
+    }
+    candidates.into_iter().find(has_index)
 }
 
 /// Reject cross-site requests. flockmux binds loopback with no token auth,

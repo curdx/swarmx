@@ -50,10 +50,15 @@ export function useNotificationBadge() {
 
   useSwarmFeed({
     onEvent: (ev) => {
+      // Only bump on events the inbox actually shows/seeds: messages and
+      // blackboard writes (both backfilled on the /notifications mount). Bare
+      // `agent_state` transitions used to light the dot too, but the inbox
+      // doesn't persist those — so a fresh spawn lit the badge while the inbox
+      // stayed empty ("red dot → empty inbox", FAULT-015). Errors/completions
+      // still badge: they arrive as blackboard `.error`/`.done` writes + messages.
       let at: number | null = null;
       if (ev.type === "message") at = ev.sent_at;
       else if (ev.type === "blackboard_changed") at = ev.at;
-      else if (ev.type === "agent_state") at = Date.now();
       if (at == null) return;
       setLatestAt((prev) => {
         const next = Math.max(prev, at!);

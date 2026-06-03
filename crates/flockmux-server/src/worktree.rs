@@ -156,7 +156,17 @@ pub(crate) fn sanitize_suffix(branch: &str) -> String {
     }
     let s = s.trim_matches(|c| c == '-' || c == '.' || c == '_').to_string();
     if s.is_empty() {
-        "dir".to_string()
+        // A fully non-ASCII name (e.g. Chinese "深色模式") would otherwise
+        // collapse to the SAME literal for every such name, so distinct
+        // directions would collide on one branch/worktree (only kept apart by
+        // unique_thread_slug's `-2/-3` suffixing) and read as meaningless.
+        // Derive a stable short hash of the original so each distinct name maps
+        // to its own slug/branch. DefaultHasher has a fixed (seedless) initial
+        // state, so this is deterministic across runs.
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        branch.hash(&mut h);
+        format!("dir-{:06x}", (h.finish() as u32) & 0x00ff_ffff)
     } else {
         s
     }
@@ -226,9 +236,14 @@ mod tests {
         assert_eq!(sanitize_suffix("dark-mode"), "dark-mode");
         assert_eq!(sanitize_suffix("Dark Mode!!"), "dark-mode");
         assert_eq!(sanitize_suffix("feature/api v2"), "feature-api-v2");
-        assert_eq!(sanitize_suffix("深色"), "dir"); // non-ascii → all dashes → trimmed → fallback
+        // Non-ascii names no longer all collapse to a single "dir": each gets a
+        // stable, distinct `dir-<hash>` so directions don't share a branch.
+        assert!(sanitize_suffix("深色").starts_with("dir-"));
+        assert_eq!(sanitize_suffix("深色"), sanitize_suffix("深色")); // deterministic
+        assert_ne!(sanitize_suffix("深色"), sanitize_suffix("浅色")); // distinct names → distinct slugs
+        assert_eq!(sanitize_suffix("深色 mode"), "mode"); // ascii kept when present
         assert_eq!(sanitize_suffix("--x--"), "x");
-        assert_eq!(sanitize_suffix(""), "dir");
+        assert!(sanitize_suffix("").starts_with("dir-"));
     }
 
     #[test]

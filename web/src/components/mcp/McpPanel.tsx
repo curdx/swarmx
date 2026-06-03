@@ -54,6 +54,13 @@ export function McpManager() {
   const [busy, setBusy] = useState<{ id: string; cli?: Cli } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [keyDialog, setKeyDialog] = useState<KeyDialogState | null>(null);
+  // Disabling rewrites the user's real ~/.claude|~/.codex config and hits every
+  // running agent immediately — gate it behind a confirm (FAULT-026).
+  const [confirmOff, setConfirmOff] = useState<{
+    id: string;
+    cli: Cli;
+    name: string;
+  } | null>(null);
   // 本次会话填过的 key —— 让"刚填完、立刻启用另一个 CLI"也不必再问(后端落盘后
   // 其实也能 recover，这只是更快的本地路径)。
   const sessionKeys = useRef<Record<string, string>>({});
@@ -135,7 +142,7 @@ export function McpManager() {
 
             const onToggle = (cli: Cli, on: boolean) => {
               if (!on) {
-                disable(srv.id, cli);
+                setConfirmOff({ id: srv.id, cli, name: meta?.name ?? srv.id });
               } else if (!srv.needsKey) {
                 enable(srv.id, cli);
               } else if (keyKnown) {
@@ -275,6 +282,43 @@ export function McpManager() {
           else syncKey(id, key);
         }}
       />
+
+      {/* 关闭确认 — 改的是用户真实配置 + 即时影响在跑 agent (FAULT-026) */}
+      <Dialog
+        open={confirmOff !== null}
+        onOpenChange={(o) => !o && setConfirmOff(null)}
+      >
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>
+              {t("mcp.disableTitle", "关闭这个 MCP？")}
+              {confirmOff ? ` — ${confirmOff.name}` : ""}
+            </DialogTitle>
+            <DialogDescription>
+              {t(
+                "mcp.disableDesc",
+                "会从该 CLI 的用户级配置里移除此 MCP，对所有工作区的 agent 即时生效；正在依赖它的 agent 可能失能。随时可重新开启。",
+              )}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirmOff(null)}>
+              {t("common.cancel", "取消")}
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                if (!confirmOff) return;
+                const { id, cli } = confirmOff;
+                setConfirmOff(null);
+                disable(id, cli);
+              }}
+            >
+              {t("mcp.disableConfirm", "关闭")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

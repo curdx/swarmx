@@ -336,6 +336,7 @@ export function WorkspaceList({
               variant="ghost"
               size="icon"
               onClick={onOpenWizard}
+              aria-label={t("chat.newWorkspace")}
               className="size-7 text-foreground-tertiary hover:text-foreground-primary"
             >
               <Plus className="size-4" />

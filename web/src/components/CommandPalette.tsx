@@ -23,7 +23,6 @@ import { useTranslation } from "react-i18next";
 import {
   Activity,
   Bell,
-  Bug,
   ClipboardList,
   GitBranch,
   MessageSquare,
@@ -57,7 +56,8 @@ const NAV = [
   { labelKey: "nav.chat", href: "/chat", icon: MessageSquare, hintKey: "cmdk.navHint.chat" },
   { labelKey: "nav.notifications", href: "/notifications", icon: Bell, hintKey: "cmdk.navHint.notifications" },
   { labelKey: "nav.settings", href: "/settings", icon: SettingsIcon, hintKey: "cmdk.navHint.settings" },
-  { labelKey: "nav.debug", href: "/debug", icon: Bug, hintKey: "cmdk.navHint.debug" },
+  // /debug is a dev-only legacy dashboard — not surfaced as a first-class
+  // command (reachable by typing the URL when debugging). See FAULT-006.
 ] as const;
 
 // Keep in sync with buildTabs() in routes/workspace/Shell.tsx — same order,

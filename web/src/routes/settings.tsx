@@ -17,6 +17,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import i18n from "@/i18n";
 import { setTheme } from "@/lib/theme";
+import { HTTP_BASE } from "@/lib/apiBase";
 import { api } from "@/api/http";
 import type { CliPluginInfo, ModelConfig, ModelsResponse } from "@/api/types";
 import {
@@ -815,7 +816,9 @@ function AboutPanel() {
 
       <Field label={t("settings.about.endpointTitle")} hint={t("settings.about.endpointHint")}>
         <code className="inline-block rounded border border-border-subtle bg-surface-tertiary px-2 py-1 font-mono text-xs text-foreground-primary">
-          127.0.0.1:7777
+          {/* Derive from the live connection instead of hardcoding 7777 — a
+              FLOCKMUX_PORT instance (or vite proxy) is no longer mislabeled. */}
+          {HTTP_BASE ? HTTP_BASE.replace(/^https?:\/\//, "") : window.location.host}
         </code>
       </Field>
 

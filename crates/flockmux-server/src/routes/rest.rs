@@ -2032,6 +2032,16 @@ pub async fn create_thread_handler(
         None => format!("t-{}", &Uuid::new_v4().to_string()[..6]),
     };
     let slug = unique_thread_slug(&state, &workspace_id, &base_slug).await;
+    // A direction named up-front (the "新方向" dialog's name field) must isolate
+    // exactly like one the orchestrator names from the first message —
+    // otherwise filling that field silently defeats worktree isolation (thread
+    // stays `shared`, both directions edit one cwd and clobber each other).
+    // Named, non-main → create `preparing` + kick off background `worktree add`;
+    // the frontend waits for `ready` before spawning the orchestrator so it
+    // lands in the worktree. Unnamed keeps the zero-friction shared/ready path
+    // (orchestrator isolates on its first-message naming).
+    let will_isolate = name.is_some();
+    let branch = slug.clone();
     let rec = state
         .store
         .create_thread(
@@ -2042,7 +2052,7 @@ pub async fn create_thread_handler(
                 isolation: "shared".to_string(),
                 branch: None,
                 cwd: ws.cwd.clone(),
-                state: "ready".to_string(),
+                state: if will_isolate { "preparing" } else { "ready" }.to_string(),
             },
             now_ms(),
         )
@@ -2054,6 +2064,19 @@ pub async fn create_thread_handler(
             )
         })?;
     let info = thread_record_to_info(rec);
+    if will_isolate {
+        // Background git takeover + `worktree add` → flips isolation/cwd/state
+        // to worktree/<dir>/ready on success, degrades to shared/ready on any
+        // failure (so a non-git project or a git hiccup never blocks the
+        // direction — it just stays unisolated, surfaced in the sidebar).
+        spawn_thread_worktree(
+            state.clone(),
+            info.id.clone(),
+            workspace_id.clone(),
+            ws.cwd.clone(),
+            branch,
+        );
+    }
     publish_thread_changed(&state, &workspace_id, &info.id, "created");
     Ok(Json(info))
 }

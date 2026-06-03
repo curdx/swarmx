@@ -27,6 +27,10 @@ async fn probe_version(bin: &str, arg: &str) -> Option<String> {
         return None;
     }
     let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    // Some tools echo their own name (`uv --version` → "uv 0.9.2 (…)"). The UI
+    // shows the name as a chip label already, so strip a leading "<bin> " to
+    // avoid rendering "uv uv 0.9.2". node/npm print a bare version → untouched.
+    let s = s.strip_prefix(&format!("{bin} ")).map(str::to_string).unwrap_or(s);
     if !s.is_empty() {
         return Some(s);
     }

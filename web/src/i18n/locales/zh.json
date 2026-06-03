@@ -85,11 +85,11 @@
     "highlight": {
       "chat": {
         "title": "对话式协作",
-        "body": "每个 agent 都是房间成员，可相互 @、相互提问"
+        "body": "每个 agent 都在同一个工作空间里，可相互 @、互相提问"
       },
       "spell": {
         "title": "声明式编排",
-        "body": "用一个 spell 文件声明「谁负责什么、谁依赖谁」"
+        "body": "声明「谁负责什么、谁依赖谁」，团队照这张图自动协作"
       },
       "auto": {
         "title": "自然语言派发任务",
@@ -116,15 +116,15 @@
     "done": "知道了",
     "sidebar": {
       "title": "左边是你的工作空间",
-      "body": "每个工作空间 = 一个项目 + 一支 AI 团队。可同时打开多个，在侧栏切换；右键重命名 / 删除（即将上线）。"
+      "body": "每个工作空间 = 一个项目 + 一支 AI 团队。可同时打开多个并在侧栏切换；同一个工作空间下还能开多条「方向」并行推进，互不干扰。"
     },
     "tabs": {
       "title": "中间有 4 个视角",
-      "body": "聊天查看消息、协作图查看 agent 间的等待关系、录像回放每个 agent 的终端、上下文查看它们的共享区。⌘1-4 快速切换。"
+      "body": "聊天看消息往来、协作图看 agent 间的依赖与等待、工作台账看任务进度与共享区、录像回放每个 agent 的终端。⌘1–4 快速切换。"
     },
     "composer": {
       "title": "底部输入框——用自然语言告诉 AI 要做什么",
-      "body": "「帮我加个登录页」「修复这个 bug」即可，planner 会自动匹配编排、启动合适的 agent 来完成。"
+      "body": "「帮我加个登录页」「修复这个 bug」即可，调度 agent 会自动拆解任务、派合适的 agent 来完成。"
     },
     "cmdk": {
       "title": "⌘K 随时呼出命令面板",
@@ -156,7 +156,7 @@
   },
   "settings": {
     "title": "设置",
-    "subtitle": "本地配置 · localStorage · 一处即生效",
+    "subtitle": "本地配置 · 改一处即时生效 · 存于本机浏览器",
     "sections": {
       "general": "通用",
       "appearance": "外观",
@@ -176,15 +176,15 @@
       "openMain": "启动时打开主面板",
       "openMainHint": "开启后会自动展开聊天窗口；不开仅停在系统托盘",
       "desktopNotify": "新消息桌面通知",
-      "desktopNotifyHint": "任何 agent → system reply 时弹一条桌面通知",
+      "desktopNotifyHint": "任何 agent 回复你时弹一条桌面通知",
       "failure": "失败处理",
       "failureHint": "当 spell 中一个 agent 失败时的连带行为",
       "killOthers": "失败时同时关闭其余 agent",
-      "killOthersHint": "开启后任一 agent shim_exit != 0 时，整个 spell 内的兄弟 agent 一起被 kill"
+      "killOthersHint": "开启后，只要有一个 agent 非正常退出，同一编排里的其它 agent 会一起停掉"
     },
     "appearance": {
       "title": "外观",
-      "hint": "切换浅 / 深 / 跟随系统，立即生效；偏好持久化在 localStorage",
+      "hint": "切换浅 / 深 / 跟随系统，立即生效；偏好存于本机浏览器",
       "theme": "主题",
       "themeHint": "选择浅色 / 深色 / 跟随系统",
       "themes": {
@@ -251,7 +251,7 @@
     },
     "models": {
       "title": "模型配给",
-      "hint": "为每个 CLI 把抽象档位(opus/sonnet/haiku)映射到它实际能用的具体模型。留空=用该 CLI 自己的默认模型。claude 默认认 opus/sonnet/haiku 别名;codex 等用自定义供应商的请在这里填它真实的模型 id。",
+      "hint": "为每个 CLI 把抽象档位(opus/sonnet/haiku)映射到它实际能用的具体模型。留空=用该 CLI 自己的默认模型。claude 默认就认 opus/sonnet/haiku 别名；codex 等用自定义供应商的，请在这里填它真实的模型 id。",
       "default": "默认",
       "noOverride": "该 CLI 不支持 --model 覆盖（其插件未声明 model_args），由它自己决定模型。",
       "cliDefaultPlaceholder": "留空=用 CLI 自己的默认",
@@ -322,7 +322,7 @@
     "rootPathPlaceholder": "粘贴依赖源码目录的绝对路径",
     "addRoot": "添加",
     "deleteConfirmTitle": "删除工作空间「{{name}}」？",
-    "deleteConfirmBody": "该 workspace 下的所有 agent 会一并停止，此操作不可撤销。",
+    "deleteConfirmBody": "该工作空间下的所有 agent 会一并停止，此操作不可撤销。",
     "wake": "唤醒",
     "online": "在线",
     "starting": "启动中",
@@ -485,13 +485,15 @@
   },
   "wizard": {
     "title": "创建工作空间",
-    "subtitle": "工作空间 = 为一个项目配备的协作房间 + AI 团队",
+    "subtitle": "工作空间 = 一个项目 + 一支专属 AI 团队",
     "step1": "给工作空间起个名字",
     "namePlaceholder": "例如：我的待办 App",
     "aiNamed": "AI 起名",
+    "errAbsolutePath": "请填写绝对路径（以 / 开头），例如 /Users/你的用户名/code/项目",
+    "errDirMissing": "这个目录不存在——请确认路径填对了，且指向一个已存在的绝对路径。",
     "step2": "项目文件夹",
     "step2Hint": "第一个是主项目（AI 的终端落在这里）；可再挂上平级的其它项目，或它依赖的源码/工具——每个挂载都能单独选「对等 / 依赖 / 工具」，AI 都直接读源码、不反编译",
-    "dirPlaceholder1": "例如:/Users/你的用户名/code/我的项目",
+    "dirPlaceholder1": "例如：/Users/你的用户名/code/我的项目",
     "dirPlaceholder1Tauri": "粘贴绝对路径，或点右边「选择…」",
     "dirPlaceholderMore": "挂载平级项目 / 依赖 / 工具的源码目录（可选）",
     "dirHint": "AI 会进入此文件夹工作",
@@ -568,13 +570,13 @@
       "settings": "设置分区"
     },
     "navHint": {
-      "chat": "Chat 三栏",
-      "dag": "DAG",
-      "replays": "Replays",
+      "chat": "消息与成员",
+      "dag": "依赖与等待",
+      "replays": "终端录像",
       "context": "共享区",
-      "notifications": "Notification Center",
-      "settings": "Preferences",
-      "debug": "Legacy M2 grid"
+      "notifications": "通知中心",
+      "settings": "偏好与模型",
+      "debug": "调试面板"
     },
     "switchWs": "切到此工作空间",
     "wake": "唤醒 {{role}}",

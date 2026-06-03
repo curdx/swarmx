@@ -93,7 +93,7 @@
       },
       "auto": {
         "title": "Auto dispatch",
-        "body": "Describe the task in plain English, the planner picks a spell"
+        "body": "Describe the task in plain English; the orchestrator breaks it down and starts the right agents"
       }
     },
     "sidebarEmpty": "No workspaces yet"
@@ -116,15 +116,15 @@
     "done": "Got it",
     "sidebar": {
       "title": "Your workspaces live on the left",
-      "body": "One workspace = one project + a crew of AI agents. Run several at once and swap with the sidebar; right-click to rename / delete (soon)."
+      "body": "One workspace = one project + a crew of AI agents. Run several at once and swap with the sidebar; open multiple parallel 'directions' under one workspace, isolated from each other."
     },
     "tabs": {
       "title": "Four views on the same workspace",
-      "body": "Chat for messages, DAG for who's waiting on whom, Replays for each agent's terminal, Context for the shared blackboard. ⌘1–4 jumps between them."
+      "body": "Chat for messages, DAG for who's waiting on whom, Ledger for task progress + the shared blackboard, Replays for each agent's terminal. ⌘1–4 jumps between them."
     },
     "composer": {
       "title": "Tell the AI what you want — plain English",
-      "body": "\"Add a login page\", \"fix this bug\" — the planner picks a spell and spins up the right agents to do it."
+      "body": "\"Add a login page\", \"fix this bug\" — the orchestrator breaks it down and spins up the right agents to do it."
     },
     "cmdk": {
       "title": "⌘K opens the command palette",
@@ -156,7 +156,7 @@
   },
   "settings": {
     "title": "Settings",
-    "subtitle": "Local config · localStorage · takes effect immediately",
+    "subtitle": "Local config · applies instantly · stored in this browser",
     "sections": {
       "general": "General",
       "appearance": "Appearance",
@@ -176,15 +176,15 @@
       "openMain": "Open main window on launch",
       "openMainHint": "When on, the chat window expands automatically; off keeps it in the tray",
       "desktopNotify": "Desktop notifications for new messages",
-      "desktopNotifyHint": "Fires a desktop notification on every agent → system reply",
+      "desktopNotifyHint": "Fires a desktop notification whenever an agent replies to you",
       "failure": "Failure handling",
       "failureHint": "Cascading behaviour when one agent in a spell fails",
       "killOthers": "Kill sibling agents on failure",
-      "killOthersHint": "When on, any agent shim_exit != 0 kills every other agent in the spell"
+      "killOthersHint": "When on, if any agent exits abnormally the others in the same run are stopped too"
     },
     "appearance": {
       "title": "Appearance",
-      "hint": "Switch light / dark / system instantly; preference persisted in localStorage",
+      "hint": "Switch light / dark / system instantly; preference stored in this browser",
       "theme": "Theme",
       "themeHint": "Choose light / dark / follow system",
       "themes": {
