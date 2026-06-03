@@ -13,7 +13,7 @@
  * batch of recent messages + blackboard entries to seed the list).
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import {
@@ -28,11 +28,17 @@ import {
   X,
 } from "lucide-react";
 import { api } from "../api/http";
-import type { BlackboardEntry, MessageRecord, SwarmEvent } from "../api/types";
+import type {
+  BlackboardEntry,
+  MessageRecord,
+  SwarmEvent,
+  Workspace,
+} from "../api/types";
 import { useSwarmFeed } from "../hooks/useSwarmFeed";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
+import { humanizeBlackboard } from "@/lib/notif";
 
 type NotifKind = "message" | "blackboard" | "state" | "error" | "completed";
 
@@ -196,13 +202,21 @@ export default function NotificationsRoute() {
   const [items, setItems] = useState<Notif[]>([]);
   const [read, setRead] = useState<Set<string>>(loadRead);
   const [tab, setTab] = useState<TabId>("all");
+  // Workspaces + their directions resolve a blackboard key's `{ws-id}/{slug}`
+  // prefix into "{workspace} · {direction}" instead of a raw 32-hex UUID. Held
+  // in a ref (not state) so the live SwarmFeed callback — a stable closure —
+  // sees the latest list without re-subscribing; nothing renders off it
+  // directly (titles are baked into each Notif when it's built).
+  const wsRef = useRef<Workspace[]>([]);
 
   const seed = useCallback(async () => {
     try {
-      const [msgs, bb] = await Promise.all([
+      const [msgs, bb, wss] = await Promise.all([
         api.listMessages({ limit: 50 }),
         api.listBlackboard(),
+        api.listWorkspaces().catch(() => [] as Workspace[]),
       ]);
+      wsRef.current = wss;
       const fromMsg: Notif[] = (msgs as MessageRecord[]).map((m) => {
         const c = classifyMessage(m, t);
         return {
@@ -216,14 +230,17 @@ export default function NotificationsRoute() {
       });
       const fromBb: Notif[] = (bb as BlackboardEntry[])
         .filter((e) => !isNoisyBlackboard(e.path))
-        .map((e) => ({
-          id: `bb-${e.path}-${e.at}`,
-          kind: "blackboard" as const,
-          agent: "blackboard",
-          title: `${e.op} ${e.path}`,
-          body: `sha256 ${e.sha256.slice(0, 8)}`,
-          at: e.at,
-        }));
+        .map((e) => {
+          const h = humanizeBlackboard(e.path, wss, t);
+          return {
+            id: `bb-${e.path}-${e.at}`,
+            kind: "blackboard" as const,
+            agent: "blackboard",
+            title: h.title,
+            body: h.context ?? `sha256 ${e.sha256.slice(0, 8)}`,
+            at: e.at,
+          };
+        });
       const all = [...fromMsg, ...fromBb].sort((a, b) => b.at - a.at);
       setItems(all);
     } catch {
@@ -262,12 +279,13 @@ export default function NotificationsRoute() {
           };
         } else if (ev.type === "blackboard_changed") {
           if (isNoisyBlackboard(ev.path)) return prev;
+          const h = humanizeBlackboard(ev.path, wsRef.current, t);
           next = {
             id: `bb-${ev.path}-${ev.at}`,
             kind: "blackboard",
             agent: ev.agent_id ?? "blackboard",
-            title: `${ev.op} ${ev.path}`,
-            body: `sha256 ${ev.sha256.slice(0, 8)}`,
+            title: h.title,
+            body: h.context ?? `sha256 ${ev.sha256.slice(0, 8)}`,
             at: ev.at,
           };
         } else if (ev.type === "agent_state") {
