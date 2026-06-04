@@ -83,6 +83,20 @@ pub fn current_branch(dir: &Path) -> Option<String> {
     Some(b.to_string())
 }
 
+/// Does `dir`'s work tree have uncommitted changes — staged, unstaged, or
+/// untracked? `git status --porcelain` prints one line per change, so any
+/// non-empty output means dirty. This is **read-only** (never touches the work
+/// tree or index), so it's safe to call while an agent is mid-edit — surfacing
+/// "this direction has unsaved work" without disturbing it. Returns `false` for
+/// a non-git dir / error / timeout: we'd rather show no marker than a false
+/// "dirty". Blocking (shells out to git); call off the async path.
+pub fn working_dirty(dir: &Path) -> bool {
+    match git(dir, &["status", "--porcelain"]) {
+        Ok(o) => o.status_ok && !o.stdout.trim().is_empty(),
+        Err(_) => false,
+    }
+}
+
 /// Make `dir` a git repo and create an initial commit so `worktree add` has a
 /// base to branch from. Idempotent-ish: `git init` on an existing repo is a
 /// no-op; if there's already a commit we skip committing. Uses inline

@@ -304,6 +304,7 @@
     "newDirectionNonGit": "This project isn't a git repo — directions share the same files (no isolation), so their edits will clobber and affect each other.",
     "directionPreparing": "isolating…",
     "directionDegraded": "Isolation failed — sharing the main directory (files may clobber each other)",
+    "directionDirty": "Uncommitted changes",
     "deleteDirection": "Delete direction {{name}}",
     "directionDeleteConfirmTitle": "Delete direction \"{{name}}\"?",
     "directionDeleteConfirmBody": "Stops every AI running in this direction and removes its isolated copy (if any). Main and other directions are unaffected.",

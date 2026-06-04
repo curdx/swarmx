@@ -408,8 +408,20 @@ export function WorkspaceList({
                     style={{ background: ws.accentColor }}
                   />
                   <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                    <span className="truncate font-heading text-[13px] font-semibold text-foreground-primary">
-                      {ws.name}
+                    <span className="flex items-center gap-1.5">
+                      <span className="truncate font-heading text-[13px] font-semibold text-foreground-primary">
+                        {ws.name}
+                      </span>
+                      {/* Single-direction workspaces don't render the per-thread
+                       *  rows (those only show when threads.length > 1), so the
+                       *  cwd's dirty state rides on the workspace row instead. */}
+                      {ws.threads.length <= 1 && ws.threads.some((th) => th.dirty) && (
+                        <span
+                          className="size-1.5 shrink-0 rounded-full bg-state-warning"
+                          title={t("chat.directionDirty")}
+                          aria-label={t("chat.directionDirty")}
+                        />
+                      )}
                     </span>
                     {ws.parent && !hasRoots && (
                       // When the tree is shown, the explicit primary-project
@@ -553,7 +565,16 @@ export function WorkspaceList({
                               <Hash className="size-3 shrink-0 text-foreground-tertiary" />
                             )}
                             <span className="flex min-w-0 flex-1 flex-col">
-                              <span className="truncate">{label}</span>
+                              <span className="flex items-center gap-1.5">
+                                <span className="truncate">{label}</span>
+                                {th.dirty && !preparing && (
+                                  <span
+                                    className="size-1.5 shrink-0 rounded-full bg-state-warning"
+                                    title={t("chat.directionDirty")}
+                                    aria-label={t("chat.directionDirty")}
+                                  />
+                                )}
+                              </span>
                               <BranchCaption branch={branch} />
                             </span>
                             {preparing && (

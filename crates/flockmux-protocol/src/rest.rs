@@ -447,6 +447,11 @@ pub struct ThreadInfo {
     pub cwd: String,
     /// "ready" | "preparing" | "failed"
     pub state: String,
+    /// Live (computed at list time, not persisted): does `cwd` have uncommitted
+    /// changes? Lets the sidebar flag "this direction's agent has unsaved work"
+    /// with a dirty dot. `false` for a clean/non-git/errored tree.
+    #[serde(default)]
+    pub dirty: bool,
     pub created_at: i64,
 }
 

@@ -204,6 +204,7 @@ fn thread_record_to_info(t: ThreadRecord) -> ThreadInfo {
         branch: t.branch,
         cwd: t.cwd,
         state: t.state,
+        dirty: false, // live value folded in by list_workspaces_handler
         created_at: t.created_at,
     }
 }
@@ -1926,16 +1927,29 @@ pub async fn list_workspaces_handler(State(state): State<AppState>) -> impl Into
     for roots in roots_by_ws.values() {
         paths.extend(roots.iter().map(|rt| PathBuf::from(&rt.path)));
     }
-    let branch_map = tokio::task::spawn_blocking(move || branches_for_paths(&paths))
+    // Thread cwds too — a worktree direction has its own dir, so each direction
+    // gets a live dirty flag (not just the shared workspace cwd).
+    for threads in threads_by_ws.values() {
+        paths.extend(threads.iter().map(|t| PathBuf::from(&t.cwd)));
+    }
+    let git_map = tokio::task::spawn_blocking(move || git_status_for_paths(&paths))
         .await
         .unwrap_or_default();
-    // Fold the computed branches into the attached roots.
+    // Fold the computed branch into the attached roots.
     for roots in roots_by_ws.values_mut() {
         for rt in roots.iter_mut() {
-            rt.branch = branch_map
+            rt.branch = git_map
                 .get(std::path::Path::new(&rt.path))
-                .cloned()
-                .flatten();
+                .and_then(|g| g.branch.clone());
+        }
+    }
+    // Fold the live dirty flag into each direction (keyed by its cwd).
+    for threads in threads_by_ws.values_mut() {
+        for t in threads.iter_mut() {
+            t.dirty = git_map
+                .get(std::path::Path::new(&t.cwd))
+                .map(|g| g.dirty)
+                .unwrap_or(false);
         }
     }
     let items: Vec<Workspace> = rows
@@ -1944,10 +1958,9 @@ pub async fn list_workspaces_handler(State(state): State<AppState>) -> impl Into
             member_count: counts.get(&r.id).copied().unwrap_or(0),
             roots: roots_by_ws.remove(&r.id).unwrap_or_default(),
             threads: threads_by_ws.remove(&r.id).unwrap_or_default(),
-            cwd_branch: branch_map
+            cwd_branch: git_map
                 .get(std::path::Path::new(&r.cwd))
-                .cloned()
-                .flatten(),
+                .and_then(|g| g.branch.clone()),
             id: r.id,
             slug: r.slug,
             name: r.name,
@@ -1959,33 +1972,48 @@ pub async fn list_workspaces_handler(State(state): State<AppState>) -> impl Into
     Json(items)
 }
 
-/// Live git branch for each of `paths`, memoized with a short TTL. Shelling out
+/// Live git facts for a path: the checked-out branch (for the sidebar chip) and
+/// whether the work tree is dirty (uncommitted changes). Both computed at list
+/// time, never persisted.
+#[derive(Clone, Default)]
+pub(crate) struct PathGit {
+    branch: Option<String>,
+    dirty: bool,
+}
+
+/// Live git status for each of `paths`, memoized with a short TTL. Shelling out
 /// to git is blocking, so this runs under `spawn_blocking`; the TTL keeps the
 /// hot workspaces-list refetch (fired on every thread/agent event) from
-/// re-invoking git each time. A path maps to `Some(branch)` only when it's a
-/// git work tree on a named branch — `None`/absent renders no chip.
-fn branches_for_paths(paths: &[PathBuf]) -> HashMap<PathBuf, Option<String>> {
+/// re-invoking git each time. `branch` is `Some` only for a git work tree on a
+/// named branch (else no chip); `dirty` is best-effort (`false` on any error).
+fn git_status_for_paths(paths: &[PathBuf]) -> HashMap<PathBuf, PathGit> {
     use parking_lot::Mutex;
     use std::sync::OnceLock;
     use std::time::{Duration, Instant};
     const TTL: Duration = Duration::from_secs(3);
-    static CACHE: OnceLock<Mutex<HashMap<PathBuf, (Option<String>, Instant)>>> = OnceLock::new();
+    static CACHE: OnceLock<Mutex<HashMap<PathBuf, (PathGit, Instant)>>> = OnceLock::new();
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
 
-    let mut out: HashMap<PathBuf, Option<String>> = HashMap::new();
+    let mut out: HashMap<PathBuf, PathGit> = HashMap::new();
     for p in paths {
         if out.contains_key(p) {
             continue; // de-dup: a path can appear as both a cwd and a root
         }
-        if let Some((b, at)) = cache.lock().get(p) {
+        if let Some((g, at)) = cache.lock().get(p) {
             if at.elapsed() < TTL {
-                out.insert(p.clone(), b.clone());
+                out.insert(p.clone(), g.clone());
                 continue;
             }
         }
-        let b = crate::worktree::current_branch(p);
-        cache.lock().insert(p.clone(), (b.clone(), Instant::now()));
-        out.insert(p.clone(), b);
+        // One git call each — both are read-only; `working_dirty` never
+        // disturbs an agent mid-edit. status --porcelain is heavier than
+        // rev-parse, but the TTL bounds how often it runs per path.
+        let g = PathGit {
+            branch: crate::worktree::current_branch(p),
+            dirty: crate::worktree::working_dirty(p),
+        };
+        cache.lock().insert(p.clone(), (g.clone(), Instant::now()));
+        out.insert(p.clone(), g);
     }
     out
 }

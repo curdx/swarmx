@@ -274,6 +274,9 @@ export interface ThreadInfo {
   cwd: string;
   /** "ready" | "preparing" | "failed" */
   state: string;
+  /** Live (computed server-side at list time): does `cwd` have uncommitted
+   *  changes? Drives the sidebar's dirty dot. */
+  dirty?: boolean;
   created_at: number;
 }
 
