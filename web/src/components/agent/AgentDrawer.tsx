@@ -34,7 +34,7 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import {
   Activity,
   ChevronRight,
@@ -51,6 +51,7 @@ import {
 import { useTranslation } from "react-i18next";
 import { api } from "../../api/http";
 import type {
+  AgentActivity,
   AgentInfo,
   BlackboardEntry,
   MessageRecord,
@@ -104,13 +105,32 @@ function formatTime(ms: number): string {
 
 interface Props {
   agentId: string;
+  /** Persistent per-agent activity stream (from useWorkspaceShellData) so the
+   *  Activity tab survives reopen/remount instead of re-subscribing fresh. */
+  activities: AgentActivity[];
   onClose: () => void;
 }
 
-export function AgentDrawer({ agentId, onClose }: Props) {
+export function AgentDrawer({ agentId, activities, onClose }: Props) {
   const [info, setInfo] = useState<AgentInfo | null>(null);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
-  const [tab, setTab] = useState<TabId>("terminal");
+  // Tab lives in the URL (?tab=…) so it survives a drawer remount (e.g. a
+  // background agents refresh) instead of snapping back to "terminal", and so
+  // it deep-links. Defaults to terminal when the param is absent/unknown.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const tab: TabId = TABS.some((x) => x.id === searchParams.get("tab"))
+    ? (searchParams.get("tab") as TabId)
+    : "terminal";
+  const setTab = (next: TabId) =>
+    setSearchParams(
+      (prev) => {
+        const p = new URLSearchParams(prev);
+        if (next === "terminal") p.delete("tab");
+        else p.set("tab", next);
+        return p;
+      },
+      { replace: true },
+    );
   const [now, setNow] = useState(Date.now());
 
   const refreshInfo = async () => {
@@ -214,7 +234,7 @@ export function AgentDrawer({ agentId, onClose }: Props) {
               across tab switches), but xterm holds a WebGL slot and a WS
               so we'd burn budget on idle panes. Switch-unmount instead. */}
           {tab === "terminal" && <TerminalTab agentId={agentId} />}
-          {tab === "activity" && <AgentActivityLog agentId={agentId} />}
+          {tab === "activity" && <AgentActivityLog activities={activities} />}
           {tab === "recordings" && (
             <RecordingsTab agentId={agentId} wsId={wsSlug} />
           )}

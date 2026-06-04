@@ -17,6 +17,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../api/http";
 import type {
+  AgentActivity,
   AgentInfo,
   AgentLiveState,
   MessageRecord,
@@ -28,6 +29,10 @@ import { useSwarmFeed } from "../../hooks/useSwarmFeed";
 import { accentToCssVar, splitWorkspacePath } from "../../lib/workspace";
 import { agentInThread, mainThreadOf } from "../../lib/thread";
 import type { WorkspaceSummary } from "./types";
+
+/** Cap on per-agent activity history kept in memory for the drawer Activity
+ *  tab. Bounded so a long-running worker can't grow this unboundedly. */
+const MAX_ACTIVITY = 100;
 
 export interface LiveRead {
   ids: number[];
@@ -66,6 +71,9 @@ export interface WorkspaceShellData {
    *  only re-renders when its own agent's event lands. Falls back to
    *  `inferAgentStatus` downstream when an agent has no slice yet. */
   agentStateById: Record<string, AgentLiveState>;
+  /** Per-agent bounded activity stream, accumulated from the swarm WS so the
+   *  drawer's Activity tab survives close/reopen/remount (NOT ephemeral). */
+  agentActivityById: Record<string, AgentActivity[]>;
   /** Unread tally already filtered to the active workspace's senders. */
   activeWorkspaceUnread: Record<string, number>;
   totalUnread: number;
@@ -92,6 +100,9 @@ export function useWorkspaceShellData(
   const [liveRead, setLiveRead] = useState<LiveRead | null>(null);
   const [agentStateById, setAgentStateById] = useState<
     Record<string, AgentLiveState>
+  >({});
+  const [agentActivityById, setAgentActivityById] = useState<
+    Record<string, AgentActivity[]>
   >({});
   const [unreadByFrom, setUnreadByFrom] = useState<Record<string, number>>({});
   const idToFromRef = useRef<Map<number, string>>(new Map());
@@ -197,6 +208,32 @@ export function useWorkspaceShellData(
               },
             },
           }));
+          // Persistent stream for the drawer's Activity tab — append, with
+          // same-seq (running → ok/error) replaced in place, bounded to the
+          // last MAX_ACTIVITY. Survives close/reopen since it lives here, not
+          // in the (ephemeral) tab component.
+          setAgentActivityById((prev) => {
+            const cur = prev[ev.agent_id] ?? [];
+            const act: AgentActivity = {
+              agent_id: ev.agent_id,
+              kind: ev.kind,
+              label: ev.label,
+              phase: ev.phase,
+              seq: ev.seq,
+              duration_ms: ev.duration_ms,
+              at: ev.at,
+            };
+            const idx = cur.findIndex((s) => s.seq === act.seq);
+            let next: AgentActivity[];
+            if (idx >= 0) {
+              next = cur.slice();
+              next[idx] = act;
+            } else {
+              next = cur.length >= MAX_ACTIVITY ? cur.slice(1) : cur.slice();
+              next.push(act);
+            }
+            return { ...prev, [ev.agent_id]: next };
+          });
           break;
         case "message": {
           const rec: MessageRecord = {
@@ -413,6 +450,7 @@ export function useWorkspaceShellData(
     liveMessage,
     liveRead,
     agentStateById,
+    agentActivityById,
     activeWorkspaceUnread,
     totalUnread,
     refreshAgents,

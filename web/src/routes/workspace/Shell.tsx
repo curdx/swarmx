@@ -141,6 +141,7 @@ export default function WorkspaceShell() {
     setSearchParams((prev) => {
       const next = new URLSearchParams(prev);
       next.delete("agent");
+      next.delete("tab"); // the drawer's tab param is meaningless without an agent
       return next;
     });
   }, [setSearchParams]);
@@ -172,6 +173,7 @@ export default function WorkspaceShell() {
     liveMessage,
     liveRead,
     agentStateById,
+    agentActivityById,
     activeWorkspaceUnread,
     totalUnread,
     refreshAgents,
@@ -403,7 +405,11 @@ export default function WorkspaceShell() {
         </section>
 
         {drawerAgentId && (
-          <AgentDrawer agentId={drawerAgentId} onClose={closeAgent} />
+          <AgentDrawer
+            agentId={drawerAgentId}
+            activities={agentActivityById[drawerAgentId] ?? []}
+            onClose={closeAgent}
+          />
         )}
         <CreateWizard
           open={wizardOpen}

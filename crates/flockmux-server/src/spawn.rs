@@ -23,6 +23,12 @@ const OSC_TERMINATOR: u8 = 0x07;
 pub struct AgentSpawn {
     pub agent_id: String,
     pub slot: AgentSlot,
+    /// For claude: the `--session-id` UUID we force at spawn, so the transcript
+    /// tailer locates `~/.claude/projects/<enc-cwd>/<uuid>.jsonl` EXACTLY rather
+    /// than guessing "newest .jsonl" (a stale prior-session file in the same
+    /// project dir would otherwise win). None for codex — it locates via its
+    /// isolated per-agent CODEX_HOME, which has no stale-file problem.
+    pub transcript_session_id: Option<String>,
 }
 
 /// How [`spawn_agent`] resolves the workspace directory for a fresh
@@ -229,6 +235,21 @@ pub fn spawn_agent(
         }
     }
 
+    // claude: force a known session id so the transcript tailer locates the
+    // exact session JSONL (`<uuid>.jsonl`) instead of guessing the newest file
+    // in the project dir — a stale prior session in the same workspace would
+    // otherwise win. codex gets None (it locates via its per-agent CODEX_HOME).
+    let transcript_session_id =
+        if plugin.mcp_format == crate::plugins::McpFormat::ClaudeLocalScope {
+            let sid = Uuid::new_v4().to_string();
+            argv.push("--session-id".into());
+            argv.push(sid.clone());
+            tracing::info!(agent = %agent_id, session_id = %sid, "claude --session-id forced for transcript location");
+            Some(sid)
+        } else {
+            None
+        };
+
     let argv_strings: Vec<String> = argv;
 
     let PtyHandles { bridge, output_rx } = PtyBridge::spawn(SpawnOpts {
@@ -312,7 +333,11 @@ pub fn spawn_agent(
         mcp_ready: tokio::sync::watch::channel(false).0,
     };
 
-    Ok(AgentSpawn { agent_id, slot })
+    Ok(AgentSpawn {
+        agent_id,
+        slot,
+        transcript_session_id,
+    })
 }
 
 /// Server-side OSC scanner. Identical algorithm to the M2 client-side

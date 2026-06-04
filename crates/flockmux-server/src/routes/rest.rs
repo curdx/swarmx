@@ -568,6 +568,7 @@ pub(crate) async fn spawn_with_bookkeeping(
         agent_id.clone(),
         result.slot.cli.clone(),
         std::path::PathBuf::from(&result.slot.workspace),
+        result.transcript_session_id.clone(),
     );
 
     let outcome = SpawnOutcome {

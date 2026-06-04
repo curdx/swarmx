@@ -49,7 +49,13 @@ enum Flavor {
 /// `AgentActivity` for each tool call/result. `cli` is the plugin id
 /// (e.g. "claude" / "codex"); `cwd` is the worker's canonical workspace dir.
 /// No-op for an unknown CLI (no known transcript format).
-pub fn spawn_tailer(swarm: Arc<Swarm>, agent_id: String, cli: String, cwd: PathBuf) {
+pub fn spawn_tailer(
+    swarm: Arc<Swarm>,
+    agent_id: String,
+    cli: String,
+    cwd: PathBuf,
+    session_id: Option<String>,
+) {
     let flavor = if cli.contains("codex") {
         Flavor::Codex
     } else if cli.contains("claude") {
@@ -59,12 +65,18 @@ pub fn spawn_tailer(swarm: Arc<Swarm>, agent_id: String, cli: String, cwd: PathB
         return;
     };
     tokio::spawn(async move {
-        run(swarm, &agent_id, flavor, &cwd).await;
+        run(swarm, &agent_id, flavor, &cwd, session_id.as_deref()).await;
     });
 }
 
-async fn run(swarm: Arc<Swarm>, agent_id: &str, flavor: Flavor, cwd: &Path) {
-    let path = match locate(flavor, agent_id, cwd).await {
+async fn run(
+    swarm: Arc<Swarm>,
+    agent_id: &str,
+    flavor: Flavor,
+    cwd: &Path,
+    session_id: Option<&str>,
+) {
+    let path = match locate(flavor, agent_id, cwd, session_id).await {
         Some(p) => p,
         None => {
             tracing::debug!(agent = %agent_id, "transcript: session file never appeared; giving up");
@@ -103,11 +115,16 @@ async fn run(swarm: Arc<Swarm>, agent_id: &str, flavor: Flavor, cwd: &Path) {
 
 // ── file location ──────────────────────────────────────────────────────────
 
-async fn locate(flavor: Flavor, agent_id: &str, cwd: &Path) -> Option<PathBuf> {
+async fn locate(
+    flavor: Flavor,
+    agent_id: &str,
+    cwd: &Path,
+    session_id: Option<&str>,
+) -> Option<PathBuf> {
     let deadline = tokio::time::Instant::now() + LOCATE_TIMEOUT;
     loop {
         let found = match flavor {
-            Flavor::Claude => claude_file(cwd),
+            Flavor::Claude => claude_file(cwd, session_id),
             Flavor::Codex => codex_file(agent_id),
         };
         if found.is_some() {
@@ -121,15 +138,27 @@ async fn locate(flavor: Flavor, agent_id: &str, cwd: &Path) -> Option<PathBuf> {
 }
 
 /// `~/.claude/projects/<encoded-cwd>/<session-uuid>.jsonl`, newest file.
-fn claude_file(cwd: &Path) -> Option<PathBuf> {
+fn claude_file(cwd: &Path, session_id: Option<&str>) -> Option<PathBuf> {
     let home = std::env::var_os("HOME")?;
     let dir = Path::new(&home)
         .join(".claude")
         .join("projects")
         .join(encode_cwd(cwd));
-    newest(&dir, false, &|p| {
-        p.extension().and_then(|e| e.to_str()) == Some("jsonl")
-    })
+    match session_id {
+        // The exact file claude was told to write via `--session-id <uuid>`.
+        // Avoids locking onto a STALE prior session's .jsonl that is still the
+        // newest in this project dir before our claude has created its own —
+        // the bug that surfaced re-spawning an orchestrator in one workspace.
+        Some(sid) => {
+            let p = dir.join(format!("{sid}.jsonl"));
+            p.is_file().then_some(p)
+        }
+        // No forced id (defensive — claude always gets one now). Fall back to
+        // the newest .jsonl in the dir.
+        None => newest(&dir, false, &|p| {
+            p.extension().and_then(|e| e.to_str()) == Some("jsonl")
+        }),
+    }
 }
 
 /// claude encodes the cwd into a directory name by replacing `/`, `.`, `_`, `\`
