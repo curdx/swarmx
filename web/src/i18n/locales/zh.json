@@ -327,7 +327,14 @@
     "online": "在线",
     "starting": "启动中",
     "shimExit": "已下线",
-    "exited": "已结束"
+    "exited": "已结束",
+    "status": {
+      "waitingDep": "等依赖",
+      "error": "异常退出"
+    },
+    "activity": {
+      "running": "正在调用 {{label}}"
+    }
   },
   "dag": {
     "title": "协作图",
@@ -449,6 +456,7 @@
     "notImplemented": "暂未实现",
     "tabs": {
       "terminal": "终端",
+      "activity": "活动",
       "recordings": "录像",
       "messages": "消息",
       "tools": "工具",
@@ -456,8 +464,12 @@
     },
     "noRecordings": "这个 agent 还没有录像",
     "noMessages": "该 agent 暂无收发消息",
-    "toolsWip": "工具调用流 WIP",
-    "toolsWipHint": "需要 shim 层 emit tool_call 事件，目前 SwarmEvent type 里只有 agent_state / message / blackboard_changed。排进 Phase D。",
+    "activity": {
+      "empty": "暂无活动",
+      "emptyHint": "这个 agent 一旦开始干活，每一步（调用工具、读写文件）都会实时出现在这里。",
+      "roundSummary_one": "本轮 {{count}} 步",
+      "roundSummary_other": "本轮 {{count}} 步"
+    },
     "noBlackboard": "该 agent 还没向共享区写入过内容",
     "injectLabel": "注入 prompt:",
     "injectPlaceholder": "给 agent 发一条 note，下回合 wake 后收到",

@@ -36,6 +36,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import {
+  Activity,
   ChevronRight,
   Code2,
   Download,
@@ -58,6 +59,7 @@ import type {
   Workspace,
 } from "../../api/types";
 import { XtermPane } from "../XtermPane";
+import { AgentActivityLog } from "./AgentActivityLog";
 import { useSwarmFeed } from "../../hooks/useSwarmFeed";
 import { Button } from "@/components/ui/button";
 import {
@@ -72,14 +74,15 @@ import { cn } from "@/lib/cn";
 import { roleColorClass as roleColor } from "@/lib/agent";
 import { directionBase, directionSlugFromKey } from "@/lib/thread";
 
-type TabId = "terminal" | "recordings" | "messages" | "context";
+type TabId = "terminal" | "activity" | "recordings" | "messages" | "context";
 
-// The "工具/Tools" tab was removed — it had no data source (the shim doesn't
-// emit tool_call SwarmEvents yet) and rendered an internal "WIP / Phase D"
-// roadmap note to users. Dropping it also fixes the 5-tab overflow that
-// clipped the last tab in the 540px drawer. Re-add when tool_call events land.
+// The "工具/Tools" placeholder tab is now the real "活动/Activity" tab —
+// `agent_activity` swarm events (server tails the CLI session JSONL) give it a
+// live step-level data source. It streams the current round's tool/system
+// steps and folds finished rounds into a one-line summary.
 const TABS: { id: TabId; labelKey: string; icon: typeof TerminalIcon }[] = [
   { id: "terminal", labelKey: "agent.tabs.terminal", icon: TerminalIcon },
+  { id: "activity", labelKey: "agent.tabs.activity", icon: Activity },
   { id: "recordings", labelKey: "agent.tabs.recordings", icon: Play },
   { id: "messages", labelKey: "agent.tabs.messages", icon: MessageSquare },
   { id: "context", labelKey: "agent.tabs.context", icon: FileText },
@@ -211,6 +214,7 @@ export function AgentDrawer({ agentId, onClose }: Props) {
               across tab switches), but xterm holds a WebGL slot and a WS
               so we'd burn budget on idle panes. Switch-unmount instead. */}
           {tab === "terminal" && <TerminalTab agentId={agentId} />}
+          {tab === "activity" && <AgentActivityLog agentId={agentId} />}
           {tab === "recordings" && (
             <RecordingsTab agentId={agentId} wsId={wsSlug} />
           )}

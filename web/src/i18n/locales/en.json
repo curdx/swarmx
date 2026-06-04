@@ -327,7 +327,14 @@
     "online": "online",
     "starting": "starting",
     "shimExit": "shim exit",
-    "exited": "exited"
+    "exited": "exited",
+    "status": {
+      "waitingDep": "waiting on deps",
+      "error": "crashed"
+    },
+    "activity": {
+      "running": "Running {{label}}"
+    }
   },
   "dag": {
     "title": "Flow",
@@ -449,6 +456,7 @@
     "notImplemented": "Not implemented yet",
     "tabs": {
       "terminal": "Terminal",
+      "activity": "Activity",
       "recordings": "Recordings",
       "messages": "Messages",
       "tools": "Tools",
@@ -456,8 +464,12 @@
     },
     "noRecordings": "This agent has no recordings yet",
     "noMessages": "No messages to or from this agent",
-    "toolsWip": "Tool-call stream WIP",
-    "toolsWipHint": "Needs shim-level tool_call SwarmEvent; today only agent_state / message / blackboard_changed exist. Tracked in Phase D.",
+    "activity": {
+      "empty": "No activity yet",
+      "emptyHint": "Once this agent starts working, every step — tool calls, file reads and writes — shows up here in real time.",
+      "roundSummary_one": "{{count}} step this round",
+      "roundSummary_other": "{{count}} steps this round"
+    },
     "noBlackboard": "This agent hasn't written to the blackboard",
     "injectLabel": "Inject prompt:",
     "injectPlaceholder": "Send the agent a note; it'll be delivered on the next wake",

@@ -18,6 +18,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../api/http";
 import type {
   AgentInfo,
+  AgentLiveState,
   MessageRecord,
   SwarmEvent,
   ThreadInfo,
@@ -59,6 +60,12 @@ export interface WorkspaceShellData {
   threadMembers: AgentInfo[];
   liveMessage: MessageRecord | null;
   liveRead: LiveRead | null;
+  /** Per-agent live state + latest activity, accumulated incrementally from
+   *  the swarm WS (NOT from REST — `AgentInfo` carries no state/activity).
+   *  Keyed by agent_id; each slice is replaced independently so a member row
+   *  only re-renders when its own agent's event lands. Falls back to
+   *  `inferAgentStatus` downstream when an agent has no slice yet. */
+  agentStateById: Record<string, AgentLiveState>;
   /** Unread tally already filtered to the active workspace's senders. */
   activeWorkspaceUnread: Record<string, number>;
   totalUnread: number;
@@ -83,6 +90,9 @@ export function useWorkspaceShellData(
   const [wsLoaded, setWsLoaded] = useState(false);
   const [liveMessage, setLiveMessage] = useState<MessageRecord | null>(null);
   const [liveRead, setLiveRead] = useState<LiveRead | null>(null);
+  const [agentStateById, setAgentStateById] = useState<
+    Record<string, AgentLiveState>
+  >({});
   const [unreadByFrom, setUnreadByFrom] = useState<Record<string, number>>({});
   const idToFromRef = useRef<Map<number, string>>(new Map());
 
@@ -156,7 +166,37 @@ export function useWorkspaceShellData(
     onEvent: (ev: SwarmEvent) => {
       switch (ev.type) {
         case "agent_state":
+          // Patch the agent's live state slice for an immediate visual update
+          // (no listAgents roundtrip). We STILL scheduleRefresh because a state
+          // transition often coincides with a roster change (new spawn /
+          // killed_at) that only the REST row reflects — the patch covers the
+          // member dot, the refresh covers membership.
+          setAgentStateById((prev) => {
+            const cur = prev[ev.agent_id];
+            if (cur?.state === ev.state) return prev; // no-op → stable ref
+            return { ...prev, [ev.agent_id]: { ...cur, state: ev.state } };
+          });
           scheduleRefresh();
+          break;
+        case "agent_activity":
+          // Pure step-level stream — never touches the agent roster, so no
+          // refresh. Replace ONLY this agent's slice so unrelated member rows
+          // keep their object identity and don't re-render.
+          setAgentStateById((prev) => ({
+            ...prev,
+            [ev.agent_id]: {
+              ...prev[ev.agent_id],
+              activity: {
+                agent_id: ev.agent_id,
+                kind: ev.kind,
+                label: ev.label,
+                phase: ev.phase,
+                seq: ev.seq,
+                duration_ms: ev.duration_ms,
+                at: ev.at,
+              },
+            },
+          }));
           break;
         case "message": {
           const rec: MessageRecord = {
@@ -372,6 +412,7 @@ export function useWorkspaceShellData(
     threadMembers,
     liveMessage,
     liveRead,
+    agentStateById,
     activeWorkspaceUnread,
     totalUnread,
     refreshAgents,

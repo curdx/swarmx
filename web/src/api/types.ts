@@ -327,10 +327,49 @@ export type SwarmAgentState =
   | "ready"
   | "thinking"
   | "idle"
-  | "exited";
+  | "exited"
+  /** Blocked on an upstream handoff (a `consumes` dependency hasn't been
+   *  produced yet). The WakeCoordinator will re-wake it once the blackboard
+   *  key it depends on is written. */
+  | "waiting_dep"
+  /** Exited abnormally (non-zero shim_exit / crashed mid-turn). Distinct from
+   *  a clean `exited` so the UI can surface it red + float it to the top. */
+  | "error";
+
+/** A step-level activity event the server derives by tailing the CLI's
+ *  session JSONL: one per tool call (Edit/Bash/Read…) or system step. The
+ *  member list shows the latest one as "what this worker is doing right now";
+ *  the AgentDrawer activity tab streams the whole round.
+ *
+ *  - `kind`     — "tool" (Edit/Bash/…) or "system" (a non-tool step).
+ *  - `label`    — human-facing line, e.g. "Edit src/foo.rs".
+ *  - `phase`    — "running" (in flight, no duration yet) → "ok" / "error".
+ *  - `seq`      — monotonic per-agent activity index.
+ *  - `duration_ms` — wall time once the step settles; absent while running.
+ *  - `at`       — unix-ms the event was emitted. */
+export interface AgentActivity {
+  agent_id: string;
+  kind: "tool" | "system";
+  label: string;
+  phase: "running" | "ok" | "error";
+  seq: number;
+  duration_ms?: number;
+  at: number;
+}
+
+/** Per-agent live slice the swarm WS accumulates client-side (state + latest
+ *  activity), keyed by agent_id. The REST `AgentInfo` row carries no live
+ *  state/activity — those only arrive over `/ws/swarm` — so this is the only
+ *  source of truth for them, with `inferAgentStatus` as the back-compat
+ *  fallback when an event hasn't been seen yet. */
+export interface AgentLiveState {
+  state?: SwarmAgentState;
+  activity?: AgentActivity;
+}
 
 export type SwarmEvent =
   | { type: "agent_state"; agent_id: string; state: SwarmAgentState }
+  | ({ type: "agent_activity" } & AgentActivity)
   | {
       type: "message";
       id: number;

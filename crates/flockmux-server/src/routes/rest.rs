@@ -498,9 +498,18 @@ pub(crate) async fn spawn_with_bookkeeping(
                         {
                             tracing::warn!(?e, agent = %agent_for_task, "record_shim_exit failed");
                         }
+                        // Non-zero exit = abnormal death → Error (the UI
+                        // surfaces it red, sorted to top). Clean exit → Exited.
+                        // Intentional kills also exit non-zero, but those rows
+                        // carry `killed_at`, which the UI prioritizes over this.
+                        let next = if code == 0 {
+                            AgentState::Exited
+                        } else {
+                            AgentState::Error
+                        };
                         swarm.publish_event(SwarmEvent::AgentState {
                             agent_id: agent_for_task.clone(),
-                            state: AgentState::Exited,
+                            state: next,
                         });
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
@@ -550,6 +559,16 @@ pub(crate) async fn spawn_with_bookkeeping(
             }
         });
     }
+
+    // Tail this worker's CLI session transcript to surface tool-level activity
+    // in the UI — zero cost to the worker (we read the JSONL it already writes,
+    // never hook or slow it). No-op for a CLI with no known transcript format.
+    crate::transcript::spawn_tailer(
+        state.swarm.clone(),
+        agent_id.clone(),
+        result.slot.cli.clone(),
+        std::path::PathBuf::from(&result.slot.workspace),
+    );
 
     let outcome = SpawnOutcome {
         agent_id: agent_id.clone(),

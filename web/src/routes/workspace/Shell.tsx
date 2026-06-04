@@ -35,7 +35,12 @@ import {
 import { useTranslation } from "react-i18next";
 import { FolderOpen } from "lucide-react";
 import { api } from "../../api/http";
-import type { AgentInfo, MessageRecord, ThreadInfo } from "../../api/types";
+import type {
+  AgentInfo,
+  AgentLiveState,
+  MessageRecord,
+  ThreadInfo,
+} from "../../api/types";
 import { AgentDrawer } from "../../components/agent/AgentDrawer";
 import { CreateWizard } from "../../components/workspace/CreateWizard";
 import { ErrorBoundary } from "../../components/ErrorBoundary";
@@ -87,6 +92,10 @@ export interface ShellOutletContext {
   liveMessage: MessageRecord | null;
   /** Latest message_read event, or null. */
   liveRead: { ids: number[]; to_agent: string; at: number } | null;
+  /** Per-agent live state + latest activity from the swarm WS, keyed by
+   *  agent_id. The members list reads it for the real-time status dot +
+   *  "what this worker is doing right now" line. */
+  agentStateById: Record<string, AgentLiveState>;
   /** Unread tally, already filtered to this workspace's senders. */
   unreadByFrom: Record<string, number>;
   /** Click → bump this counter, MessagesPanel scrolls to first unread. */
@@ -162,6 +171,7 @@ export default function WorkspaceShell() {
     threadMembers,
     liveMessage,
     liveRead,
+    agentStateById,
     activeWorkspaceUnread,
     totalUnread,
     refreshAgents,
@@ -353,6 +363,7 @@ export default function WorkspaceShell() {
     threadAgentIds,
     liveMessage,
     liveRead,
+    agentStateById,
     unreadByFrom: activeWorkspaceUnread,
     jumpUnreadTick,
     openAgent,

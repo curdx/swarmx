@@ -69,14 +69,47 @@ pub enum SwarmEvent {
         /// "created" | "updated" | "isolated" | "deleted".
         op: String,
     },
+    /// A worker's tool- or step-level activity. Sourced from claude/codex
+    /// PostToolUse hooks (tool-level) or an internal step (system-level).
+    /// Drives the live activity block + the member-row "what is it doing right
+    /// now" line. Keep it LOW-FREQUENCY: emit one `running` when a tool/step
+    /// starts and one `ok`/`error` when it ends — never per-byte. The broadcast
+    /// channel drops frames under flood, and the UI rebuilds current state from
+    /// the latest event per (agent_id, seq), so a missed mid-frame is benign.
+    AgentActivity {
+        agent_id: String,
+        /// "tool" (a real tool call) | "system" (compacting context, wrapping
+        /// up, waiting…). Open string so callers can extend later.
+        kind: String,
+        /// Human-facing one-liner, e.g. `Edit src/foo.rs` or `整理上下文`.
+        label: String,
+        /// "running" | "ok" | "error".
+        phase: String,
+        /// Per-turn sequence number; pairs a `running` with its later
+        /// `ok`/`error` so the UI can group the current round and dedupe.
+        seq: u32,
+        /// Wall-clock duration once finished; `None` while still running.
+        #[serde(default)]
+        duration_ms: Option<u32>,
+        at: i64,
+    },
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentState {
     Spawning,
     Ready,
     Thinking,
     Idle,
+    /// Waiting on an unmet dependency — a `consumes`/`depends_on` blackboard
+    /// key that isn't ready yet. WakeCoordinator flips this to Thinking/Ready
+    /// once the dependency lands.
+    WaitingDep,
+    /// Terminated abnormally (non-zero shim exit, or a `<role>.error` fallback).
+    /// Distinct from `Exited` (clean stop) so the UI can surface it (red,
+    /// sorted to top). Error DETAIL rides a separate `AgentActivity`
+    /// (kind="system", phase="error") so this enum stays `Copy`.
+    Error,
     Exited,
 }

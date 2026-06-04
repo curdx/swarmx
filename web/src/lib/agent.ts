@@ -11,7 +11,7 @@
  * data-layer half so non-React callers can also format an agent label.
  */
 
-import type { AgentInfo } from "../api/types";
+import type { AgentInfo, AgentLiveState, SwarmAgentState } from "../api/types";
 
 export const ROLE_COLOR_CLASS: Record<string, string> = {
   planner: "bg-agent-planner",
@@ -236,4 +236,89 @@ export function agentStatusDotClass(s: AgentSemanticStatus): string {
     case "idle":
       return "bg-state-success";
   }
+}
+
+// ── 成员栏实时态推导（真实 state + activity，含向后兼容回退）─────────────
+
+/** 成员栏一行的视觉决策。`tone` 决定色点 / typing / 文字,`label` 是
+ *  "已终止" / "等依赖" 这类状态词(可空 → 不显示文字,只显示色点或 typing)。
+ *  `typing` 为 true 时调用方渲染三点动画替代色点。`isError` 用于把出错
+ *  成员顶到列表最前。 */
+export interface MemberVisual {
+  /** 色点颜色类(如 "bg-status-danger")。typing=true 或纯文字态时为空串。 */
+  dotClass: string;
+  /** 状态文字("已终止"/"等依赖"/…)。空串 = 不显示文字。 */
+  label: string;
+  /** 是否渲染三点 typing 动画(运行中)。 */
+  typing: boolean;
+  /** 是否为异常退出(未被主动 kill)。调用方据此把该成员顶到最前。 */
+  isError: boolean;
+}
+
+/** 把 agent 的硬状态(killed/shim_exit) + 真实 swarm state(若有) + 消息流
+ *  推导,合成成员栏一行的视觉。优先级(高→低):
+ *    killed_at  → "已终止" 灰(主动 kill,绝不判红,即便 state=error)
+ *    shim_exit  → "已下线" 灰
+ *    !shim_ready→ "启动中" 黄(还在拉起 PTY)
+ *    state=error→ 红点 + "异常退出",并 isError=true(顶到最前)
+ *    state=waiting_dep → 灰点 + "等依赖"
+ *    state=running/thinking/spawning → typing 动画
+ *    state=ready/idle 或 state 缺失 → 回退 inferAgentStatus(向后兼容)
+ *
+ *  `live` 是 swarm WS 累积的真实状态切片;缺失(老 server / 事件未到)时整体
+ *  回退到基于消息流的 inferAgentStatus,行为与改造前一致。 */
+export function resolveMemberVisual(
+  agent: AgentInfo,
+  live: AgentLiveState | undefined,
+  messages: MessageRecord[],
+  labels: Record<SwarmAgentState | "exited" | "shimExit" | "starting", string>,
+  now: number = Date.now(),
+): MemberVisual {
+  // 1) 硬状态优先——killed_at 永远先于 error,避免主动 kill 误判红。
+  if (agent.killed_at != null) {
+    return { dotClass: "bg-state-idle", label: labels.exited, typing: false, isError: false };
+  }
+  if (agent.shim_exit != null) {
+    return { dotClass: "bg-state-idle", label: labels.shimExit, typing: false, isError: false };
+  }
+  if (!agent.shim_ready) {
+    return { dotClass: "bg-state-wake", label: labels.starting, typing: false, isError: false };
+  }
+
+  // 2) 真实 swarm state(若已收到事件)。
+  const st = live?.state;
+  if (st === "error") {
+    return { dotClass: "bg-status-danger", label: labels.error, typing: false, isError: true };
+  }
+  if (st === "waiting_dep") {
+    return { dotClass: "bg-state-idle", label: labels.waiting_dep, typing: false, isError: false };
+  }
+  if (st === "thinking" || st === "spawning") {
+    return { dotClass: "", label: "", typing: true, isError: false };
+  }
+  // ready/idle/exited 等真实态不足以表达"是否在干活"(worker 跑工具时 state
+  // 可能停在 ready),所以这些情况继续走消息流推导兜底。
+
+  // 3) 回退:消息流语义推导(向后兼容,state 缺失时也走这里)。
+  const semantic = inferAgentStatus(agent, messages, now);
+  return {
+    dotClass: agentStatusDotClass(semantic),
+    label: agentStatusLabel(semantic),
+    typing: agentStatusIsTyping(semantic),
+    isError: false,
+  };
+}
+
+/** 把一条 activity 渲染成成员栏第二行的 "此刻在干嘛" 文案 + 是否仍在跑。
+ *  running 时无 duration_ms,用 at→now 算 elapsed;ok/error 用 duration_ms。
+ *  返回 null = 没有可展示的活动(回退显示 cli·id)。 */
+export function formatActivityLine(
+  live: AgentLiveState | undefined,
+  now: number = Date.now(),
+): { label: string; phase: "running" | "ok" | "error"; elapsedMs: number } | null {
+  const act = live?.activity;
+  if (!act) return null;
+  const elapsedMs =
+    act.phase === "running" ? Math.max(0, now - act.at) : (act.duration_ms ?? 0);
+  return { label: act.label, phase: act.phase, elapsedMs };
 }

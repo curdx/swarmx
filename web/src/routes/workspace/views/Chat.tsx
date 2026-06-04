@@ -32,15 +32,15 @@ import { Radio, Users, Zap } from "lucide-react";
 import { cn } from "@/lib/cn";
 import {
   roleColorClass as roleColor,
-  inferAgentStatus,
-  agentStatusLabel,
-  agentStatusDotClass,
-  agentStatusIsTyping,
+  resolveMemberVisual,
+  formatActivityLine,
 } from "@/lib/agent";
 import type {
+  AgentLiveState,
   BlackboardEntry,
   BlackboardSnapshot,
   MessageRecord,
+  SwarmAgentState,
   SwarmEvent,
 } from "../../../api/types";
 import { useSwarmFeed } from "../../../hooks/useSwarmFeed";
@@ -110,29 +110,44 @@ function fmtBreadcrumbAgo(at: number, now: number): string {
   return `${hr}h 前`;
 }
 
-/** 成员列表一行的"AI 当前在干啥"视觉。微信式简洁:
- *  - typing 动画(··· 闪烁)  → responding / working
- *  - 绿点                 → idle / awaiting_user (默认 "在线")
- *  - 灰点 + "已结束"       → exited
- *  - 灰点 + "已暂停"       → paused
- *  - 黄点 + "启动中"       → shim 还没 ready */
+/** 成员列表一行的"AI 当前在干啥"视觉。优先真实 swarm state(`live`),缺失
+ *  时回退到消息流推导(向后兼容)。优先级与色彩集中在 lib/agent
+ *  resolveMemberVisual 里——这里只把 i18n 文案喂进去。
+ *  - typing 动画(··· 闪烁)  → running / thinking / responding / working
+ *  - 绿点                  → idle / awaiting_user (默认 "在线")
+ *  - 灰点 + "等依赖"        → waiting_dep
+ *  - 红点 + "异常退出"      → state=error(且未被主动 kill)
+ *  - 灰点 + "已终止/已下线"  → killed_at / shim_exit
+ *  - 黄点 + "启动中"        → shim 还没 ready */
 function statusDot(
   a: AgentInfo,
+  live: AgentLiveState | undefined,
   messages: MessageRecord[],
   t: (k: string) => string,
 ) {
-  if (a.killed_at)
-    return { typing: false, className: "bg-state-idle", label: t("chat.exited") };
-  if (a.shim_exit != null)
-    return { typing: false, className: "bg-state-idle", label: t("chat.shimExit") };
-  if (!a.shim_ready)
-    return { typing: false, className: "bg-state-wake", label: t("chat.starting") };
-  const status = inferAgentStatus(a, messages);
-  return {
-    typing: agentStatusIsTyping(status),
-    className: agentStatusDotClass(status),
-    label: agentStatusLabel(status),
-  };
+  const labels = {
+    spawning: t("chat.starting"),
+    ready: t("chat.online"),
+    thinking: "",
+    idle: "",
+    exited: t("chat.exited"),
+    waiting_dep: t("chat.status.waitingDep"),
+    error: t("chat.status.error"),
+    shimExit: t("chat.shimExit"),
+    starting: t("chat.starting"),
+  } satisfies Record<SwarmAgentState | "exited" | "shimExit" | "starting", string>;
+  const v = resolveMemberVisual(a, live, messages, labels);
+  return { typing: v.typing, className: v.dotClass, label: v.label, isError: v.isError };
+}
+
+/** 成员栏第二行的活动 elapsed —— 规格图示 "0:42"。<1h 用 m:ss,≥1h 用 h:mm。 */
+function fmtActivityElapsed(ms: number): string {
+  const sec = Math.max(0, Math.floor(ms / 1000));
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  if (m < 60) return `${m}:${String(s).padStart(2, "0")}`;
+  const h = Math.floor(m / 60);
+  return `${h}:${String(m % 60).padStart(2, "0")}`;
 }
 
 /** 三点 typing 动画 —— 跟微信"对方正在输入"风格一致。三个圆点错相位
@@ -173,6 +188,7 @@ export default function ChatView() {
     threadAgentIds,
     liveMessage,
     liveRead,
+    agentStateById,
     unreadByFrom: activeWorkspaceUnread,
     jumpUnreadTick,
     openAgent,
@@ -504,17 +520,24 @@ export default function ChatView() {
             </div>
           )}
           {(() => {
-            // orchestrator 永远置顶。它是用户在 workspace 里唯一的常驻
-            // 对接人 (Magentic-One PM 角色),worker 完工后用户应该回头
-            // 找它继续 — 视觉上必须立刻可分辨。其他 agent 按原顺序。
-            const sorted = [...activeMembers].sort((a, b) => {
-              const ao = a.role === "orchestrator" ? 0 : 1;
-              const bo = b.role === "orchestrator" ? 0 : 1;
-              return ao - bo;
-            });
+            // 排序优先级:
+            //   1. 异常退出(state=error 且未被主动 kill)→ 顶到最前,出错
+            //      自动抢眼。killed_at 的成员不算 error(主动 kill 不顶)。
+            //   2. orchestrator → 次置顶。用户在 workspace 里唯一的常驻
+            //      对接人 (Magentic-One PM 角色),worker 完工后回头找它。
+            //   3. 其余按原顺序。
+            const isErr = (a: AgentInfo) =>
+              a.killed_at == null &&
+              a.shim_exit == null &&
+              agentStateById[a.agent_id]?.state === "error";
+            const rank = (a: AgentInfo) =>
+              isErr(a) ? 0 : a.role === "orchestrator" ? 1 : 2;
+            const sorted = [...activeMembers].sort((a, b) => rank(a) - rank(b));
             return sorted;
           })().map((a) => {
-            const dot = statusDot(a, recentMessages, t);
+            const live = agentStateById[a.agent_id];
+            const dot = statusDot(a, live, recentMessages, t);
+            const activity = formatActivityLine(live);
             const unread = activeWorkspaceUnread[a.agent_id] ?? 0;
             const isOrchestrator = a.role === "orchestrator";
             return (
@@ -565,16 +588,64 @@ export default function ChatView() {
                           />
                         )}
                         {dot.label && (
-                          <span className="font-caption text-[10px] text-foreground-tertiary">
+                          <span
+                            className={cn(
+                              "font-caption text-[10px]",
+                              dot.isError
+                                ? "text-status-danger"
+                                : "text-foreground-tertiary",
+                            )}
+                          >
                             {dot.label}
                           </span>
                         )}
                       </>
                     )}
                   </div>
-                  <div className="truncate font-mono text-[10px] text-foreground-tertiary">
-                    {a.cli} · {a.agent_id.slice(-8)}
-                  </div>
+                  {/* 第二行 = "此刻在干嘛"。有实时活动就展示它(规格图示
+                      "正在调用 Edit · src/App.vue 0:42"),否则回退 cli·id。
+                      跑完(ok)→✓,出错→✕(红);running 用 at→now elapsed,
+                      ok/error 用 duration_ms。 */}
+                  {activity ? (
+                    <div className="flex items-center gap-1.5 truncate font-mono text-[10px]">
+                      <span
+                        className={cn(
+                          "shrink-0",
+                          activity.phase === "error"
+                            ? "text-status-danger"
+                            : activity.phase === "ok"
+                              ? "text-status-success"
+                              : "text-accent-primary",
+                        )}
+                      >
+                        {activity.phase === "error"
+                          ? "✕"
+                          : activity.phase === "ok"
+                            ? "✓"
+                            : "▸"}
+                      </span>
+                      <span
+                        className={cn(
+                          "min-w-0 flex-1 truncate",
+                          activity.phase === "error"
+                            ? "text-status-danger"
+                            : "text-foreground-secondary",
+                        )}
+                        title={activity.label}
+                      >
+                        {activity.phase === "running"
+                          ? t("chat.activity.running", { label: activity.label })
+                          : activity.label}
+                      </span>
+                      <span className="shrink-0 text-foreground-tertiary">
+                        {fmtActivityElapsed(activity.elapsedMs)}
+                      </span>
+                    </div>
+                  ) : (
+                    <div className="truncate font-mono text-[10px] text-foreground-tertiary">
+                      {a.cli} · {a.agent_id.slice(-8)}
+                    </div>
+                  )}
                 </div>
                 {unread > 0 && (
                   <Badge

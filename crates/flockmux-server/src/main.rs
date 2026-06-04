@@ -22,6 +22,7 @@ mod roles;
 mod routes;
 mod spawn;
 mod spells;
+mod transcript;
 mod wake;
 // Git worktree helpers for thread isolation, wired into the thread REST
 // handlers (rename → background `worktree add`). `is_git_repo` stays as a
