@@ -212,13 +212,23 @@ export default function WorkspaceShell() {
         );
         await refreshWorkspaces();
         navigate(`/chat/${ws.id}/t/${th.slug}`);
-        await api.runSpell({
-          name: "init",
-          task: "",
-          workspace_dir: ws.path,
-          workspace_id: ws.workspaceId,
-          thread_id: th.id,
-        });
+        // A *named* direction isolates immediately: the backend marks it
+        // "preparing", does a background `git worktree add`, and spawns the
+        // orchestrator IN THE NEW WORKTREE CWD once isolation completes. In
+        // that case the frontend must NOT also spawn — doing so produced a
+        // second orchestrator for the same thread, and in the wrong cwd
+        // (ws.path is the main project, not the worktree). An *unnamed*
+        // direction comes back "ready" with no isolation, so the frontend
+        // owns the spawn (isolation happens later via swarm_name_thread).
+        if (th.state !== "preparing") {
+          await api.runSpell({
+            name: "init",
+            task: "",
+            workspace_dir: ws.path,
+            workspace_id: ws.workspaceId,
+            thread_id: th.id,
+          });
+        }
         refreshAgents();
       } catch (e) {
         // eslint-disable-next-line no-console
