@@ -15,6 +15,24 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  harness:
+    name: Harness check (cross-file invariants)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # Mechanical guards for cross-file footguns the compiler / cargo test
+      # can't catch: the two MessageRecord DTOs drifting apart, a storage type
+      # not re-exported from lib.rs, Tauri externalBin missing a sidecar binary,
+      # or the codex per-agent CODEX_HOME injection getting dropped. All rules
+      # are STATIC file reads (no git history needed), so a default checkout is
+      # fine. Add a rule in scripts/harness-check.mjs each time a new
+      # silent-failure footgun is hit.
+      - name: Run harness check
+        run: node scripts/harness-check.mjs
+
   rust:
     name: Rust (build · test · clippy)
     runs-on: ubuntu-latest
