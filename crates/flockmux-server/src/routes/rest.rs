@@ -1007,19 +1007,38 @@ fn spawn_bootstrap_inject(
             || ctx.role_keys.iter().any(|r| prompt.contains(&format!("{{{r}_id}}")));
         let body = prompt.into_bytes();
         let body_len = body.len();
-        // Submit as TWO frames (paste body, settle 150ms, then \r): claude/
+        // Submit as separate frames (paste body, settle, then \r): claude/
         // codex TUIs classify a burst containing newlines as a *paste*, so a
         // \r in the same burst becomes a literal newline rather than a submit.
         // Splitting lets the TUI settle the paste, then the standalone \r reads
-        // as Enter. 150ms is empirical (50ms sometimes missed cold-start codex).
+        // as Enter.
+        //
+        // The settle delay MUST scale with prompt size. A cold-start TUI takes
+        // longer to drain + classify a large bracketed paste; a \r that lands
+        // before the paste closes is swallowed into the paste buffer and never
+        // submits. Observed in QA: a 21988-byte `init` orchestrator prompt left
+        // claude parked at Ctx:0 forever (green "READY", no greeting) — a manual
+        // Enter unstuck it instantly. A flat 150ms is only safe for small
+        // prompts. We scale ~1ms per 100 bytes on top of a 150ms floor, and then
+        // re-send \r once more after a further gap as a safety net: if the first
+        // \r was absorbed by a still-open paste, the second (well after the paste
+        // has closed) submits; if the first already submitted, the second lands
+        // on an empty prompt and is a harmless no-op.
         if let Err(err) = input_tx.send(bytes::Bytes::from(body)).await {
             tracing::warn!(source = ctx.source, spell = %ctx.spell, agent = %agent_id, ?err, "PTY paste send failed during bootstrap");
             return;
         }
-        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        let settle_ms = 150 + (body_len as u64 / 100);
+        tokio::time::sleep(std::time::Duration::from_millis(settle_ms)).await;
         if let Err(err) = input_tx.send(bytes::Bytes::from_static(b"\r")).await {
             tracing::warn!(source = ctx.source, spell = %ctx.spell, agent = %agent_id, ?err, "PTY submit send failed during bootstrap");
             return;
+        }
+        // Safety net: re-submit once after the paste has certainly closed. A
+        // second Enter on an already-submitted (now empty) prompt is a no-op.
+        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+        if let Err(err) = input_tx.send(bytes::Bytes::from_static(b"\r")).await {
+            tracing::warn!(source = ctx.source, spell = %ctx.spell, agent = %agent_id, ?err, "PTY re-submit send failed during bootstrap");
         }
         tracing::info!(
             source = ctx.source,
