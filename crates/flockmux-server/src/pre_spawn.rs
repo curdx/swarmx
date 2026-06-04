@@ -31,20 +31,44 @@ use serde_json::{json, Value};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, PoisonError};
 
 fn home_path() -> Option<PathBuf> {
     std::env::var_os("HOME").map(PathBuf::from)
 }
 
-fn write_json_atomic(target: &Path, root: &Value) -> Result<()> {
-    // `with_extension` REPLACES the old extension, so for `version.json` we'd
-    // get `version.flockmux-tmp` (losing `.json` in the sibling-name). That's
-    // still fine — the tmp lives in the same directory and we rename to the
-    // exact `target` path anyway — but we keep the ".json" by appending.
-    let tmp = match target.extension().and_then(|s| s.to_str()) {
-        Some(ext) => target.with_extension(format!("{ext}.flockmux-tmp")),
-        None => target.with_extension("flockmux-tmp"),
+/// Serializes read-modify-write of the *shared* CLI config files
+/// (`~/.claude.json`, `~/.codex/config.toml`, `~/.codex/version.json`). Each
+/// spawn patches these; run in parallel they otherwise (a) collide on the temp
+/// sibling -> `rename ... No such file or directory`, and (b) lost-update each
+/// other (both read v0, both write v0+self, last writer wins). Held only across
+/// a few ms of local file IO, never across `.await`. Poison-tolerant so one
+/// panicked patch can't wedge every future spawn.
+static CONFIG_PATCH_LOCK: Mutex<()> = Mutex::new(());
+
+fn lock_config_patch() -> std::sync::MutexGuard<'static, ()> {
+    CONFIG_PATCH_LOCK.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Temp sibling for an atomic write, unique per process-and-call so concurrent
+/// writers never share it (the old fixed `.flockmux-tmp` suffix raced under
+/// parallel spawn). Stays in `target`'s dir so the final `rename` is one-fs.
+fn unique_tmp_path(target: &Path) -> PathBuf {
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let n = SEQ.fetch_add(1, Ordering::Relaxed);
+    let pid = std::process::id();
+    // Preserve the original extension in the sibling name purely for legible
+    // debris (`config.toml` -> `config.toml.flockmux-tmp.<pid>.<n>`).
+    let suffix = match target.extension().and_then(|s| s.to_str()) {
+        Some(ext) => format!("{ext}.flockmux-tmp.{pid}.{n}"),
+        None => format!("flockmux-tmp.{pid}.{n}"),
     };
+    target.with_extension(suffix)
+}
+
+fn write_json_atomic(target: &Path, root: &Value) -> Result<()> {
+    let tmp = unique_tmp_path(target);
     {
         let mut f = fs::File::create(&tmp)
             .with_context(|| format!("create {}", tmp.display()))?;
@@ -66,6 +90,7 @@ pub fn mark_claude_workspace_trusted(workspace: &Path) -> Result<()> {
 }
 
 fn patch_claude_trust_at(cfg: &Path, workspace: &Path) -> Result<()> {
+    let _guard = lock_config_patch();
     let bytes = fs::read(cfg).with_context(|| format!("read {}", cfg.display()))?;
     let mut root: Value =
         serde_json::from_slice(&bytes).with_context(|| format!("parse {}", cfg.display()))?;
@@ -113,6 +138,7 @@ pub fn mark_codex_update_dismissed() -> Result<()> {
 }
 
 fn patch_codex_dismiss_at(cfg: &Path) -> Result<()> {
+    let _guard = lock_config_patch();
     let bytes = fs::read(cfg).with_context(|| format!("read {}", cfg.display()))?;
     let mut root: Value =
         serde_json::from_slice(&bytes).with_context(|| format!("parse {}", cfg.display()))?;
@@ -147,6 +173,7 @@ pub fn mark_codex_workspace_trusted(workspace: &Path) -> Result<()> {
 }
 
 fn patch_codex_trust_at(cfg: &Path, workspace: &Path) -> Result<()> {
+    let _guard = lock_config_patch();
     let existing = fs::read_to_string(cfg)
         .with_context(|| format!("read {}", cfg.display()))?;
 
@@ -174,7 +201,7 @@ fn patch_codex_trust_at(cfg: &Path, workspace: &Path) -> Result<()> {
 
     // Atomic write — codex itself opens & rewrites this file on session
     // start, so a half-written file would be poison.
-    let tmp = cfg.with_extension("toml.flockmux-tmp");
+    let tmp = unique_tmp_path(cfg);
     {
         let mut f = fs::File::create(&tmp)
             .with_context(|| format!("create {}", tmp.display()))?;
@@ -220,6 +247,7 @@ fn patch_claude_mcp_at(
     mcp_bin: &Path,
     server_url: &str,
 ) -> Result<()> {
+    let _guard = lock_config_patch();
     let bytes = fs::read(cfg).with_context(|| format!("read {}", cfg.display()))?;
     let mut root: Value =
         serde_json::from_slice(&bytes).with_context(|| format!("parse {}", cfg.display()))?;
@@ -276,6 +304,7 @@ fn patch_claude_mcp_at(
 /// Rewrites the section in place if `command =` no longer points at the
 /// current binary (handles `cargo build` moving the path between runs).
 pub fn ensure_codex_mcp_global(mcp_bin: &Path) -> Result<()> {
+    let _guard = lock_config_patch();
     let cfg = match home_path().map(|h| h.join(".codex").join("config.toml")) {
         Some(p) => p,
         None => return Ok(()),
@@ -320,7 +349,7 @@ pub fn ensure_codex_mcp_global(mcp_bin: &Path) -> Result<()> {
         }
     };
 
-    let tmp = cfg.with_extension("toml.flockmux-tmp");
+    let tmp = unique_tmp_path(&cfg);
     {
         let mut f = fs::File::create(&tmp)
             .with_context(|| format!("create {}", tmp.display()))?;
@@ -1203,7 +1232,7 @@ trust_level = \"trusted\"\n";
                 out
             }
         };
-        let tmp = cfg.with_extension("toml.flockmux-tmp");
+        let tmp = unique_tmp_path(cfg);
         {
             let mut f = fs::File::create(&tmp)?;
             f.write_all(updated.as_bytes())?;
