@@ -302,6 +302,7 @@
     "newDirectionConfirm": "Open direction",
     "newDirectionSpawnNote": "Opening a direction immediately starts a new orchestrator AI for this line.",
     "newDirectionNonGit": "This project isn't a git repo — directions share the same files (no isolation), so their edits will clobber and affect each other.",
+    "newDirectionOrBranch": "Or open an existing branch",
     "directionPreparing": "isolating…",
     "directionDegraded": "Isolation failed — sharing the main directory (files may clobber each other)",
     "directionDirty": "Uncommitted changes",

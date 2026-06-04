@@ -12,7 +12,7 @@ use axum::{
     Json,
 };
 use flockmux_protocol::rest::{
-    AgentInfo, CliPluginInfo, CreateThreadRequest, CreateWorkspaceRequest, RunSpellAgent,
+    AgentInfo, BranchInfo, CliPluginInfo, CreateThreadRequest, CreateWorkspaceRequest, RunSpellAgent,
     RunSpellRequest, RunSpellResponse, SpawnAgentRequest, SpawnAgentResponse, SpawnWorkerRequest,
     SpawnWorkerResponse, SpellAgentInfo, SpellInfo, ThreadInfo, UpdateThreadRequest, Workspace,
     WorkspaceRoot,
@@ -2063,6 +2063,31 @@ pub async fn list_threads_handler(
     )
 }
 
+/// `GET /api/workspaces/:id/branches` — local git branches of the workspace
+/// cwd, each flagged whether it's already checked out (so the "open existing
+/// branch" picker can disable those — a checked-out branch can't be attached to
+/// a new worktree). Empty for a non-git workspace. Off the async runtime (git
+/// blocks).
+pub async fn list_branches_handler(
+    State(state): State<AppState>,
+    Path(workspace_id): Path<String>,
+) -> impl IntoResponse {
+    let ws = match state.store.get_workspace_by_id(workspace_id).await {
+        Ok(Some(w)) => w,
+        _ => return Json(Vec::<BranchInfo>::new()),
+    };
+    let cwd = PathBuf::from(ws.cwd);
+    let branches = tokio::task::spawn_blocking(move || crate::worktree::list_branches(&cwd))
+        .await
+        .unwrap_or_default();
+    Json(
+        branches
+            .into_iter()
+            .map(|(name, checked_out)| BranchInfo { name, checked_out })
+            .collect::<Vec<_>>(),
+    )
+}
+
 /// `POST /api/workspaces/:id/threads` — open a new direction. Zero-friction:
 /// `name` optional; created `shared` + `ready` in the workspace's own cwd. Git
 /// isolation is DEFERRED until the direction is named (see
@@ -2092,9 +2117,16 @@ pub async fn create_thread_handler(
             )
         })?;
     let name = req.name.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    // "Open an existing branch as a direction" — flockmux's worktree-native take
+    // on switching branches. When set, the direction's display name/slug default
+    // to the branch and the worktree ATTACHES this exact branch instead of
+    // creating a fresh one (see `branch` below; `worktree_add` falls back to
+    // attach when `-b` fails because the branch exists).
+    let open_branch = req.branch.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let display_name = name.or(open_branch);
     // A name (if any) yields a readable, stable slug; otherwise a short random
     // placeholder. Slug is fixed for the thread's life (see doc above).
-    let base_slug = match name {
+    let base_slug = match display_name {
         Some(n) => crate::worktree::sanitize_suffix(n),
         None => format!("t-{}", &Uuid::new_v4().to_string()[..6]),
     };
@@ -2107,15 +2139,19 @@ pub async fn create_thread_handler(
     // the frontend waits for `ready` before spawning the orchestrator so it
     // lands in the worktree. Unnamed keeps the zero-friction shared/ready path
     // (orchestrator isolates on its first-message naming).
-    let will_isolate = name.is_some();
-    let branch = slug.clone();
+    let will_isolate = display_name.is_some();
+    // Worktree binds to the exact existing branch when opening one; otherwise a
+    // fresh branch named after the slug.
+    let branch = open_branch
+        .map(|b| b.to_string())
+        .unwrap_or_else(|| slug.clone());
     let rec = state
         .store
         .create_thread(
             NewThread {
                 workspace_id: workspace_id.clone(),
                 slug,
-                name: name.map(|s| s.to_string()),
+                name: display_name.map(|s| s.to_string()),
                 isolation: "shared".to_string(),
                 branch: None,
                 cwd: ws.cwd.clone(),

@@ -508,6 +508,23 @@ pub struct CreateWorkspaceRequest {
 pub struct CreateThreadRequest {
     #[serde(default)]
     pub name: Option<String>,
+    /// Open an EXISTING branch as this direction instead of creating a fresh
+    /// one. When set, the worktree attaches this exact branch (the direction's
+    /// name/slug derive from it if `name` is absent). flockmux's
+    /// worktree-per-direction take on "switch branch" — never an in-place
+    /// `git checkout` that would yank the floor out from a running agent.
+    #[serde(default)]
+    pub branch: Option<String>,
+}
+
+/// One local branch of a workspace's repo, for the "open existing branch as a
+/// direction" picker (`GET /api/workspaces/:id/branches`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BranchInfo {
+    pub name: String,
+    /// Already checked out in some worktree (the main one or another
+    /// direction) → can't be attached again, so the picker disables it.
+    pub checked_out: bool,
 }
 
 /// `PATCH /api/workspaces/:id/threads/:tid` — (re)name a direction. Setting a

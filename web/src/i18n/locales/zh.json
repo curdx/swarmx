@@ -302,6 +302,7 @@
     "newDirectionConfirm": "开启方向",
     "newDirectionSpawnNote": "开启方向会立即启动一个新的 orchestrator AI 来接管这条线。",
     "newDirectionNonGit": "这个项目不是 git 仓库——多个方向会共用同一份文件、无法隔离，它们的改动会互相覆盖、互相影响。",
+    "newDirectionOrBranch": "或打开已有分支",
     "directionPreparing": "隔离中…",
     "directionDegraded": "隔离失败，正与主线共用同一目录（文件可能互相覆盖）",
     "directionDirty": "有未提交改动",

@@ -3,6 +3,7 @@ import type {
   BlackboardEntry,
   BlackboardHistoryEntry,
   BlackboardSnapshot,
+  BranchInfo,
   CliPluginInfo,
   CreateThreadRequest,
   CreateWorkspaceRequest,
@@ -225,6 +226,10 @@ export const api = {
   // (workspaceId), matching the server's path param.
   listThreads: (id: string) =>
     request<ThreadInfo[]>("GET", `/api/workspaces/${id}/threads`),
+  // Local branches of a workspace's repo, for the "open existing branch as a
+  // direction" picker.
+  listBranches: (id: string) =>
+    request<BranchInfo[]>("GET", `/api/workspaces/${id}/branches`),
   createThread: (id: string, req: CreateThreadRequest) =>
     request<ThreadInfo>("POST", `/api/workspaces/${id}/threads`, req),
   updateThread: (id: string, threadId: string, req: { name: string }) =>

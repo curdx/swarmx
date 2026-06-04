@@ -227,6 +227,36 @@ pub fn worktree_add(repo_cwd: &Path, branch: &str) -> Result<PathBuf> {
     ))
 }
 
+/// Local branches of the repo at `dir`, each flagged whether it's currently
+/// checked out in some worktree (the main one or a direction's). A checked-out
+/// branch can't be attached to a new worktree, so the "open existing branch"
+/// picker disables those. Empty for a non-git dir / error / timeout. Blocking
+/// (shells out to git); call off the async path.
+pub fn list_branches(dir: &Path) -> Vec<(String, bool)> {
+    let names = match git(dir, &["branch", "--format=%(refname:short)"]) {
+        Ok(o) if o.status_ok => o.stdout,
+        _ => return Vec::new(),
+    };
+    // Branches checked out in any worktree — `worktree list --porcelain` emits a
+    // `branch refs/heads/<name>` line per attached worktree.
+    let mut checked_out: std::collections::HashSet<String> = std::collections::HashSet::new();
+    if let Ok(o) = git(dir, &["worktree", "list", "--porcelain"]) {
+        if o.status_ok {
+            for line in o.stdout.lines() {
+                if let Some(b) = line.strip_prefix("branch refs/heads/") {
+                    checked_out.insert(b.trim().to_string());
+                }
+            }
+        }
+    }
+    names
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(|name| (name.to_string(), checked_out.contains(name)))
+        .collect()
+}
+
 /// Remove a worktree (best-effort — caller logs but doesn't fail the request).
 /// `--force` so an uncommitted-changes worktree still gets cleaned up when the
 /// user deletes the direction (they chose to discard it).

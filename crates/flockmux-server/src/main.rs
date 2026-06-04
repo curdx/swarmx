@@ -361,6 +361,12 @@ async fn main() -> Result<()> {
             "/api/workspaces/:id/root-suggestions",
             get(routes::rest::suggest_workspace_roots_handler),
         )
+        // Local branches of a workspace's repo — for the "open existing branch
+        // as a direction" picker.
+        .route(
+            "/api/workspaces/:id/branches",
+            get(routes::rest::list_branches_handler),
+        )
         // Threads (directions) within a workspace.
         .route(
             "/api/workspaces/:id/threads",

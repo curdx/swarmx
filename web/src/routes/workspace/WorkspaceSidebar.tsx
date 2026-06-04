@@ -29,7 +29,7 @@ import {
   X,
 } from "lucide-react";
 import { api, ApiError } from "../../api/http";
-import type { ThreadInfo, WorkspaceRoot } from "../../api/types";
+import type { BranchInfo, ThreadInfo, WorkspaceRoot } from "../../api/types";
 import { splitWorkspacePath } from "../../lib/workspace";
 import { directionBase } from "../../lib/thread";
 import type { WorkspaceSummary } from "./types";
@@ -287,7 +287,11 @@ export function WorkspaceList({
   /** Open a new direction in this workspace (create + navigate + launch the
    *  orchestrator). Owner (Shell) does the create/nav/spawn. `name` is the
    *  optional user-chosen direction name (blank → orchestrator auto-names it). */
-  onNewDirection?: (ws: WorkspaceSummary, name?: string) => void;
+  onNewDirection?: (
+    ws: WorkspaceSummary,
+    name?: string,
+    branch?: string,
+  ) => void;
   /** Delete a direction (server kills its live agents first). */
   onDeleteThread?: (ws: WorkspaceSummary, threadId: string) => void;
 }) {
@@ -312,6 +316,24 @@ export function WorkspaceList({
   // the workspace cwd isn't a git repo (directions can't be isolated then).
   const [newDirFor, setNewDirFor] = useState<WorkspaceSummary | null>(null);
   const [newDirName, setNewDirName] = useState("");
+  // Existing local branches of the new-direction dialog's workspace, for the
+  // "open existing branch" picker. Fetched when the dialog opens; empty for a
+  // non-git workspace (cwdBranch == null) or on error.
+  const [branches, setBranches] = useState<BranchInfo[]>([]);
+  useEffect(() => {
+    if (!newDirFor || newDirFor.cwdBranch == null) {
+      setBranches([]);
+      return;
+    }
+    let live = true;
+    api
+      .listBranches(newDirFor.workspaceId)
+      .then((bs) => live && setBranches(bs))
+      .catch(() => live && setBranches([]));
+    return () => {
+      live = false;
+    };
+  }, [newDirFor]);
   // Workspace ids whose attached-source subtree is collapsed. Default is
   // expanded (a fresh id is absent from the set), so newly-attached deps are
   // visible without a click.
@@ -759,6 +781,36 @@ export function WorkspaceList({
               <span className="font-caption text-xs text-foreground-secondary">
                 {t("chat.newDirectionNonGit")}
               </span>
+            </div>
+          )}
+          {/* Open an EXISTING branch as a direction (flockmux's worktree-native
+           *  "switch branch": attach a worktree, never an in-place checkout that
+           *  would disrupt a running agent). Branches already checked out
+           *  elsewhere are filtered out server-side. */}
+          {branches.some((b) => !b.checked_out) && (
+            <div className="flex flex-col gap-1">
+              <span className="font-caption text-xs text-foreground-tertiary">
+                {t("chat.newDirectionOrBranch")}
+              </span>
+              <div className="flex max-h-40 flex-col gap-0.5 overflow-y-auto">
+                {branches
+                  .filter((b) => !b.checked_out)
+                  .map((b) => (
+                    <button
+                      key={b.name}
+                      className="flex items-center gap-1.5 rounded-md px-2 py-1 text-left text-[12px] text-foreground-secondary transition-colors hover:bg-surface-tertiary"
+                      onClick={() => {
+                        const target = newDirFor;
+                        setNewDirFor(null);
+                        if (target)
+                          onNewDirection?.(target, undefined, b.name);
+                      }}
+                    >
+                      <GitBranch className="size-3 shrink-0 text-accent-purple" />
+                      <span className="truncate font-mono">{b.name}</span>
+                    </button>
+                  ))}
+              </div>
             </div>
           )}
           <div className="flex justify-end gap-2 pt-1">

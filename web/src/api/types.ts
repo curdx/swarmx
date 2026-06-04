@@ -218,9 +218,20 @@ export interface RunSpellRequest {
 }
 
 /** `POST /api/workspaces/:id/threads` — open a new direction. `name` optional
- *  (zero-friction: the orchestrator names it from the first message). */
+ *  (zero-friction: the orchestrator names it from the first message). `branch`
+ *  opens an EXISTING branch as the direction (attach a worktree to it) instead
+ *  of creating a fresh one. */
 export interface CreateThreadRequest {
   name?: string | null;
+  branch?: string | null;
+}
+
+/** One local branch of a workspace's repo (`GET /api/workspaces/:id/branches`),
+ *  for the "open existing branch as a direction" picker. */
+export interface BranchInfo {
+  name: string;
+  /** Already checked out in some worktree → can't be attached again. */
+  checked_out: boolean;
 }
 
 export interface RunSpellAgent {

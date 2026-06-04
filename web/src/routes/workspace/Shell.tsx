@@ -202,13 +202,15 @@ export default function WorkspaceShell() {
   // two run_spell calls → two empty directions, each with its own orchestrator.
   const creatingDirRef = useRef(false);
   const onNewDirection = useCallback(
-    async (ws: WorkspaceSummary, name?: string) => {
+    async (ws: WorkspaceSummary, name?: string, branch?: string) => {
       if (creatingDirRef.current) return;
       creatingDirRef.current = true;
       try {
+        // `branch` opens an EXISTING branch as the direction (attach a
+        // worktree); otherwise a fresh named/unnamed direction.
         const th = await api.createThread(
           ws.workspaceId,
-          name ? { name } : {},
+          branch ? { branch } : name ? { name } : {},
         );
         await refreshWorkspaces();
         navigate(`/chat/${ws.id}/t/${th.slug}`);
