@@ -77,7 +77,12 @@ export function McpManager() {
     reload();
   }, [reload]);
 
-  const nodeOk = env?.node.present ?? true;
+  // node usable = present AND new enough. A present-but-too-old node (v14)
+  // can't run npx MCP servers, so it must NOT count as OK (used to gate toggles
+  // + drive the chip/warning).
+  const nodeOk = (env?.node.present ?? true) && (env?.node.adequate ?? true);
+  // Distinguish "missing" from "present but too old" for the warning copy.
+  const nodeTooOld = !!env?.node.present && env?.node.adequate === false;
 
   const runOp = useCallback(
     async (mark: { id: string; cli?: Cli }, op: () => Promise<unknown>) => {
@@ -124,6 +129,17 @@ export function McpManager() {
           <p className="flex items-center gap-1.5 font-caption text-xs text-state-danger" role="alert">
             <TriangleAlert className="size-3.5 shrink-0" />
             {t("mcp.nodeMissing", "未检测到 Node.js — npx 类 MCP（含 chrome-devtools）无法运行，请先安装 Node.js LTS。")}
+          </p>
+        )}
+        {nodeTooOld && (
+          <p className="flex items-center gap-1.5 font-caption text-xs text-state-warning" role="alert">
+            <TriangleAlert className="size-3.5 shrink-0" />
+            {t("mcp.nodeTooOld", {
+              version: env?.node.version ?? "",
+              min: env?.node.minMajor ?? 18,
+              defaultValue:
+                "Node.js {{version}} 版本过低 — npx 类 MCP（含 chrome-devtools）需 Node {{min}}+（LTS），请升级后再启用。",
+            })}
           </p>
         )}
       </section>
@@ -344,20 +360,24 @@ function RuntimeChip({
 }) {
   const present = info?.present;
   const loading = info === undefined;
+  // present but too old (node only) → not a clean ✓: amber, not green/red.
+  const tooOld = present === true && info?.adequate === false;
   return (
     <span
       className={cn(
         "inline-flex items-center gap-1.5 rounded-md border px-2 py-1 font-mono text-[11px]",
         loading
           ? "border-border-subtle bg-surface-elevated text-foreground-tertiary"
-          : present
-            ? "border-border-subtle bg-surface-elevated text-foreground-secondary"
-            : "border-state-danger/40 bg-status-danger-soft text-state-danger",
+          : tooOld
+            ? "border-state-warning/40 bg-status-warning-soft text-state-warning"
+            : present
+              ? "border-border-subtle bg-surface-elevated text-foreground-secondary"
+              : "border-state-danger/40 bg-status-danger-soft text-state-danger",
       )}
     >
       {loading ? (
         <Loader2 className="size-3 animate-spin" />
-      ) : present ? (
+      ) : present && !tooOld ? (
         <Check className="size-3 text-state-success" />
       ) : (
         <TriangleAlert className="size-3" />

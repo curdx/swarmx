@@ -42,6 +42,16 @@ async fn probe_version(bin: &str, arg: &str) -> Option<String> {
     }
 }
 
+/// Minimum Node major the npx-based MCP servers (chrome-devtools, context7…)
+/// need. They target current LTS; anything below this can't run them — so a
+/// merely-present-but-too-old node must NOT read as "OK" in the UI.
+const NODE_MIN_MAJOR: u32 = 18;
+
+/// Parse the major version out of a `node --version` string ("v22.17.0" → 22).
+fn node_major(version: &str) -> Option<u32> {
+    version.trim().trim_start_matches('v').split('.').next()?.parse().ok()
+}
+
 pub async fn mcp_env(State(_s): State<AppState>) -> impl IntoResponse {
     // node/npm 用 `--version`；uv 同样。并行探，少等几百毫秒。
     let (node, npm, uv) = tokio::join!(
@@ -49,8 +59,16 @@ pub async fn mcp_env(State(_s): State<AppState>) -> impl IntoResponse {
         probe_version("npm", "--version"),
         probe_version("uv", "--version"),
     );
+    // `adequate` = present AND major >= LTS minimum. A present-but-old node
+    // (e.g. v14) is the case that used to show a green ✓ while the servers below
+    // all say "needs Node LTS" — that's the check lying. Surface it.
+    let node_adequate = node
+        .as_deref()
+        .and_then(node_major)
+        .map(|m| m >= NODE_MIN_MAJOR)
+        .unwrap_or(false);
     Json(json!({
-        "node": { "present": node.is_some(), "version": node },
+        "node": { "present": node.is_some(), "version": node, "adequate": node_adequate, "minMajor": NODE_MIN_MAJOR },
         "npm":  { "present": npm.is_some(),  "version": npm },
         "uv":   { "present": uv.is_some(),   "version": uv },
     }))
@@ -372,5 +390,21 @@ pub async fn mcp_uninstall(
     match res {
         Ok(output) => (StatusCode::OK, Json(json!({"ok": true, "output": output}))).into_response(),
         Err((code, msg)) => (code, Json(json!({"error": msg}))).into_response(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn node_major_parses_and_gates_lts() {
+        assert_eq!(node_major("v22.17.0"), Some(22));
+        assert_eq!(node_major("v18.20.8"), Some(18));
+        assert_eq!(node_major("14.21.3"), Some(14)); // tolerate a missing 'v'
+        assert_eq!(node_major("not-a-version"), None);
+        // The gate the UI relies on: v14 is below LTS, v18/v22 are not.
+        assert!(node_major("v14.21.3").unwrap() < NODE_MIN_MAJOR);
+        assert!(node_major("v18.20.8").unwrap() >= NODE_MIN_MAJOR);
     }
 }

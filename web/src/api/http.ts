@@ -115,6 +115,11 @@ function qs(params: Record<string, string | number | boolean | undefined>): stri
 export interface RuntimeInfo {
   present: boolean;
   version: string | null;
+  /** node only: present AND version >= the LTS minimum the npx MCP servers need.
+   *  `false` for a present-but-too-old node (e.g. v14). Absent for npm/uv. */
+  adequate?: boolean;
+  /** node only: the minimum major version required (for the warning copy). */
+  minMajor?: number;
 }
 export interface McpEnv {
   node: RuntimeInfo;

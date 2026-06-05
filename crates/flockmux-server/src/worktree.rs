@@ -324,7 +324,21 @@ pub fn delete_branch(repo_cwd: &Path, branch: &str) -> Result<()> {
 /// call covers the main worktree and all direction worktrees. Idempotent;
 /// best-effort no-op for a non-git dir.
 pub fn ignore_managed_artifacts(repo_cwd: &Path) {
-    const MANAGED: [&str; 2] = [".claude/settings.local.json", ".codex/hooks.json"];
+    ignore_paths_locally(repo_cwd, &[".claude/settings.local.json", ".codex/hooks.json"]);
+}
+
+/// Append `patterns` to the repo's LOCAL `.git/info/exclude` (idempotent),
+/// resolving the shared common dir so it covers the main worktree + every
+/// direction worktree. Used to hide flockmux-generated files (managed hook
+/// config, and a deps-context CLAUDE.md/AGENTS.md we created) from git's "dirty"
+/// accounting — `info/exclude` only affects UNTRACKED files, so anything the
+/// user actually tracks is unaffected. Best-effort no-op for a non-git dir.
+///
+/// CALLER CONTRACT for CLAUDE.md/AGENTS.md: only pass these when flockmux
+/// authored the WHOLE file (it didn't exist / was empty before our block) —
+/// never when appending our block to a user's existing file, or we'd hide their
+/// real context file.
+pub fn ignore_paths_locally(repo_cwd: &Path, patterns: &[&str]) {
     let common = match git(repo_cwd, &["rev-parse", "--git-common-dir"]) {
         Ok(o) if o.status_ok && !o.stdout.trim().is_empty() => o.stdout.trim().to_string(),
         _ => return,
@@ -340,7 +354,7 @@ pub fn ignore_managed_artifacts(repo_cwd: &Path) {
     };
     let exclude = common_path.join("info").join("exclude");
     let existing = std::fs::read_to_string(&exclude).unwrap_or_default();
-    let missing: Vec<&str> = MANAGED
+    let missing: Vec<&str> = patterns
         .iter()
         .copied()
         .filter(|pat| !existing.lines().any(|l| l.trim() == *pat))

@@ -1856,6 +1856,17 @@ fn write_workspace_deps_context(cwd: &str, name: &str, roots: &[WorkspaceRoot]) 
     for fname in ["CLAUDE.md", "AGENTS.md"] {
         let path = std::path::Path::new(cwd).join(fname);
         let existing = std::fs::read_to_string(&path).unwrap_or_default();
+        // Is everything OUTSIDE our managed block blank? Then flockmux authored
+        // the whole file (created it or it was empty before) — safe to local-
+        // exclude so a multi-root workspace doesn't show a perpetual false dirty
+        // dot. If the user had their own content (append case), DON'T exclude —
+        // we'd hide their real CLAUDE.md.
+        let flockmux_only = match (existing.find(START), existing.find(END)) {
+            (Some(s), Some(e)) => {
+                existing[..s].trim().is_empty() && existing[e + END.len()..].trim().is_empty()
+            }
+            _ => existing.trim().is_empty(),
+        };
         let next = if let (Some(s), Some(e)) = (existing.find(START), existing.find(END)) {
             // replace existing managed block in place
             let end_full = e + END.len();
@@ -1869,6 +1880,9 @@ fn write_workspace_deps_context(cwd: &str, name: &str, roots: &[WorkspaceRoot]) 
             tracing::warn!(?e, file = %path.display(), "failed writing workspace deps context");
         } else {
             tracing::info!(file = %path.display(), roots = roots.len(), "wrote workspace deps context");
+            if flockmux_only {
+                crate::worktree::ignore_paths_locally(std::path::Path::new(cwd), &[fname]);
+            }
         }
     }
 }
