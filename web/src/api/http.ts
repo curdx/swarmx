@@ -8,6 +8,7 @@ import type {
   CreateThreadRequest,
   CreateWorkspaceRequest,
   MarkReadResponse,
+  MergeResult,
   MessageRecord,
   ModelConfig,
   ModelsResponse,
@@ -18,6 +19,7 @@ import type {
   SpawnAgentRequest,
   SpawnAgentResponse,
   SpellInfo,
+  ThreadDiff,
   ThreadInfo,
   UnreadCountResponse,
   Workspace,
@@ -240,6 +242,19 @@ export const api = {
     ),
   deleteThread: (id: string, threadId: string) =>
     request<void>("DELETE", `/api/workspaces/${id}/threads/${threadId}`),
+  // Preview what a direction changed before merging it back to the main line.
+  threadDiff: (id: string, threadId: string) =>
+    request<ThreadDiff>(
+      "GET",
+      `/api/workspaces/${id}/threads/${threadId}/diff`,
+    ),
+  // Merge a direction back to the main line. Clean → "merged"; conflicts →
+  // "resolving" (an AI agent was spawned to finish the merge).
+  mergeThread: (id: string, threadId: string) =>
+    request<MergeResult>(
+      "POST",
+      `/api/workspaces/${id}/threads/${threadId}/merge`,
+    ),
   // attached dependency-source roots (post-create management)
   addWorkspaceRoot: (id: string, root: WorkspaceRoot) =>
     request<WorkspaceRoot>("POST", `/api/workspaces/${id}/roots`, root),

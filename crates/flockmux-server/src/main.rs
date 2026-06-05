@@ -376,6 +376,14 @@ async fn main() -> Result<()> {
             "/api/workspaces/:id/threads/:tid",
             patch(routes::rest::update_thread_handler).delete(routes::rest::delete_thread_handler),
         )
+        .route(
+            "/api/workspaces/:id/threads/:tid/diff",
+            get(routes::rest::thread_diff_handler),
+        )
+        .route(
+            "/api/workspaces/:id/threads/:tid/merge",
+            post(routes::rest::merge_thread_handler),
+        )
         .route("/api/spells", get(routes::rest::list_spells))
         .route("/api/spell/run", post(routes::rest::run_spell))
         .route("/ws/swarm", get(routes::ws_swarm::ws_swarm))

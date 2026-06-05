@@ -602,6 +602,9 @@ pub fn install_claude_stop_hook(
     let cfg_dir = workspace.join(".claude");
     fs::create_dir_all(&cfg_dir)
         .with_context(|| format!("mkdir {}", cfg_dir.display()))?;
+    // Keep our managed file out of git's "dirty" accounting (sidebar dot,
+    // merge-to-main base check) without touching the user's tracked .gitignore.
+    crate::worktree::ignore_managed_artifacts(workspace);
     let cfg = cfg_dir.join("settings.local.json");
     install_claude_stop_hook_at(&cfg, mcp_bin, server_url, timeout)
 }
@@ -637,6 +640,8 @@ pub fn install_codex_stop_hook(
     let cfg_dir = workspace.join(".codex");
     fs::create_dir_all(&cfg_dir)
         .with_context(|| format!("mkdir {}", cfg_dir.display()))?;
+    // Keep our managed file out of git's "dirty" accounting (see claude variant).
+    crate::worktree::ignore_managed_artifacts(workspace);
     let cfg = cfg_dir.join("hooks.json");
     install_codex_stop_hook_at(&cfg, mcp_bin, server_url, timeout)
 }

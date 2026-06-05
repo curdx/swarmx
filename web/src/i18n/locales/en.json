@@ -148,6 +148,23 @@
     "live": "live",
     "off": "off"
   },
+  "merge": {
+    "button": "Merge to main",
+    "title": "Merge \"{{name}}\" to main",
+    "loading": "Loading changes…",
+    "intro": "This direction changed {{count}} file(s); merging into {{base}}",
+    "noChanges": "This direction has no changes to merge",
+    "baseDirty": "The main line ({{base}}) has uncommitted changes — commit or stash them first",
+    "confirm": "Merge",
+    "merging": "Merging…",
+    "mergedTitle": "Merged",
+    "mergedBody": "Merged {{count}} file(s) into {{base}}",
+    "conflictTitle": "Changes collided",
+    "conflictBody": "{{count}} file(s) conflict — an AI is reconciling them; check back in chat",
+    "conflictFiles": "Conflicting files",
+    "watchInChat": "Watch in chat",
+    "done": "Done"
+  },
   "error": {
     "title": "This view hit an error",
     "body": "The rest of the app still works. Retry, or reload the page.",

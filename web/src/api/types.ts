@@ -297,6 +297,26 @@ export interface ThreadInfo {
   created_at: number;
 }
 
+/** Preview of what a direction changed, before merging it back to the main line
+ *  (`GET /api/workspaces/:id/threads/:tid/diff`). */
+export interface ThreadDiff {
+  /** Base branch (the workspace cwd's current branch). */
+  base?: string | null;
+  /** The direction's own branch. */
+  branch?: string | null;
+  /** Repo-relative files this direction changed vs the merge-base. */
+  files: string[];
+  /** Base work tree has uncommitted changes → a merge would be refused. */
+  base_dirty: boolean;
+}
+
+/** Result of `POST /api/workspaces/:id/threads/:tid/merge`. `status` discriminates:
+ *  - "merged": clean merge into `base` (`files` = changed-file count).
+ *  - "resolving": conflicts; an AI agent (`agent_id`) was spawned to resolve. */
+export type MergeResult =
+  | { status: "merged"; base: string; files: number }
+  | { status: "resolving"; agent_id: string; files: string[] };
+
 export interface Workspace {
   id: string;
   /** First 8 chars of `id`. Used as the URL slug `/chat/:slug`. */

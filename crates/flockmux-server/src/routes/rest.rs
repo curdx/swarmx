@@ -2208,6 +2208,249 @@ fn publish_thread_changed(state: &AppState, workspace_id: &str, thread_id: &str,
     });
 }
 
+// ── merge a direction back into the main line ────────────────────────────────
+
+#[derive(serde::Serialize)]
+pub struct ThreadDiffResponse {
+    /// Base branch = the branch currently checked out at the workspace cwd.
+    pub base: Option<String>,
+    /// The direction's own branch (None for a shared/non-isolated direction).
+    pub branch: Option<String>,
+    /// Repo-relative files this direction changed vs the merge-base.
+    pub files: Vec<String>,
+    /// Whether the base work tree has uncommitted changes — a merge would be
+    /// refused, so the UI warns and disables the merge button.
+    pub base_dirty: bool,
+}
+
+/// `GET /api/workspaces/:id/threads/:tid/diff` — preview "what this direction
+/// changed" before merging. Read-only; never touches the work tree.
+pub async fn thread_diff_handler(
+    State(state): State<AppState>,
+    Path((workspace_id, thread_id)): Path<(String, String)>,
+) -> Result<Json<ThreadDiffResponse>, (StatusCode, Json<serde_json::Value>)> {
+    let ws = require_workspace(&state, &workspace_id).await?;
+    let th = require_thread(&state, &thread_id).await?;
+    let branch = th.branch.clone().filter(|b| !b.is_empty());
+    let cwd = std::path::PathBuf::from(&ws.cwd);
+    let branch_for_diff = branch.clone();
+    let (base, files, base_dirty) = tokio::task::spawn_blocking(move || {
+        let base = crate::worktree::current_branch(&cwd);
+        let files = match (&base, &branch_for_diff) {
+            (Some(b), Some(f)) => crate::worktree::diff_summary(&cwd, b, f),
+            _ => Vec::new(),
+        };
+        let dirty = crate::worktree::working_dirty(&cwd);
+        (base, files, dirty)
+    })
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": e.to_string()})),
+        )
+    })?;
+    Ok(Json(ThreadDiffResponse { base, branch, files, base_dirty }))
+}
+
+#[derive(serde::Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum MergeResponse {
+    /// Merged cleanly into `base`; `files` is the direction's changed-file count.
+    Merged { base: String, files: usize },
+    /// Conflicts; an AI resolver agent was spawned to finish the merge.
+    Resolving { agent_id: String, files: Vec<String> },
+}
+
+/// `POST /api/workspaces/:id/threads/:tid/merge` — merge a direction's branch
+/// back into the main line. Clean → done. Conflict → spawn an AI agent in the
+/// main worktree to resolve + commit (the user just sees "AI is reconciling").
+pub async fn merge_thread_handler(
+    State(state): State<AppState>,
+    Path((workspace_id, thread_id)): Path<(String, String)>,
+) -> Result<Json<MergeResponse>, (StatusCode, Json<serde_json::Value>)> {
+    let ws = require_workspace(&state, &workspace_id).await?;
+    let th = require_thread(&state, &thread_id).await?;
+    let branch = match th.branch.clone().filter(|b| !b.is_empty()) {
+        Some(b) if th.isolation == "worktree" => b,
+        _ => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": "该方向没有独立分支，无需合并"})),
+            ));
+        }
+    };
+    let cwd = std::path::PathBuf::from(&ws.cwd);
+
+    // All git work on a blocking thread (shells out). Returns the base branch +
+    // the merge outcome, or a user-facing refusal string.
+    let branch_for_git = branch.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        if crate::worktree::working_dirty(&cwd) {
+            return Err("主线有未提交改动，请先提交或暂存后再合并".to_string());
+        }
+        let base = crate::worktree::current_branch(&cwd)
+            .ok_or_else(|| "主线处于游离 HEAD，无法合并".to_string())?;
+        let outcome = crate::worktree::merge_into_base(&cwd, &base, &branch_for_git);
+        Ok((base, outcome))
+    })
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": e.to_string()})),
+        )
+    })?;
+    let (base, outcome) = match result {
+        Ok(v) => v,
+        // A clean refusal (dirty base / detached HEAD) — 409 so the UI shows the
+        // reason rather than a generic error.
+        Err(msg) => return Err((StatusCode::CONFLICT, Json(json!({"error": msg})))),
+    };
+
+    match outcome {
+        crate::worktree::MergeOutcome::Clean { files } => {
+            Ok(Json(MergeResponse::Merged { base, files }))
+        }
+        crate::worktree::MergeOutcome::Conflict { files } => {
+            let agent_id =
+                spawn_merge_resolver(&state, &ws, &base, &branch, &files)
+                    .await
+                    .map_err(|(s, m)| (s, Json(json!({"error": m}))))?;
+            Ok(Json(MergeResponse::Resolving { agent_id, files }))
+        }
+        crate::worktree::MergeOutcome::Error { msg } => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": format!("合并失败：{msg}")})),
+        )),
+    }
+}
+
+async fn require_workspace(
+    state: &AppState,
+    workspace_id: &str,
+) -> Result<flockmux_storage::WorkspaceRecord, (StatusCode, Json<serde_json::Value>)> {
+    state
+        .store
+        .get_workspace_by_id(workspace_id.to_string())
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": e.to_string()})),
+            )
+        })?
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": format!("unknown workspace_id: {workspace_id}")})),
+            )
+        })
+}
+
+async fn require_thread(
+    state: &AppState,
+    thread_id: &str,
+) -> Result<flockmux_storage::ThreadRecord, (StatusCode, Json<serde_json::Value>)> {
+    state
+        .store
+        .get_thread(thread_id.to_string())
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": e.to_string()})),
+            )
+        })?
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": format!("unknown thread_id: {thread_id}")})),
+            )
+        })
+}
+
+/// Pick the CLI for the merge-resolver: prefer this workspace's live
+/// orchestrator (so it matches what the user configured), else any live agent,
+/// else "claude" (the safe default — conflict resolution wants a strong model).
+async fn resolver_cli(state: &AppState, workspace_id: &str) -> String {
+    if let Ok(agents) = state.store.list_agents().await {
+        let alive = |a: &&flockmux_storage::AgentRecord| {
+            a.workspace_id.as_deref() == Some(workspace_id)
+                && a.killed_at.is_none()
+                && a.shim_exit_at.is_none()
+        };
+        if let Some(a) = agents.iter().find(|a| alive(a) && a.role == "orchestrator") {
+            return a.cli.clone();
+        }
+        if let Some(a) = agents.iter().find(alive) {
+            return a.cli.clone();
+        }
+    }
+    "claude".to_string()
+}
+
+/// Spawn a one-shot agent in the MAIN worktree (ws.cwd, currently mid-merge with
+/// conflict markers + MERGE_HEAD) to resolve the conflicts and commit. Lands it
+/// in the main direction (thread_id = main) so it operates on the primary
+/// worktree, not the direction being merged.
+async fn spawn_merge_resolver(
+    state: &AppState,
+    ws: &flockmux_storage::WorkspaceRecord,
+    base: &str,
+    branch: &str,
+    files: &[String],
+) -> Result<String, (StatusCode, String)> {
+    let main_thread_id = state
+        .store
+        .list_threads(ws.id.clone())
+        .await
+        .ok()
+        .and_then(|ts| ts.into_iter().find(|t| t.slug == "main").map(|t| t.id));
+    let cli = resolver_cli(state, &ws.id).await;
+    let files_list = files.join("、");
+    let system_prompt = format!(
+        "你正在解决一次 git merge 冲突：把分支 `{branch}` 合并进 `{base}` 时与主线已有改动撞车了。\n\
+         冲突文件：{files_list}。\n\
+         逐个打开这些文件，理解两边各自想做什么，消除所有 `<<<<<<<` / `=======` / `>>>>>>>` 冲突标记，\
+         保留两边都合理的意图（不是无脑选一边）。改完后对这些文件 `git add`，再 `git commit`（保留默认的 \
+         merge commit 信息）完成合并。\n\
+         完成后用 swarm_send_message 给 `user` 发一句话，说明你把什么和什么调和了；若某处你不确定，也在这句话里点出来。然后停止。\n\
+         只动这些冲突文件，不要改与本次冲突无关的任何东西。"
+    );
+    let layout = WorkspaceLayout::Shared {
+        dir: std::path::PathBuf::from(&ws.cwd),
+    };
+    let spawn_ms = now_ms();
+    let out = spawn_with_bookkeeping(
+        state,
+        &cli,
+        Some("merge-resolver".to_string()),
+        None,
+        layout,
+        ws.id.clone(),
+        None,
+        main_thread_id,
+    )
+    .await?;
+    // Inject immediately (no dependency gate — there's nothing to wait on).
+    spawn_bootstrap_inject(
+        state.registry.clone(),
+        out.lifecycle_rx.resubscribe(),
+        out.agent_id.clone(),
+        system_prompt,
+        BootstrapCtx {
+            source: "worker",
+            spell: String::new(),
+            role_keys: Vec::new(),
+        },
+        Vec::new(),
+        state.swarm.clone(),
+        spawn_ms,
+    );
+    Ok(out.agent_id)
+}
+
 /// `PATCH /api/workspaces/:id/threads/:tid` — (re)name a direction. Naming a
 /// previously-unnamed, non-`main` direction is ALSO the trigger for automatic
 /// git isolation: we persist the name + branch, flip state to `preparing`,

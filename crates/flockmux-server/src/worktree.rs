@@ -271,6 +271,141 @@ pub fn worktree_remove(repo_cwd: &Path, dest: &Path) -> Result<()> {
     }
 }
 
+/// Make flockmux's own managed artifacts invisible to git by adding them to the
+/// repo's LOCAL `.git/info/exclude` — never the user's tracked `.gitignore`.
+///
+/// We drop `.claude/settings.local.json` (the Stop-hook config) and
+/// `.codex/hooks.json` into the project cwd AND every direction worktree at
+/// spawn time. Untracked, they otherwise show as changes — falsely marking the
+/// tree "dirty" (bogus sidebar dot) and blocking "merge to main" (which refuses
+/// a dirty base). `info/exclude` only hides UNTRACKED files, so a user who
+/// actually tracks these keeps them. It lives in the shared common dir, so one
+/// call covers the main worktree and all direction worktrees. Idempotent;
+/// best-effort no-op for a non-git dir.
+pub fn ignore_managed_artifacts(repo_cwd: &Path) {
+    const MANAGED: [&str; 2] = [".claude/settings.local.json", ".codex/hooks.json"];
+    let common = match git(repo_cwd, &["rev-parse", "--git-common-dir"]) {
+        Ok(o) if o.status_ok && !o.stdout.trim().is_empty() => o.stdout.trim().to_string(),
+        _ => return,
+    };
+    // rev-parse can return a relative path (e.g. ".git"); resolve against cwd.
+    let common_path = {
+        let p = Path::new(&common);
+        if p.is_absolute() {
+            p.to_path_buf()
+        } else {
+            repo_cwd.join(p)
+        }
+    };
+    let exclude = common_path.join("info").join("exclude");
+    let existing = std::fs::read_to_string(&exclude).unwrap_or_default();
+    let missing: Vec<&str> = MANAGED
+        .iter()
+        .copied()
+        .filter(|pat| !existing.lines().any(|l| l.trim() == *pat))
+        .collect();
+    if missing.is_empty() {
+        return;
+    }
+    let mut out = existing;
+    if !out.is_empty() && !out.ends_with('\n') {
+        out.push('\n');
+    }
+    out.push_str("# flockmux-managed (auto-excluded; not committed)\n");
+    for pat in missing {
+        out.push_str(pat);
+        out.push('\n');
+    }
+    if let Some(dir) = exclude.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let _ = std::fs::write(&exclude, out);
+}
+
+// ── merge a direction back into the main line ───────────────────────────────
+
+/// What a [`merge_into_base`] attempt did.
+#[derive(Debug)]
+pub enum MergeOutcome {
+    /// Merged cleanly. `files` = how many files the direction had changed.
+    Clean { files: usize },
+    /// The merge left conflict markers in these (repo-relative) files; the work
+    /// tree is mid-merge (MERGE_HEAD set) awaiting resolution by a human/agent.
+    Conflict { files: Vec<String> },
+    /// The merge couldn't run at all (git error / timeout / nothing to merge).
+    Error { msg: String },
+}
+
+/// Repo-relative files the `from` branch changed relative to its merge-base with
+/// `base` — i.e. "what this direction actually did". Uses three-dot
+/// `git diff --name-only <base>...<from>` so unrelated churn on `base` since the
+/// branch point isn't counted. Empty on any git error/timeout. Blocking; call
+/// off the async path.
+pub fn diff_summary(repo_cwd: &Path, base: &str, from: &str) -> Vec<String> {
+    let spec = format!("{base}...{from}");
+    match git(repo_cwd, &["diff", "--name-only", &spec]) {
+        Ok(o) if o.status_ok => o
+            .stdout
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .map(String::from)
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// Repo-relative files with unresolved merge conflicts
+/// (`git diff --name-only --diff-filter=U`). Non-empty only while a merge is in
+/// progress and stuck on conflicts. Blocking; call off the async path.
+pub fn conflicted_files(repo_cwd: &Path) -> Vec<String> {
+    match git(repo_cwd, &["diff", "--name-only", "--diff-filter=U"]) {
+        Ok(o) if o.status_ok => o
+            .stdout
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .map(String::from)
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// Merge `from` into the branch currently checked out at `repo_cwd`. `repo_cwd`
+/// MUST be the project's PRIMARY worktree (the workspace cwd, on `base`) — never
+/// an isolated direction worktree, which can't hold the merge. Runs
+/// `git merge --no-edit <from>`; on conflict the work tree is left mid-merge
+/// (MERGE_HEAD + conflict markers) for a resolver to finish.
+///
+/// Caller MUST ensure `repo_cwd` is clean first (`working_dirty` == false): git
+/// refuses to merge over uncommitted changes and we never stash silently.
+pub fn merge_into_base(repo_cwd: &Path, base: &str, from: &str) -> MergeOutcome {
+    // Count the direction's changed files BEFORE merging — afterwards `from` is
+    // an ancestor of `base` and the three-dot diff would be empty.
+    let changed = diff_summary(repo_cwd, base, from).len();
+    let out = match git(repo_cwd, &["merge", "--no-edit", from]) {
+        Ok(o) => o,
+        Err(e) => return MergeOutcome::Error { msg: e.to_string() },
+    };
+    if out.status_ok {
+        return MergeOutcome::Clean { files: changed };
+    }
+    // Non-zero exit: a real conflict leaves unmerged paths + MERGE_HEAD; anything
+    // else (e.g. "merge is not possible because you have unmerged files", bad
+    // ref) is a hard error we surface verbatim.
+    let conflicts = conflicted_files(repo_cwd);
+    if !conflicts.is_empty() {
+        MergeOutcome::Conflict { files: conflicts }
+    } else {
+        let msg = if out.stderr.trim().is_empty() {
+            out.stdout.trim().to_string()
+        } else {
+            out.stderr.trim().to_string()
+        };
+        MergeOutcome::Error { msg }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -337,5 +472,89 @@ mod tests {
 
         worktree_remove(&proj, &wt).expect("worktree remove");
         assert!(!wt.exists(), "worktree dir gone after remove");
+    }
+
+    // Real-git merge: clean (new file) then conflict (same file two ways).
+    // Skipped automatically if `git` isn't on PATH.
+    #[test]
+    fn merge_clean_then_conflict_on_real_git() {
+        if Command::new("git").arg("--version").output().is_err() {
+            return; // no git → skip
+        }
+        let dir = tempfile::TempDir::new().unwrap();
+        let repo = dir.path().join("r");
+        std::fs::create_dir_all(&repo).unwrap();
+        // Run git with an inline identity so commits don't fail on a machine
+        // without global user.* (mirrors git_init_with_commit).
+        let commit = |repo: &Path, msg: &str| {
+            git(repo, &["add", "-A"]).unwrap();
+            git(
+                repo,
+                &[
+                    "-c", "user.email=t@t.t", "-c", "user.name=t",
+                    "commit", "-q", "-m", msg,
+                ],
+            )
+            .unwrap();
+        };
+        git(&repo, &["init", "-q"]).unwrap();
+        std::fs::write(repo.join("a.txt"), "base\n").unwrap();
+        commit(&repo, "base");
+        let base = current_branch(&repo).expect("base branch");
+
+        // feature: adds a new file → clean merge.
+        git(&repo, &["checkout", "-q", "-b", "feature"]).unwrap();
+        std::fs::write(repo.join("b.txt"), "feature\n").unwrap();
+        commit(&repo, "feat");
+        git(&repo, &["checkout", "-q", &base]).unwrap();
+
+        assert_eq!(diff_summary(&repo, &base, "feature"), vec!["b.txt".to_string()]);
+        match merge_into_base(&repo, &base, "feature") {
+            MergeOutcome::Clean { files } => assert_eq!(files, 1),
+            other => panic!("expected clean, got {other:?}"),
+        }
+
+        // feature2: edits a.txt; base edits a.txt differently → conflict.
+        git(&repo, &["checkout", "-q", "-b", "feature2"]).unwrap();
+        std::fs::write(repo.join("a.txt"), "from-feature2\n").unwrap();
+        commit(&repo, "f2");
+        git(&repo, &["checkout", "-q", &base]).unwrap();
+        std::fs::write(repo.join("a.txt"), "from-base\n").unwrap();
+        commit(&repo, "base2");
+
+        match merge_into_base(&repo, &base, "feature2") {
+            MergeOutcome::Conflict { files } => {
+                assert!(files.contains(&"a.txt".to_string()), "a.txt conflicted");
+            }
+            other => panic!("expected conflict, got {other:?}"),
+        }
+        assert!(!conflicted_files(&repo).is_empty(), "mid-merge has conflicts");
+        let _ = git(&repo, &["merge", "--abort"]); // tidy up the in-progress merge
+    }
+
+    #[test]
+    fn ignore_managed_artifacts_writes_patterns_idempotently() {
+        if Command::new("git").arg("--version").output().is_err() {
+            return; // no git → skip
+        }
+        let dir = tempfile::TempDir::new().unwrap();
+        let repo = dir.path().join("r");
+        std::fs::create_dir_all(&repo).unwrap();
+        git(&repo, &["init", "-q"]).unwrap();
+
+        ignore_managed_artifacts(&repo);
+        let exclude = repo.join(".git/info/exclude");
+        let body = std::fs::read_to_string(&exclude).unwrap();
+        assert!(body.contains(".claude/settings.local.json"), "claude pattern added");
+        assert!(body.contains(".codex/hooks.json"), "codex pattern added");
+
+        // Idempotent: a second call must not duplicate the entries.
+        ignore_managed_artifacts(&repo);
+        let body2 = std::fs::read_to_string(&exclude).unwrap();
+        assert_eq!(
+            body2.matches(".claude/settings.local.json").count(),
+            1,
+            "no duplicate exclude entry on re-run",
+        );
     }
 }

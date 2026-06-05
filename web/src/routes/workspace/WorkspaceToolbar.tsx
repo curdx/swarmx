@@ -7,17 +7,19 @@
  * navigates to these same tab targets — one definition, two consumers.
  */
 
-import { type ReactNode } from "react";
+import { type ReactNode, useState } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import {
   ClipboardList,
   GitBranch,
+  GitMerge,
   MessageSquare,
   Play,
 } from "lucide-react";
 import type { WorkspaceSummary } from "./types";
 import { directionBase } from "@/lib/thread";
+import { MergeDialog } from "@/components/workspace/MergeDialog";
 import { Badge } from "@/components/ui/badge";
 import {
   Tooltip,
@@ -68,6 +70,17 @@ export function WorkspaceToolbar({
     typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
   const modKey = isMac ? "⌘" : "Ctrl";
 
+  // "合并到主线" is offered only for a non-main direction that actually has its
+  // own branch (isolated worktree, ready) — a shared/main direction has nothing
+  // to merge.
+  const [mergeOpen, setMergeOpen] = useState(false);
+  const activeThread = workspace.threads.find((th) => th.slug === threadSlug);
+  const canMerge =
+    !!activeThread &&
+    activeThread.slug !== "main" &&
+    activeThread.isolation === "worktree" &&
+    activeThread.state === "ready";
+
   return (
     <nav className="flex h-10 shrink-0 items-center gap-1 border-b border-border-subtle px-3">
       {tabs.map((tab) => {
@@ -99,6 +112,30 @@ export function WorkspaceToolbar({
       })}
 
       <span className="flex-1" />
+
+      {/* 合并到主线 — 只在「非 main + 已隔离 worktree 方向」出现。 */}
+      {canMerge && activeThread && (
+        <>
+          <button
+            type="button"
+            onClick={() => setMergeOpen(true)}
+            title={t("merge.button")}
+            className="flex h-6 shrink-0 items-center gap-1 rounded-md border border-border-subtle px-2 font-caption text-[11px] text-foreground-secondary transition-colors hover:bg-surface-tertiary hover:text-foreground-primary"
+          >
+            <GitMerge className="size-3.5" />
+            <span className="hidden whitespace-nowrap lg:inline">
+              {t("merge.button")}
+            </span>
+          </button>
+          <MergeDialog
+            open={mergeOpen}
+            onOpenChange={setMergeOpen}
+            workspaceId={workspace.workspaceId}
+            threadId={activeThread.id}
+            threadName={activeThread.name || activeThread.slug}
+          />
+        </>
+      )}
 
       {/* workspace actions — 全部 shrink-0 + 小尺寸，跟 tab 行高保持一致 */}
       {agentCount > 0 && (
