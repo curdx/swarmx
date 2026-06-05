@@ -478,6 +478,7 @@
     "resume": "Resume",
     "restart": "Restart",
     "notImplemented": "Not implemented yet",
+    "terminalExited": "This agent has exited — its terminal is gone. See what it did in the Recordings / Messages / Context tabs.",
     "tabs": {
       "terminal": "Terminal",
       "activity": "Activity",

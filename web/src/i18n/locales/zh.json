@@ -478,6 +478,7 @@
     "resume": "恢复",
     "restart": "重启",
     "notImplemented": "暂未实现",
+    "terminalExited": "这个 agent 已退出，终端不可用。它干了什么可以在「录像 / 消息 / 上下文」里回看。",
     "tabs": {
       "terminal": "终端",
       "activity": "活动",

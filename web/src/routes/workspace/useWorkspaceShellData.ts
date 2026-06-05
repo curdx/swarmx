@@ -309,14 +309,16 @@ export function useWorkspaceShellData(
       aliveByWsId.set(a.workspace_id, arr);
     }
     return workspaceRows.map<WorkspaceSummary>((w) => {
-      const { parent } = splitWorkspacePath(w.cwd);
+      // Use the cwd's basename (the actual project folder) for the caption, not
+      // its parent dir — `/tmp` told the user nothing (F2).
+      const { name: folder } = splitWorkspacePath(w.cwd);
       return {
         id: w.slug,
         workspaceId: w.id,
         path: w.cwd,
         cwdBranch: w.cwd_branch ?? null,
         name: w.name,
-        parent,
+        folder,
         accentColor: accentToCssVar(w.accent),
         members: aliveByWsId.get(w.id) ?? [],
         roots: w.roots ?? [],

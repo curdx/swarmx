@@ -19,8 +19,10 @@ export interface WorkspaceSummary {
   cwdBranch: string | null;
   /** Human name from CreateWizard (workspaces.name). */
   name: string;
-  /** Path parent for the small mono caption under the name. */
-  parent: string;
+  /** The project folder name (cwd basename) for the small mono caption under
+   *  the name — e.g. `my-project`, not the useless parent dir `/Users/me/code`.
+   *  The full path is on the row's title tooltip. */
+  folder: string;
   /** Accent color CSS var; comes from workspaces.accent or defaults
    *  to peach. */
   accentColor: string;

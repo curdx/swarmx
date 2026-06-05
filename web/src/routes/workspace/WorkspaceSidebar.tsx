@@ -452,12 +452,12 @@ export function WorkspaceList({
                     {ws.threads.length <= 1 && (
                       <BranchCaption branch={ws.cwdBranch} />
                     )}
-                    {ws.parent && !hasRoots && (
-                      // When the tree is shown, the explicit primary-project
-                      // node already carries the folder + path, so the row
-                      // drops the redundant parent caption.
+                    {ws.folder && !hasRoots && (
+                      // The project folder name (cwd basename). When the root
+                      // tree is shown, the explicit primary-project node already
+                      // carries the folder + path, so the row drops this caption.
                       <span className="truncate font-mono text-[10px] leading-tight text-foreground-tertiary">
-                        {ws.parent}
+                        {ws.folder}
                       </span>
                     )}
                   </span>

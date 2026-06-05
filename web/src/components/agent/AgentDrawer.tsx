@@ -118,14 +118,26 @@ export function AgentDrawer({ agentId, activities, onClose }: Props) {
   // background agents refresh) instead of snapping back to "terminal", and so
   // it deep-links. Defaults to terminal when the param is absent/unknown.
   const [searchParams, setSearchParams] = useSearchParams();
-  const tab: TabId = TABS.some((x) => x.id === searchParams.get("tab"))
+  // Assume live until info loads, so a genuinely live agent never flickers off
+  // the terminal default.
+  const liveAgent = info ? info.killed_at == null && info.shim_exit == null : true;
+  const explicitTab: TabId | null = TABS.some((x) => x.id === searchParams.get("tab"))
     ? (searchParams.get("tab") as TabId)
-    : "terminal";
+    : null;
+  // F6: a killed agent's terminal is a dead PTY (the WS connect just errors), so
+  // clicking its avatar in chat used to open an empty/error drawer. Default a
+  // dead agent to its recordings — the richest "what did this agent do" view —
+  // instead. An explicit ?tab= always wins (deep-link / user pick).
+  const defaultTab: TabId = liveAgent ? "terminal" : "recordings";
+  const tab: TabId = explicitTab ?? defaultTab;
+  // Drop the param only for the section's natural default so the URL stays
+  // clean there — and crucially so clicking a NON-default tab (e.g. 终端 on a
+  // dead agent) actually sticks instead of bouncing back to the default.
   const setTab = (next: TabId) =>
     setSearchParams(
       (prev) => {
         const p = new URLSearchParams(prev);
-        if (next === "terminal") p.delete("tab");
+        if (next === defaultTab) p.delete("tab");
         else p.set("tab", next);
         return p;
       },
@@ -233,7 +245,7 @@ export function AgentDrawer({ agentId, activities, onClose }: Props) {
           {/* Mount all tabs concurrently is tempting (keeps terminal alive
               across tab switches), but xterm holds a WebGL slot and a WS
               so we'd burn budget on idle panes. Switch-unmount instead. */}
-          {tab === "terminal" && <TerminalTab agentId={agentId} />}
+          {tab === "terminal" && <TerminalTab agentId={agentId} live={liveAgent} />}
           {tab === "activity" && <AgentActivityLog activities={activities} />}
           {tab === "recordings" && (
             <RecordingsTab agentId={agentId} wsId={wsSlug} />
@@ -395,7 +407,19 @@ function TabBar({ tab, onChange }: { tab: TabId; onChange: (t: TabId) => void })
 
 // ── Tab: Terminal ────────────────────────────────────────────────────────
 
-function TerminalTab({ agentId }: { agentId: string }) {
+function TerminalTab({ agentId, live }: { agentId: string; live: boolean }) {
+  const { t } = useTranslation();
+  // A killed agent has no PTY — connecting the xterm WS would just error. Show a
+  // plain note pointing at the historical tabs instead of a dead/error terminal.
+  if (!live) {
+    return (
+      <div className="flex h-full items-center justify-center bg-surface-inverse p-6">
+        <p className="max-w-xs text-center font-caption text-sm text-foreground-inverse-secondary">
+          {t("agent.terminalExited")}
+        </p>
+      </div>
+    );
+  }
   return (
     <div className="h-full bg-surface-inverse">
       <XtermPane agentId={agentId} visible />

@@ -85,14 +85,14 @@ export default function ChatHome() {
       aliveByWsId.set(a.workspace_id, arr);
     }
     return workspaceRows.map<WorkspaceSummary>((w) => {
-      const { parent } = splitWorkspacePath(w.cwd);
+      const { name: folder } = splitWorkspacePath(w.cwd);
       return {
         id: w.slug,
         workspaceId: w.id,
         path: w.cwd,
         cwdBranch: w.cwd_branch ?? null,
         name: w.name,
-        parent,
+        folder,
         accentColor: accentToCssVar(w.accent),
         members: aliveByWsId.get(w.id) ?? [],
         roots: w.roots ?? [],
