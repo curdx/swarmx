@@ -176,7 +176,7 @@
   },
   "settings": {
     "title": "Settings",
-    "subtitle": "Local config · applies instantly · stored in this browser",
+    "subtitle": "Preferences live in this browser; model / plugin config lives on the server",
     "sections": {
       "general": "General",
       "appearance": "Appearance",

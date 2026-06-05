@@ -176,7 +176,7 @@
   },
   "settings": {
     "title": "设置",
-    "subtitle": "本地配置 · 改一处即时生效 · 存于本机浏览器",
+    "subtitle": "偏好存于本机浏览器，模型 / 插件等配给存于服务端",
     "sections": {
       "general": "通用",
       "appearance": "外观",
