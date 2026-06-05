@@ -445,6 +445,13 @@ export function WorkspaceList({
                         />
                       )}
                     </span>
+                    {/* Single-direction workspaces don't render per-thread rows
+                     *  (those carry the branch caption), so the cwd's branch
+                     *  rides on the workspace row — otherwise the most common
+                     *  case (one project, main only) shows no branch at all. */}
+                    {ws.threads.length <= 1 && (
+                      <BranchCaption branch={ws.cwdBranch} />
+                    )}
                     {ws.parent && !hasRoots && (
                       // When the tree is shown, the explicit primary-project
                       // node already carries the folder + path, so the row

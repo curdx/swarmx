@@ -1949,13 +1949,18 @@ pub async fn list_workspaces_handler(State(state): State<AppState>) -> impl Into
                 .and_then(|g| g.branch.clone());
         }
     }
-    // Fold the live dirty flag into each direction (keyed by its cwd).
+    // Fold the live dirty flag + branch into each direction (keyed by its cwd).
+    // dirty is always live; branch is only filled when the DB row hasn't already
+    // recorded one (an isolated worktree keeps its stored branch — its cwd's git
+    // HEAD is the same branch anyway, but the stored value is canonical).
     for threads in threads_by_ws.values_mut() {
         for t in threads.iter_mut() {
-            t.dirty = git_map
-                .get(std::path::Path::new(&t.cwd))
-                .map(|g| g.dirty)
-                .unwrap_or(false);
+            if let Some(g) = git_map.get(std::path::Path::new(&t.cwd)) {
+                t.dirty = g.dirty;
+                if t.branch.is_none() {
+                    t.branch = g.branch.clone();
+                }
+            }
         }
     }
     let items: Vec<Workspace> = rows
