@@ -2886,12 +2886,21 @@ pub async fn delete_thread_handler(
         if let Ok(Some(ws)) = state.store.get_workspace_by_id(workspace_id).await {
             let repo = ws.cwd.clone();
             let dest = thread.cwd.clone();
+            let branch = thread.branch.clone();
             tokio::spawn(async move {
                 let _ = tokio::task::spawn_blocking(move || {
-                    crate::worktree::worktree_remove(
-                        std::path::Path::new(&repo),
+                    let repo_path = std::path::Path::new(&repo);
+                    // Remove the worktree FIRST — git refuses to delete a branch
+                    // still checked out in one. Then drop the now-orphaned branch
+                    // so a same-named direction recreated later starts fresh
+                    // instead of re-attaching this branch's history.
+                    let _ = crate::worktree::worktree_remove(
+                        repo_path,
                         std::path::Path::new(&dest),
-                    )
+                    );
+                    if let Some(b) = branch.as_deref().filter(|b| !b.is_empty()) {
+                        let _ = crate::worktree::delete_branch(repo_path, b);
+                    }
                 })
                 .await;
             });

@@ -271,6 +271,23 @@ pub fn worktree_remove(repo_cwd: &Path, dest: &Path) -> Result<()> {
     }
 }
 
+/// Delete a local branch (best-effort). `-D` (force) so it works whether or not
+/// the branch is fully merged — a direction delete is a "discard" (the user
+/// chose to drop it), and a merge-then-cleanup deletes an already-merged branch
+/// either way. MUST be called AFTER the branch's worktree is removed: git
+/// refuses to delete a branch still checked out in a worktree. No-op /
+/// best-effort on any error (the branch lingering is harmless vs failing the
+/// delete). Without this, a same-named direction recreated later would re-attach
+/// this stale branch's history.
+pub fn delete_branch(repo_cwd: &Path, branch: &str) -> Result<()> {
+    let out = git(repo_cwd, &["branch", "-D", branch]).context("git branch -D")?;
+    if out.status_ok {
+        Ok(())
+    } else {
+        Err(anyhow!("git branch -D failed: {}", out.stderr.trim()))
+    }
+}
+
 /// Make flockmux's own managed artifacts invisible to git by adding them to the
 /// repo's LOCAL `.git/info/exclude` — never the user's tracked `.gitignore`.
 ///
@@ -472,6 +489,18 @@ mod tests {
 
         worktree_remove(&proj, &wt).expect("worktree remove");
         assert!(!wt.exists(), "worktree dir gone after remove");
+
+        // After the worktree is gone, the branch can be deleted (it's no longer
+        // checked out anywhere). list_branches should then not include it.
+        assert!(
+            list_branches(&proj).iter().any(|(b, _)| b == "dark-mode"),
+            "branch present before delete",
+        );
+        delete_branch(&proj, "dark-mode").expect("delete branch");
+        assert!(
+            !list_branches(&proj).iter().any(|(b, _)| b == "dark-mode"),
+            "branch gone after delete",
+        );
     }
 
     // Real-git merge: clean (new file) then conflict (same file two ways).

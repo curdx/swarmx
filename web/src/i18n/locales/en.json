@@ -163,7 +163,10 @@
     "conflictBody": "{{count}} file(s) conflict — an AI is reconciling them; check back in chat",
     "conflictFiles": "Conflicting files",
     "watchInChat": "Watch in chat",
-    "done": "Done"
+    "done": "Done",
+    "cleanupHint": "This direction is merged — you can wrap it up.",
+    "cleanup": "Clean up this direction",
+    "keep": "Keep it"
   },
   "error": {
     "title": "This view hit an error",

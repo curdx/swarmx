@@ -404,6 +404,7 @@ export default function WorkspaceShell() {
             agentCount={threadMembers.length}
             totalUnread={totalUnread}
             onJumpUnread={() => setJumpUnreadTick((v) => v + 1)}
+            onCleanupThread={(threadId) => onDeleteThread(activeWs, threadId)}
           />
           <ViewTransition>
             {/* View-level boundary: a crash in one tab (malformed ledger

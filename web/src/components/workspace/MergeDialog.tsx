@@ -12,7 +12,7 @@
 
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { AlertTriangle, Bot, Check, FileText, GitMerge } from "lucide-react";
+import { AlertTriangle, Bot, Check, FileText, GitMerge, Trash2 } from "lucide-react";
 import { api } from "@/api/http";
 import type { MergeResult, ThreadDiff } from "@/api/types";
 import {
@@ -32,6 +32,9 @@ interface Props {
   threadId: string;
   /** Direction display name, for the dialog title. */
   threadName: string;
+  /** Clean up this direction (delete worktree + branch + card, nav to main).
+   *  Offered after a clean merge so the merged-and-done direction doesn't linger. */
+  onCleanup: (threadId: string) => void;
 }
 
 function FileList({ files }: { files: string[] }) {
@@ -58,6 +61,7 @@ export function MergeDialog({
   workspaceId,
   threadId,
   threadName,
+  onCleanup,
 }: Props) {
   const { t } = useTranslation();
   const [diff, setDiff] = useState<ThreadDiff | null>(null);
@@ -122,10 +126,23 @@ export function MergeDialog({
               </DialogTitle>
               <DialogDescription>
                 {t("merge.mergedBody", { count: result.files, base: result.base })}
+                {" "}
+                {t("merge.cleanupHint")}
               </DialogDescription>
             </DialogHeader>
-            <div className="flex justify-end pt-2">
-              <Button onClick={() => onOpenChange(false)}>{t("merge.done")}</Button>
+            <div className="flex justify-end gap-2 pt-2">
+              <Button variant="outline" onClick={() => onOpenChange(false)}>
+                {t("merge.keep")}
+              </Button>
+              <Button
+                onClick={() => {
+                  onOpenChange(false);
+                  onCleanup(threadId);
+                }}
+              >
+                <Trash2 className="size-3.5" />
+                {t("merge.cleanup")}
+              </Button>
             </div>
           </>
         ) : result?.status === "resolving" ? (

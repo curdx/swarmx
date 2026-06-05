@@ -163,7 +163,10 @@
     "conflictBody": "{{count}} 个文件有冲突，AI 正在协调——稍后回聊天看它的结论",
     "conflictFiles": "冲突文件",
     "watchInChat": "回聊天看进度",
-    "done": "完成"
+    "done": "完成",
+    "cleanupHint": "这个方向已经合过了，可以收尾清理。",
+    "cleanup": "清理这个方向",
+    "keep": "先留着"
   },
   "error": {
     "title": "这个视图出错了",

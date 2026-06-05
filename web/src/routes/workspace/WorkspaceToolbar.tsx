@@ -56,6 +56,7 @@ export function WorkspaceToolbar({
   agentCount,
   totalUnread,
   onJumpUnread,
+  onCleanupThread,
 }: {
   workspace: WorkspaceSummary;
   /** Active direction slug; tabs stay within this direction. */
@@ -63,6 +64,8 @@ export function WorkspaceToolbar({
   agentCount: number;
   totalUnread: number;
   onJumpUnread: () => void;
+  /** Clean up a direction after merge (delete worktree+branch+card, nav to main). */
+  onCleanupThread: (threadId: string) => void;
 }) {
   const { t } = useTranslation();
   const tabs = buildTabs(workspace.id, threadSlug);
@@ -133,6 +136,7 @@ export function WorkspaceToolbar({
             workspaceId={workspace.workspaceId}
             threadId={activeThread.id}
             threadName={activeThread.name || activeThread.slug}
+            onCleanup={onCleanupThread}
           />
         </>
       )}
