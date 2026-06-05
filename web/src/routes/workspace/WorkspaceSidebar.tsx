@@ -94,6 +94,30 @@ function BranchCaption({ branch }: { branch?: string | null }) {
   );
 }
 
+/** "↑N ↓M" — how far an isolated direction's branch has diverged from the main
+ *  line (ahead / behind, purely local). Renders nothing when in sync or N/A. */
+function AheadBehind({
+  ahead,
+  behind,
+}: {
+  ahead?: number | null;
+  behind?: number | null;
+}) {
+  const { t } = useTranslation();
+  const a = ahead ?? 0;
+  const b = behind ?? 0;
+  if (a === 0 && b === 0) return null;
+  return (
+    <span
+      className="flex shrink-0 items-center gap-1 font-mono text-[9px] leading-tight text-foreground-tertiary"
+      title={t("chat.directionAheadBehind", { ahead: a, behind: b })}
+    >
+      {a > 0 && <span className="text-state-success">↑{a}</span>}
+      {b > 0 && <span className="text-state-warning">↓{b}</span>}
+    </span>
+  );
+}
+
 // ── Workspace root tree (logical, parent_id based) ─────────────────────
 
 interface RootNode {
@@ -604,7 +628,12 @@ export function WorkspaceList({
                                   />
                                 )}
                               </span>
-                              <BranchCaption branch={branch} />
+                              <span className="flex items-center gap-1.5">
+                                <BranchCaption branch={branch} />
+                                {!isMain && (
+                                  <AheadBehind ahead={th.ahead} behind={th.behind} />
+                                )}
+                              </span>
                             </span>
                             {preparing && (
                               <span className="ml-auto shrink-0 font-caption text-[9px] text-foreground-tertiary">

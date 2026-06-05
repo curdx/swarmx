@@ -326,6 +326,7 @@
     "directionPreparing": "隔离中…",
     "directionDegraded": "隔离失败，正与主线共用同一目录（文件可能互相覆盖）",
     "directionDirty": "有未提交改动",
+    "directionAheadBehind": "领先主线 {{ahead}} 个提交 · 落后 {{behind}} 个",
     "deleteDirection": "删除方向 {{name}}",
     "directionDeleteConfirmTitle": "删除方向「{{name}}」?",
     "directionDeleteConfirmBody": "会停掉这个方向里所有在跑的 AI，并移除它的隔离副本（如果有）。主线和其它方向不受影响。",

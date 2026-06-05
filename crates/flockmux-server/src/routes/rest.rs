@@ -205,6 +205,8 @@ fn thread_record_to_info(t: ThreadRecord) -> ThreadInfo {
         cwd: t.cwd,
         state: t.state,
         dirty: false, // live value folded in by list_workspaces_handler
+        ahead: None,  // live values folded in by list_workspaces_handler
+        behind: None,
         created_at: t.created_at,
     }
 }
@@ -1959,6 +1961,51 @@ pub async fn list_workspaces_handler(State(state): State<AppState>) -> impl Into
                 t.dirty = g.dirty;
                 if t.branch.is_none() {
                     t.branch = g.branch.clone();
+                }
+            }
+        }
+    }
+    // ahead/behind: how far each isolated direction's branch has diverged from
+    // its workspace's base branch (the main worktree's current branch). Purely
+    // local (no fetch). Only worktree directions with a branch != base qualify,
+    // so a plain main-only workspace adds ZERO git calls (the common case stays
+    // free); the rev-list runs off the async runtime, keyed by thread id.
+    let ab_input: Vec<(String, String, String, String)> = rows
+        .iter()
+        .filter_map(|r| {
+            let base = git_map
+                .get(std::path::Path::new(&r.cwd))
+                .and_then(|g| g.branch.clone())?;
+            let threads = threads_by_ws.get(&r.id)?;
+            Some(threads.iter().filter_map(move |t| {
+                let br = t.branch.as_deref().filter(|b| !b.is_empty())?;
+                (t.isolation == "worktree" && br != base).then(|| {
+                    (r.cwd.clone(), base.clone(), br.to_string(), t.id.clone())
+                })
+            }))
+        })
+        .flatten()
+        .collect();
+    if !ab_input.is_empty() {
+        let ab_map = tokio::task::spawn_blocking(move || {
+            let mut m: std::collections::HashMap<String, (i64, i64)> =
+                std::collections::HashMap::new();
+            for (cwd, base, branch, tid) in ab_input {
+                if let Some(ab) =
+                    crate::worktree::ahead_behind(std::path::Path::new(&cwd), &base, &branch)
+                {
+                    m.insert(tid, ab);
+                }
+            }
+            m
+        })
+        .await
+        .unwrap_or_default();
+        for threads in threads_by_ws.values_mut() {
+            for t in threads.iter_mut() {
+                if let Some(&(ahead, behind)) = ab_map.get(&t.id) {
+                    t.ahead = Some(ahead);
+                    t.behind = Some(behind);
                 }
             }
         }

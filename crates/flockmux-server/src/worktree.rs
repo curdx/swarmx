@@ -271,6 +271,30 @@ pub fn worktree_remove(repo_cwd: &Path, dest: &Path) -> Result<()> {
     }
 }
 
+/// Commits `branch` is ahead of / behind `base`, computed **purely locally**
+/// (never fetches). Returns `(ahead, behind)` where `ahead` = commits on
+/// `branch` not on `base`, `behind` = commits on `base` not on `branch`.
+///
+/// `git rev-list --left-right --count <base>...<branch>` prints
+/// "`<behind>`\t`<ahead>`" (left = reachable from base only; right = branch
+/// only). Run from the main repo — refs are shared across worktrees, so it sees
+/// every direction's branch. `None` on any git error, or when `base == branch`
+/// (the main direction is its own base — ahead/behind is meaningless there).
+pub fn ahead_behind(repo_cwd: &Path, base: &str, branch: &str) -> Option<(i64, i64)> {
+    if base == branch || base.is_empty() || branch.is_empty() {
+        return None;
+    }
+    let spec = format!("{base}...{branch}");
+    let out = git(repo_cwd, &["rev-list", "--left-right", "--count", &spec]).ok()?;
+    if !out.status_ok {
+        return None;
+    }
+    let mut it = out.stdout.split_whitespace();
+    let behind: i64 = it.next()?.parse().ok()?;
+    let ahead: i64 = it.next()?.parse().ok()?;
+    Some((ahead, behind))
+}
+
 /// Delete a local branch (best-effort). `-D` (force) so it works whether or not
 /// the branch is fully merged — a direction delete is a "discard" (the user
 /// chose to drop it), and a merge-then-cleanup deletes an already-merged branch
@@ -559,6 +583,42 @@ mod tests {
         }
         assert!(!conflicted_files(&repo).is_empty(), "mid-merge has conflicts");
         let _ = git(&repo, &["merge", "--abort"]); // tidy up the in-progress merge
+    }
+
+    #[test]
+    fn ahead_behind_counts_diverged_commits() {
+        if Command::new("git").arg("--version").output().is_err() {
+            return; // no git → skip
+        }
+        let dir = tempfile::TempDir::new().unwrap();
+        let repo = dir.path().join("r");
+        std::fs::create_dir_all(&repo).unwrap();
+        let commit = |repo: &Path, file: &str, body: &str, msg: &str| {
+            std::fs::write(repo.join(file), body).unwrap();
+            git(repo, &["add", "-A"]).unwrap();
+            git(
+                repo,
+                &["-c", "user.email=t@t.t", "-c", "user.name=t", "commit", "-q", "-m", msg],
+            )
+            .unwrap();
+        };
+        git(&repo, &["init", "-q"]).unwrap();
+        commit(&repo, "a.txt", "base\n", "base");
+        let base = current_branch(&repo).unwrap();
+
+        // feat diverges: +2 commits of its own, base gains +1 → ahead 2, behind 1.
+        git(&repo, &["checkout", "-q", "-b", "feat"]).unwrap();
+        commit(&repo, "b.txt", "1\n", "feat1");
+        commit(&repo, "b.txt", "2\n", "feat2");
+        git(&repo, &["checkout", "-q", &base]).unwrap();
+        commit(&repo, "a.txt", "base2\n", "base2");
+
+        assert_eq!(ahead_behind(&repo, &base, "feat"), Some((2, 1)), "ahead 2, behind 1");
+        // base vs itself → None (main direction is its own base).
+        assert_eq!(ahead_behind(&repo, &base, &base), None);
+        // No divergence (fresh branch off base) → (0, 0).
+        git(&repo, &["branch", "fresh", &base]).unwrap();
+        assert_eq!(ahead_behind(&repo, &base, "fresh"), Some((0, 0)));
     }
 
     #[test]

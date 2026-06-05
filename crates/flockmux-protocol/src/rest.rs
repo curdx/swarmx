@@ -459,6 +459,14 @@ pub struct ThreadInfo {
     /// with a dirty dot. `false` for a clean/non-git/errored tree.
     #[serde(default)]
     pub dirty: bool,
+    /// Live (computed at list time, not persisted): commits this direction's
+    /// branch is ahead of / behind the workspace's base branch (the main
+    /// worktree's current branch). Purely local — never fetches. `None` for the
+    /// main/shared direction, a non-git tree, or detached HEAD.
+    #[serde(default)]
+    pub ahead: Option<i64>,
+    #[serde(default)]
+    pub behind: Option<i64>,
     pub created_at: i64,
 }
 

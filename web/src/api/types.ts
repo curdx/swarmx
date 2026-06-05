@@ -294,6 +294,11 @@ export interface ThreadInfo {
   /** Live (computed server-side at list time): does `cwd` have uncommitted
    *  changes? Drives the sidebar's dirty dot. */
   dirty?: boolean;
+  /** Live (computed server-side, purely local — no fetch): commits this
+   *  direction's branch is ahead of / behind the workspace's base branch.
+   *  Null for the main/shared direction or a non-git tree. */
+  ahead?: number | null;
+  behind?: number | null;
   created_at: number;
 }
 

@@ -326,6 +326,7 @@
     "directionPreparing": "isolating…",
     "directionDegraded": "Isolation failed — sharing the main directory (files may clobber each other)",
     "directionDirty": "Uncommitted changes",
+    "directionAheadBehind": "{{ahead}} commit(s) ahead of main · {{behind}} behind",
     "deleteDirection": "Delete direction {{name}}",
     "directionDeleteConfirmTitle": "Delete direction \"{{name}}\"?",
     "directionDeleteConfirmBody": "Stops every AI running in this direction and removes its isolated copy (if any). Main and other directions are unaffected.",
