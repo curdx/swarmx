@@ -438,6 +438,172 @@ a {
 }
 .prose-context th { background: var(--color-surface-tertiary); }
 
+/* ── Chat-bubble markdown (ChatMarkdown / agent bubbles) ──────────────────
+ * Compact sibling of .prose-context tuned for chat density: tighter vertical
+ * rhythm, fills the bubble (no max-width), inherits the bubble's text colour.
+ * Reuses the existing token system so it tracks light / [data-theme=dark]. */
+.prose-chat {
+  font-family: var(--font-body);
+  font-size: 13px;
+  line-height: 1.6;
+  color: inherit;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+.prose-chat > :first-child { margin-top: 0; }
+.prose-chat > :last-child { margin-bottom: 0; }
+.prose-chat p { margin: 0.4em 0; }
+.prose-chat h1,
+.prose-chat h2,
+.prose-chat h3,
+.prose-chat h4 {
+  font-family: var(--font-heading);
+  font-weight: 600;
+  line-height: 1.3;
+  margin: 0.8em 0 0.35em;
+  color: var(--color-foreground-primary);
+}
+.prose-chat h1 { font-size: 1.3em; }
+.prose-chat h2 { font-size: 1.18em; }
+.prose-chat h3 { font-size: 1.06em; }
+.prose-chat h4 { font-size: 1em; }
+.prose-chat a {
+  color: var(--color-accent-primary-deep);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.prose-chat strong { font-weight: 600; }
+.prose-chat em { font-style: italic; }
+/* Tailwind v4 preflight resets ul/ol to list-style:none — restore the markers
+ * explicitly or every agent bullet/numbered list renders as flush, marker-less
+ * lines. */
+.prose-chat ul,
+.prose-chat ol { margin: 0.4em 0; padding-left: 1.35em; }
+.prose-chat ul { list-style-type: disc; }
+.prose-chat ol { list-style-type: decimal; }
+.prose-chat ul ul { list-style-type: circle; }
+.prose-chat li { margin: 0.15em 0; }
+.prose-chat li::marker { color: var(--color-foreground-tertiary); }
+.prose-chat li > ul,
+.prose-chat li > ol { margin: 0.15em 0; }
+.prose-chat code {
+  font-family: var(--font-mono);
+  font-size: 0.86em;
+  background: var(--color-surface-tertiary);
+  padding: 0.12em 0.36em;
+  border-radius: 4px;
+}
+.prose-chat pre {
+  font-family: var(--font-mono);
+  background: var(--color-surface-tertiary);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 8px;
+  padding: 10px 12px;
+  overflow-x: auto;
+  font-size: 0.82em;
+  line-height: 1.5;
+  margin: 0; /* the ChatMarkdown wrapper div supplies vertical margin */
+}
+.prose-chat pre code {
+  background: transparent;
+  padding: 0;
+  font-size: 1em;
+  border-radius: 0;
+}
+.prose-chat blockquote {
+  border-left: 3px solid var(--color-accent-primary-soft);
+  padding-left: 0.7em;
+  margin: 0.5em 0;
+  color: var(--color-foreground-secondary);
+}
+.prose-chat hr {
+  border: 0;
+  border-top: 1px solid var(--color-border-subtle);
+  margin: 0.8em 0;
+}
+.prose-chat table {
+  border-collapse: collapse;
+  font-size: 0.9em;
+  margin: 0.5em 0;
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  overflow-x: auto;
+}
+.prose-chat th,
+.prose-chat td {
+  border: 1px solid var(--color-border-subtle);
+  padding: 4px 8px;
+  text-align: left;
+}
+.prose-chat th { background: var(--color-surface-tertiary); font-weight: 600; }
+.prose-chat img { max-width: 100%; height: auto; border-radius: 6px; margin: 0.4em 0; }
+
+/* highlight.js token palette (rehype-highlight output). Two GitHub-derived
+ * palettes — light on :root (code bg slate-100), dark on [data-theme=dark]
+ * (code bg slate-700) — both proven legible on their respective backgrounds.
+ * Only the token classes we actually see from claude/codex output are mapped;
+ * unmapped tokens fall through to the inherited bubble colour. */
+.hljs-comment,
+.hljs-quote { color: #6e7781; font-style: italic; }
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-deletion { color: #cf222e; }
+.hljs-string,
+.hljs-meta .hljs-string { color: #0a3069; }
+.hljs-number,
+.hljs-literal,
+.hljs-variable,
+.hljs-template-variable,
+.hljs-attr,
+.hljs-attribute { color: #0550ae; }
+.hljs-title,
+.hljs-title.function_,
+.hljs-section { color: #8250df; }
+.hljs-built_in,
+.hljs-type,
+.hljs-class .hljs-title,
+.hljs-params { color: #953800; }
+.hljs-tag,
+.hljs-name,
+.hljs-selector-id,
+.hljs-selector-class,
+.hljs-addition { color: #116329; }
+.hljs-meta,
+.hljs-symbol,
+.hljs-bullet { color: #6e7781; }
+.hljs-emphasis { font-style: italic; }
+.hljs-strong { font-weight: 600; }
+
+[data-theme="dark"] .hljs-comment,
+[data-theme="dark"] .hljs-quote { color: #94a3b8; }
+[data-theme="dark"] .hljs-keyword,
+[data-theme="dark"] .hljs-selector-tag,
+[data-theme="dark"] .hljs-deletion { color: #ff7b72; }
+[data-theme="dark"] .hljs-string,
+[data-theme="dark"] .hljs-meta .hljs-string { color: #a5d6ff; }
+[data-theme="dark"] .hljs-number,
+[data-theme="dark"] .hljs-literal,
+[data-theme="dark"] .hljs-variable,
+[data-theme="dark"] .hljs-template-variable,
+[data-theme="dark"] .hljs-attr,
+[data-theme="dark"] .hljs-attribute { color: #79c0ff; }
+[data-theme="dark"] .hljs-title,
+[data-theme="dark"] .hljs-title.function_,
+[data-theme="dark"] .hljs-section { color: #d2a8ff; }
+[data-theme="dark"] .hljs-built_in,
+[data-theme="dark"] .hljs-type,
+[data-theme="dark"] .hljs-class .hljs-title,
+[data-theme="dark"] .hljs-params { color: #ffa657; }
+[data-theme="dark"] .hljs-tag,
+[data-theme="dark"] .hljs-name,
+[data-theme="dark"] .hljs-selector-id,
+[data-theme="dark"] .hljs-selector-class,
+[data-theme="dark"] .hljs-addition { color: #7ee787; }
+[data-theme="dark"] .hljs-meta,
+[data-theme="dark"] .hljs-symbol,
+[data-theme="dark"] .hljs-bullet { color: #94a3b8; }
+
 /* Three-dot "typing" animation used by MessagesPanel's PendingBubble.
    Bounces opacity and a small Y offset so consecutive dots ripple. */
 @keyframes flockmuxTypingDot {

@@ -280,6 +280,16 @@ export const api = {
       `/api/workspaces/${id}/root-suggestions${projectPath ? `?path=${encodeURIComponent(projectPath)}` : ""}`,
     ),
 
+  // Composer 「优化」 button: one-shot headless prompt rewrite (server runs
+  // `claude -p` on a fast tier). Returns the improved text + whether it changed.
+  optimizePrompt: (input: string, signal?: AbortSignal) =>
+    request<{ optimized: string; changed: boolean }>(
+      "POST",
+      "/api/prompt/optimize",
+      { input },
+      signal,
+    ),
+
   // F1 model settings: per-CLI tier→concrete-model mapping.
   getModels: () => request<ModelsResponse>("GET", "/api/models"),
   putModels: (config: ModelConfig) =>

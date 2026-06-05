@@ -3994,6 +3994,161 @@ pub async fn run_spell(
     Ok(Json(resp))
 }
 
+/// Conservative prompt-improver meta-prompt for the composer 「优化」 button.
+/// Tuned for a developer talking to a coding orchestrator: CLARIFY intent
+/// WITHOUT HALLUCINATING new requirements. Preserves paths/identifiers/
+/// versions/commands verbatim, keeps ambiguity ambiguous, returns near-
+/// unchanged input when already clear. (Research basis: OpenAI/Anthropic
+/// prompt-improver meta-prompts + Nielsen "prompt augmentation" — the
+/// image-tool "pad with detail" model is deliberately rejected here.)
+const OPTIMIZE_META_PROMPT: &str = r#"你是一个"提示词编辑器"。下面 <用户原始输入> 里是一名开发者写给 AI 编码调度器(orchestrator)的需求。把它改写成更清晰、更可执行的指令，并严格遵守：
+
+- 保留所有技术细节原样：文件路径、函数/类/变量名、库名与工具名、版本号、命令、报错信息、命令行参数、代码片段。绝不修改、"纠正"或删除它们。
+- 不要臆造任何用户没说的需求、约束、验收标准、技术选型、文件名或范围。意图含糊处保持含糊，不要靠猜补全。
+- 可以做：修正语法/错别字(代码与标识符内除外)、整理为清晰结构(先目标、再约束、再细节)、把隐含动作显式化、把一长串需求拆成有序步骤。
+- 保持简洁，不要加客套、角色扮演或空话。
+- 保持与原文相同的语言。
+- 如果输入已经足够清晰具体，几乎原样返回。
+- 只输出改写后的提示词本身，不要任何前言、解释或 markdown 代码围栏。"#;
+
+#[derive(serde::Deserialize)]
+pub struct OptimizePromptRequest {
+    pub input: String,
+}
+
+#[derive(serde::Serialize)]
+pub struct OptimizePromptResponse {
+    pub optimized: String,
+    pub changed: bool,
+}
+
+/// POST /api/prompt/optimize — one-shot, headless prompt rewrite for the chat
+/// composer's 「优化」 button.
+///
+/// Runs `claude -p` (print mode) on a small/fast tier using the operator's
+/// existing login (HOME/PATH inherited from the server process), so it needs no
+/// extra API key and reuses the CLI flockmux already orchestrates.
+///
+/// SAFETY: this rewrites a DRAFT the user has not sent yet, so claude must never
+/// *act* on it. We therefore (1) do NOT pass `--dangerously-skip-permissions`
+/// (in headless mode un-granted tool calls are denied, not executed), and
+/// (2) run in a throwaway temp cwd so there is nothing of the user's project to
+/// touch. A 45s timeout with kill_on_drop bounds the worst case to a clean
+/// "timeout" error — never a destructive action.
+pub async fn optimize_prompt(
+    State(state): State<AppState>,
+    Json(req): Json<OptimizePromptRequest>,
+) -> impl IntoResponse {
+    let original = req.input.clone();
+    let input = req.input.trim().to_string();
+    // Empty / too short to meaningfully improve — return unchanged (the button
+    // is also disabled client-side; this is the server backstop).
+    if input.chars().count() < 8 {
+        return Json(OptimizePromptResponse { optimized: original, changed: false })
+            .into_response();
+    }
+
+    // The rewrite is CLI-agnostic; always drive it with claude's print mode.
+    let (binary, plugin_id) = match state.plugins.get("claude") {
+        Some(p) => (p.binary.clone(), p.id.clone()),
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({ "error": "优化需要 claude CLI，但未找到 claude 插件" })),
+            )
+                .into_response();
+        }
+    };
+
+    // Small/fast tier so the rewrite stays snappy and cheap, decoupled from the
+    // (heavier) orchestrator model.
+    let model = { state.models.read().await.resolve(&plugin_id, Some("haiku")) };
+
+    let prompt = format!("{OPTIMIZE_META_PROMPT}\n\n<用户原始输入>\n{input}\n</用户原始输入>");
+
+    let mut cmd = tokio::process::Command::new(&binary);
+    cmd.arg("-p").arg(&prompt);
+    if let Some(m) = &model {
+        cmd.arg("--model").arg(m);
+    }
+    cmd.current_dir(std::env::temp_dir())
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true);
+
+    let child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({ "error": format!("无法启动 claude：{e}（请确认已安装并登录）") })),
+            )
+                .into_response();
+        }
+    };
+
+    let out = match tokio::time::timeout(
+        std::time::Duration::from_secs(45),
+        child.wait_with_output(),
+    )
+    .await
+    {
+        Ok(Ok(o)) => o,
+        Ok(Err(e)) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({ "error": format!("claude 执行失败：{e}") })),
+            )
+                .into_response();
+        }
+        Err(_) => {
+            return (
+                StatusCode::GATEWAY_TIMEOUT,
+                Json(json!({ "error": "优化超时（claude 无响应）" })),
+            )
+                .into_response();
+        }
+    };
+
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let detail = stderr
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .last()
+            .unwrap_or("claude 返回非零状态");
+        return (
+            StatusCode::BAD_GATEWAY,
+            Json(json!({ "error": format!("优化失败：{detail}") })),
+        )
+            .into_response();
+    }
+
+    let raw = String::from_utf8_lossy(&out.stdout);
+    let cleaned = strip_code_fences(raw.trim());
+    if cleaned.is_empty() {
+        // Never hand back an empty composer — fall back to the original.
+        return Json(OptimizePromptResponse { optimized: original, changed: false })
+            .into_response();
+    }
+    let changed = cleaned != original.trim();
+    Json(OptimizePromptResponse { optimized: cleaned.to_string(), changed }).into_response()
+}
+
+/// Strip a single ``` fence (with optional language tag) the model may wrap the
+/// rewrite in despite being told not to. Leaves un-fenced text untouched.
+fn strip_code_fences(s: &str) -> &str {
+    let t = s.trim();
+    if let Some(rest) = t.strip_prefix("```") {
+        if let Some(nl) = rest.find('\n') {
+            let body = &rest[nl + 1..];
+            return body.strip_suffix("```").unwrap_or(body).trim();
+        }
+    }
+    t
+}
 
 #[cfg(test)]
 mod p0_tests {
@@ -4003,6 +4158,21 @@ mod p0_tests {
 
     fn consume(from: &str, kind: &str) -> ConsumeRef {
         ConsumeRef { from_role: from.into(), kind: kind.into() }
+    }
+
+    #[test]
+    fn strip_code_fences_unwraps_fenced_output() {
+        // bare ``` with language tag
+        assert_eq!(
+            strip_code_fences("```text\n改写后的内容\n```"),
+            "改写后的内容"
+        );
+        // ``` without language tag
+        assert_eq!(strip_code_fences("```\nhello\n```"), "hello");
+        // un-fenced text is returned untouched (trimmed)
+        assert_eq!(strip_code_fences("  just text  "), "just text");
+        // an inline ``` that is not a wrapping fence stays put
+        assert_eq!(strip_code_fences("see `x` here"), "see `x` here");
     }
 
     #[test]

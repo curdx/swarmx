@@ -594,7 +594,12 @@
     "details": "详情",
     "send": "发送",
     "sending": "发送中…",
-    "sendHint": "Enter 发送 · Shift+Enter 换行"
+    "sendHint": "Enter 发送 · Shift+Enter 换行",
+    "optimize": "优化输入",
+    "optimizeTooltip": "用 AI 把你的输入改写得更清晰（保留技术细节，不臆造需求）",
+    "optimizing": "优化中…",
+    "optimizeUndo": "已优化 · 点此撤销",
+    "optimizeNoChange": "已经够清晰了，没改动"
   },
   "cmdk": {
     "placeholder": "搜索命令、跳转、唤醒 agent…",

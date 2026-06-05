@@ -592,7 +592,12 @@
     "details": "Details",
     "send": "Send",
     "sending": "Sending…",
-    "sendHint": "Enter to send · Shift+Enter for newline"
+    "sendHint": "Enter to send · Shift+Enter for newline",
+    "optimize": "Optimize input",
+    "optimizeTooltip": "Let AI rewrite your input to be clearer (keeps technical details, invents nothing)",
+    "optimizing": "Optimizing…",
+    "optimizeUndo": "Optimized · undo",
+    "optimizeNoChange": "Already clear — no changes"
   },
   "cmdk": {
     "placeholder": "Search commands, jumps, wake agents…",

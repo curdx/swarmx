@@ -32,9 +32,12 @@ import { useTranslation } from "react-i18next";
 import {
   CornerUpLeft,
   Filter,
+  Loader2,
   RefreshCw,
   Search,
   Send,
+  Sparkles,
+  Undo2,
   X,
 } from "lucide-react";
 import { api } from "../api/http";
@@ -48,6 +51,7 @@ import {
 } from "@/components/ui/popover";
 import { cn } from "@/lib/cn";
 import { AgentChip } from "@/components/agent/AgentChip";
+import { ChatMarkdown } from "@/components/ChatMarkdown";
 import { roleColorClass as roleColor } from "@/lib/agent";
 
 interface Props {
@@ -196,6 +200,11 @@ export function MessagesPanel({
   const [inReplyTo, setInReplyTo] = useState<number | null>(null);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // 「优化」 button: the rewrite is reversible (preOptimize holds the pre-rewrite
+  // draft for one-click undo); optimizeNote shows a transient "already clear".
+  const [optimizing, setOptimizing] = useState(false);
+  const [preOptimize, setPreOptimize] = useState<string | null>(null);
+  const [optimizeNote, setOptimizeNote] = useState<string | null>(null);
   const [marking, setMarking] = useState<number | null>(null);
   const [bySenderOpen, setBySenderOpen] = useState(false);
 
@@ -502,6 +511,8 @@ export function MessagesPanel({
         setBody("");
         setInReplyTo(null);
         setError(null);
+        setPreOptimize(null);
+        setOptimizeNote(null);
         composerRef.current?.focus();
       } catch (e) {
         setError((e as Error).message);
@@ -532,12 +543,52 @@ export function MessagesPanel({
       setBody("");
       setInReplyTo(null);
       setError(null);
+      setPreOptimize(null);
+      setOptimizeNote(null);
       composerRef.current?.focus();
     } catch (e) {
       setError((e as Error).message);
     } finally {
       setSending(false);
     }
+  };
+
+  // 「优化」 — server rewrites the draft (claude -p, fast tier) into a clearer
+  // instruction. Replace-in-place WITH undo (the researched gold standard: a
+  // proposal you can edit, never a silent overwrite). preOptimize keeps the
+  // original so one click / typing restores it.
+  const optimize = async () => {
+    const trimmed = body.trim();
+    if (!trimmed || optimizing || sending) return;
+    setOptimizing(true);
+    setError(null);
+    setOptimizeNote(null);
+    try {
+      const res = await api.optimizePrompt(trimmed);
+      if (res.changed && res.optimized && res.optimized !== body) {
+        setPreOptimize(body);
+        setBody(res.optimized);
+        requestAnimationFrame(() => autoGrow(composerRef.current));
+      } else {
+        // Already clear — tell the user nothing changed (don't fake an edit).
+        setOptimizeNote(t("messages.optimizeNoChange"));
+        window.setTimeout(() => setOptimizeNote(null), 2600);
+      }
+      composerRef.current?.focus();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setOptimizing(false);
+    }
+  };
+
+  const undoOptimize = () => {
+    if (preOptimize == null) return;
+    setBody(preOptimize);
+    setPreOptimize(null);
+    setOptimizeNote(null);
+    requestAnimationFrame(() => autoGrow(composerRef.current));
+    composerRef.current?.focus();
   };
 
   const startReply = (m: MessageRecord) => {
@@ -940,9 +991,12 @@ export function MessagesPanel({
                           <CornerUpLeft className="size-2.5" />#{m.in_reply_to}
                         </button>
                       )}
-                      <p className="selectable whitespace-pre-wrap break-words font-body text-[13px] leading-relaxed text-foreground-primary">
-                        {m.body}
-                      </p>
+                      {/* Agent output is GFM markdown (headings/lists/code/
+                          tables) — render it, don't show literal `##`/```. */}
+                      <ChatMarkdown
+                        content={m.body}
+                        className="selectable text-foreground-primary"
+                      />
 
                       {/* hover-only actions — top-right of the turn */}
                       <div className="pointer-events-none absolute -top-2 right-0 flex items-center gap-1 opacity-0 transition-opacity group-hover/bubble:pointer-events-auto group-hover/bubble:opacity-100">
@@ -1017,6 +1071,10 @@ export function MessagesPanel({
             onChange={(e) => {
               setBody(e.target.value);
               autoGrow(e.target);
+              // User edited the draft — the prior rewrite's undo no longer
+              // applies; drop the affordances so they don't go stale.
+              if (preOptimize !== null) setPreOptimize(null);
+              if (optimizeNote !== null) setOptimizeNote(null);
             }}
             onKeyDown={onComposerKey}
             placeholder={composerPlaceholder}
@@ -1024,6 +1082,23 @@ export function MessagesPanel({
             rows={1}
             className="min-w-0 flex-1 resize-none rounded-2xl px-3 py-2 font-body text-[13px] leading-snug"
           />
+          {/* 「优化」 — ghost wand, left of Send so it reads as a draft helper,
+              not a second send. Icon swaps to a spinner while rewriting. */}
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={optimize}
+            disabled={optimizing || sending || !body.trim() || !canCompose}
+            aria-label={t("messages.optimize")}
+            title={t("messages.optimizeTooltip")}
+            className="size-9 shrink-0 rounded-full text-foreground-tertiary transition-colors hover:bg-surface-tertiary hover:text-accent-primary disabled:opacity-40"
+          >
+            {optimizing ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              <Sparkles className="size-4" />
+            )}
+          </Button>
           <Button
             size="icon"
             onClick={send}
@@ -1042,9 +1117,30 @@ export function MessagesPanel({
             <Send className="size-4" />
           </Button>
         </div>
-        <span className="self-end font-caption text-[10px] text-foreground-tertiary">
-          {t("messages.sendHint")}
-        </span>
+        {/* Hint row: left carries the optimize undo / "no change" feedback,
+            right keeps the Enter-to-send hint. */}
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex min-w-0 items-center gap-2">
+            {preOptimize !== null && (
+              <button
+                type="button"
+                onClick={undoOptimize}
+                className="inline-flex shrink-0 items-center gap-1 rounded-full bg-accent-primary-soft px-2 py-0.5 font-caption text-[10px] text-accent-primary-deep transition-colors hover:bg-accent-primary-soft/70"
+              >
+                <Undo2 className="size-3" />
+                {t("messages.optimizeUndo")}
+              </button>
+            )}
+            {optimizeNote && (
+              <span className="truncate font-caption text-[10px] text-foreground-tertiary">
+                {optimizeNote}
+              </span>
+            )}
+          </div>
+          <span className="shrink-0 font-caption text-[10px] text-foreground-tertiary">
+            {t("messages.sendHint")}
+          </span>
+        </div>
       </div>
     </div>
   );

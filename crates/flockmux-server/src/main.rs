@@ -386,6 +386,8 @@ async fn main() -> Result<()> {
         )
         .route("/api/spells", get(routes::rest::list_spells))
         .route("/api/spell/run", post(routes::rest::run_spell))
+        // Composer 「优化」 button: one-shot headless prompt rewrite (claude -p).
+        .route("/api/prompt/optimize", post(routes::rest::optimize_prompt))
         .route("/ws/swarm", get(routes::ws_swarm::ws_swarm))
         .route("/ws/pty/:agent_id", get(routes::pty_ws::pty_ws));
 
