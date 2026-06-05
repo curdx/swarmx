@@ -51,6 +51,7 @@ enum Flavor {
 /// No-op for an unknown CLI (no known transcript format).
 pub fn spawn_tailer(
     swarm: Arc<Swarm>,
+    store: Arc<flockmux_storage::Store>,
     agent_id: String,
     cli: String,
     cwd: PathBuf,
@@ -65,12 +66,13 @@ pub fn spawn_tailer(
         return;
     };
     tokio::spawn(async move {
-        run(swarm, &agent_id, flavor, &cwd, session_id.as_deref()).await;
+        run(swarm, store, &agent_id, flavor, &cwd, session_id.as_deref()).await;
     });
 }
 
 async fn run(
     swarm: Arc<Swarm>,
+    store: Arc<flockmux_storage::Store>,
     agent_id: &str,
     flavor: Flavor,
     cwd: &Path,
@@ -90,10 +92,15 @@ async fn run(
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut st = TailState::new(flavor);
 
+    // High-water mark we've already persisted, so an idle tick (no new events)
+    // doesn't fire a redundant UPDATE.
+    let mut persisted: Option<i64> = None;
+
     loop {
         tokio::select! {
             _ = tick.tick() => {
                 st.poll(&path, &swarm, agent_id).await;
+                persist_activity(&store, agent_id, st.last_emit_at, &mut persisted).await;
             }
             ev = rx.recv() => {
                 match ev {
@@ -101,6 +108,7 @@ async fn run(
                         if a == agent_id && matches!(state, AgentState::Exited | AgentState::Error) =>
                     {
                         st.poll(&path, &swarm, agent_id).await; // final flush
+                        persist_activity(&store, agent_id, st.last_emit_at, &mut persisted).await;
                         break;
                     }
                     Ok(_) => {}
@@ -111,6 +119,26 @@ async fn run(
         }
     }
     tracing::debug!(agent = %agent_id, "transcript: tailer stopped");
+}
+
+/// Persist `last_emit_at` to the agent row if it advanced past what we've
+/// already written. Mutating `persisted` through `&mut` keeps the high-water
+/// mark across poll ticks without a dead-store warning at the break path.
+async fn persist_activity(
+    store: &flockmux_storage::Store,
+    agent_id: &str,
+    last_emit_at: Option<i64>,
+    persisted: &mut Option<i64>,
+) {
+    if last_emit_at <= *persisted {
+        return;
+    }
+    if let Some(at) = last_emit_at {
+        if let Err(e) = store.touch_agent_activity(agent_id.to_string(), at).await {
+            tracing::debug!(agent = %agent_id, ?e, "transcript: touch_agent_activity failed");
+        }
+        *persisted = last_emit_at;
+    }
 }
 
 // ── file location ──────────────────────────────────────────────────────────
@@ -238,6 +266,11 @@ struct TailState {
     partial: Vec<u8>,
     pending: HashMap<String, Pending>,
     seq: u32,
+    /// Unix-ms of the most recent event emitted this tailer's lifetime. The run
+    /// loop diffs this against what it has persisted to decide whether to call
+    /// `touch_agent_activity` after a poll (avoids a redundant UPDATE on idle
+    /// ticks that produced no new events).
+    last_emit_at: Option<i64>,
 }
 
 impl TailState {
@@ -248,6 +281,7 @@ impl TailState {
             partial: Vec::new(),
             pending: HashMap::new(),
             seq: 0,
+            last_emit_at: None,
         }
     }
 
@@ -317,6 +351,9 @@ impl TailState {
 
     fn emit(&mut self, t: ParsedTool, swarm: &Swarm, agent_id: &str) {
         let at = now_ms();
+        // Every tool start/end is "the agent did something at `at`" — record the
+        // high-water mark so the run loop can persist it (F3 stuck-detection).
+        self.last_emit_at = Some(at);
         match t {
             ParsedTool::Start { tool_id, label } => {
                 self.seq = self.seq.wrapping_add(1);

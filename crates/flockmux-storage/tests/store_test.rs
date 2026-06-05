@@ -87,6 +87,43 @@ async fn agent_lifecycle_updates_idempotent() {
     assert_eq!(a.killed_at, Some(ts(30)));
 }
 
+#[tokio::test]
+async fn touch_agent_activity_advances_monotonically() {
+    let (_dir, store) = fresh_store().await;
+    store
+        .record_agent_spawn(NewAgent {
+            id: "a-3".into(),
+            cli: "claude".into(),
+            role: "backend".into(),
+            workspace: "/tmp/c".into(),
+            spawned_at: ts(0),
+            workspace_id: None,
+            spell_run_id: None,
+            thread_id: None,
+        })
+        .await
+        .unwrap();
+
+    // Fresh row: no activity yet (F3 stuck-detection falls back to spawned_at).
+    let a = store.list_agents().await.unwrap().pop().unwrap();
+    assert_eq!(a.last_activity_at, None);
+
+    // First tool event sets it.
+    store.touch_agent_activity("a-3".into(), ts(10)).await.unwrap();
+    let a = store.list_agents().await.unwrap().pop().unwrap();
+    assert_eq!(a.last_activity_at, Some(ts(10)));
+
+    // Forward progress advances it.
+    store.touch_agent_activity("a-3".into(), ts(25)).await.unwrap();
+    let a = store.list_agents().await.unwrap().pop().unwrap();
+    assert_eq!(a.last_activity_at, Some(ts(25)));
+
+    // A stale/out-of-order poll must NOT rewind the high-water mark.
+    store.touch_agent_activity("a-3".into(), ts(15)).await.unwrap();
+    let a = store.list_agents().await.unwrap().pop().unwrap();
+    assert_eq!(a.last_activity_at, Some(ts(25)), "monotonic — never rewinds");
+}
+
 // ── messages ─────────────────────────────────────────────────────────────
 
 #[tokio::test]

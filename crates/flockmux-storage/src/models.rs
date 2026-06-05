@@ -44,6 +44,11 @@ pub struct AgentRecord {
     pub spell_run_id: Option<String>,
     #[serde(default)]
     pub thread_id: Option<String>,
+    /// Unix-ms of the agent's most recent tool-level activity, persisted by the
+    /// transcript tailer (migration 0013). `None` for agents that never emitted
+    /// a tool event. The UI uses it to tell "wedged" from "idle" after a reload.
+    #[serde(default)]
+    pub last_activity_at: Option<i64>,
 }
 
 /// A "direction" inside a workspace — its own orchestrator + worker subtree +

@@ -115,6 +115,8 @@ function fmtBreadcrumbAgo(at: number, now: number): string {
  *  resolveMemberVisual 里——这里只把 i18n 文案喂进去。
  *  - typing 动画(··· 闪烁)  → running / thinking / responding / working
  *  - 绿点                  → idle / awaiting_user (默认 "在线")
+ *  - 琥珀点 + "可能卡住"     → 工具 running 卡太久(F3)
+ *  - 琥珀点 + "无响应"       → worker 起来后长时间零活动(从未起跑/卡死)
  *  - 灰点 + "等依赖"        → waiting_dep
  *  - 红点 + "异常退出"      → state=error(且未被主动 kill)
  *  - 灰点 + "已终止/已下线"  → killed_at / shim_exit
@@ -135,7 +137,12 @@ function statusDot(
     error: t("chat.status.error"),
     shimExit: t("chat.shimExit"),
     starting: t("chat.starting"),
-  } satisfies Record<SwarmAgentState | "exited" | "shimExit" | "starting", string>;
+    stalled: t("chat.status.stalled"),
+    noResponse: t("chat.status.noResponse"),
+  } satisfies Record<
+    SwarmAgentState | "exited" | "shimExit" | "starting" | "stalled" | "noResponse",
+    string
+  >;
   const v = resolveMemberVisual(a, live, messages, labels);
   return { typing: v.typing, className: v.dotClass, label: v.label, isError: v.isError };
 }

@@ -120,6 +120,13 @@ pub struct AgentInfo {
     /// still go through. Resets to false on server restart.
     #[serde(default)]
     pub paused: bool,
+    /// Unix-ms of the agent's most recent tool-level activity, persisted by the
+    /// transcript tailer (migration 0013). `None` for agents that never emitted
+    /// a tool event (e.g. the orchestrator, which we don't tail). The UI uses
+    /// it to tell "wedged" from "idle" even on a cold page load, where the live
+    /// `AgentActivity` WS stream isn't available yet.
+    #[serde(default)]
+    pub last_activity_at: Option<i64>,
 }
 
 // ── ad-hoc worker DTOs (Magentic-One 重构) ────────────────────────────────

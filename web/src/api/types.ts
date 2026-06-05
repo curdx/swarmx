@@ -95,6 +95,12 @@ export interface AgentInfo {
    *  WakeCoordinator skips auto-wake for this agent until resume. Manual
    *  ⚡ wakes still work. Resets on server restart. */
   paused?: boolean;
+  /** Unix-ms of the agent's most recent tool-level activity, persisted by the
+   *  transcript tailer (server migration 0013). Null for agents that never
+   *  emitted a tool event (e.g. the orchestrator, which isn't tailed). Used to
+   *  tell "wedged" from "idle" even on a cold load, before the live
+   *  AgentActivity WS stream has caught up. */
+  last_activity_at?: number | null;
 }
 
 // ── M3 swarm DTOs ────────────────────────────────────────────────────────

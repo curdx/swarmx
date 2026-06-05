@@ -21,6 +21,8 @@ const MIGRATION_0010: &str = include_str!("../migrations/0010_message_thread_id.
 const MIGRATION_0011: &str =
     include_str!("../migrations/0011_worker_role_typed_handoff.sql");
 const MIGRATION_0012: &str = include_str!("../migrations/0012_message_meta.sql");
+const MIGRATION_0013: &str =
+    include_str!("../migrations/0013_agent_last_activity.sql");
 
 pub(crate) fn run_migrations(conn: &mut Connection) -> Result<()> {
     let current = current_version(conn).unwrap_or(0);
@@ -61,6 +63,9 @@ pub(crate) fn run_migrations(conn: &mut Connection) -> Result<()> {
     }
     if current < 12 {
         apply(conn, 12, MIGRATION_0012).context("apply migration 0012")?;
+    }
+    if current < 13 {
+        apply(conn, 13, MIGRATION_0013).context("apply migration 0013")?;
     }
     Ok(())
 }

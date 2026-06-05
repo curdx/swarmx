@@ -332,7 +332,9 @@
     "exited": "已结束",
     "status": {
       "waitingDep": "等依赖",
-      "error": "异常退出"
+      "error": "异常退出",
+      "stalled": "可能卡住",
+      "noResponse": "无响应"
     },
     "activity": {
       "running": "正在调用 {{label}}"
@@ -544,7 +546,7 @@
   "messages": {
     "filter": "过滤 发送方 / 接收方 / 正文",
     "refresh": "刷新",
-    "bySender": "按发送方未读 ({{count}})",
+    "bySender": "未读 {{total}} 条 · 来自 {{senders}} 位",
     "bySenderNone": "无",
     "empty": "暂无消息",
     "unread": "未读",

@@ -113,6 +113,20 @@ export type AgentSemanticStatus =
 const RESPONDING_WINDOW_MS = 60_000;
 const WORKING_WINDOW_MS = 60_000;
 
+/** Thresholds for the activity-aware honesty layer in `resolveMemberVisual`
+ *  (F3). Tuned to err toward NOT crying wolf — a soft amber "可能卡住" is fine
+ *  to surface late, a false alarm on a legit long build is not.
+ *  - STALL_RUNNING: a single tool stuck in "running" this long (no ok/error
+ *    event) reads as wedged. Set above a normal build/test so a real long tool
+ *    doesn't trip it.
+ *  - STARTUP_GRACE: a freshly-spawned worker gets this long to produce its
+ *    first tool event before "no signal at all" stops reading as "booting".
+ *  - NO_RESPONSE: a ready worker that has produced ZERO observable activity
+ *    this long after spawn is almost certainly wedged / never started. */
+const STALL_RUNNING_MS = 300_000;
+const STARTUP_GRACE_MS = 45_000;
+const NO_RESPONSE_MS = 300_000;
+
 /** Pure function: given an agent and recent message history, return
  *  the best-guess semantic state. Caller is responsible for passing
  *  the *right slice* of messages — typically the last ~200 of the
@@ -169,34 +183,15 @@ export function inferAgentStatus(
     return "working";
   }
 
-  // Magentic-One worker default: if this agent was spawned by another
-  // agent (parent_agent_id set) and hasn't yet sent its first outbound
-  // message, it's almost certainly running Bash/Read/Write tool calls
-  // — those don't show up in the message stream so the previous rules
-  // would mis-classify it as `idle`. A worker that's alive + shim_ready
-  // and never spoken should read as "working" so the user sees a typing
-  // dot in the member list while npm install / build / etc. run.
-  //
-  // Important caveat: workers that hand off via blackboard signal and
-  // STOP don't actually kill their PTY — they just sit idle. Without a
-  // time bound here we'd keep showing typing dots forever for a worker
-  // that finished half an hour ago. Cap the "assumed working" window
-  // at WORKER_FRESH_WINDOW_MS past spawn; after that, no outbound +
-  // no recent inbound means truly idle, not stuck.
-  if (agent.parent_agent_id && !lastOutbound) {
-    const spawnedAt = agent.spawned_at ?? null;
-    if (spawnedAt == null || now - spawnedAt < WORKER_FRESH_WINDOW_MS) {
-      return "working";
-    }
-  }
-
+  // A worker that's alive but hasn't spoken used to be ASSUMED "working" for
+  // 10 minutes here (so a typing dot showed while npm install / build ran).
+  // That was a lie source — a silently-wedged or already-done worker also
+  // shows no outbound, so it kept "typing" for 10 minutes. We now decide
+  // worker liveness from real tool-level activity (see resolveMemberVisual's
+  // activity layer), so this function just reports the honest message-stream
+  // verdict: no recent inbound/outbound → idle.
   return "idle";
 }
-
-/** Worker spawn 后默认显示为 "working" 的时间窗。短于此 → typing dot;
- *  超出 → idle。够覆盖 npm install / cargo build / 中等编码任务,但短到
- *  STOPped 后的僵尸 PTY 不会无限 typing。 */
-const WORKER_FRESH_WINDOW_MS = 10 * 60 * 1000;
 
 /** 文字 label —— 只在 agent 真的"不可用"或"被操作过"时显示。
  *  日常 idle/awaiting_user/responding/working 全部用色点 + typing 动画
@@ -271,7 +266,10 @@ export function resolveMemberVisual(
   agent: AgentInfo,
   live: AgentLiveState | undefined,
   messages: MessageRecord[],
-  labels: Record<SwarmAgentState | "exited" | "shimExit" | "starting", string>,
+  labels: Record<
+    SwarmAgentState | "exited" | "shimExit" | "starting" | "stalled" | "noResponse",
+    string
+  >,
   now: number = Date.now(),
 ): MemberVisual {
   // 1) 硬状态优先——killed_at 永远先于 error,避免主动 kill 误判红。
@@ -296,10 +294,43 @@ export function resolveMemberVisual(
   if (st === "thinking" || st === "spawning") {
     return { dotClass: "", label: "", typing: true, isError: false };
   }
-  // ready/idle/exited 等真实态不足以表达"是否在干活"(worker 跑工具时 state
-  // 可能停在 ready),所以这些情况继续走消息流推导兜底。
 
-  // 3) 回退:消息流语义推导(向后兼容,state 缺失时也走这里)。
+  // 3) 活动诚实层(F3):ready/idle 这类 state 不表达"是否真在干活"。用工具级
+  //    activity + 持久化的 last_activity_at + 消息流,把"卡住/无响应"与"idle"
+  //    区分开,不再一律绿点/typing 撒谎。
+  const stalled = (label: string): MemberVisual => ({
+    dotClass: "bg-state-warning",
+    label,
+    typing: false,
+    isError: false,
+  });
+  const act = live?.activity;
+  // 3a) 某个工具"running"卡太久 → 大概率卡死,别再 typing 假装在跑。
+  if (act && act.phase === "running") {
+    if (now - act.at >= STALL_RUNNING_MS) return stalled(labels.stalled);
+    return { dotClass: "", label: "", typing: true, isError: false }; // 真在跑某工具
+  }
+  // 3b) 工具刚结束(ok/error)→ 仍在活跃干活。
+  if (act && (act.phase === "ok" || act.phase === "error") && now - act.at < WORKING_WINDOW_MS) {
+    return { dotClass: "", label: "", typing: true, isError: false };
+  }
+
+  // 3c) 从未产生任何"活着"的信号:区分"从未起跑/卡死"与"idle"。只对 worker
+  //     (有 parent)判定——orchestrator 不被 tail,其活性由消息流体现(走兜底)。
+  const hasOutbound = messages.some((m) => m.from_agent === agent.agent_id);
+  const everActive = act != null || agent.last_activity_at != null || hasOutbound;
+  if (agent.parent_agent_id && !everActive) {
+    const spawnedAt = agent.spawned_at ?? null;
+    const age = spawnedAt == null ? 0 : now - spawnedAt;
+    // 启动宽限期内:乐观显示在跑(正在拉起第一个工具)。
+    if (age < STARTUP_GRACE_MS) return { dotClass: "", label: "", typing: true, isError: false };
+    // 超过无响应阈值仍零活动 → 卡死/没起来。这就是 QA 要的"从未起跑/卡死"信号。
+    if (age >= NO_RESPONSE_MS) return stalled(labels.noResponse);
+    // 中间地带:安静但还不到报警,给中性绿点(不撒谎说在干活)。
+    return { dotClass: "bg-state-success", label: "", typing: false, isError: false };
+  }
+
+  // 4) 回退:消息流语义推导(orchestrator + 已说过话的 worker;state 缺失也走这里)。
   const semantic = inferAgentStatus(agent, messages, now);
   return {
     dotClass: agentStatusDotClass(semantic),

@@ -332,7 +332,9 @@
     "exited": "exited",
     "status": {
       "waitingDep": "waiting on deps",
-      "error": "crashed"
+      "error": "crashed",
+      "stalled": "may be stuck",
+      "noResponse": "not responding"
     },
     "activity": {
       "running": "Running {{label}}"
@@ -542,7 +544,7 @@
   "messages": {
     "filter": "Filter by sender / receiver / body",
     "refresh": "Refresh",
-    "bySender": "Unread by sender ({{count}})",
+    "bySender": "{{total}} unread · from {{senders}} sender(s)",
     "bySenderNone": "none",
     "empty": "No messages yet",
     "unread": "unread",

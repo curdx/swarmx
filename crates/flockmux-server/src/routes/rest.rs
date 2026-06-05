@@ -566,6 +566,7 @@ pub(crate) async fn spawn_with_bookkeeping(
     // never hook or slow it). No-op for a CLI with no known transcript format.
     crate::transcript::spawn_tailer(
         state.swarm.clone(),
+        state.store.clone(),
         agent_id.clone(),
         result.slot.cli.clone(),
         std::path::PathBuf::from(&result.slot.workspace),
@@ -642,6 +643,9 @@ pub async fn list_agents(State(state): State<AppState>) -> impl IntoResponse {
                 // the SQLite union below — fills in once spell_run_id is set.
                 parent_agent_id: None,
                 paused,
+                // Backfilled from the SQLite row in the union below (the live
+                // registry slot doesn't carry it).
+                last_activity_at: None,
             },
         );
     }
@@ -660,6 +664,7 @@ pub async fn list_agents(State(state): State<AppState>) -> impl IntoResponse {
                     info.workspace_id = row.workspace_id;
                     info.spell_run_id = row.spell_run_id;
                     info.thread_id = row.thread_id;
+                    info.last_activity_at = row.last_activity_at;
                     items.push(info);
                 } else {
                     // Historical row: depends_on is empty (subscription
@@ -683,6 +688,7 @@ pub async fn list_agents(State(state): State<AppState>) -> impl IntoResponse {
                         thread_id: row.thread_id,
                         parent_agent_id: None,
                         paused: false,
+                        last_activity_at: row.last_activity_at,
                     });
                 }
             }

@@ -185,13 +185,31 @@ impl Store {
         .context("spawn_blocking record_shim_exit")?
     }
 
+    /// Persist the agent's most recent tool-level activity time, called by the
+    /// transcript tailer. Monotonic — only ever moves forward — so an
+    /// out-of-order or stale poll can't rewind a fresher timestamp. Cheap UPDATE
+    /// on a single indexed row; the tailer throttles to at most one per poll.
+    pub async fn touch_agent_activity(&self, id: String, at_ms: i64) -> Result<()> {
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<()> {
+            conn.execute(
+                "UPDATE agents SET last_activity_at = ?2 \
+                 WHERE id = ?1 AND (last_activity_at IS NULL OR last_activity_at < ?2)",
+                params![id, at_ms],
+            )?;
+            Ok(())
+        }))
+        .await
+        .context("spawn_blocking touch_agent_activity")?
+    }
+
     pub async fn list_agents(&self) -> Result<Vec<AgentRecord>> {
         let pool = self.pool.clone();
         tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<Vec<AgentRecord>> {
             let mut stmt = conn.prepare(
                 "SELECT id, cli, role, workspace, spawned_at, killed_at, \
                         shim_ready_at, shim_exit_at, shim_exit_code, \
-                        workspace_id, spell_run_id, thread_id \
+                        workspace_id, spell_run_id, thread_id, last_activity_at \
                  FROM agents \
                  ORDER BY spawned_at ASC",
             )?;
@@ -209,6 +227,7 @@ impl Store {
                     workspace_id: row.get(9)?,
                     spell_run_id: row.get(10)?,
                     thread_id: row.get(11)?,
+                    last_activity_at: row.get(12)?,
                 })
             })?;
             rows.collect::<rusqlite::Result<Vec<_>>>()
