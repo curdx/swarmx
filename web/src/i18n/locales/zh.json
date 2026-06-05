@@ -234,7 +234,7 @@
     },
     "plugins": {
       "title": "CLI 插件",
-      "hint": "从 cli-plugins/*.toml 加载；启用 / 禁用 / 路径覆盖等待 backend plugin manager",
+      "hint": "从 cli-plugins/*.toml 加载，当前由 server 管理；自定义启用 / 禁用、路径覆盖即将支持。",
       "binaryLabel": "binary",
       "loadError": "加载失败：{{error}}",
       "empty": "没有插件",

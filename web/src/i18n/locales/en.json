@@ -234,7 +234,7 @@
     },
     "plugins": {
       "title": "CLI plugins",
-      "hint": "Loaded from cli-plugins/*.toml; enable / disable / path override waits for a backend plugin manager",
+      "hint": "Loaded from cli-plugins/*.toml, currently server-managed; custom enable / disable & path override coming soon.",
       "binaryLabel": "binary",
       "loadError": "Load failed: {{error}}",
       "empty": "No plugins",
