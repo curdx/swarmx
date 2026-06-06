@@ -69,10 +69,13 @@ flockmux 的**任务台账 + 黑板 + 协作图 + typed handoff key** 这套"结
 - 现实：DAG 只画**已 spawn** 的 agent（执行态），无 orchestrator 规划的完整依赖全貌（计划态，含未开始）。
 - 建议：一张计划全貌图 + 一张执行进度图叠加；并在边上标 typed 契约（produces→consumes kind）。
 
-**S5 🔴 卡死 worker 无超时兜底（端到端真机复现）**
-- 现实：codex worker spawn 后 `last_activity_at:null` 持续 10+ 分钟（`shim_ready:true` 但从未活动）；UI 正确标 🟡「无响应」，但 **orchestrator 永久等 `backend.done`，无超时 / 无 `.blocked` / 无自动 `.error` fallback / 用户侧无"重试·换 CLI·kill"引导**，整条编排静默 stuck。
-- 双面：✅ 可观测性达标（暴露阻塞，非静默假装在跑，符合最佳实践）；🔴 缺自愈/兜底（现实印证后端 W5：depends-on 无超时、blocked 状态未实现）。
-- 建议：worker 无活动超时 → 自动写 `<role>.error` + wake orchestrator + 给用户"卡住了，重试/换 claude/kill"操作。区分"在跑长命令"与"真卡死"（本例 `last_activity_at:null` 即真卡，可据此判定）。
+**S5 🔴 worker「hang 不退出」是兜底盲区；但「退出」有优秀的 .error fallback + 自愈（真机复现 + kill 验证）**
+- 现实①（盲区）：codex worker spawn 后 `last_activity_at:null` 持续 10+ 分钟，**进程没退出**（`shim_ready:true, killed_at:null, shim_exit:null`）。这种"活着但 hang"态**不触发任何兜底**——无"无活动超时→主动 kill/error"，orchestrator 永等 `backend.done`，UI 标 🟡 无响应但整条编排静默 stuck，只能人工干预。
+- 现实②（kill 验证，工作优秀）：一旦 worker **真正退出/被 kill**，`.error` fallback 链路完整且超预期 —— 手动 kill 后 **1ms 内** server 写 `…/main/backend.done.error`（原因 "agent exited without writing its handoff signal"）→ wake orchestrator（两条 wake，见下方"重复 wake"小注）→ orchestrator **不仅汇报用户，还自动重派了一个改进 prompt 的新 worker 自愈**。
+- **结论修正**（推翻初稿"死亡无兜底"的推断）：兜底盲区**不是"死亡无 fallback"**（死亡有，且带 orchestrator 自愈重试），**而是"hang 不退出"这一态缺探活/超时**，没把它转成"退出"去触发那条已经很完善的 fallback。
+- 建议：给 worker 加**无活动探活超时**（`last_activity_at` 超 N 分钟仍为 null/不变 → 主动 kill），让 hang 态落入现成的 `.error` fallback + 自愈路径即可，无需新建一套。
+- 小注：kill 触发了 **两条几乎相同的 wake**（id 489/490，body 都是 `backend.done.error`）给同一 orchestrator —— 轻微重复唤醒，呼应后端 W3/lag-rewake，无害但可去重。
+- 命名校正：fallback 实际写的是 **`<signal>.error`（`backend.done.error`）**，与 memory `project_m6c_error_fallback_design` 记的"写 `<role>.error`"不符 —— 以现实为准，相关 memory 已更新。
 
 ### 2.3 上下文 / 工作台账
 
