@@ -475,6 +475,10 @@ export interface ModelCliInfo {
   display_name: string;
   /** false ⇒ the CLI declares no model_args; the UI greys it out. */
   supports_model: boolean;
+  /** true ⇒ the opus/sonnet/haiku tier names ARE this CLI's own model aliases
+   *  (only claude). The page shows the tier rows only when true; other CLIs
+   *  (codex = gpt-5.x) get just a default-model row. */
+  native_tiers?: boolean;
 }
 export interface ModelsResponse {
   config: ModelConfig;

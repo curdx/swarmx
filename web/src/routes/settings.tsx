@@ -521,16 +521,20 @@ function ModelsPanel() {
                   value={cliOf(cli.id).default}
                   onChange={(v) => setDefault(cli.id, v)}
                 />
-                {MODEL_TIERS.map((tier) => (
-                  <ModelRow
-                    key={tier}
-                    label={tier}
-                    placeholder={t("settings.models.tierPlaceholder")}
-                    value={cliOf(cli.id).tiers[tier] ?? ""}
-                    onChange={(v) => setTier(cli.id, tier, v)}
-                    mono
-                  />
-                ))}
+                {/* opus/sonnet/haiku rows ONLY for CLIs that natively have
+                    those tiers (claude). codex (gpt-5.x) doesn't — showing them
+                    there is a leaky abstraction, so it gets just default+effort. */}
+                {cli.native_tiers &&
+                  MODEL_TIERS.map((tier) => (
+                    <ModelRow
+                      key={tier}
+                      label={tier}
+                      placeholder={t("settings.models.tierPlaceholder")}
+                      value={cliOf(cli.id).tiers[tier] ?? ""}
+                      onChange={(v) => setTier(cli.id, tier, v)}
+                      mono
+                    />
+                  ))}
                 <div className="mt-1 h-px bg-border-subtle" />
                 <EffortRow
                   label={t("settings.models.effort")}

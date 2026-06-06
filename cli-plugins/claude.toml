@@ -41,6 +41,9 @@ input_settle_ms = 0                        # claude accepts keystrokes immediate
 # claude accepts an alias ('opus'/'sonnet') or a full model id. With no
 # default_model set, claude uses its own configured default.
 model_args = ["--model", "{model}"]
+# claude's --model natively accepts the opus/sonnet/haiku aliases — the tier
+# vocabulary IS claude's own lineup, so the 模型 settings page shows these rows.
+native_tiers = true
 
 # Reasoning effort overlay. 2026 Claude Code takes `--effort <level>` (per
 # session); {effort} is the concrete value from effort_levels below. Omitted

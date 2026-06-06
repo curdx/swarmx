@@ -271,7 +271,7 @@
     },
     "models": {
       "title": "模型配给",
-      "hint": "为每个 CLI 把抽象档位(opus/sonnet/haiku)映射到它实际能用的具体模型。留空=用该 CLI 自己的默认模型。claude 默认就认 opus/sonnet/haiku 别名；codex 等用自定义供应商的，请在这里填它真实的模型 id。",
+      "hint": "配置每个 CLI 用什么模型、想多深。opus/sonnet/haiku 是 Claude 自己的型号档位（claude 的 --model 原生认这三个别名）；其它 CLI（如 codex 是 gpt-5.x 系列）没有这套，只需填它的默认模型即可。",
       "default": "默认",
       "noOverride": "该 CLI 不支持 --model 覆盖（其插件未声明 model_args），由它自己决定模型。",
       "cliDefaultPlaceholder": "留空=用 CLI 自己的默认",

@@ -50,6 +50,10 @@ input_settle_ms = 300                  # codex's ratatui input poll attaches ~12
 # at spawn with the per-spawn `model` (REST/MCP) or `default_model`. Unset
 # default_model ⇒ codex uses its own configured default.
 model_args = ["--model", "{model}"]
+# codex has NO opus/sonnet/haiku — it's gpt-5.x. So the 模型 settings page must
+# not show those tier rows for codex; it shows just codex's default model +
+# effort. (A claude-tier role that lands on codex falls back to codex's default.)
+native_tiers = false
 
 # Reasoning effort overlay. codex takes `-c model_reasoning_effort=<v>` (CLI
 # override beats config.toml + the sqlite-persisted last-used value, so we pass

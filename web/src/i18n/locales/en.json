@@ -271,7 +271,7 @@
     },
     "models": {
       "title": "Model allocation",
-      "hint": "Map each CLI's abstract tier (opus/sonnet/haiku) to the concrete model it can actually use. Empty = the CLI's own default. claude understands opus/sonnet/haiku aliases; for codex or any custom provider, put its real model id here.",
+      "hint": "Configure which model each CLI uses and how hard it thinks. opus/sonnet/haiku are Claude's own tiers (its --model accepts those aliases); other CLIs (e.g. codex = gpt-5.x) don't have them — just set their default model.",
       "default": "Default",
       "noOverride": "This CLI does not support a --model override (its plugin declares no model_args); it picks its own model.",
       "cliDefaultPlaceholder": "empty = the CLI's own default",

@@ -27,6 +27,10 @@ pub async fn get_models(State(state): State<AppState>) -> Json<Value> {
                 // CLIs whose manifest declares no model_args can't take a
                 // --model override; the UI greys these out.
                 "supports_model": !p.model_args.is_empty(),
+                // Whether the opus/sonnet/haiku tier names are THIS CLI's own
+                // model aliases (only claude). The page shows tier rows only
+                // when true; codex etc. get just a default-model row.
+                "native_tiers": p.native_tiers,
             })
         })
         .collect();

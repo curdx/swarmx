@@ -221,6 +221,13 @@ pub struct CliPlugin {
     /// pick its own default. A per-spawn `model` (REST/MCP) overrides this.
     #[serde(default)]
     pub default_model: Option<String>,
+    /// True iff this CLI's `--model` natively accepts the abstract tier names
+    /// (opus/sonnet/haiku) as aliases — i.e. the tier vocabulary IS this CLI's
+    /// own model lineup. Only claude. For others (codex = gpt-5.x) those names
+    /// are meaningless, so the 模型 settings page must NOT present opus/sonnet/
+    /// haiku rows for them — it shows just their real default model + effort.
+    #[serde(default)]
+    pub native_tiers: bool,
 
     /// Reasoning/thinking effort overlay (parallel to `model_args`). Argv
     /// template with an `{effort}` placeholder substituted at spawn — claude:
