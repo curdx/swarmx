@@ -2702,6 +2702,17 @@ pub async fn set_thread_model_handler(
     // verbatim and resolved per-CLI at spawn time.
     let tier = req.tier.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
     let reasoning = req.reasoning.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    // Validate effort here too (parity with PUT /api/models) — a bogus level
+    // would otherwise reach `--effort` at spawn. (tier is a free model id /
+    // alias, validated per-CLI at resolve time, so it's not constrained here.)
+    if let Some(r) = reasoning.as_deref() {
+        if !["low", "medium", "high", "xhigh", "max"].contains(&r) {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": format!("invalid reasoning effort '{r}' — valid: low|medium|high|xhigh|max")})),
+            ));
+        }
+    }
     state
         .store
         .set_thread_model_tier(thread_id.clone(), tier)
