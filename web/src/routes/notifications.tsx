@@ -39,7 +39,12 @@ import { useSwarmFeed } from "../hooks/useSwarmFeed";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
-import { humanizeBlackboard, isHiddenWake, notifBody } from "@/lib/notif";
+import {
+  friendlyAgent,
+  humanizeBlackboard,
+  isHiddenWake,
+  notifBody,
+} from "@/lib/notif";
 import { buildRoleLookup, resolveRole } from "@/lib/agent";
 
 type NotifKind = "message" | "blackboard" | "state" | "error" | "completed";
@@ -113,21 +118,6 @@ type TabId = (typeof TABS)[number]["id"];
 //   2. otherwise an explicit success marker (✅ passed 完成 通过 …) means
 //      completed — even if the body also says "error" somewhere;
 //   3. only a *soft* failure word with NO success marker counts as an error.
-/** A human label for an agent id in a notification title: "你"/"系统" for the
- *  user/system pseudo-agents, else the agent's role ("orchestrator", "Backend
- *  Engineer", …) resolved from /api/agent — never the raw `codex-7508c707`
- *  id, which means nothing to a user. Mirrors the chat's AgentChip. */
-function friendlyAgent(
-  id: string,
-  roleLookup: Map<string, string>,
-  t: TFunction,
-): string {
-  const r = resolveRole(id, roleLookup);
-  if (r === "user") return t("notifications.fromUser");
-  if (r === "system") return t("notifications.fromSystem");
-  return r;
-}
-
 function classifyMessage(
   m: MessageRecord,
   t: TFunction,

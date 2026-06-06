@@ -9,8 +9,28 @@
  */
 
 import type { MessageMeta, Workspace } from "@/api/types";
+import { resolveRole } from "@/lib/agent";
 
 type Tr = (k: string, opts?: Record<string, unknown>) => string;
+
+/** Human label for an agent id in a notification: "你"/"系统" for the
+ *  user/system pseudo-agents, else the role ("orchestrator", "Backend
+ *  Engineer", …) resolved from /api/agent — never the raw `codex-6fc9b645`
+ *  short id, which is noise to a user. Shared by BOTH the bell popover and the
+ *  full /notifications page so the two surfaces render a sender identically
+ *  (they drifted: the popover showed "orchestrator 6fc9b645" via AgentChip
+ *  while the page showed a clean "orchestrator"). roleLookup covers exited
+ *  agents too (listAgents returns them). */
+export function friendlyAgent(
+  id: string,
+  roleLookup: Map<string, string>,
+  t: Tr,
+): string {
+  const r = resolveRole(id, roleLookup);
+  if (r === "user") return t("notifications.fromUser");
+  if (r === "system") return t("notifications.fromSystem");
+  return r;
+}
 
 /** Auto blackboard wakes (and legacy untyped wakes, meta absent) are internal
  *  agent-coordination plumbing — redundant with the BlackboardChanged event the

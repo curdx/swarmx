@@ -35,8 +35,12 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { cn } from "@/lib/cn";
-import { humanizeBlackboard, isHiddenWake, notifBody } from "@/lib/notif";
-import { AgentChip } from "@/components/agent/AgentChip";
+import {
+  friendlyAgent,
+  humanizeBlackboard,
+  isHiddenWake,
+  notifBody,
+} from "@/lib/notif";
 import { buildRoleLookup } from "@/lib/agent";
 
 interface Item {
@@ -56,13 +60,38 @@ type Tr = (k: string, opts?: Record<string, unknown>) => string;
 /** `humanizeBlackboard` now lives in `@/lib/notif` — shared with the full
  *  /notifications page so the two renderings can't drift. */
 
-/** `user` / `system` are pseudo-agents, not roles — rendering them through the
- *  AgentChip prints a doubled "user user" (role-prefix == short-id). Give them a
- *  plain friendly label instead. Returns null for a real agent id. */
-function pseudoFrom(from: string, t: Tr): string | null {
-  if (from === "user") return t("notifications.fromUser");
-  if (from === "system") return t("notifications.fromSystem");
-  return null;
+/** Build a popover Item from a message record — shared by the initial fetch and
+ *  the live SwarmFeed path so the two can't drift. Sender identity goes through
+ *  the shared `friendlyAgent` (role label, never the raw `codex-6fc9b645` short
+ *  id), and a wake renders as "系统 唤醒 {role}" — identical to the full
+ *  /notifications page (the popover used to show a bare "系统" with an empty body
+ *  for manual wakes, and "orchestrator 6fc9b645" via AgentChip for the rest).
+ *  `agent` is kept for real ids only, purely so a click can deep-link `?agent=`. */
+function itemFromMessage(
+  m: Pick<
+    MessageRecord,
+    "id" | "from_agent" | "to_agent" | "kind" | "body" | "sent_at"
+  >,
+  roleLookup: Map<string, string>,
+  workspace: string | undefined,
+  t: Tr,
+): Item {
+  const isPseudo = m.from_agent === "system" || m.from_agent === "user";
+  const isWake = m.kind === "wake";
+  return {
+    id: `msg-${m.id}`,
+    kind: isWake ? "state" : "message",
+    agent: isPseudo ? undefined : m.from_agent,
+    workspace,
+    title: isWake
+      ? t("notifications.kinds.wakeTitle", {
+          from: friendlyAgent(m.from_agent, roleLookup, t),
+          to: friendlyAgent(m.to_agent, roleLookup, t),
+        })
+      : friendlyAgent(m.from_agent, roleLookup, t),
+    body: notifBody(m.kind, m.body, t),
+    at: m.sent_at,
+  };
 }
 
 interface Props {
@@ -109,22 +138,12 @@ export function NotificationPopover({ hasUnseen, onSeen }: Props) {
         if (a.workspace) wsM.set(a.agent_id, a.workspace);
       }
       setAgentWorkspaces(wsM);
-      setRoleLookup(buildRoleLookup(agents as AgentInfo[]));
+      const rl = buildRoleLookup(agents as AgentInfo[]);
+      setRoleLookup(rl);
       setWorkspaces(wss as Workspace[]);
       const fromMsgs: Item[] = (msgs as MessageRecord[])
         .filter((m) => !isHiddenWake(m))
-        .map((m) => {
-          const pseudo = pseudoFrom(m.from_agent, t);
-          return {
-            id: `msg-${m.id}`,
-            kind: "message" as const,
-            agent: pseudo ? undefined : m.from_agent,
-            workspace: wsM.get(m.from_agent),
-            title: pseudo ?? m.from_agent,
-            body: notifBody(m.kind, m.body, t),
-            at: m.sent_at,
-          };
-        });
+        .map((m) => itemFromMessage(m, rl, wsM.get(m.from_agent), t));
       const fromBb: Item[] = bb
         // Skip worker heartbeats (`<wsId>/<role>.progress.md`) — they're
         // written on every milestone and would drown out real messages.
@@ -168,16 +187,12 @@ export function NotificationPopover({ hasUnseen, onSeen }: Props) {
       let next: Item | null = null;
       if (ev.type === "message") {
         if (isHiddenWake(ev)) return;
-        const pseudo = pseudoFrom(ev.from_agent, t);
-        next = {
-          id: `msg-${ev.id}`,
-          kind: "message",
-          agent: pseudo ? undefined : ev.from_agent,
-          workspace: agentWorkspaces.get(ev.from_agent),
-          title: pseudo ?? ev.from_agent,
-          body: notifBody(ev.kind, ev.body, t),
-          at: ev.sent_at,
-        };
+        next = itemFromMessage(
+          ev,
+          roleLookup,
+          agentWorkspaces.get(ev.from_agent),
+          t,
+        );
       } else if (ev.type === "blackboard_changed") {
         if (ev.path.endsWith(".progress.md")) return; // skip heartbeats
         const { title, context } = humanizeBlackboard(ev.path, workspaces, t);
@@ -287,18 +302,9 @@ export function NotificationPopover({ hasUnseen, onSeen }: Props) {
                     <Icon className="mt-0.5 size-3.5 shrink-0 text-foreground-tertiary" />
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-1.5">
-                        {item.agent ? (
-                          <AgentChip
-                            agentId={item.agent}
-                            roleLookup={roleLookup}
-                            size="xs"
-                            showAvatar={false}
-                          />
-                        ) : (
-                          <span className="truncate font-heading text-[11px] font-medium text-foreground-primary">
-                            {item.title}
-                          </span>
-                        )}
+                        <span className="truncate font-heading text-[11px] font-medium text-foreground-primary">
+                          {item.title}
+                        </span>
                         <span className="ml-auto shrink-0 font-caption text-[10px] text-foreground-tertiary">
                           {relTime(item.at, t)}
                         </span>
