@@ -539,6 +539,15 @@ function ModelsPanel() {
                 <EffortRow
                   label={t("settings.models.effort")}
                   hint={t("settings.models.effortHint")}
+                  // codex's reasoning effort tops out at xhigh (极高); picking
+                  // 最大/max silently downgrades server-side. The per-direction
+                  // picker says so in its level descriptions — mirror that here
+                  // so the global default isn't a silent surprise.
+                  note={
+                    cli.id === "codex"
+                      ? t("settings.models.effortCodexNote")
+                      : undefined
+                  }
                   value={cliOf(cli.id).effort ?? ""}
                   onChange={(v) => setEffort(cli.id, v)}
                 />
@@ -606,11 +615,14 @@ function ModelRow({
 function EffortRow({
   label,
   hint,
+  note,
   value,
   onChange,
 }: {
   label: string;
   hint?: string;
+  /** Extra CLI-specific caveat shown below the hint (e.g. codex effort cap). */
+  note?: string;
   value: string;
   onChange: (v: string) => void;
 }) {
@@ -642,6 +654,11 @@ function EffortRow({
         {hint && (
           <span className="font-caption text-[10px] text-foreground-tertiary">
             {hint}
+          </span>
+        )}
+        {note && (
+          <span className="font-caption text-[10px] text-state-warning">
+            {note}
           </span>
         )}
       </div>

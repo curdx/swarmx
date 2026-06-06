@@ -39,7 +39,7 @@ import { useSwarmFeed } from "../hooks/useSwarmFeed";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
-import { humanizeBlackboard, isHiddenWake } from "@/lib/notif";
+import { humanizeBlackboard, isHiddenWake, notifBody } from "@/lib/notif";
 import { buildRoleLookup, resolveRole } from "@/lib/agent";
 
 type NotifKind = "message" | "blackboard" | "state" | "error" | "completed";
@@ -287,7 +287,7 @@ export default function NotificationsRoute() {
             kind: c.kind,
             agent: friendlyAgent(m.from_agent, roleRef.current, t),
             title: c.title,
-            body: m.body,
+            body: notifBody(m.kind, m.body, t),
             at: m.sent_at,
           };
         });
@@ -339,7 +339,7 @@ export default function NotificationsRoute() {
             kind: c.kind,
             agent: friendlyAgent(ev.from_agent, roleRef.current, t),
             title: c.title,
-            body: ev.body,
+            body: notifBody(ev.kind, ev.body, t),
             at: ev.sent_at,
           };
         } else if (ev.type === "blackboard_changed") {

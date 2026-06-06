@@ -279,6 +279,7 @@
       "tierPlaceholder": "concrete model id (empty = CLI default)",
       "effort": "Default effort",
       "effortHint": "Default reasoning depth for this CLI's agents (Claude --effort / Codex reasoning effort); override per direction in chat.",
+      "effortCodexNote": "Codex caps at “xhigh”; picking “max” auto-downgrades to xhigh.",
       "save": "Save",
       "saved": "Saved"
     }
@@ -444,6 +445,8 @@
     "subtitle": "from /ws/swarm · {{count}} unread",
     "markAllRead": "Mark all read",
     "markAllReadConfirm": "Mark all {{count}} unread notifications as read? This can't be undone.",
+    "codeBlock": "[code]",
+    "codeBlockLang": "[{{lang}} code]",
     "tabs": {
       "all": "All",
       "message": "Messages",

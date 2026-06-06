@@ -25,6 +25,37 @@ export function isHiddenWake(m: {
   return m.kind === "wake" && m.meta?.reason !== "manual";
 }
 
+/** Display body for a message-derived notification. Two cleanups, shared so the
+ *  bell popover and the full /notifications page preview identically:
+ *   - WAKE notifications carry the raw injection prompt ("操作员唤醒——请先查邮
+ *     箱里的新消息…") as their body — an instruction TO the agent, noise FOR the
+ *     user. The title already says what happened, so drop the body entirely.
+ *   - Otherwise collapse fenced code blocks to a short 「[…]」 placeholder so a
+ *     preview isn't a wall of raw ```svg```/```mermaid``` source (a chat that
+ *     renders to an image/diagram dumps its source verbatim into the feed). */
+export function notifBody(
+  kind: string,
+  body: string,
+  t: Tr,
+): string | undefined {
+  if (kind === "wake") return undefined;
+  const collapsed = collapseCodeFences(body, t);
+  return collapsed || undefined;
+}
+
+/** Replace ```lang …``` fenced blocks with a one-token placeholder; inline
+ *  `code` (single backtick) and prose are left untouched. */
+function collapseCodeFences(s: string, t: Tr): string {
+  return s
+    .replace(/```([\w+#-]*)[^\n]*\n[\s\S]*?```/g, (_m, lang: string) =>
+      lang
+        ? t("notifications.codeBlockLang", { lang })
+        : t("notifications.codeBlock"),
+    )
+    .replace(/[ \t]+\n/g, "\n")
+    .trim();
+}
+
 /** A blackboard key is `{workspace_id}/{thread_slug}/{file}`. Render it as
  *  human text — a friendly ledger label + the workspace/direction names —
  *  instead of the raw 32-char UUID + slug + content hash the user can't read. */

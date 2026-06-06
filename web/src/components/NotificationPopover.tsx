@@ -35,7 +35,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { cn } from "@/lib/cn";
-import { humanizeBlackboard, isHiddenWake } from "@/lib/notif";
+import { humanizeBlackboard, isHiddenWake, notifBody } from "@/lib/notif";
 import { AgentChip } from "@/components/agent/AgentChip";
 import { buildRoleLookup } from "@/lib/agent";
 
@@ -121,7 +121,7 @@ export function NotificationPopover({ hasUnseen, onSeen }: Props) {
             agent: pseudo ? undefined : m.from_agent,
             workspace: wsM.get(m.from_agent),
             title: pseudo ?? m.from_agent,
-            body: m.body,
+            body: notifBody(m.kind, m.body, t),
             at: m.sent_at,
           };
         });
@@ -175,7 +175,7 @@ export function NotificationPopover({ hasUnseen, onSeen }: Props) {
           agent: pseudo ? undefined : ev.from_agent,
           workspace: agentWorkspaces.get(ev.from_agent),
           title: pseudo ?? ev.from_agent,
-          body: ev.body,
+          body: notifBody(ev.kind, ev.body, t),
           at: ev.sent_at,
         };
       } else if (ev.type === "blackboard_changed") {

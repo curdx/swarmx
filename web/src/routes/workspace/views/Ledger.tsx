@@ -47,6 +47,15 @@ function emptySnap(): LedgerSnap {
   return { content: "", at: null, error: null };
 }
 
+/** The orchestrator writes the raw ledger with a "Task Ledger" / "Progress
+ *  Ledger" heading as its first line; each card already titles it
+ *  (任务台账 / 进展状态), so that inner heading is redundant. Drop a leading
+ *  line that's just "<Task|Progress> Ledger" (optional markdown #). Everything
+ *  else — Facts / Status / Plan … — is left intact. */
+function stripLedgerHeading(content: string): string {
+  return content.replace(/^\s*#{0,6}\s*(?:task|progress)\s+ledger\s*\r?\n+/i, "");
+}
+
 export default function LedgerView() {
   const { t } = useTranslation();
   const { workspace, threadSlug } = useWorkspaceContext();
@@ -338,7 +347,7 @@ function LedgerCard({
         ) : snap.content ? (
           <article className="prose prose-sm max-w-none font-body text-[13px] text-foreground-primary">
             <ReactMarkdown remarkPlugins={[remarkGfm]}>
-              {snap.content}
+              {stripLedgerHeading(snap.content)}
             </ReactMarkdown>
           </article>
         ) : (

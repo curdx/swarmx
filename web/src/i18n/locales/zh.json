@@ -279,6 +279,7 @@
       "tierPlaceholder": "具体模型 id（留空=用 CLI 默认）",
       "effort": "默认思考强度",
       "effortHint": "这个 CLI 的 agent 默认想多深（Claude --effort / Codex reasoning effort）；聊天里可按方向单独覆盖。",
+      "effortCodexNote": "Codex 封顶到「极高」；选「最大」会自动降到极高。",
       "save": "保存",
       "saved": "已保存"
     }
@@ -444,6 +445,8 @@
     "subtitle": "来自 /ws/swarm · {{count}} 条未读",
     "markAllRead": "全部标为已读",
     "markAllReadConfirm": "把 {{count}} 条未读全部标为已读？此操作不可撤销。",
+    "codeBlock": "［代码块］",
+    "codeBlockLang": "［{{lang}} 代码块］",
     "tabs": {
       "all": "全部",
       "message": "消息",
