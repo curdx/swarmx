@@ -52,6 +52,8 @@ import {
 import { cn } from "@/lib/cn";
 import { AgentChip } from "@/components/agent/AgentChip";
 import { ChatMarkdown } from "@/components/ChatMarkdown";
+import { ImageAttachments } from "@/components/ImageAttachments";
+import { extractImagePaths, fileUrl, baseName } from "@/lib/imagePaths";
 import { roleColorClass as roleColor } from "@/lib/agent";
 
 interface Props {
@@ -205,6 +207,9 @@ export function MessagesPanel({
   const [optimizing, setOptimizing] = useState(false);
   const [preOptimize, setPreOptimize] = useState<string | null>(null);
   const [optimizeNote, setOptimizeNote] = useState<string | null>(null);
+  // Pasted/dropped clipboard images upload to /api/attachment; their saved path
+  // is appended to the draft (agents read images by path).
+  const [uploadingImage, setUploadingImage] = useState(false);
   const [marking, setMarking] = useState<number | null>(null);
   const [bySenderOpen, setBySenderOpen] = useState(false);
 
@@ -591,6 +596,73 @@ export function MessagesPanel({
     composerRef.current?.focus();
   };
 
+  const appendPath = (path: string) => {
+    setBody((prev) => {
+      if (!prev) return path;
+      return prev + (/\s$/.test(prev) ? "" : "\n") + path;
+    });
+    requestAnimationFrame(() => autoGrow(composerRef.current));
+  };
+
+  // Paste/drop a clipboard image → upload → append its saved path to the draft.
+  // (Pasting a path string is just normal text; this handles raw bitmaps.)
+  const handleImageFiles = async (files: File[]) => {
+    const imgs = files.filter((f) => f.type.startsWith("image/"));
+    if (imgs.length === 0) return false;
+    setUploadingImage(true);
+    setError(null);
+    try {
+      for (const f of imgs) {
+        const guessExt = (f.type.split("/")[1] || "png").replace("jpeg", "jpg");
+        const { path } = await api.uploadAttachment(f, f.name || `pasted.${guessExt}`);
+        appendPath(path);
+      }
+      composerRef.current?.focus();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setUploadingImage(false);
+    }
+    return true;
+  };
+
+  const onComposerPaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    const files: File[] = [];
+    for (const it of items) {
+      if (it.kind === "file" && it.type.startsWith("image/")) {
+        const f = it.getAsFile();
+        if (f) files.push(f);
+      }
+    }
+    if (files.length === 0) return; // plain text paste — let it through
+    e.preventDefault();
+    void handleImageFiles(files);
+  };
+
+  const onComposerDrop = (e: React.DragEvent<HTMLTextAreaElement>) => {
+    const files = Array.from(e.dataTransfer?.files ?? []);
+    if (files.some((f) => f.type.startsWith("image/"))) {
+      e.preventDefault();
+      void handleImageFiles(files);
+    }
+  };
+
+  // Remove an image path token from the draft (the ✕ on a composer thumbnail).
+  const removeComposerImage = (path: string) => {
+    setBody((prev) =>
+      prev
+        .split(path)
+        .join("")
+        .replace(/`+/g, (m) => (m.length >= 2 ? "" : m))
+        .replace(/\n{3,}/g, "\n\n")
+        .replace(/[ \t]+\n/g, "\n")
+        .trim(),
+    );
+    requestAnimationFrame(() => autoGrow(composerRef.current));
+  };
+
   const startReply = (m: MessageRecord) => {
     setInReplyTo(m.id);
     composerRef.current?.focus();
@@ -669,6 +741,9 @@ export function MessagesPanel({
   // dead-ends the input behind a manual 唤醒 click.
   const canCompose = !!defaultRecipient || !!onSend;
   const sendDisabled = sending || !body.trim() || !canCompose;
+  // Image paths currently in the draft → small removable thumbnails above the
+  // input, so the user sees the screenshot they referenced/pasted.
+  const composerImages = useMemo(() => extractImagePaths(body), [body]);
   // 所有 workspace 用同一句 placeholder —— 用户视角永远是"跟 AI 说话",
   // 不再区分 init-only / 普通 ws。无活成员但能 onSend 唤醒时，提示发消息即上线。
   const composerPlaceholder = defaultRecipient
@@ -894,6 +969,7 @@ export function MessagesPanel({
                       <p className="selectable whitespace-pre-wrap break-words font-body text-[13px] leading-snug">
                         {m.body}
                       </p>
+                      <ImageAttachments paths={extractImagePaths(m.body)} />
                       <span className="float-right ml-2 mt-0.5 inline-block font-caption text-[10px] tabular-nums text-foreground-on-accent/70">
                         {formatClock(m.sent_at)}
                       </span>
@@ -997,6 +1073,7 @@ export function MessagesPanel({
                         content={m.body}
                         className="selectable text-foreground-primary"
                       />
+                      <ImageAttachments paths={extractImagePaths(m.body)} />
 
                       {/* hover-only actions — top-right of the turn */}
                       <div className="pointer-events-none absolute -top-2 right-0 flex items-center gap-1 opacity-0 transition-opacity group-hover/bubble:pointer-events-auto group-hover/bubble:opacity-100">
@@ -1059,6 +1136,23 @@ export function MessagesPanel({
             </button>
           </div>
         )}
+        {(composerImages.length > 0 || uploadingImage) && (
+          <div className="flex flex-wrap items-center gap-2">
+            {composerImages.map((p) => (
+              <ComposerThumb
+                key={p}
+                path={p}
+                onRemove={() => removeComposerImage(p)}
+                removeLabel={t("messages.removeImage")}
+              />
+            ))}
+            {uploadingImage && (
+              <span className="flex h-16 w-16 items-center justify-center rounded-md border border-dashed border-border-subtle">
+                <Loader2 className="size-4 animate-spin text-foreground-tertiary" />
+              </span>
+            )}
+          </div>
+        )}
         <div className="flex items-end gap-2">
           {/* picker(发给 XX ▼ + 换一个发送对象)已经去掉 —— 用户视角是
               "跟一个 AI 接待员对话",所有消息默认发给 scout(它会自己
@@ -1077,6 +1171,8 @@ export function MessagesPanel({
               if (optimizeNote !== null) setOptimizeNote(null);
             }}
             onKeyDown={onComposerKey}
+            onPaste={onComposerPaste}
+            onDrop={onComposerDrop}
             placeholder={composerPlaceholder}
             disabled={!canCompose}
             rows={1}
@@ -1232,5 +1328,49 @@ function PendingDot({ delayMs }: { delayMs: number }) {
         animationDelay: `${delayMs}ms`,
       }}
     />
+  );
+}
+
+/** Small removable image thumbnail shown above the composer for each image path
+ *  in the draft (pasted/typed). Falls back to a filename chip if the file is
+ *  gone, so the ✕-to-remove affordance still works. */
+function ComposerThumb({
+  path,
+  onRemove,
+  removeLabel,
+}: {
+  path: string;
+  onRemove: () => void;
+  removeLabel: string;
+}) {
+  const [failed, setFailed] = useState(false);
+  return (
+    <div className="group/att relative">
+      {failed ? (
+        <div
+          className="flex h-16 w-16 items-center justify-center rounded-md border border-border-subtle bg-surface-tertiary p-1 text-center font-mono text-[8px] leading-tight text-foreground-tertiary"
+          title={path}
+        >
+          {baseName(path)}
+        </div>
+      ) : (
+        <img
+          src={fileUrl(path)}
+          alt={baseName(path)}
+          onError={() => setFailed(true)}
+          className="h-16 w-16 rounded-md border border-border-subtle object-cover"
+          title={path}
+        />
+      )}
+      <button
+        type="button"
+        onClick={onRemove}
+        aria-label={removeLabel}
+        title={removeLabel}
+        className="absolute -right-1.5 -top-1.5 inline-flex size-5 items-center justify-center rounded-full border border-border-subtle bg-surface-elevated text-foreground-secondary shadow-sm transition hover:text-state-danger"
+      >
+        <X className="size-3" />
+      </button>
+    </div>
   );
 }

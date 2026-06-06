@@ -599,7 +599,15 @@
     "optimizeTooltip": "用 AI 把你的输入改写得更清晰（保留技术细节，不臆造需求）",
     "optimizing": "优化中…",
     "optimizeUndo": "已优化 · 点此撤销",
-    "optimizeNoChange": "已经够清晰了，没改动"
+    "optimizeNoChange": "已经够清晰了，没改动",
+    "codeTab": "代码",
+    "previewTab": "预览",
+    "openInNewTab": "在新标签打开",
+    "copyCode": "复制代码",
+    "copied": "已复制",
+    "imageBroken": "图片不可用",
+    "attachImage": "添加图片",
+    "removeImage": "移除"
   },
   "cmdk": {
     "placeholder": "搜索命令、跳转、唤醒 agent…",

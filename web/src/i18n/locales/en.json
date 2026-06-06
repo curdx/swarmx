@@ -597,7 +597,15 @@
     "optimizeTooltip": "Let AI rewrite your input to be clearer (keeps technical details, invents nothing)",
     "optimizing": "Optimizing…",
     "optimizeUndo": "Optimized · undo",
-    "optimizeNoChange": "Already clear — no changes"
+    "optimizeNoChange": "Already clear — no changes",
+    "codeTab": "Code",
+    "previewTab": "Preview",
+    "openInNewTab": "Open in new tab",
+    "copyCode": "Copy code",
+    "copied": "Copied",
+    "imageBroken": "Image unavailable",
+    "attachImage": "Attach image",
+    "removeImage": "Remove"
   },
   "cmdk": {
     "placeholder": "Search commands, jumps, wake agents…",

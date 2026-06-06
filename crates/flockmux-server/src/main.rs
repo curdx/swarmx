@@ -388,6 +388,14 @@ async fn main() -> Result<()> {
         .route("/api/spell/run", post(routes::rest::run_spell))
         // Composer 「优化」 button: one-shot headless prompt rewrite (claude -p).
         .route("/api/prompt/optimize", post(routes::rest::optimize_prompt))
+        // Local image preview: serve an image by abs path (chat/composer), and
+        // accept a pasted/dropped bitmap upload (raised body limit for images).
+        .route("/api/file", get(routes::rest::serve_file))
+        .route(
+            "/api/attachment",
+            post(routes::rest::upload_attachment)
+                .layer(axum::extract::DefaultBodyLimit::max(26_214_400)),
+        )
         .route("/ws/swarm", get(routes::ws_swarm::ws_swarm))
         .route("/ws/pty/:agent_id", get(routes::pty_ws::pty_ws));
 

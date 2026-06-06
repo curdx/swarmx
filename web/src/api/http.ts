@@ -290,6 +290,24 @@ export const api = {
       signal,
     ),
 
+  // Upload a pasted/dropped clipboard image: POST raw bytes, get back the saved
+  // absolute path (which the composer drops into the message text so agents can
+  // read it). Not via request() — the body is binary, not JSON.
+  uploadAttachment: async (blob: Blob, name?: string): Promise<{ path: string }> => {
+    const res = await fetch(
+      `${HTTP_BASE}/api/attachment${name ? `?name=${encodeURIComponent(name)}` : ""}`,
+      {
+        method: "POST",
+        headers: { "content-type": blob.type || "application/octet-stream" },
+        body: blob,
+      },
+    );
+    if (!res.ok) {
+      throw new Error((await res.text().catch(() => "")) || `upload → ${res.status}`);
+    }
+    return res.json() as Promise<{ path: string }>;
+  },
+
   // F1 model settings: per-CLI tier→concrete-model mapping.
   getModels: () => request<ModelsResponse>("GET", "/api/models"),
   putModels: (config: ModelConfig) =>

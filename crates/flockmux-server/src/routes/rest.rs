@@ -4150,6 +4150,195 @@ fn strip_code_fences(s: &str) -> &str {
     t
 }
 
+// ── Local image preview (composer + chat bubbles) ─────────────────────────
+// Chat messages reference screenshots by absolute PATH (the same string the
+// agents read). These two endpoints let the web UI *show* that image.
+
+/// Map an image extension → MIME, or `None` for non-image extensions (the
+/// allowlist — only these are ever served / accepted).
+fn image_content_type(ext: &str) -> Option<&'static str> {
+    Some(match ext {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "bmp" => "image/bmp",
+        "avif" => "image/avif",
+        "svg" => "image/svg+xml",
+        "ico" => "image/x-icon",
+        _ => return None,
+    })
+}
+
+/// Magic-byte sniff so a renamed non-image (`id_rsa` → `secret.png`) or a
+/// prompt-injected agent path to a non-image is rejected even if the extension
+/// passes. SVG is text/XML, so it's matched structurally.
+fn sniff_is_image(ext: &str, b: &[u8]) -> bool {
+    if ext == "svg" {
+        let head = &b[..b.len().min(512)];
+        let s = String::from_utf8_lossy(head);
+        let s = s.trim_start();
+        return s.starts_with("<?xml") || s.starts_with("<svg") || s.contains("<svg");
+    }
+    let starts = |sig: &[u8]| b.len() >= sig.len() && &b[..sig.len()] == sig;
+    match ext {
+        "png" => starts(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]),
+        "jpg" | "jpeg" => starts(&[0xFF, 0xD8, 0xFF]),
+        "gif" => starts(b"GIF87a") || starts(b"GIF89a"),
+        "webp" => b.len() >= 12 && &b[0..4] == b"RIFF" && &b[8..12] == b"WEBP",
+        "bmp" => starts(b"BM"),
+        "avif" => b.len() >= 12 && &b[4..8] == b"ftyp",
+        "ico" => starts(&[0x00, 0x00, 0x01, 0x00]),
+        _ => false,
+    }
+}
+
+/// Loopback-Host guard (DNS-rebinding): a malicious page can't point a rebound
+/// domain at us and read file bytes. Absent Host (non-browser caller) is allowed.
+fn host_is_loopback(headers: &axum::http::HeaderMap) -> bool {
+    match headers
+        .get(axum::http::header::HOST)
+        .and_then(|h| h.to_str().ok())
+    {
+        None => true,
+        Some(host) => {
+            let h = host.rsplit_once(':').map(|(a, _)| a).unwrap_or(host);
+            let h = h.trim_start_matches('[').trim_end_matches(']');
+            h == "127.0.0.1" || h.eq_ignore_ascii_case("localhost") || h == "::1"
+        }
+    }
+}
+
+#[derive(serde::Deserialize)]
+pub struct FileQuery {
+    pub path: String,
+}
+
+/// GET /api/file?path=<abs> — serve a LOCAL image so the UI can preview a path
+/// referenced in a chat message / composer.
+///
+/// SECURITY (loopback single-user, but still a real surface): Host must be
+/// loopback; `canonicalize` resolves `..`/symlinks and 404s on missing; an
+/// extension allowlist + magic-byte sniff means ONLY real image bytes ever ship
+/// (a renamed secret or a prompt-injected non-image path is rejected); 25 MB
+/// cap; `nosniff`; SVG gets a locked-down CSP. We deliberately do NOT confine to
+/// workspace roots — screenshots live anywhere (~/Desktop, /tmp) and images
+/// aren't secrets, so "serve real images only" is the right balance here.
+pub async fn serve_file(
+    headers: axum::http::HeaderMap,
+    Query(q): Query<FileQuery>,
+) -> axum::response::Response {
+    use axum::http::header;
+    if !host_is_loopback(&headers) {
+        return (StatusCode::FORBIDDEN, "bad host").into_response();
+    }
+    let canon = match std::fs::canonicalize(&q.path) {
+        Ok(c) => c,
+        Err(_) => return (StatusCode::NOT_FOUND, "not found").into_response(),
+    };
+    match std::fs::metadata(&canon) {
+        Ok(m) if m.is_file() => {
+            if m.len() > 25 * 1024 * 1024 {
+                return (StatusCode::PAYLOAD_TOO_LARGE, "too large").into_response();
+            }
+        }
+        _ => return (StatusCode::NOT_FOUND, "not found").into_response(),
+    }
+    let ext = canon
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|s| s.to_ascii_lowercase())
+        .unwrap_or_default();
+    let ctype = match image_content_type(&ext) {
+        Some(c) => c,
+        None => return (StatusCode::UNSUPPORTED_MEDIA_TYPE, "not an image").into_response(),
+    };
+    let bytes = match tokio::fs::read(&canon).await {
+        Ok(b) => b,
+        Err(_) => return (StatusCode::NOT_FOUND, "read failed").into_response(),
+    };
+    if !sniff_is_image(&ext, &bytes) {
+        return (StatusCode::UNSUPPORTED_MEDIA_TYPE, "not an image").into_response();
+    }
+    let mut resp = axum::response::Response::new(axum::body::Body::from(bytes));
+    let h = resp.headers_mut();
+    h.insert(header::CONTENT_TYPE, ctype.parse().unwrap());
+    h.insert("x-content-type-options", "nosniff".parse().unwrap());
+    h.insert(header::CACHE_CONTROL, "private, max-age=60".parse().unwrap());
+    if ext == "svg" {
+        h.insert(
+            header::CONTENT_SECURITY_POLICY,
+            "default-src 'none'; style-src 'unsafe-inline'; img-src data:"
+                .parse()
+                .unwrap(),
+        );
+    }
+    resp
+}
+
+#[derive(serde::Deserialize)]
+pub struct AttachQuery {
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
+/// POST /api/attachment?name=<basename> — body is raw image bytes (the composer
+/// POSTs a pasted/dropped clipboard bitmap here). Saves it under the data dir's
+/// `attachments/` and returns its absolute `path`, which the composer drops into
+/// the message text so agents can read the image by path (Claude inline, Codex
+/// `-i`). Same image-only sniff + size cap as `serve_file`.
+pub async fn upload_attachment(
+    State(state): State<AppState>,
+    Query(q): Query<AttachQuery>,
+    body: axum::body::Bytes,
+) -> axum::response::Response {
+    if body.is_empty() {
+        return (StatusCode::BAD_REQUEST, "empty body").into_response();
+    }
+    if body.len() > 25 * 1024 * 1024 {
+        return (StatusCode::PAYLOAD_TOO_LARGE, "too large").into_response();
+    }
+    // Extension: trust the supplied name only if it's an image AND the bytes
+    // actually match; otherwise sniff a supported type from the bytes.
+    let name_ext = q
+        .name
+        .as_deref()
+        .and_then(|n| std::path::Path::new(n).extension().and_then(|e| e.to_str()))
+        .map(|s| s.to_ascii_lowercase());
+    let ext = match name_ext {
+        Some(e) if image_content_type(&e).is_some() && sniff_is_image(&e, &body) => e,
+        _ => match ["png", "jpeg", "gif", "webp", "bmp", "avif"]
+            .into_iter()
+            .find(|e| sniff_is_image(e, &body))
+        {
+            Some(e) => e.to_string(),
+            None => return (StatusCode::UNSUPPORTED_MEDIA_TYPE, "not an image").into_response(),
+        },
+    };
+    // attachments dir = <data>/attachments (sibling of recordings/blackboard).
+    let dir = state
+        .recordings_root
+        .parent()
+        .map(|p| p.join("attachments"))
+        .unwrap_or_else(|| state.recordings_root.join("attachments"));
+    if let Err(e) = tokio::fs::create_dir_all(&dir).await {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("mkdir attachments: {e}"),
+        )
+            .into_response();
+    }
+    let full = dir.join(format!("{}.{}", Uuid::new_v4(), ext));
+    if let Err(e) = tokio::fs::write(&full, &body).await {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("write attachment: {e}"),
+        )
+            .into_response();
+    }
+    Json(json!({ "path": full.to_string_lossy() })).into_response()
+}
+
 #[cfg(test)]
 mod p0_tests {
     use super::*;
@@ -4158,6 +4347,25 @@ mod p0_tests {
 
     fn consume(from: &str, kind: &str) -> ConsumeRef {
         ConsumeRef { from_role: from.into(), kind: kind.into() }
+    }
+
+    #[test]
+    fn image_sniff_rejects_renamed_non_image() {
+        // real PNG magic passes
+        let png = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0];
+        assert!(sniff_is_image("png", &png));
+        // a text file renamed to .png is rejected (the exfil guard)
+        assert!(!sniff_is_image("png", b"-----BEGIN OPENSSH PRIVATE KEY-----"));
+        // jpeg / gif magic
+        assert!(sniff_is_image("jpg", &[0xFF, 0xD8, 0xFF, 0xE0]));
+        assert!(sniff_is_image("gif", b"GIF89a...."));
+        // svg detected structurally
+        assert!(sniff_is_image("svg", b"<svg xmlns=\"...\"></svg>"));
+        assert!(sniff_is_image("svg", b"<?xml version=\"1.0\"?><svg></svg>"));
+        assert!(!sniff_is_image("svg", b"just text, not svg"));
+        // non-image extension has no content type
+        assert!(image_content_type("txt").is_none());
+        assert!(image_content_type("png").is_some());
     }
 
     #[test]
