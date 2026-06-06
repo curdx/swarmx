@@ -23,7 +23,7 @@ import {
 import { cn } from "@/lib/cn";
 
 const TIERS = ["opus", "sonnet", "haiku"] as const;
-const EFFORTS = ["low", "medium", "high", "max"] as const;
+const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
 
 function tierLabel(tier: string): string {
   if ((TIERS as readonly string[]).includes(tier)) {

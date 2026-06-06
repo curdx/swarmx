@@ -276,6 +276,8 @@
       "noOverride": "该 CLI 不支持 --model 覆盖（其插件未声明 model_args），由它自己决定模型。",
       "cliDefaultPlaceholder": "留空=用 CLI 自己的默认",
       "tierPlaceholder": "具体模型 id（留空=用 CLI 默认）",
+      "effort": "默认思考强度",
+      "effortHint": "这个 CLI 的 agent 默认想多深（Claude --effort / Codex reasoning effort）；聊天里可按方向单独覆盖。",
       "save": "保存",
       "saved": "已保存"
     }
@@ -622,18 +624,20 @@
       "haiku": "最快最省——杂活/闲聊"
     },
     "effortHeading": "思考强度",
-    "effortDefaultHint": "用模型自带的默认强度",
+    "effortDefaultHint": "跟随全局设置（设置 → 模型）",
     "effort": {
       "low": "低",
       "medium": "中",
       "high": "高",
+      "xhigh": "极高",
       "max": "最大"
     },
     "effortHint": {
       "low": "想得少、最快最省",
       "medium": "适中",
-      "high": "想得更深、更慢更贵",
-      "max": "拉满，留给硬骨头"
+      "high": "想得更深（Claude 默认就是这档）",
+      "xhigh": "比高再深一档（Opus 4.7/4.8、Codex 支持）",
+      "max": "拉满，留给硬骨头（Codex 无此档，自动降到极高）"
     },
     "switching": "切换中，调度重启…"
   },

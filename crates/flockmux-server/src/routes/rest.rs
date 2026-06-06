@@ -405,6 +405,15 @@ pub(crate) async fn spawn_with_bookkeeping(
         resolved
     };
 
+    // Reasoning effort: the per-direction `thread.reasoning_effort` arrived as
+    // `reasoning` and wins; otherwise fall back to the per-CLI global default
+    // (模型 settings). None ⇒ the model's own default (no effort flag). Single
+    // chokepoint so every spawn path inherits the global default.
+    let reasoning = match reasoning {
+        Some(r) => Some(r),
+        None => state.models.read().await.effort_for(cli),
+    };
+
     let spawned_at = now_ms();
 
     // Mint the recording id + path up front so spawn_agent can hand the

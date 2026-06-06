@@ -276,6 +276,8 @@
       "noOverride": "This CLI does not support a --model override (its plugin declares no model_args); it picks its own model.",
       "cliDefaultPlaceholder": "empty = the CLI's own default",
       "tierPlaceholder": "concrete model id (empty = CLI default)",
+      "effort": "Default effort",
+      "effortHint": "Default reasoning depth for this CLI's agents (Claude --effort / Codex reasoning effort); override per direction in chat.",
       "save": "Save",
       "saved": "Saved"
     }
@@ -620,18 +622,20 @@
       "haiku": "Fastest & cheapest — chores / chat"
     },
     "effortHeading": "Thinking effort",
-    "effortDefaultHint": "Use the model's own default",
+    "effortDefaultHint": "Follow global settings (Settings → Models)",
     "effort": {
       "low": "Low",
       "medium": "Medium",
       "high": "High",
+      "xhigh": "X-High",
       "max": "Max"
     },
     "effortHint": {
       "low": "Less thinking — fastest & cheapest",
       "medium": "Moderate",
-      "high": "Thinks deeper — slower & pricier",
-      "max": "Maxed out — for hard problems"
+      "high": "Thinks deeper (Claude's own default)",
+      "xhigh": "One step above high (Opus 4.7/4.8, Codex)",
+      "max": "Maxed out — for hard problems (Codex has no max → X-High)"
     },
     "switching": "Switching, restarting orchestrator…"
   },

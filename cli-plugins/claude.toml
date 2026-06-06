@@ -51,5 +51,6 @@ effort_args = ["--effort", "{effort}"]
 [effort_levels]
 low = "low"
 medium = "medium"
-high = "high"
-max = "max"     # claude's true ceiling, supported on the effort-aware models
+high = "high"      # claude's own default on Opus 4.8 / Sonnet 4.6
+xhigh = "xhigh"    # one above default; Opus 4.7/4.8 (degrades to high on 4.6)
+max = "max"        # claude's true ceiling, supported on the effort-aware models

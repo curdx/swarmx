@@ -34,6 +34,13 @@ pub struct CliModels {
     /// tier key falls back to `default`.
     #[serde(default)]
     pub tiers: BTreeMap<String, String>,
+    /// Global default reasoning/thinking effort for this CLI (abstract level
+    /// low|medium|high|max). Empty ⇒ the model's own default (emit no effort
+    /// flag). A per-direction `thread.reasoning_effort` overrides this; this is
+    /// the fallback applied at the spawn chokepoint when a direction sets none.
+    /// Mapped to the CLI's concrete flag via the plugin's `effort_levels`.
+    #[serde(default)]
+    pub effort: String,
 }
 
 /// The whole model config (all CLIs).
@@ -72,6 +79,7 @@ impl ModelConfig {
             CliModels {
                 default: String::new(),
                 tiers: claude_tiers,
+                effort: String::new(),
             },
         );
         clis.insert("codex".into(), CliModels::default());
@@ -114,6 +122,17 @@ impl ModelConfig {
             }
             None => per_cli_default(),
         }
+    }
+
+    /// Global default reasoning effort for `cli` (abstract level), or `None` if
+    /// unset. The per-direction `thread.reasoning_effort` takes precedence; this
+    /// is the fallback applied at the spawn chokepoint.
+    pub fn effort_for(&self, cli: &str) -> Option<String> {
+        self.clis
+            .get(cli)
+            .map(|c| c.effort.trim())
+            .filter(|e| !e.is_empty())
+            .map(|e| e.to_string())
     }
 }
 
@@ -184,6 +203,7 @@ mod tests {
             CliModels {
                 default: default.to_string(),
                 tiers,
+                effort: String::new(),
             },
         );
         cfg
@@ -255,6 +275,7 @@ mod tests {
             CliModels {
                 default: "gpt-5.5".into(),
                 tiers: BTreeMap::new(),
+                effort: String::new(),
             },
         );
         // Manual merge mirrors load_or_default's logic.

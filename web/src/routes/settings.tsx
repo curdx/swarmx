@@ -425,7 +425,8 @@ function ModelsPanel() {
     };
   }, []);
 
-  const cliOf = (id: string) => cfg?.clis[id] ?? { default: "", tiers: {} };
+  const cliOf = (id: string) =>
+    cfg?.clis[id] ?? { default: "", tiers: {}, effort: "" };
   const setDefault = (id: string, v: string) =>
     setCfg((prev) =>
       prev
@@ -446,6 +447,12 @@ function ModelsPanel() {
         ...prev,
         clis: { ...prev.clis, [id]: { ...c, tiers: { ...c.tiers, [tier]: v } } },
       };
+    });
+  const setEffort = (id: string, v: string) =>
+    setCfg((prev) => {
+      if (!prev) return prev;
+      const c = prev.clis[id] ?? { default: "", tiers: {} };
+      return { ...prev, clis: { ...prev.clis, [id]: { ...c, effort: v } } };
     });
 
   const save = async () => {
@@ -524,6 +531,13 @@ function ModelsPanel() {
                     mono
                   />
                 ))}
+                <div className="mt-1 h-px bg-border-subtle" />
+                <EffortRow
+                  label={t("settings.models.effort")}
+                  hint={t("settings.models.effortHint")}
+                  value={cliOf(cli.id).effort ?? ""}
+                  onChange={(v) => setEffort(cli.id, v)}
+                />
               </div>
             )}
           </div>
@@ -579,6 +593,54 @@ function ModelRow({
         onChange={(e) => onChange(e.target.value)}
         className="flex-1 rounded-md border border-border-subtle bg-surface-primary px-3 py-1.5 font-mono text-xs text-foreground-primary outline-none focus:border-accent-primary"
       />
+    </div>
+  );
+}
+
+/** Default reasoning-effort selector for a CLI (a fixed-option dropdown, not a
+ *  free-text model id). "" = the model's own default. */
+function EffortRow({
+  label,
+  hint,
+  value,
+  onChange,
+}: {
+  label: string;
+  hint?: string;
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  const { t } = useTranslation();
+  const id = React.useId();
+  const LEVELS = ["low", "medium", "high", "xhigh", "max"] as const;
+  return (
+    <div className="flex items-start gap-3">
+      <Label
+        htmlFor={id}
+        className="mt-1.5 w-20 shrink-0 text-sm text-foreground-secondary"
+      >
+        {label}
+      </Label>
+      <div className="flex flex-1 flex-col gap-1">
+        <select
+          id={id}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          className="w-full rounded-md border border-border-subtle bg-surface-primary px-3 py-1.5 text-xs text-foreground-primary outline-none focus:border-accent-primary"
+        >
+          <option value="">{t("model.default")}</option>
+          {LEVELS.map((lv) => (
+            <option key={lv} value={lv}>
+              {t(`model.effort.${lv}`)}
+            </option>
+          ))}
+        </select>
+        {hint && (
+          <span className="font-caption text-[10px] text-foreground-tertiary">
+            {hint}
+          </span>
+        )}
+      </div>
     </div>
   );
 }

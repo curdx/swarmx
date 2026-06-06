@@ -462,6 +462,9 @@ export interface CliModels {
   /** tier (opus/sonnet/haiku) → concrete model id. Empty value = CLI default
    *  for that tier; absent key = fall back to `default`. */
   tiers: Record<string, string>;
+  /** Global default reasoning effort (low|medium|high|max). Empty = model's own
+   *  default. A per-direction override (chat picker) wins over this. */
+  effort?: string;
 }
 export interface ModelConfig {
   version: number;

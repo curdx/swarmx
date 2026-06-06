@@ -63,7 +63,8 @@ effort_args = ["-c", "model_reasoning_effort={effort}"]
 low = "low"
 medium = "medium"
 high = "high"
-max = "xhigh"
+xhigh = "xhigh"    # codex's own ceiling
+max = "xhigh"      # codex has no "max" → coerce abstract max to its xhigh ceiling
 
 # Post-spawn readiness automation (host-side). codex 0.130+ pops a "Hooks need
 # review" TUI dialog the first time it sees a hooks.json path it hasn't recorded

@@ -53,6 +53,15 @@ pub async fn put_models(
                 Json(json!({"error": format!("cli '{cli}' has an empty tier key")})),
             ));
         }
+        // Effort is an abstract level the plugin maps per-CLI; constrain it so a
+        // typo doesn't silently become a no-op (empty = the model's own default).
+        let eff = m.effort.trim();
+        if !eff.is_empty() && !["low", "medium", "high", "xhigh", "max"].contains(&eff) {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": format!("cli '{cli}' has invalid effort '{eff}' — valid: low|medium|high|xhigh|max or empty")})),
+            ));
+        }
     }
 
     if let Err(e) = models_config::save(&config) {
