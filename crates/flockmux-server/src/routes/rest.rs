@@ -204,6 +204,7 @@ fn thread_record_to_info(t: ThreadRecord) -> ThreadInfo {
         branch: t.branch,
         cwd: t.cwd,
         state: t.state,
+        model_tier: t.model_tier,
         dirty: false, // live value folded in by list_workspaces_handler
         ahead: None,  // live values folded in by list_workspaces_handler
         behind: None,
@@ -1132,11 +1133,11 @@ pub async fn spawn_worker(
     // (`<workspace_id>/<thread_slug>/…`) that minted handoff keys are scoped by,
     // so producer + consumer keys match within a direction and never collide
     // across directions. Main thread (no row) → slug "main".
-    let (thread_cwd, thread_slug) = match thread_id.as_ref() {
+    let (thread_cwd, thread_slug, thread_model_tier) = match thread_id.as_ref() {
         Some(tid) => match state.store.get_thread(tid.clone()).await {
-            Ok(Some(t)) => (t.cwd, t.slug),
+            Ok(Some(t)) => (t.cwd, t.slug, t.model_tier),
             // Thread row gone (deleted) → fall back to the main/project cwd.
-            Ok(None) => (ws.cwd.clone(), "main".to_string()),
+            Ok(None) => (ws.cwd.clone(), "main".to_string(), None),
             // Hard error: don't guess a directory; fail loudly.
             Err(e) => {
                 return Err((
@@ -1145,7 +1146,7 @@ pub async fn spawn_worker(
                 ))
             }
         },
-        None => (ws.cwd.clone(), "main".to_string()),
+        None => (ws.cwd.clone(), "main".to_string(), None),
     };
     let layout = WorkspaceLayout::Shared {
         dir: PathBuf::from(&thread_cwd),
@@ -1192,6 +1193,8 @@ pub async fn spawn_worker(
             Json(json!({"error": format!("role '{role_slug}' has no default_cli and no cli override was given")})),
         ));
     }
+    // Precedence: explicit spawn request → role's pinned tier → the direction's
+    // model_tier (the user's per-direction choice) → none (global default).
     let resolved_model = req
         .model
         .clone()
@@ -1199,7 +1202,8 @@ pub async fn spawn_worker(
         .or_else(|| {
             let t = manifest.default_model_tier.trim();
             (!t.is_empty()).then(|| t.to_string())
-        });
+        })
+        .or_else(|| thread_model_tier.clone());
     let role_label = if manifest.name.trim().is_empty() {
         role_slug.clone()
     } else {
@@ -2641,6 +2645,61 @@ pub async fn update_thread_handler(
     Ok(Json(updated))
 }
 
+#[derive(serde::Deserialize)]
+pub struct SetThreadModelRequest {
+    /// Abstract tier (opus|sonnet|haiku) or a concrete model id. Empty / null /
+    /// absent = clear the override (use the global default).
+    #[serde(default)]
+    pub tier: Option<String>,
+}
+
+/// PUT /api/workspaces/:id/threads/:tid/model — set (or clear) this direction's
+/// model. Persists only; takes effect on the NEXT spawn in the direction (the
+/// client restarts the orchestrator to apply it now). Returns the updated thread.
+pub async fn set_thread_model_handler(
+    State(state): State<AppState>,
+    Path((workspace_id, thread_id)): Path<(String, String)>,
+    Json(req): Json<SetThreadModelRequest>,
+) -> Result<Json<ThreadInfo>, (StatusCode, Json<serde_json::Value>)> {
+    // Confirm the thread exists and belongs to this workspace.
+    let thread = state
+        .store
+        .get_thread(thread_id.clone())
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?
+        .filter(|t| t.workspace_id == workspace_id)
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": format!("unknown thread: {thread_id}")})),
+            )
+        })?;
+    let _ = thread;
+    // Normalize empty → None (clear). A concrete tier/model is stored verbatim
+    // and resolved per-CLI at spawn time by models_config.
+    let tier = req.tier.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    state
+        .store
+        .set_thread_model_tier(thread_id.clone(), tier)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+    publish_thread_changed(&state, &workspace_id, &thread_id, "updated");
+    let updated = state
+        .store
+        .get_thread(thread_id.clone())
+        .await
+        .ok()
+        .flatten()
+        .map(thread_record_to_info)
+        .ok_or_else(|| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "thread vanished after update"})),
+            )
+        })?;
+    Ok(Json(updated))
+}
+
 /// Background git isolation for a freshly-named direction. The git calls block
 /// (each internally time-boxed at 30s) so they run on a blocking thread off the
 /// async runtime. On success the thread is repointed to the worktree dir and
@@ -3848,14 +3907,27 @@ pub async fn run_spell(
     // Phase 1: spawn all agents up-front (no PTY input yet) so each one's
     // agent_id is known before we render any prompt. Otherwise the writer's
     // prompt couldn't reference critic's id.
+    // Per-direction model override: the orchestrator (and any spell agent whose
+    // role doesn't pin its own tier) inherits this direction's model_tier. A
+    // role with an explicit default_model_tier still wins. None = global default.
+    let thread_model_tier: Option<String> = resolved_thread
+        .as_ref()
+        .and_then(|t| t.model_tier.clone())
+        .filter(|s| !s.trim().is_empty());
     let mut outcomes: Vec<(SpawnOutcome, String)> =
         Vec::with_capacity(resolved_agents.len());
     for resolved in &resolved_agents {
+        let agent_model = state
+            .roles
+            .get(&resolved.role)
+            .map(|r| r.manifest.default_model_tier.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .or_else(|| thread_model_tier.clone());
         let out = spawn_with_bookkeeping(
             &state,
             &resolved.cli,
             Some(resolved.role.clone()),
-            None, // spells don't carry a per-worker model overlay (yet)
+            agent_model,
             layout.clone(),
             workspace.id.clone(),
             Some(spell_run_id.clone()),

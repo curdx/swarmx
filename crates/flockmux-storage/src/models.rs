@@ -65,6 +65,11 @@ pub struct ThreadRecord {
     pub cwd: String,
     /// "ready" | "preparing" | "failed"
     pub state: String,
+    /// Per-direction model override (abstract tier opus|sonnet|haiku or a
+    /// concrete model id). NULL = use the global default. Resolved per-CLI at
+    /// spawn time. See migration 0014.
+    #[serde(default)]
+    pub model_tier: Option<String>,
     pub created_at: i64,
     #[serde(default)]
     pub deleted_at: Option<i64>,

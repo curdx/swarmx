@@ -53,6 +53,7 @@ import { cn } from "@/lib/cn";
 import { AgentChip } from "@/components/agent/AgentChip";
 import { ChatMarkdown } from "@/components/ChatMarkdown";
 import { ImageAttachments } from "@/components/ImageAttachments";
+import { ModelPicker } from "@/components/ModelPicker";
 import { extractImagePaths, fileUrl, baseName } from "@/lib/imagePaths";
 import { roleColorClass as roleColor } from "@/lib/agent";
 
@@ -102,6 +103,14 @@ interface Props {
    *  干活" inline cards 走这。父组件维护 task state machine，这里只是
    *  视觉插槽。 */
   taskActivityBelow?: React.ReactNode;
+  /** Active direction's model_tier (null = global default). When `onSetModel`
+   *  is also provided, the top bar shows a model picker. Omitted by the legacy
+   *  /debug SwarmPanel (no direction). */
+  modelTier?: string | null;
+  /** Change this direction's model. Parent persists + restarts the orchestrator. */
+  onSetModel?: (tier: string | null) => void;
+  /** True while a model switch is applying (picker shows a spinner). */
+  modelBusy?: boolean;
 }
 
 const KIND_DEFAULT = "note";
@@ -192,6 +201,9 @@ export function MessagesPanel({
   onSend,
   jumpUnreadTick = 0,
   taskActivityBelow,
+  modelTier = null,
+  onSetModel,
+  modelBusy = false,
 }: Props) {
   const aliveForInference = allAliveAgents ?? activeMembers;
   const { t } = useTranslation();
@@ -787,6 +799,9 @@ export function MessagesPanel({
           </div>
         ) : (
           <>
+            {onSetModel && (
+              <ModelPicker tier={modelTier} onSet={onSetModel} busy={modelBusy} />
+            )}
             <span className="flex-1" />
             <Button
               variant="ghost"

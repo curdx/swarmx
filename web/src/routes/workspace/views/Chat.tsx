@@ -235,6 +235,47 @@ export default function ChatView() {
     }
   }, [reviving, workspace.path, workspace.workspaceId, refreshAgents]);
 
+  // ── Per-direction model switch ───────────────────────────────────────
+  // The chat model picker calls this. We persist the direction's model_tier,
+  // then restart any live orchestrator so the new model takes effect now (it
+  // re-bootstraps from the ledger). Workers spawned afterward inherit the tier
+  // at spawn time. Passive otherwise (null tier = follow the global default).
+  const [modelBusy, setModelBusy] = useState(false);
+  const setDirectionModel = useCallback(
+    async (tier: string | null) => {
+      if (!activeThread || modelBusy) return;
+      setModelBusy(true);
+      try {
+        await api.setThreadModel(workspace.workspaceId, activeThread.id, tier);
+        const orchs = activeMembers.filter((m) => m.role === "orchestrator");
+        if (orchs.length > 0) {
+          await Promise.allSettled(orchs.map((o) => api.killAgent(o.agent_id)));
+          await api.runSpell({
+            name: "init",
+            task: "",
+            workspace_dir: workspace.path,
+            workspace_id: workspace.workspaceId,
+            thread_id: activeThread.id,
+          });
+        }
+        refreshAgents();
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn("set direction model failed", e);
+      } finally {
+        setModelBusy(false);
+      }
+    },
+    [
+      activeThread,
+      modelBusy,
+      workspace.workspaceId,
+      workspace.path,
+      activeMembers,
+      refreshAgents,
+    ],
+  );
+
   // 发消息即上线：工作空间没有活的 orchestrator 时，用户直接发消息——自动
   // 拉起 orchestrator(init spell)、把这条消息投给它、唤醒它干活，省去先手点
   // 「唤醒调度」。MessagesPanel 在 defaultRecipient 为空(无活成员)时调用本函数。
@@ -485,6 +526,9 @@ export default function ChatView() {
           jumpUnreadTick={jumpUnreadTick}
           onOpenAgent={openAgent}
           onSend={sendBootstrappingOrchestrator}
+          modelTier={activeThread?.model_tier ?? null}
+          onSetModel={setDirectionModel}
+          modelBusy={modelBusy}
           taskActivityBelow={
             <TaskActivity tasks={tasks} onDismiss={dismissTask} />
           }

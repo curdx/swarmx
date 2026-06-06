@@ -608,6 +608,19 @@
     "removeImage": "Remove",
     "previewError": "Render failed"
   },
+  "model": {
+    "label": "Model",
+    "tooltip": "Choose which model this direction's AI uses",
+    "heading": "Model for this direction",
+    "default": "Default",
+    "defaultHint": "Follow global settings (Settings → Models)",
+    "hint": {
+      "opus": "Most capable, slow & pricey — hard problems",
+      "sonnet": "Balanced, the everyday default",
+      "haiku": "Fastest & cheapest — chores / chat"
+    },
+    "switching": "Switching, restarting orchestrator…"
+  },
   "cmdk": {
     "placeholder": "Search commands, jumps, wake agents…",
     "groups": {

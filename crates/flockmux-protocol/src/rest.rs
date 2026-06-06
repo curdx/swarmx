@@ -454,6 +454,11 @@ pub struct ThreadInfo {
     pub cwd: String,
     /// "ready" | "preparing" | "failed"
     pub state: String,
+    /// Per-direction model override (abstract tier opus|sonnet|haiku or a
+    /// concrete model id). None = use the global default. Set via the chat
+    /// header model picker.
+    #[serde(default)]
+    pub model_tier: Option<String>,
     /// Live (computed at list time, not persisted): does `cwd` have uncommitted
     /// changes? Lets the sidebar flag "this direction's agent has unsaved work"
     /// with a dirty dot. `false` for a clean/non-git/errored tree.

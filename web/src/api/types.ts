@@ -291,6 +291,9 @@ export interface ThreadInfo {
   cwd: string;
   /** "ready" | "preparing" | "failed" */
   state: string;
+  /** Per-direction model override (abstract tier opus|sonnet|haiku or a concrete
+   *  model id). Null = use the global default. Set via the chat model picker. */
+  model_tier?: string | null;
   /** Live (computed server-side at list time): does `cwd` have uncommitted
    *  changes? Drives the sidebar's dirty dot. */
   dirty?: boolean;

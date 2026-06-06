@@ -610,6 +610,19 @@
     "removeImage": "移除",
     "previewError": "渲染失败"
   },
+  "model": {
+    "label": "模型",
+    "tooltip": "选择本方向的 AI 用哪个模型",
+    "heading": "本方向的模型",
+    "default": "默认",
+    "defaultHint": "跟随全局设置（设置 → 模型）",
+    "hint": {
+      "opus": "最强，慢且贵——难题/重构",
+      "sonnet": "均衡，日常默认",
+      "haiku": "最快最省——杂活/闲聊"
+    },
+    "switching": "切换中，调度重启…"
+  },
   "cmdk": {
     "placeholder": "搜索命令、跳转、唤醒 agent…",
     "groups": {

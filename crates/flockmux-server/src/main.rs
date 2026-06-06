@@ -35,7 +35,7 @@ use axum::{
     http::{header, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{delete, get, patch, post},
+    routing::{delete, get, patch, post, put},
     Router,
 };
 use flockmux_storage::Store;
@@ -375,6 +375,11 @@ async fn main() -> Result<()> {
         .route(
             "/api/workspaces/:id/threads/:tid",
             patch(routes::rest::update_thread_handler).delete(routes::rest::delete_thread_handler),
+        )
+        // Per-direction model override (chat header model picker).
+        .route(
+            "/api/workspaces/:id/threads/:tid/model",
+            put(routes::rest::set_thread_model_handler),
         )
         .route(
             "/api/workspaces/:id/threads/:tid/diff",

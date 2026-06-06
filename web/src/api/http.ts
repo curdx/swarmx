@@ -245,6 +245,15 @@ export const api = {
       `/api/workspaces/${id}/threads/${threadId}`,
       req,
     ),
+  // Per-direction model override. tier = "opus"|"sonnet"|"haiku"|concrete id, or
+  // null to clear (use the global default). Takes effect on the next spawn in
+  // the direction (caller restarts the orchestrator to apply it immediately).
+  setThreadModel: (id: string, threadId: string, tier: string | null) =>
+    request<ThreadInfo>(
+      "PUT",
+      `/api/workspaces/${id}/threads/${threadId}/model`,
+      { tier },
+    ),
   deleteThread: (id: string, threadId: string) =>
     request<void>("DELETE", `/api/workspaces/${id}/threads/${threadId}`),
   // Preview what a direction changed before merging it back to the main line.
