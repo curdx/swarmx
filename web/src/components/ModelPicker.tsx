@@ -95,6 +95,11 @@ export function ModelPicker({
           icon={<Gauge className="size-3" />}
           title={t("model.effortHeading")}
         />
+        {curTier === "haiku" && (
+          <p className="px-2 pb-1 font-caption text-[10px] leading-snug text-status-warning">
+            {t("model.effortHaikuNote")}
+          </p>
+        )}
         <MenuItem
           label={t("model.default")}
           hint={t("model.effortDefaultHint")}

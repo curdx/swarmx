@@ -624,6 +624,7 @@
       "haiku": "最快最省——杂活/闲聊"
     },
     "effortHeading": "思考强度",
+    "effortHaikuNote": "Haiku 不吃思考强度——此项对跑 Haiku 的 agent 无效（对其它模型仍生效）",
     "effortDefaultHint": "跟随全局设置（设置 → 模型）",
     "effort": {
       "low": "低",

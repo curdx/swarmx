@@ -622,6 +622,7 @@
       "haiku": "Fastest & cheapest — chores / chat"
     },
     "effortHeading": "Thinking effort",
+    "effortHaikuNote": "Haiku ignores thinking effort — no effect on Haiku agents (still applies to other models)",
     "effortDefaultHint": "Follow global settings (Settings → Models)",
     "effort": {
       "low": "Low",
