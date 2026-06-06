@@ -294,6 +294,9 @@ export interface ThreadInfo {
   /** Per-direction model override (abstract tier opus|sonnet|haiku or a concrete
    *  model id). Null = use the global default. Set via the chat model picker. */
   model_tier?: string | null;
+  /** Per-direction reasoning/thinking effort (abstract low|medium|high|max).
+   *  Null = the model's own default. Set via the chat model picker. */
+  reasoning_effort?: string | null;
   /** Live (computed server-side at list time): does `cwd` have uncommitted
    *  changes? Drives the sidebar's dirty dot. */
   dirty?: boolean;

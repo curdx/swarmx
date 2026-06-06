@@ -459,6 +459,10 @@ pub struct ThreadInfo {
     /// header model picker.
     #[serde(default)]
     pub model_tier: Option<String>,
+    /// Per-direction reasoning/thinking effort (abstract low|medium|high|max).
+    /// None = the model's own default. Set via the chat model picker.
+    #[serde(default)]
+    pub reasoning_effort: Option<String>,
     /// Live (computed at list time, not persisted): does `cwd` have uncommitted
     /// changes? Lets the sidebar flag "this direction's agent has unsaved work"
     /// with a dirty dot. `false` for a clean/non-git/errored tree.

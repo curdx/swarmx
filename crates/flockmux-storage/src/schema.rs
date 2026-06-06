@@ -25,6 +25,8 @@ const MIGRATION_0013: &str =
     include_str!("../migrations/0013_agent_last_activity.sql");
 const MIGRATION_0014: &str =
     include_str!("../migrations/0014_thread_model_tier.sql");
+const MIGRATION_0015: &str =
+    include_str!("../migrations/0015_thread_reasoning_effort.sql");
 
 pub(crate) fn run_migrations(conn: &mut Connection) -> Result<()> {
     let current = current_version(conn).unwrap_or(0);
@@ -71,6 +73,9 @@ pub(crate) fn run_migrations(conn: &mut Connection) -> Result<()> {
     }
     if current < 14 {
         apply(conn, 14, MIGRATION_0014).context("apply migration 0014")?;
+    }
+    if current < 15 {
+        apply(conn, 15, MIGRATION_0015).context("apply migration 0015")?;
     }
     Ok(())
 }

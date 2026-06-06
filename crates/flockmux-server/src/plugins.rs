@@ -222,6 +222,21 @@ pub struct CliPlugin {
     #[serde(default)]
     pub default_model: Option<String>,
 
+    /// Reasoning/thinking effort overlay (parallel to `model_args`). Argv
+    /// template with an `{effort}` placeholder substituted at spawn — claude:
+    /// `["--effort", "{effort}"]`, codex: `["-c", "model_reasoning_effort={effort}"]`.
+    /// Empty ⇒ this CLI can't take an effort override. Both 2026 CLIs converged
+    /// on discrete effort levels and degrade gracefully if a level outranks the
+    /// model, so the same value is safe across models.
+    #[serde(default)]
+    pub effort_args: Vec<String>,
+    /// Maps an ABSTRACT effort level (low|medium|high|max) to this CLI's concrete
+    /// value (e.g. claude max→"max", codex max→"xhigh"). An abstract level absent
+    /// here (or "default") emits no effort args = the model's own default. Keeps
+    /// the host model-agnostic — a new CLI declares its own ladder in TOML.
+    #[serde(default)]
+    pub effort_levels: HashMap<String, String>,
+
     /// Transport to drive this CLI (L4). Defaults to `pty` — the only wired
     /// path today. `acp` is reserved for structured JSON-RPC-over-stdio; see
     /// [`Transport`].

@@ -1,15 +1,20 @@
 /**
- * ModelPicker — choose which model THIS direction's AI (the orchestrator, plus
- * workers that don't pin their own tier) runs at. A small pill in the chat top
- * bar, à la ChatGPT's model dropdown.
+ * ModelPicker — choose THIS direction's model AND reasoning/thinking effort.
+ * A small pill in the chat top bar, à la ChatGPT's model dropdown.
  *
- * The value is the direction's `model_tier`: an abstract tier (opus|sonnet|
- * haiku) resolved per-CLI by the global 模型 settings, or null = "use the global
- * default". Changing it persists on the thread and (via the parent) restarts the
- * live orchestrator so the switch takes effect immediately.
+ * Two orthogonal knobs:
+ *  - model: abstract tier (opus|sonnet|haiku) resolved per-CLI by the global 模型
+ *    settings, or null = global default.
+ *  - reasoning effort: abstract low|medium|high|max (both Claude Code and Codex
+ *    converged on discrete effort levels in 2026), or null = the model's own
+ *    default. Mapped to each CLI's concrete flag at spawn.
+ *
+ * Changing either persists on the direction and (via the parent) restarts the
+ * live orchestrator so it takes effect immediately. The body sent is always the
+ * complete desired state, so the parent merges the unchanged knob.
  */
 import { useTranslation } from "react-i18next";
-import { Check, ChevronDown, Cpu, Loader2 } from "lucide-react";
+import { Check, ChevronDown, Cpu, Gauge, Loader2 } from "lucide-react";
 import {
   Popover,
   PopoverContent,
@@ -18,9 +23,8 @@ import {
 import { cn } from "@/lib/cn";
 
 const TIERS = ["opus", "sonnet", "haiku"] as const;
+const EFFORTS = ["low", "medium", "high", "max"] as const;
 
-/** Display label for a tier value (proper-case the known tiers; verbatim for a
- *  concrete model id). */
 function tierLabel(tier: string): string {
   if ((TIERS as readonly string[]).includes(tier)) {
     return tier.charAt(0).toUpperCase() + tier.slice(1);
@@ -30,18 +34,24 @@ function tierLabel(tier: string): string {
 
 export function ModelPicker({
   tier,
+  reasoning,
   onSet,
   busy = false,
 }: {
-  /** Current direction model_tier, or null = global default. */
   tier: string | null;
-  /** Set the tier (null clears to global default). */
-  onSet: (tier: string | null) => void;
+  reasoning: string | null;
+  /** Set one knob; the parent keeps the other and sends the full state. */
+  onSet: (cfg: { tier?: string | null; reasoning?: string | null }) => void;
   busy?: boolean;
 }) {
   const { t } = useTranslation();
-  const current = tier && tier.trim() ? tier.trim() : null;
-  const label = current ? tierLabel(current) : t("model.default");
+  const curTier = tier && tier.trim() ? tier.trim() : null;
+  const curEffort = reasoning && reasoning.trim() ? reasoning.trim() : null;
+  const modelLabel = curTier ? tierLabel(curTier) : t("model.default");
+  // Pill shows "Sonnet · 高" when an effort is set, else just the model.
+  const pillLabel = curEffort
+    ? `${modelLabel} · ${t(`model.effort.${curEffort}`)}`
+    : modelLabel;
 
   return (
     <Popover>
@@ -58,31 +68,59 @@ export function ModelPicker({
           ) : (
             <Cpu className="size-3.5 text-foreground-tertiary" />
           )}
-          <span className="font-medium">{label}</span>
+          <span className="font-medium">{pillLabel}</span>
           <ChevronDown className="size-3 text-foreground-tertiary" />
         </button>
       </PopoverTrigger>
-      <PopoverContent align="start" sideOffset={6} className="w-52 p-1">
-        <p className="px-2 py-1 font-caption text-[10px] uppercase tracking-wider text-foreground-tertiary">
-          {t("model.heading")}
-        </p>
+      <PopoverContent align="start" sideOffset={6} className="w-56 p-1">
+        <Section icon={<Cpu className="size-3" />} title={t("model.heading")} />
         <MenuItem
           label={t("model.default")}
           hint={t("model.defaultHint")}
-          active={current === null}
-          onClick={() => onSet(null)}
+          active={curTier === null}
+          onClick={() => onSet({ tier: null })}
         />
         {TIERS.map((tr) => (
           <MenuItem
             key={tr}
             label={tierLabel(tr)}
             hint={t(`model.hint.${tr}`)}
-            active={current === tr}
-            onClick={() => onSet(tr)}
+            active={curTier === tr}
+            onClick={() => onSet({ tier: tr })}
+          />
+        ))}
+
+        <div className="my-1 h-px bg-border-subtle" />
+        <Section
+          icon={<Gauge className="size-3" />}
+          title={t("model.effortHeading")}
+        />
+        <MenuItem
+          label={t("model.default")}
+          hint={t("model.effortDefaultHint")}
+          active={curEffort === null}
+          onClick={() => onSet({ reasoning: null })}
+        />
+        {EFFORTS.map((ef) => (
+          <MenuItem
+            key={ef}
+            label={t(`model.effort.${ef}`)}
+            hint={t(`model.effortHint.${ef}`)}
+            active={curEffort === ef}
+            onClick={() => onSet({ reasoning: ef })}
           />
         ))}
       </PopoverContent>
     </Popover>
+  );
+}
+
+function Section({ icon, title }: { icon: React.ReactNode; title: string }) {
+  return (
+    <p className="flex items-center gap-1.5 px-2 py-1 font-caption text-[10px] uppercase tracking-wider text-foreground-tertiary">
+      {icon}
+      {title}
+    </p>
   );
 }
 

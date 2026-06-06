@@ -51,6 +51,20 @@ input_settle_ms = 300                  # codex's ratatui input poll attaches ~12
 # default_model ⇒ codex uses its own configured default.
 model_args = ["--model", "{model}"]
 
+# Reasoning effort overlay. codex takes `-c model_reasoning_effort=<v>` (CLI
+# override beats config.toml + the sqlite-persisted last-used value, so we pass
+# it on every spawn). {effort} is the concrete value from effort_levels below.
+# Omitted when the direction has no effort set → codex's default (medium).
+# Abstract `max` maps to codex's ceiling `xhigh` (model-dependent; coerces down
+# if unsupported).
+effort_args = ["-c", "model_reasoning_effort={effort}"]
+
+[effort_levels]
+low = "low"
+medium = "medium"
+high = "high"
+max = "xhigh"
+
 # Post-spawn readiness automation (host-side). codex 0.130+ pops a "Hooks need
 # review" TUI dialog the first time it sees a hooks.json path it hasn't recorded
 # a trust hash for. flockmux mints a fresh workspace per spawn (= new path = new

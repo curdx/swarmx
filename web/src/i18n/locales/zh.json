@@ -621,6 +621,20 @@
       "sonnet": "均衡，日常默认",
       "haiku": "最快最省——杂活/闲聊"
     },
+    "effortHeading": "思考强度",
+    "effortDefaultHint": "用模型自带的默认强度",
+    "effort": {
+      "low": "低",
+      "medium": "中",
+      "high": "高",
+      "max": "最大"
+    },
+    "effortHint": {
+      "low": "想得少、最快最省",
+      "medium": "适中",
+      "high": "想得更深、更慢更贵",
+      "max": "拉满，留给硬骨头"
+    },
     "switching": "切换中，调度重启…"
   },
   "cmdk": {

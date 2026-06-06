@@ -242,11 +242,22 @@ export default function ChatView() {
   // at spawn time. Passive otherwise (null tier = follow the global default).
   const [modelBusy, setModelBusy] = useState(false);
   const setDirectionModel = useCallback(
-    async (tier: string | null) => {
+    async (cfg: { tier?: string | null; reasoning?: string | null }) => {
       if (!activeThread || modelBusy) return;
       setModelBusy(true);
       try {
-        await api.setThreadModel(workspace.workspaceId, activeThread.id, tier);
+        // Send the COMPLETE desired state: apply the changed knob, keep the
+        // other from the current thread.
+        const nextTier =
+          cfg.tier !== undefined ? cfg.tier : activeThread.model_tier ?? null;
+        const nextReasoning =
+          cfg.reasoning !== undefined
+            ? cfg.reasoning
+            : activeThread.reasoning_effort ?? null;
+        await api.setThreadModel(workspace.workspaceId, activeThread.id, {
+          tier: nextTier,
+          reasoning: nextReasoning,
+        });
         const orchs = activeMembers.filter((m) => m.role === "orchestrator");
         if (orchs.length > 0) {
           await Promise.allSettled(orchs.map((o) => api.killAgent(o.agent_id)));
@@ -527,6 +538,7 @@ export default function ChatView() {
           onOpenAgent={openAgent}
           onSend={sendBootstrappingOrchestrator}
           modelTier={activeThread?.model_tier ?? null}
+          reasoningEffort={activeThread?.reasoning_effort ?? null}
           onSetModel={setDirectionModel}
           modelBusy={modelBusy}
           taskActivityBelow={

@@ -1140,7 +1140,7 @@ impl Store {
             let mut stmt = conn.prepare(
                 "INSERT INTO threads (id, workspace_id, slug, name, isolation, branch, cwd, state, created_at) \
                  VALUES (lower(hex(randomblob(16))), ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) \
-                 RETURNING id, workspace_id, slug, name, isolation, branch, cwd, state, created_at, deleted_at, model_tier",
+                 RETURNING id, workspace_id, slug, name, isolation, branch, cwd, state, created_at, deleted_at, model_tier, reasoning_effort",
             )?;
             let mut rows = stmt.query(params![
                 rec.workspace_id, rec.slug, rec.name, rec.isolation,
@@ -1159,6 +1159,7 @@ impl Store {
                 created_at: row.get(8)?,
                 deleted_at: row.get(9)?,
                 model_tier: row.get(10)?,
+                reasoning_effort: row.get(11)?,
             })
         }))
         .await
@@ -1170,7 +1171,7 @@ impl Store {
         let pool = self.pool.clone();
         tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<Vec<ThreadRecord>> {
             let mut stmt = conn.prepare(
-                "SELECT id, workspace_id, slug, name, isolation, branch, cwd, state, created_at, deleted_at, model_tier \
+                "SELECT id, workspace_id, slug, name, isolation, branch, cwd, state, created_at, deleted_at, model_tier, reasoning_effort \
                  FROM threads WHERE workspace_id = ?1 AND deleted_at IS NULL \
                  ORDER BY created_at ASC",
             )?;
@@ -1187,6 +1188,7 @@ impl Store {
                     created_at: row.get(8)?,
                     deleted_at: row.get(9)?,
                     model_tier: row.get(10)?,
+                    reasoning_effort: row.get(11)?,
                 })
             })?;
             rows.collect::<rusqlite::Result<Vec<_>>>()
@@ -1200,7 +1202,7 @@ impl Store {
         let pool = self.pool.clone();
         tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<Option<ThreadRecord>> {
             let mut stmt = conn.prepare(
-                "SELECT id, workspace_id, slug, name, isolation, branch, cwd, state, created_at, deleted_at, model_tier \
+                "SELECT id, workspace_id, slug, name, isolation, branch, cwd, state, created_at, deleted_at, model_tier, reasoning_effort \
                  FROM threads WHERE id = ?1",
             )?;
             let mut rows = stmt.query(params![id])?;
@@ -1217,6 +1219,7 @@ impl Store {
                     created_at: row.get(8)?,
                     deleted_at: row.get(9)?,
                     model_tier: row.get(10)?,
+                    reasoning_effort: row.get(11)?,
                 }))
             } else {
                 Ok(None)
@@ -1295,6 +1298,26 @@ impl Store {
         }))
         .await
         .context("spawn_blocking set_thread_model_tier")?
+    }
+
+    /// Set (or clear) a direction's reasoning/thinking effort. `None` writes
+    /// NULL = "the model's own default". Dedicated setter (like model_tier) so
+    /// clearing-to-default writes NULL.
+    pub async fn set_thread_reasoning_effort(
+        &self,
+        id: String,
+        effort: Option<String>,
+    ) -> Result<()> {
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<()> {
+            conn.execute(
+                "UPDATE threads SET reasoning_effort = ?2 WHERE id = ?1 AND deleted_at IS NULL",
+                params![id, effort],
+            )?;
+            Ok(())
+        }))
+        .await
+        .context("spawn_blocking set_thread_reasoning_effort")?
     }
 
     /// Soft-delete a thread (sets deleted_at). Idempotent. Frees its slug for

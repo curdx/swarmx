@@ -205,6 +205,7 @@ fn thread_record_to_info(t: ThreadRecord) -> ThreadInfo {
         cwd: t.cwd,
         state: t.state,
         model_tier: t.model_tier,
+        reasoning_effort: t.reasoning_effort,
         dirty: false, // live value folded in by list_workspaces_handler
         ahead: None,  // live values folded in by list_workspaces_handler
         behind: None,
@@ -294,7 +295,7 @@ pub async fn spawn(
     // Trailing args: spell_run_id=None (standalone), thread_id=None (a single
     // ad-hoc agent lands on the workspace's main thread).
     let outcome =
-        spawn_with_bookkeeping(&state, &req.cli, req.role, req.model, layout, ws.id, None, None)
+        spawn_with_bookkeeping(&state, &req.cli, req.role, req.model, None, layout, ws.id, None, None)
             .await
             .map_err(|(status, msg)| (status, Json(json!({"error": msg}))))?;
     Ok(Json(SpawnAgentResponse {
@@ -353,11 +354,13 @@ fn max_spawn_depth() -> usize {
         .unwrap_or(6)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn spawn_with_bookkeeping(
     state: &AppState,
     cli: &str,
     role: Option<String>,
     model: Option<String>,
+    reasoning: Option<String>,
     layout: WorkspaceLayout,
     workspace_id: String,
     spell_run_id: Option<String>,
@@ -432,6 +435,7 @@ pub(crate) async fn spawn_with_bookkeeping(
         &plugin,
         role,
         model,
+        reasoning,
         &layout,
         &state.shim_path,
         &state.mcp_bin,
@@ -1133,11 +1137,11 @@ pub async fn spawn_worker(
     // (`<workspace_id>/<thread_slug>/…`) that minted handoff keys are scoped by,
     // so producer + consumer keys match within a direction and never collide
     // across directions. Main thread (no row) → slug "main".
-    let (thread_cwd, thread_slug, thread_model_tier) = match thread_id.as_ref() {
+    let (thread_cwd, thread_slug, thread_model_tier, thread_reasoning) = match thread_id.as_ref() {
         Some(tid) => match state.store.get_thread(tid.clone()).await {
-            Ok(Some(t)) => (t.cwd, t.slug, t.model_tier),
+            Ok(Some(t)) => (t.cwd, t.slug, t.model_tier, t.reasoning_effort),
             // Thread row gone (deleted) → fall back to the main/project cwd.
-            Ok(None) => (ws.cwd.clone(), "main".to_string(), None),
+            Ok(None) => (ws.cwd.clone(), "main".to_string(), None, None),
             // Hard error: don't guess a directory; fail loudly.
             Err(e) => {
                 return Err((
@@ -1146,7 +1150,7 @@ pub async fn spawn_worker(
                 ))
             }
         },
-        None => (ws.cwd.clone(), "main".to_string(), None),
+        None => (ws.cwd.clone(), "main".to_string(), None, None),
     };
     let layout = WorkspaceLayout::Shared {
         dir: PathBuf::from(&thread_cwd),
@@ -1307,11 +1311,13 @@ pub async fn spawn_worker(
     // Readiness-gate baseline: any dep written at/after this counts as a
     // CURRENT-run input; earlier writes are stale (prior run) and ignored.
     let worker_spawn_ms = now_ms();
+    let resolved_reasoning = thread_reasoning.clone().filter(|s| !s.trim().is_empty());
     let out = spawn_with_bookkeeping(
         &state,
         &resolved_cli,
         Some(role_label.clone()),
         resolved_model.clone(),
+        resolved_reasoning,
         layout,
         req.workspace_id.clone(),
         None,             // ad-hoc workers don't belong to a spell run
@@ -2492,6 +2498,7 @@ async fn spawn_merge_resolver(
         &cli,
         Some("merge-resolver".to_string()),
         None,
+        None,
         layout,
         ws.id.clone(),
         None,
@@ -2647,15 +2654,22 @@ pub async fn update_thread_handler(
 
 #[derive(serde::Deserialize)]
 pub struct SetThreadModelRequest {
-    /// Abstract tier (opus|sonnet|haiku) or a concrete model id. Empty / null /
-    /// absent = clear the override (use the global default).
+    /// Abstract tier (opus|sonnet|haiku) or a concrete model id. Empty / null =
+    /// clear (use the global default). The body carries the COMPLETE desired
+    /// state — both fields are always written — so there's no absent-vs-clear
+    /// ambiguity.
     #[serde(default)]
     pub tier: Option<String>,
+    /// Abstract reasoning effort (low|medium|high|max). Empty / null = clear
+    /// (the model's own default).
+    #[serde(default)]
+    pub reasoning: Option<String>,
 }
 
 /// PUT /api/workspaces/:id/threads/:tid/model — set (or clear) this direction's
-/// model. Persists only; takes effect on the NEXT spawn in the direction (the
-/// client restarts the orchestrator to apply it now). Returns the updated thread.
+/// model AND reasoning effort (the body is the full desired state). Persists
+/// only; takes effect on the NEXT spawn in the direction (the client restarts
+/// the orchestrator to apply it now). Returns the updated thread.
 pub async fn set_thread_model_handler(
     State(state): State<AppState>,
     Path((workspace_id, thread_id)): Path<(String, String)>,
@@ -2675,12 +2689,18 @@ pub async fn set_thread_model_handler(
             )
         })?;
     let _ = thread;
-    // Normalize empty → None (clear). A concrete tier/model is stored verbatim
-    // and resolved per-CLI at spawn time by models_config.
+    // Normalize empty → None (clear). A concrete tier/model/effort is stored
+    // verbatim and resolved per-CLI at spawn time.
     let tier = req.tier.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    let reasoning = req.reasoning.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
     state
         .store
         .set_thread_model_tier(thread_id.clone(), tier)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+    state
+        .store
+        .set_thread_reasoning_effort(thread_id.clone(), reasoning)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
     publish_thread_changed(&state, &workspace_id, &thread_id, "updated");
@@ -3914,6 +3934,12 @@ pub async fn run_spell(
         .as_ref()
         .and_then(|t| t.model_tier.clone())
         .filter(|s| !s.trim().is_empty());
+    // Direction reasoning effort: inherited by every spawned agent (roles don't
+    // pin effort). None = the model's own default.
+    let thread_reasoning: Option<String> = resolved_thread
+        .as_ref()
+        .and_then(|t| t.reasoning_effort.clone())
+        .filter(|s| !s.trim().is_empty());
     let mut outcomes: Vec<(SpawnOutcome, String)> =
         Vec::with_capacity(resolved_agents.len());
     for resolved in &resolved_agents {
@@ -3928,6 +3954,7 @@ pub async fn run_spell(
             &resolved.cli,
             Some(resolved.role.clone()),
             agent_model,
+            thread_reasoning.clone(),
             layout.clone(),
             workspace.id.clone(),
             Some(spell_run_id.clone()),

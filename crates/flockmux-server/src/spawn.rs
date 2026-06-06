@@ -65,10 +65,12 @@ pub enum WorkspaceLayout {
 /// `recorder` is an optional asciicast v2 sink. When set, the PTY pump
 /// mirrors every chunk (including OSC lifecycle markers) into the
 /// recorder; when unset, the recording layer is bypassed.
+#[allow(clippy::too_many_arguments)]
 pub fn spawn_agent(
     plugin: &CliPlugin,
     role: Option<String>,
     model: Option<String>,
+    reasoning: Option<String>,
     workspace: &WorkspaceLayout,
     shim_path: &Path,
     mcp_bin: &Path,
@@ -129,6 +131,24 @@ pub fn spawn_agent(
             "model requested but plugin declares no model_args; ignoring"
         ),
         None => {}
+    }
+
+    // Reasoning/thinking effort overlay (parallel to model). The abstract level
+    // (low|medium|high|max) maps to this CLI's concrete value via the manifest's
+    // effort_levels; the result substitutes into effort_args (claude `--effort`,
+    // codex `-c model_reasoning_effort=`). Unknown/"default" level or a CLI with
+    // no effort support → emit nothing = the model's own default.
+    if let Some(level) = reasoning.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        match plugin.effort_levels.get(level) {
+            Some(concrete) if !plugin.effort_args.is_empty() => {
+                argv.extend(effort_overlay_args(concrete, &plugin.effort_args));
+                tracing::info!(agent = %agent_id, effort = %level, concrete = %concrete, "reasoning effort overlay applied");
+            }
+            _ => tracing::debug!(
+                agent = %agent_id, effort = %level,
+                "reasoning effort requested but unmapped / unsupported by this CLI; ignoring"
+            ),
+        }
     }
 
     // codex 0.130 gates non-managed Stop hooks behind an in-app /hooks
@@ -891,6 +911,12 @@ mod ready_plan_tests {
 /// model is in effect; this only renders the template.
 fn model_overlay_args(model: &str, template: &[String]) -> Vec<String> {
     template.iter().map(|a| a.replace("{model}", model)).collect()
+}
+
+/// Substitute the concrete effort value into a CLI's `effort_args` template
+/// (`{effort}` placeholder). Mirrors `model_overlay_args`.
+fn effort_overlay_args(effort: &str, template: &[String]) -> Vec<String> {
+    template.iter().map(|a| a.replace("{effort}", effort)).collect()
 }
 
 /// Cache key is `(binary, flag)` so different plugins probing different

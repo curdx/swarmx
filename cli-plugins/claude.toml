@@ -41,3 +41,15 @@ input_settle_ms = 0                        # claude accepts keystrokes immediate
 # claude accepts an alias ('opus'/'sonnet') or a full model id. With no
 # default_model set, claude uses its own configured default.
 model_args = ["--model", "{model}"]
+
+# Reasoning effort overlay. 2026 Claude Code takes `--effort <level>` (per
+# session); {effort} is the concrete value from effort_levels below. Omitted
+# when the direction has no effort set → the model's own default (high on Opus
+# 4.8). Unsupported levels degrade to the highest the model supports (no error);
+# Haiku has no effort, so the flag is a documented no-op there.
+effort_args = ["--effort", "{effort}"]
+[effort_levels]
+low = "low"
+medium = "medium"
+high = "high"
+max = "max"     # claude's true ceiling, supported on the effort-aware models

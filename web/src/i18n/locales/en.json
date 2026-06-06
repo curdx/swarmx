@@ -619,6 +619,20 @@
       "sonnet": "Balanced, the everyday default",
       "haiku": "Fastest & cheapest — chores / chat"
     },
+    "effortHeading": "Thinking effort",
+    "effortDefaultHint": "Use the model's own default",
+    "effort": {
+      "low": "Low",
+      "medium": "Medium",
+      "high": "High",
+      "max": "Max"
+    },
+    "effortHint": {
+      "low": "Less thinking — fastest & cheapest",
+      "medium": "Moderate",
+      "high": "Thinks deeper — slower & pricier",
+      "max": "Maxed out — for hard problems"
+    },
     "switching": "Switching, restarting orchestrator…"
   },
   "cmdk": {

@@ -107,9 +107,12 @@ interface Props {
    *  is also provided, the top bar shows a model picker. Omitted by the legacy
    *  /debug SwarmPanel (no direction). */
   modelTier?: string | null;
-  /** Change this direction's model. Parent persists + restarts the orchestrator. */
-  onSetModel?: (tier: string | null) => void;
-  /** True while a model switch is applying (picker shows a spinner). */
+  /** Active direction's reasoning effort (null = model default). */
+  reasoningEffort?: string | null;
+  /** Change this direction's model and/or reasoning. Parent persists + restarts
+   *  the orchestrator. Sends one knob; parent keeps the other. */
+  onSetModel?: (cfg: { tier?: string | null; reasoning?: string | null }) => void;
+  /** True while a model/effort switch is applying (picker shows a spinner). */
   modelBusy?: boolean;
 }
 
@@ -202,6 +205,7 @@ export function MessagesPanel({
   jumpUnreadTick = 0,
   taskActivityBelow,
   modelTier = null,
+  reasoningEffort = null,
   onSetModel,
   modelBusy = false,
 }: Props) {
@@ -800,7 +804,12 @@ export function MessagesPanel({
         ) : (
           <>
             {onSetModel && (
-              <ModelPicker tier={modelTier} onSet={onSetModel} busy={modelBusy} />
+              <ModelPicker
+                tier={modelTier}
+                reasoning={reasoningEffort}
+                onSet={onSetModel}
+                busy={modelBusy}
+              />
             )}
             <span className="flex-1" />
             <Button

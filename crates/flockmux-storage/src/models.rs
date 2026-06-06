@@ -70,6 +70,11 @@ pub struct ThreadRecord {
     /// spawn time. See migration 0014.
     #[serde(default)]
     pub model_tier: Option<String>,
+    /// Per-direction reasoning/thinking effort (abstract low|medium|high|max).
+    /// NULL = the model's own default. Mapped to each CLI's concrete value at
+    /// spawn (effort_levels in the plugin manifest). See migration 0015.
+    #[serde(default)]
+    pub reasoning_effort: Option<String>,
     pub created_at: i64,
     #[serde(default)]
     pub deleted_at: Option<i64>,
