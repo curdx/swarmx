@@ -28,7 +28,7 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 import rehypeSanitize from "rehype-sanitize";
-import { Check, Code2, Copy, ExternalLink, Eye } from "lucide-react";
+import { Check, Code2, Copy, ExternalLink, Eye, Loader2 } from "lucide-react";
 import { cn } from "@/lib/cn";
 
 // Module-level constants: react-markdown re-parses when plugin/component refs
@@ -110,6 +110,94 @@ function HtmlPreview({ code }: { code: string }) {
   );
 }
 
+/** SVG preview. Rendered via an <img> data-URL, NOT inline/iframe-with-scripts:
+ *  the browser disables scripts AND external loads inside an <img>, so even a
+ *  hostile SVG (`<script>`, `onload`, external `<use>`) is inert. Safest path
+ *  for agent-authored SVG, zero deps. */
+function SvgPreview({ code }: { code: string }) {
+  const { t } = useTranslation();
+  const [failed, setFailed] = useState(false);
+  const src = `data:image/svg+xml;utf8,${encodeURIComponent(code)}`;
+  if (failed) {
+    return (
+      <div className="my-2 rounded-lg border border-border-subtle bg-surface-tertiary px-3 py-4 text-center font-caption text-[11px] text-foreground-tertiary">
+        {t("messages.previewError")}
+      </div>
+    );
+  }
+  return (
+    <div className="my-2 flex justify-center overflow-auto rounded-lg border border-border-subtle bg-white p-3">
+      <img
+        src={src}
+        alt="SVG preview"
+        onError={() => setFailed(true)}
+        className="max-h-[420px] max-w-full"
+      />
+    </div>
+  );
+}
+
+// Module counter for unique mermaid render ids (must be valid DOM/CSS ids —
+// React's useId yields colons that mermaid chokes on).
+let mermaidSeq = 0;
+
+/** Mermaid diagram preview. mermaid.js is lazy-imported (large) so it only loads
+ *  when a ```mermaid block is actually previewed. securityLevel:'strict' +
+ *  htmlLabels:false sanitize the output (no scripts/HTML labels) before we inject
+ *  it. Falls back to the code on a parse error. */
+function MermaidPreview({ code }: { code: string }) {
+  const { t } = useTranslation();
+  const [svg, setSvg] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    setSvg(null);
+    setFailed(false);
+    (async () => {
+      try {
+        const mermaid = (await import("mermaid")).default;
+        mermaid.initialize({
+          startOnLoad: false,
+          securityLevel: "strict",
+          // The preview container is always white, so use the light theme
+          // regardless of the app's dark/light mode (a dark-theme diagram on a
+          // white canvas reads as a mismatch).
+          theme: "default",
+          flowchart: { htmlLabels: false },
+        });
+        const { svg } = await mermaid.render(`mmd-${(mermaidSeq += 1)}`, code);
+        if (!cancelled) setSvg(svg);
+      } catch {
+        if (!cancelled) setFailed(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [code]);
+  if (failed) {
+    return (
+      <div className="my-2 rounded-lg border border-border-subtle bg-surface-tertiary px-3 py-4 text-center font-caption text-[11px] text-foreground-tertiary">
+        {t("messages.previewError")}
+      </div>
+    );
+  }
+  if (svg == null) {
+    return (
+      <div className="my-2 flex items-center justify-center rounded-lg border border-border-subtle bg-white py-8">
+        <Loader2 className="size-4 animate-spin text-foreground-tertiary" />
+      </div>
+    );
+  }
+  return (
+    <div
+      className="my-2 flex justify-center overflow-auto rounded-lg border border-border-subtle bg-white p-3 [&_svg]:max-w-full"
+      // mermaid 'strict' output is sanitized (scripts/handlers stripped).
+      dangerouslySetInnerHTML={{ __html: svg }}
+    />
+  );
+}
+
 /** Fenced code block: highlighted <pre> + copy button, and — for ```html — a
  *  "代码 | 预览" toggle that renders the HTML in the sandboxed iframe above. */
 function CodeBlock({
@@ -123,8 +211,12 @@ function CodeBlock({
 }) {
   const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
-  const [view, setView] = useState<"code" | "preview">("code");
-  const previewable = lang === "html";
+  const previewable = lang === "html" || lang === "svg" || lang === "mermaid";
+  // HTML may be a whole app → default to Code (read first). SVG/Mermaid are
+  // visual artifacts → default to the rendered Preview.
+  const [view, setView] = useState<"code" | "preview">(
+    lang === "svg" || lang === "mermaid" ? "preview" : "code",
+  );
 
   const copy = () => {
     if (!raw || !navigator.clipboard) return;
@@ -177,7 +269,7 @@ function CodeBlock({
             </button>
           </div>
         )}
-        {previewable && view === "preview" && (
+        {lang === "html" && view === "preview" && (
           <button
             type="button"
             onClick={openExternal}
@@ -203,7 +295,13 @@ function CodeBlock({
         </button>
       </div>
       {previewable && view === "preview" ? (
-        <HtmlPreview code={raw} />
+        lang === "html" ? (
+          <HtmlPreview code={raw} />
+        ) : lang === "svg" ? (
+          <SvgPreview code={raw} />
+        ) : (
+          <MermaidPreview code={raw} />
+        )
       ) : (
         <pre>{children}</pre>
       )}

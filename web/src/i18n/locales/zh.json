@@ -607,7 +607,8 @@
     "copied": "已复制",
     "imageBroken": "图片不可用",
     "attachImage": "添加图片",
-    "removeImage": "移除"
+    "removeImage": "移除",
+    "previewError": "渲染失败"
   },
   "cmdk": {
     "placeholder": "搜索命令、跳转、唤醒 agent…",

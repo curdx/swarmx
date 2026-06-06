@@ -605,7 +605,8 @@
     "copied": "Copied",
     "imageBroken": "Image unavailable",
     "attachImage": "Attach image",
-    "removeImage": "Remove"
+    "removeImage": "Remove",
+    "previewError": "Render failed"
   },
   "cmdk": {
     "placeholder": "Search commands, jumps, wake agents…",
