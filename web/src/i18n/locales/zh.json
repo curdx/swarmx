@@ -67,6 +67,7 @@
     "replays": "录像库",
     "context": "上下文",
     "notifications": "通知",
+    "mcp": "MCP",
     "settings": "设置",
     "debug": "Debug"
   },
@@ -659,6 +660,7 @@
       "replays": "终端录像",
       "context": "共享区",
       "notifications": "通知中心",
+      "mcp": "为 agent 装工具",
       "settings": "偏好与模型",
       "debug": "调试面板"
     },

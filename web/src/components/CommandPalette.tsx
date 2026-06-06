@@ -23,6 +23,7 @@ import { useTranslation } from "react-i18next";
 import {
   Activity,
   Bell,
+  Boxes,
   Bug,
   ClipboardList,
   GitBranch,
@@ -56,6 +57,10 @@ import {
 const NAV = [
   { labelKey: "nav.chat", href: "/chat", icon: MessageSquare, hintKey: "cmdk.navHint.chat" },
   { labelKey: "nav.notifications", href: "/notifications", icon: Bell, hintKey: "cmdk.navHint.notifications" },
+  // MCP is a primary left-rail destination (McpActivityBar) but was missing
+  // from ⌘K — typing "mcp" returned no match. Mirror the rail's Boxes icon and
+  // sit it next to 设置, the other config surface.
+  { labelKey: "nav.mcp", href: "/mcp", icon: Boxes, hintKey: "cmdk.navHint.mcp" },
   { labelKey: "nav.settings", href: "/settings", icon: SettingsIcon, hintKey: "cmdk.navHint.settings" },
   // /debug isn't purely dev tooling — it hosts the blackboard editor (operator
   // writes HITL approval keys) + spells launcher, which have no other home yet.

@@ -144,6 +144,34 @@ export function AgentDrawer({ agentId, activities, onClose }: Props) {
       { replace: true },
     );
   const [now, setNow] = useState(Date.now());
+  // Cold-start backfill for the Activity tab. The live `activities` prop only
+  // holds steps that streamed in AFTER the WS subscription/this shell mount —
+  // so opening the drawer on an agent that already worked showed "暂无活动"
+  // even though it has history (visible in its terminal). Pull the tailer's
+  // ring once per agent; it shares the live stream's `seq` space, so we merge.
+  const [backfill, setBackfill] = useState<AgentActivity[]>([]);
+  useEffect(() => {
+    let alive = true;
+    setBackfill([]);
+    api
+      .getAgentActivity(agentId)
+      .then((rows) => {
+        if (alive) setBackfill(rows);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [agentId]);
+  // Merge backfill + live by `seq` (live wins — it's the freshest phase for an
+  // in-flight step). Sorted ascending: AgentActivityLog renders newest at the
+  // bottom and auto-scrolls there.
+  const mergedActivities = useMemo(() => {
+    const bySeq = new Map<number, AgentActivity>();
+    for (const a of backfill) bySeq.set(a.seq, a);
+    for (const a of activities) bySeq.set(a.seq, a);
+    return [...bySeq.values()].sort((x, y) => x.seq - y.seq);
+  }, [backfill, activities]);
 
   const refreshInfo = async () => {
     try {
@@ -246,7 +274,9 @@ export function AgentDrawer({ agentId, activities, onClose }: Props) {
               across tab switches), but xterm holds a WebGL slot and a WS
               so we'd burn budget on idle panes. Switch-unmount instead. */}
           {tab === "terminal" && <TerminalTab agentId={agentId} live={liveAgent} />}
-          {tab === "activity" && <AgentActivityLog activities={activities} />}
+          {tab === "activity" && (
+            <AgentActivityLog activities={mergedActivities} />
+          )}
           {tab === "recordings" && (
             <RecordingsTab agentId={agentId} wsId={wsSlug} />
           )}

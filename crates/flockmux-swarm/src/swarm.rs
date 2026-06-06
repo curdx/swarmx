@@ -12,6 +12,7 @@
 use crate::path_safe;
 use anyhow::{Context, Result};
 use dashmap::DashMap;
+use flockmux_protocol::rest::AgentActivityRecord;
 use flockmux_protocol::ws_swarm::SwarmEvent;
 use flockmux_storage::{
     BlackboardOpRecord, MessageRecord as StoreMessageRecord, NewBlackboardOp,
@@ -20,10 +21,16 @@ use flockmux_storage::{
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc};
+
+/// Max recent tool-level activity rows retained per agent for the drawer's
+/// Activity-tab backfill (`GET /api/agent/:id/activity`). Bounded so a
+/// long-running worker can't grow this unboundedly; matches the frontend's
+/// in-memory cap so backfill + live stream agree on how much history exists.
+const MAX_ACTIVITY_LOG: usize = 100;
 
 /// Envelope handed to a per-agent inbox. M3 only uses this in tests / future
 /// MCP integration — the production path is SQLite + ws/swarm broadcast.
@@ -61,6 +68,12 @@ pub struct Swarm {
     /// watcher consults this before persisting an "external" op so it
     /// doesn't echo our own writes back into SQLite.
     seen_sha: Mutex<HashMap<PathBuf, String>>,
+    /// Per-agent bounded ring of recent tool-level activity, fed by the
+    /// transcript tailer alongside the WS broadcast. Served by `GET
+    /// /api/agent/:id/activity` so the drawer's Activity tab can backfill on a
+    /// cold open (the WS stream is forward-only). In-memory only — dead agents'
+    /// "what did it do" is covered by their recording.
+    activity_log: DashMap<String, Mutex<VecDeque<AgentActivityRecord>>>,
 }
 
 impl Swarm {
@@ -78,7 +91,38 @@ impl Swarm {
             blackboard_root,
             events_tx,
             seen_sha: Mutex::new(HashMap::new()),
+            activity_log: DashMap::new(),
         })
+    }
+
+    /// Record one tool-level activity for `agent_id` into the bounded in-memory
+    /// ring the `GET /api/agent/:id/activity` backfill serves. Collapses by
+    /// `seq` so a `running` row is replaced in place by its later `ok`/`error`
+    /// (the same dedupe the UI does), keeping one row per step. Called by the
+    /// transcript tailer alongside `publish_event`.
+    pub fn record_activity(&self, agent_id: &str, rec: AgentActivityRecord) {
+        let entry = self
+            .activity_log
+            .entry(agent_id.to_string())
+            .or_insert_with(|| Mutex::new(VecDeque::new()));
+        let mut q = entry.lock();
+        if let Some(slot) = q.iter_mut().find(|r| r.seq == rec.seq) {
+            *slot = rec;
+        } else {
+            if q.len() >= MAX_ACTIVITY_LOG {
+                q.pop_front();
+            }
+            q.push_back(rec);
+        }
+    }
+
+    /// Recent activity for `agent_id`, oldest-first (the drawer renders newest
+    /// at the bottom). Empty for agents we don't tail or that haven't acted.
+    pub fn recent_activity(&self, agent_id: &str) -> Vec<AgentActivityRecord> {
+        self.activity_log
+            .get(agent_id)
+            .map(|e| e.lock().iter().cloned().collect())
+            .unwrap_or_default()
     }
 
     pub fn store(&self) -> &Arc<Store> {

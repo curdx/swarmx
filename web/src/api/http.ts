@@ -1,4 +1,5 @@
 import type {
+  AgentActivity,
   AgentInfo,
   BlackboardEntry,
   BlackboardHistoryEntry,
@@ -160,6 +161,11 @@ export const api = {
   // body 写"manual wake from operator"。挡在 M6d-6 quiet gate 后面，
   // agent 正在 stream 时只投 mailbox 不戳 PTY。
   wakeAgent: (id: string) => request<void>("POST", `/api/agent/${id}/wake`),
+  // Recent tool-level activity from the transcript tailer's ring — backfills
+  // the drawer's Activity tab on a cold open (the live WS stream is
+  // forward-only). Shares the live stream's `seq` space so they merge by it.
+  getAgentActivity: (id: string) =>
+    request<AgentActivity[]>("GET", `/api/agent/${id}/activity`),
   // 不杀 PTY 的暂停:发 Ctrl-C 取消当前 turn + 设 paused flag。WakeCoordinator
   // 跳过这个 agent 的自动唤醒,manual ⚡ 仍然能用。
   interruptAgent: (id: string) =>

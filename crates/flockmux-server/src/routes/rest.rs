@@ -839,6 +839,19 @@ pub async fn wake_agent(
     }
 }
 
+/// `GET /api/agent/:id/activity` — recent tool-level activity for an agent,
+/// served from the transcript tailer's in-memory ring. Backfills the drawer's
+/// Activity tab on a cold open / after a remount, where the forward-only
+/// `AgentActivity` WS stream shows nothing for an agent that already did its
+/// work. Always 200; empty `[]` for agents we don't tail or that haven't acted
+/// yet. Oldest-first, same `seq` space as the live stream so the UI merges them.
+pub async fn agent_activity(
+    State(state): State<AppState>,
+    Path(agent_id): Path<String>,
+) -> impl IntoResponse {
+    Json(state.swarm.recent_activity(&agent_id))
+}
+
 // ────────────────────────────────────────────────────────────────────────
 // Spawn ad-hoc worker (Magentic-One 重构): orchestrator 通过 MCP
 // swarm_spawn_worker 拉一个临时 worker。绕过 spell + role,worker 的

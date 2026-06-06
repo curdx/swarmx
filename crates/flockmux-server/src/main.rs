@@ -301,6 +301,10 @@ async fn main() -> Result<()> {
         .route("/api/roles", get(routes::rest::list_roles))
         .route("/api/agent/:id", delete(routes::rest::kill))
         .route("/api/agent/:id/wake", post(routes::rest::wake_agent))
+        .route(
+            "/api/agent/:id/activity",
+            get(routes::rest::agent_activity),
+        )
         .route("/api/agent/:id/interrupt", post(routes::rest::interrupt))
         .route("/api/agent/:id/resume", post(routes::rest::resume))
         // Internal: the agent's own flockmux-mcp pings this when its tool list

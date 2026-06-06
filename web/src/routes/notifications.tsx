@@ -152,6 +152,17 @@ function classifyMessage(
       }),
     };
   }
+  // Free-text the USER wrote is a request, not an agent work-report — never
+  // grade it as 异常/完成 by prose keywords. A user message like "这个测试没
+  // 通过，帮我修" or "看下这张报错截图" describes a problem; filing it under
+  // Errors with a red alarm is noise (the user authored it). Only agent
+  // summaries get the error/completed heuristic below.
+  if (resolveRole(m.from_agent, roleLookup) === "user") {
+    return {
+      kind: "message",
+      title: `${friendlyAgent(m.from_agent, roleLookup, t)} → ${friendlyAgent(m.to_agent, roleLookup, t)}`,
+    };
+  }
   const body = m.body.toLowerCase();
   const error = () => ({
     kind: "error" as NotifKind,
@@ -166,8 +177,16 @@ function classifyMessage(
   // naive substring trips on its own negation/noun form. So we grade in
   // precedence order, each rule written to dodge the trap that bit the last:
   //
-  // 1. HARD failure glyphs — never appear in a success handoff.
-  if (/❌|✗|panic|traceback|stack trace|崩溃|报错/.test(body)) return error();
+  // 1. UNAMBIGUOUS failure glyphs — SYMBOLS a success/neutral message never
+  //    contains (nobody types "no ❌"). The WORDS panic / traceback / 崩溃 /
+  //    报错 were demoted OUT of this top tier: they routinely appear NEGATED or
+  //    in meta-discussion ("没有红色 traceback", "没有报错", "全是好消息"), and
+  //    as a hard, completion-beating signal they flagged green reports as 异常
+  //    (the worst false positive — a finished task looks broken). They now live
+  //    in rule 4, BELOW completion, so a report that says "构建通过 … 没有
+  //    traceback" lands in 完成. A real crash carries no completion word, so it
+  //    still falls through to rule 4 and registers as an error.
+  if (/❌|✗/.test(body)) return error();
 
   // 2. NEGATED completion = a real failure verdict (未通过 / 没做好 / not
   //    passed). The negative-lookahead excludes the NOUN form 未完成数 /
@@ -193,11 +212,16 @@ function classifyMessage(
     return completed();
   }
 
-  // 4. Soft failure words that survived to here = an actual failure. Exclude
-  //    the conditional "失败时/失败后…" (describing failure handling) and bare
-  //    "error" (0 errors / error handling) which are not failures themselves.
+  // 4. Soft failure words that survived completion = an actual failure —
+  //    including the crash words demoted from rule 1. Excludes the conditional
+  //    "失败时/失败后…" (describing failure handling) and bare "error" (0 errors
+  //    / error handling), which are not failures themselves. A negated mention
+  //    with NO completion word (e.g. a bare "没有 traceback") can still slip
+  //    through as a false error here, but that's far rarer than the green
+  //    reports rule 1 used to alarm on, and proximity-negation in free prose is
+  //    its own tar pit ("没有红色 traceback" puts a word between the two).
   if (
-    /失败(?!\s*(?:时|后|则|会|就|重试|的话|时候))|failed|failure|exception/.test(
+    /失败(?!\s*(?:时|后|则|会|就|重试|的话|时候))|failed|failure|exception|panic|traceback|stack\s*trace|崩溃/.test(
       body,
     )
   ) {

@@ -15,6 +15,7 @@
 //! upgrade changes them, CI turns red instead of the feature silently emitting
 //! nothing.
 
+use flockmux_protocol::rest::AgentActivityRecord;
 use flockmux_protocol::ws_swarm::{AgentState, SwarmEvent};
 use flockmux_swarm::Swarm;
 use serde_json::Value;
@@ -366,34 +367,56 @@ impl TailState {
                         label: label.clone(),
                     },
                 );
-                swarm.publish_event(SwarmEvent::AgentActivity {
-                    agent_id: agent_id.to_string(),
-                    kind: "tool".into(),
-                    label,
-                    phase: "running".into(),
-                    seq,
-                    duration_ms: None,
-                    at,
-                });
+                emit_activity(swarm, agent_id, "running", label, seq, None, at);
             }
             ParsedTool::End { tool_id, ok } => {
                 // A result for a tool we never saw start (we attached
                 // mid-session) is ignored — no running event to pair with.
                 if let Some(p) = self.pending.remove(&tool_id) {
                     let dur = (at - p.start_ms).max(0) as u32;
-                    swarm.publish_event(SwarmEvent::AgentActivity {
-                        agent_id: agent_id.to_string(),
-                        kind: "tool".into(),
-                        label: p.label,
-                        phase: if ok { "ok".into() } else { "error".into() },
-                        seq: p.seq,
-                        duration_ms: Some(dur),
-                        at,
-                    });
+                    let phase = if ok { "ok" } else { "error" };
+                    emit_activity(swarm, agent_id, phase, p.label, p.seq, Some(dur), at);
                 }
             }
         }
     }
+}
+
+/// Fan one tool-level activity out to BOTH sinks: the in-memory ring
+/// (`Swarm::record_activity`, served by `GET /api/agent/:id/activity` for cold
+/// backfill) and the live WS broadcast (`publish_event`). Centralised so a row
+/// can never reach one sink but not the other — they share the same `seq`, so
+/// the UI merges backfill + live by it.
+fn emit_activity(
+    swarm: &Swarm,
+    agent_id: &str,
+    phase: &str,
+    label: String,
+    seq: u32,
+    duration_ms: Option<u32>,
+    at: i64,
+) {
+    swarm.record_activity(
+        agent_id,
+        AgentActivityRecord {
+            agent_id: agent_id.to_string(),
+            kind: "tool".into(),
+            label: label.clone(),
+            phase: phase.to_string(),
+            seq,
+            duration_ms,
+            at,
+        },
+    );
+    swarm.publish_event(SwarmEvent::AgentActivity {
+        agent_id: agent_id.to_string(),
+        kind: "tool".into(),
+        label,
+        phase: phase.to_string(),
+        seq,
+        duration_ms,
+        at,
+    });
 }
 
 enum ParsedTool {

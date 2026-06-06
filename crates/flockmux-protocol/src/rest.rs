@@ -129,6 +129,29 @@ pub struct AgentInfo {
     pub last_activity_at: Option<i64>,
 }
 
+/// One tool-level activity row, served by `GET /api/agent/:id/activity`. Same
+/// shape as the `SwarmEvent::AgentActivity` WS frame, held in the transcript
+/// tailer's in-memory ring so the drawer's Activity tab can BACKFILL on a cold
+/// open — the live WS stream is forward-only and shows nothing for an agent
+/// that already did its work before the drawer (or the page) opened.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentActivityRecord {
+    pub agent_id: String,
+    /// "tool" | "system" — mirrors `SwarmEvent::AgentActivity::kind`.
+    pub kind: String,
+    /// One-line human label, e.g. `Edit src/foo.rs`.
+    pub label: String,
+    /// "running" | "ok" | "error".
+    pub phase: String,
+    /// Per-turn sequence number; pairs a `running` row with its later
+    /// `ok`/`error`. Backfill and live WS share the SAME tailer seq space, so
+    /// the UI can merge them by `seq`.
+    pub seq: u32,
+    #[serde(default)]
+    pub duration_ms: Option<u32>,
+    pub at: i64,
+}
+
 // ── ad-hoc worker DTOs (Magentic-One 重构) ────────────────────────────────
 
 /// `POST /api/worker` 入参。Orchestrator(或上一级 worker)通过 MCP

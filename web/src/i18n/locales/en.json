@@ -67,6 +67,7 @@
     "replays": "Replays",
     "context": "Context",
     "notifications": "Notifications",
+    "mcp": "MCP",
     "settings": "Settings",
     "debug": "Debug"
   },
@@ -657,6 +658,7 @@
       "replays": "Replays",
       "context": "Blackboard",
       "notifications": "Notification Center",
+      "mcp": "Tools for agents",
       "settings": "Preferences",
       "debug": "Legacy M2 grid"
     },
