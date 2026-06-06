@@ -38,7 +38,6 @@ import {
   Send,
   Sparkles,
   Undo2,
-  Workflow,
   X,
 } from "lucide-react";
 import { api } from "../api/http";
@@ -227,12 +226,6 @@ export function MessagesPanel({
   // Pasted/dropped clipboard images upload to /api/attachment; their saved path
   // is appended to the draft (agents read images by path).
   const [uploadingImage, setUploadingImage] = useState(false);
-  // 「工作流」 one-shot toggle: when armed, the NEXT message is prefixed with the
-  // `ultracode` keyword so the orchestrator's Claude runs it as a dynamic
-  // workflow (fan out → cross-check → synthesize) instead of a normal turn.
-  // Per-task by design — resets after send — because session-wide ultracode has
-  // no supported non-interactive enable and would blow the token budget.
-  const [workflowArmed, setWorkflowArmed] = useState(false);
   const [marking, setMarking] = useState<number | null>(null);
   const [bySenderOpen, setBySenderOpen] = useState(false);
 
@@ -528,12 +521,6 @@ export function MessagesPanel({
   const send = async () => {
     const trimmed = body.trim();
     if (!trimmed) return;
-    // 「工作流」 armed → prefix the `ultracode` keyword so the orchestrator's
-    // Claude treats this task as a dynamic workflow. Supported headless trigger
-    // (claude -p / bypass runs it immediately); per-task, never session-wide.
-    const outgoing = workflowArmed
-      ? `ultracode：把下面这个任务当作 dynamic workflow（拆成多个并行 agent、互相交叉验证后再汇总）来完成。\n\n${trimmed}`
-      : trimmed;
     // No live recipient (workspace's orchestrator has exited). If the parent
     // wired `onSend`, route the message through it — it spawns the orchestrator
     // and delivers — so the user just types instead of first clicking 唤醒.
@@ -541,13 +528,12 @@ export function MessagesPanel({
       if (!onSend) return;
       setSending(true);
       try {
-        await onSend(outgoing);
+        await onSend(trimmed);
         setBody("");
         setInReplyTo(null);
         setError(null);
         setPreOptimize(null);
         setOptimizeNote(null);
-        setWorkflowArmed(false);
         composerRef.current?.focus();
       } catch (e) {
         setError((e as Error).message);
@@ -562,7 +548,7 @@ export function MessagesPanel({
         from: USER_SENDER,
         to: defaultRecipient.agent_id,
         kind: KIND_DEFAULT,
-        body: outgoing,
+        body: trimmed,
         in_reply_to: inReplyTo ?? undefined,
       });
       setItems((prev) =>
@@ -580,7 +566,6 @@ export function MessagesPanel({
       setError(null);
       setPreOptimize(null);
       setOptimizeNote(null);
-      setWorkflowArmed(false);
       composerRef.current?.focus();
     } catch (e) {
       setError((e as Error).message);
@@ -1217,26 +1202,6 @@ export function MessagesPanel({
             rows={1}
             className="min-w-0 flex-1 resize-none rounded-2xl px-3 py-2 font-body text-[13px] leading-snug"
           />
-          {/* 「工作流」 one-shot toggle — when armed, this message runs as a
-              dynamic workflow (ultracode). Accent-filled when armed so it reads
-              as "next send is special". */}
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => setWorkflowArmed((v) => !v)}
-            disabled={sending || !canCompose}
-            aria-label={t("messages.workflow")}
-            aria-pressed={workflowArmed}
-            title={t("messages.workflowTooltip")}
-            className={cn(
-              "size-9 shrink-0 rounded-full transition-colors disabled:opacity-40",
-              workflowArmed
-                ? "bg-accent-primary-soft text-accent-primary-deep hover:bg-accent-primary-soft/80"
-                : "text-foreground-tertiary hover:bg-surface-tertiary hover:text-accent-primary",
-            )}
-          >
-            <Workflow className="size-4" />
-          </Button>
           {/* 「优化」 — ghost wand, left of Send so it reads as a draft helper,
               not a second send. Icon swaps to a spinner while rewriting. */}
           <Button
@@ -1289,12 +1254,6 @@ export function MessagesPanel({
             {optimizeNote && (
               <span className="truncate font-caption text-[10px] text-foreground-tertiary">
                 {optimizeNote}
-              </span>
-            )}
-            {workflowArmed && (
-              <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-accent-primary-soft px-2 py-0.5 font-caption text-[10px] text-accent-primary-deep">
-                <Workflow className="size-3" />
-                {t("messages.workflowArmed")}
               </span>
             )}
           </div>
