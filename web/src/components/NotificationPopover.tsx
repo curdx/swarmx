@@ -35,6 +35,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { cn } from "@/lib/cn";
+import { relTime } from "@/lib/relTime";
 import {
   friendlyAgent,
   humanizeBlackboard,
@@ -97,14 +98,6 @@ function itemFromMessage(
 interface Props {
   hasUnseen: boolean;
   onSeen: () => void;
-}
-
-function relTime(ms: number, t: (k: string, opts?: Record<string, unknown>) => string): string {
-  const d = Date.now() - ms;
-  if (d < 60_000) return t("notifications.time.now");
-  if (d < 3_600_000) return t("notifications.time.minAgo", { n: Math.floor(d / 60_000) });
-  if (d < 86_400_000) return t("notifications.time.hourAgo", { n: Math.floor(d / 3_600_000) });
-  return new Date(ms).toLocaleString();
 }
 
 export function NotificationPopover({ hasUnseen, onSeen }: Props) {

@@ -664,6 +664,9 @@
     "empty": "No tasks yet — they appear once the orchestrator spawns workers.",
     "untitled": "Untitled",
     "manual": "manual",
+    "live": "Running",
+    "showAll": "Show all {{n}}",
+    "collapse": "Collapse",
     "overriddenHint": "Status set by hand, overrides the derived value",
     "status": {
       "triage": "Triage",

@@ -666,6 +666,9 @@
     "empty": "暂无任务——orchestrator 派 worker 后会出现在这里。",
     "untitled": "未命名",
     "manual": "手动",
+    "live": "运行中",
+    "showAll": "显示全部 {{n}}",
+    "collapse": "收起",
     "overriddenHint": "状态由人工设定，覆盖自动推导",
     "status": {
       "triage": "待分诊",

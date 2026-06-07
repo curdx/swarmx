@@ -16,8 +16,12 @@ import { useTranslation } from "react-i18next";
 import { api } from "@/api/http";
 import type { TaskRow } from "@/api/types";
 import { cn } from "@/lib/cn";
+import { relTime } from "@/lib/relTime";
 import { useToolWorkspaces } from "@/lib/useToolWorkspaces";
 import { WorkspacePicker } from "@/components/WorkspacePicker";
+
+/** Cards shown per column before a "show all" expander kicks in. */
+const COLUMN_CAP = 12;
 
 // Column order + the dot color per status. Derived statuses + operator-set ones
 // share this map so a human "blocked" lands in the same column as a derived one.
@@ -34,6 +38,7 @@ export default function TasksRoute() {
   const { workspaces, wsId, setWsId } = useToolWorkspaces();
   const [tasks, setTasks] = useState<TaskRow[] | null>(null);
   const [err, setErr] = useState(false);
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
 
   const load = useCallback(async () => {
     try {
@@ -105,6 +110,8 @@ export default function TasksRoute() {
         <div className="flex flex-1 gap-3 overflow-x-auto p-4">
           {COLUMNS.map((col) => {
             const items = byCol(col.key);
+            const isExp = expanded[col.key];
+            const shown = isExp ? items : items.slice(0, COLUMN_CAP);
             return (
               <div key={col.key} className="flex w-72 shrink-0 flex-col gap-2">
                 <div className="flex items-center gap-2 px-1">
@@ -115,9 +122,18 @@ export default function TasksRoute() {
                   <span className="font-mono text-[11px] text-foreground-tertiary">{items.length}</span>
                 </div>
                 <div className="flex flex-col gap-2">
-                  {items.map((tk) => (
+                  {shown.map((tk) => (
                     <TaskCard key={tk.agent_id} task={tk} onSet={setStatus} t={t} />
                   ))}
+                  {items.length > COLUMN_CAP && (
+                    <button
+                      type="button"
+                      onClick={() => setExpanded((e) => ({ ...e, [col.key]: !isExp }))}
+                      className="rounded border border-border-subtle border-dashed px-2 py-1.5 font-caption text-[11px] text-foreground-tertiary transition-colors hover:bg-surface-tertiary hover:text-foreground-secondary"
+                    >
+                      {isExp ? t("tasks.collapse") : t("tasks.showAll", { n: items.length })}
+                    </button>
+                  )}
                 </div>
               </div>
             );
@@ -140,8 +156,16 @@ function TaskCard({
   return (
     <div className="flex flex-col gap-2 rounded-lg border border-border-subtle bg-surface-secondary p-3">
       <div className="flex items-center justify-between gap-2">
-        <span className="truncate font-medium text-sm text-foreground-primary" title={task.role_label}>
-          {task.role_label || task.role_slug || t("tasks.untitled")}
+        <span className="flex min-w-0 items-center gap-1.5">
+          {task.killed_at === null && (
+            <span
+              className="size-1.5 shrink-0 rounded-full bg-status-success"
+              title={t("tasks.live")}
+            />
+          )}
+          <span className="truncate font-medium text-sm text-foreground-primary" title={task.role_label}>
+            {task.role_label || task.role_slug || t("tasks.untitled")}
+          </span>
         </span>
         {task.overridden && (
           <span
@@ -159,6 +183,9 @@ function TaskCard({
             → {task.handoff_signal.split("/").pop()}
           </span>
         )}
+        <span className="ml-auto shrink-0" title={new Date(task.spawned_at).toLocaleString()}>
+          {relTime(task.last_activity_at ?? task.spawned_at, t)}
+        </span>
       </div>
       <div className="flex flex-wrap gap-1">
         {task.status !== "blocked" && (
