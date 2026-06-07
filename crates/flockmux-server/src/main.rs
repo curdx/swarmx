@@ -285,6 +285,8 @@ async fn main() -> Result<()> {
         .route("/api/usage", get(routes::usage::usage_summary))
         .route("/api/tasks", get(routes::tasks::list_tasks))
         .route("/api/tasks/:id/status", post(routes::tasks::set_task_status))
+        .route("/api/files/list", get(routes::files::list_dir))
+        .route("/api/files/read", get(routes::files::read_file))
         // F1 模型设置页: per-CLI tier→concrete-model mapping (read/write).
         .route(
             "/api/models",

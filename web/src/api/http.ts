@@ -22,6 +22,8 @@ import type {
   SpellInfo,
   ThreadDiff,
   ThreadInfo,
+  FileListResp,
+  FileReadResp,
   TasksResponse,
   UnreadCountResponse,
   UsageSummary,
@@ -160,6 +162,10 @@ export const api = {
   listTasks: () => request<TasksResponse>("GET", "/api/tasks"),
   setTaskStatus: (agentId: string, status: string | null) =>
     request<{ ok: boolean }>("POST", `/api/tasks/${agentId}/status`, { status }),
+  filesList: (dir?: string) =>
+    request<FileListResp>("GET", `/api/files/list${dir ? qs({ dir }) : ""}`),
+  filesRead: (path: string) =>
+    request<FileReadResp>("GET", `/api/files/read${qs({ path })}`),
   spawnAgent: (req: SpawnAgentRequest) =>
     request<SpawnAgentResponse>("POST", "/api/agent", req),
   killAgent: (id: string) => request<void>("DELETE", `/api/agent/${id}`),

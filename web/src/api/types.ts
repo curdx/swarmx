@@ -551,3 +551,22 @@ export interface TaskRow {
 export interface TasksResponse {
   tasks: TaskRow[];
 }
+
+// ── file browser (GET /api/files/*) ────────────────────────────────────────
+export interface FileEntry {
+  name: string;
+  is_dir: boolean;
+  size: number;
+}
+export interface FileListResp {
+  dir: string;
+  parent: string | null;
+  entries: FileEntry[];
+}
+export interface FileReadResp {
+  path: string;
+  binary: boolean;
+  size: number;
+  content: string | null;
+  truncated: boolean;
+}

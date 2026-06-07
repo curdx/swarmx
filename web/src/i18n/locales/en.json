@@ -69,6 +69,7 @@
     "notifications": "Notifications",
     "mcp": "MCP",
     "tasks": "Tasks",
+    "files": "Files",
     "usage": "Usage",
     "settings": "Settings",
     "debug": "Debug"
@@ -617,6 +618,12 @@
     "previewError": "Render failed",
     "truncatedNotice": "Content too long — rendering the first {{n}} characters"
   },
+  "files": {
+    "title": "File browser",
+    "previewHint": "Pick a file on the left to preview",
+    "binary": "Binary file — no preview",
+    "truncated": "truncated"
+  },
   "tasks": {
     "title": "Task board",
     "subtitle": "Every worker is a task; status is derived from lifecycle automatically — or mark blocked / done / archived by hand.",
@@ -712,6 +719,7 @@
       "notifications": "Notification Center",
       "mcp": "Tools for agents",
       "tasks": "Task board",
+      "files": "Browse local files",
       "usage": "Tokens & cost",
       "settings": "Preferences",
       "debug": "Legacy M2 grid"

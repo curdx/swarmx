@@ -69,6 +69,7 @@
     "notifications": "通知",
     "mcp": "MCP",
     "tasks": "任务",
+    "files": "文件",
     "usage": "用量",
     "settings": "设置",
     "debug": "Debug"
@@ -619,6 +620,12 @@
     "previewError": "渲染失败",
     "truncatedNotice": "内容过长，仅渲染前 {{n}} 字符"
   },
+  "files": {
+    "title": "文件浏览器",
+    "previewHint": "选择左侧文件预览",
+    "binary": "二进制文件，不预览",
+    "truncated": "已截断"
+  },
   "tasks": {
     "title": "任务看板",
     "subtitle": "每个 worker 即一个任务，状态自动从生命周期推导；你也可以手动标记阻塞 / 完成 / 归档。",
@@ -714,6 +721,7 @@
       "notifications": "通知中心",
       "mcp": "为 agent 装工具",
       "tasks": "任务看板",
+      "files": "浏览本地文件",
       "usage": "token 与成本",
       "settings": "偏好与模型",
       "debug": "调试面板"
