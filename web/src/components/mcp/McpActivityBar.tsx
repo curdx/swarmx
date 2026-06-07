@@ -1,17 +1,28 @@
 /**
  * McpActivityBar — 最外层应用导航菜单，常驻在 AppShell 内容区最左。横排菜单项
  * (图标 + 文字)，可展开/收起成纯图标窄条(状态存 localStorage)：
- *   - MCP(顶)   → 跳独立页面 /mcp
- *   - 设置(顶)  → 跳 /settings
- *   - 底部       → 菜单展开/收起开关
+ *   - 顶部组 → MCP / 文件 / 终端 / 定时 / 任务 / 用量(各自独立页面)
+ *   - 沉底   → 设置
+ *   - 最底   → 菜单展开/收起开关
  *
- * MCP 现在是独立页面(routes/mcp.tsx)，不再是滑出/停靠面板，所以这里只是导航。
+ * 这些页面以前只能 ⌘K 或直接敲 URL 到达(发现性差)；放进常驻左栏作为 app-level
+ * 入口。图标/标签与 CommandPalette 的 NAV 保持一致。
  */
 
-import { useEffect, useState, type ReactElement } from "react";
+import { useEffect, useState, type ComponentType, type ReactElement } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { Blocks, ChevronsLeft, ChevronsRight, Settings } from "lucide-react";
+import {
+  BarChart3,
+  Blocks,
+  ChevronsLeft,
+  ChevronsRight,
+  ClipboardList,
+  Clock,
+  FolderTree,
+  Settings,
+  Terminal,
+} from "lucide-react";
 import {
   Tooltip,
   TooltipContent,
@@ -20,6 +31,22 @@ import {
 import { cn } from "@/lib/cn";
 
 const MENU_KEY = "flockmux:mcp:menuCollapsed:v1";
+
+/** Top nav group — app-level destinations (each a standalone route). Keep
+ *  labels/icons in sync with NAV in components/CommandPalette.tsx. */
+const NAV: ReadonlyArray<{
+  href: string;
+  labelKey: string;
+  fallback: string;
+  icon: ComponentType<{ className?: string }>;
+}> = [
+  { href: "/mcp", labelKey: "mcp.title", fallback: "MCP", icon: Blocks },
+  { href: "/files", labelKey: "nav.files", fallback: "文件", icon: FolderTree },
+  { href: "/terminal", labelKey: "nav.terminal", fallback: "终端", icon: Terminal },
+  { href: "/cron", labelKey: "nav.cron", fallback: "定时", icon: Clock },
+  { href: "/tasks", labelKey: "nav.tasks", fallback: "任务", icon: ClipboardList },
+  { href: "/usage", labelKey: "nav.usage", fallback: "用量", icon: BarChart3 },
+];
 
 function readFlag(key: string): boolean {
   try {
@@ -90,26 +117,30 @@ export function McpActivityBar() {
         collapsed ? "w-14 px-1.5" : "w-[184px] px-2",
       )}
     >
-      {/* MCP — 跳独立页面 /mcp */}
-      {withTip(
-        t("mcp.title", "MCP"),
-        <NavLink
-          to="/mcp"
-          aria-label={t("mcp.title", "MCP")}
-          className={linkClass(pathname.startsWith("/mcp"))}
-        >
-          <Blocks className="size-[18px] shrink-0" />
-          {!collapsed && <span className="font-heading">{t("mcp.title", "MCP")}</span>}
-        </NavLink>,
-      )}
+      {/* 顶部组：MCP / 文件 / 终端 / 定时 / 任务 / 用量 */}
+      {NAV.map(({ href, labelKey, fallback, icon: Icon }) => {
+        const label = t(labelKey, fallback);
+        return withTip(
+          label,
+          <NavLink
+            key={href}
+            to={href}
+            aria-label={label}
+            className={linkClass(pathname.startsWith(href))}
+          >
+            <Icon className="size-[18px] shrink-0" />
+            {!collapsed && <span className="font-heading">{label}</span>}
+          </NavLink>,
+        );
+      })}
 
-      {/* 设置 — 跳 /settings */}
+      {/* 设置 — 沉底，与功能页拉开距离 */}
       {withTip(
         t("nav.settings", "设置"),
         <NavLink
           to="/settings"
           aria-label={t("nav.settings", "设置")}
-          className={linkClass(pathname.startsWith("/settings"))}
+          className={cn(linkClass(pathname.startsWith("/settings")), "mt-auto")}
         >
           <Settings className="size-[18px] shrink-0" />
           {!collapsed && <span className="font-heading">{t("nav.settings", "设置")}</span>}
