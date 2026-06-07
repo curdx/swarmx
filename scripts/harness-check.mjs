@@ -208,6 +208,46 @@ function structFields(text, structName) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
+// Rule 5 — every migration file must be BOTH registered (include_str! const)
+// AND applied (apply(conn, N, ...)) in schema.rs.
+//
+// Root cause it guards: adding `migrations/00NN_*.sql` requires two manual
+// edits in schema.rs — a `const MIGRATION_00NN = include_str!(...)` and an
+// `apply(conn, N, MIGRATION_00NN)` block. Miss either and the crate compiles
+// fine but the migration SILENTLY never runs, so the new table/column doesn't
+// exist at runtime (a query fails far from the cause).
+// ─────────────────────────────────────────────────────────────────────────
+{
+  const { readdir } = await import("node:fs/promises");
+  const migDir = "crates/flockmux-storage/migrations";
+  const schemaPath = "crates/flockmux-storage/src/schema.rs";
+  const schema = await readText(schemaPath);
+  let files = [];
+  try {
+    files = (await readdir(path.join(root, migDir))).filter((f) =>
+      /^\d{4}_.*\.sql$/.test(f),
+    );
+  } catch (e) {
+    fail(`规则5: 读不到 migrations 目录 ${migDir}：${e.message}`);
+  }
+  for (const f of files.sort()) {
+    const four = f.slice(0, 4); // "0016"
+    const n = parseInt(four, 10); // 16
+    const constName = `MIGRATION_${four}`;
+    if (!new RegExp(`const ${constName}\\b`).test(schema)) {
+      fail(
+        `规则5: 迁移 ${f} 未在 ${schemaPath} 注册 —— 缺 \`const ${constName}: &str = include_str!(...)\`。新迁移忘登记会静默不执行（编译过但新表/列不存在）。`,
+      );
+    }
+    if (!new RegExp(`apply\\(conn,\\s*${n}\\s*,\\s*${constName}\\b`).test(schema)) {
+      fail(
+        `规则5: 迁移 ${f} 未在 ${schemaPath} 的 run_migrations 里 apply —— 缺 \`apply(conn, ${n}, ${constName})\`。`,
+      );
+    }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
 if (failures.length > 0) {
   console.error(`❌ harness-check 失败（${failures.length} 项）：`);
   for (const failure of failures) console.error(`  - ${failure}`);
