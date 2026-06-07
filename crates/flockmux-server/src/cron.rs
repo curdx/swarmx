@@ -120,6 +120,9 @@ pub fn is_valid(expr: &str) -> bool {
 // ── action + scheduler ──────────────────────────────────────────────────────
 
 use crate::AppState;
+use axum::extract::State;
+use axum::Json;
+use flockmux_protocol::rest::RunSpellRequest;
 use flockmux_storage::CronJobRecord;
 use flockmux_swarm::NewMessage;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -131,26 +134,29 @@ fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
-/// Fire one job NOW: deliver its prompt to the workspace's live orchestrator
-/// (message + wake), then stamp `last_run_at`. Returns Err (skipped) when no
-/// orchestrator is alive — cron wakes an existing one; spawning from cron is a
-/// future enhancement. Shared by the scheduler and the manual `POST /run`.
+/// Fire one job NOW: deliver its prompt to the workspace's orchestrator
+/// (message + wake), then stamp `last_run_at`. When no orchestrator is alive —
+/// the common state for an idle or just-rebooted workspace — revive one on
+/// demand (the `init` spell, same path the chat composer uses) so a scheduled
+/// fire actually runs instead of silently skipping. Shared by the scheduler and
+/// the manual `POST /run`.
 pub async fn run_job(state: &AppState, job: &CronJobRecord) -> Result<(), String> {
     let agents = state.store.list_agents().await.map_err(|e| e.to_string())?;
-    let orch = agents.into_iter().find(|a| {
+    let live_orch = agents.into_iter().find(|a| {
         a.killed_at.is_none()
             && a.workspace_id.as_deref() == Some(job.workspace_id.as_str())
             && a.role == "orchestrator"
     });
-    let Some(orch) = orch else {
-        return Err("no live orchestrator in workspace".into());
+    let orch_id = match live_orch {
+        Some(o) => o.id,
+        None => revive_orchestrator(state, job).await?,
     };
     let now = now_ms();
     state
         .swarm
         .send_message(NewMessage {
             from_agent: "cron".into(),
-            to_agent: orch.id.clone(),
+            to_agent: orch_id.clone(),
             kind: "note".into(),
             body: job.prompt.clone(),
             sent_at: now,
@@ -159,9 +165,40 @@ pub async fn run_job(state: &AppState, job: &CronJobRecord) -> Result<(), String
         })
         .await
         .map_err(|e| e.to_string())?;
-    let _ = crate::wake::deliver_manual_wake(&state.swarm, &state.registry, &orch.id).await;
+    let _ = crate::wake::deliver_manual_wake(&state.swarm, &state.registry, &orch_id).await;
     let _ = state.store.touch_cron_run(job.id.clone(), now).await;
     Ok(())
+}
+
+/// Spawn a fresh orchestrator for the job's workspace (the `init` spell) and
+/// return its agent id. Runs in the workspace's main direction; the bootstrap
+/// detects the existing ledger and short-circuits, then reads the cron message
+/// we deliver right after. Mirrors the chat "send-to-revive" launch.
+async fn revive_orchestrator(state: &AppState, job: &CronJobRecord) -> Result<String, String> {
+    let ws = state
+        .store
+        .get_workspace_by_id(job.workspace_id.clone())
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "workspace not found".to_string())?;
+    let req = RunSpellRequest {
+        name: "init".into(),
+        task: String::new(),
+        workspace_dir: Some(ws.cwd.clone()),
+        workspace_id: Some(job.workspace_id.clone()),
+        caller_agent_id: None,
+        thread_id: None, // → resolves to the workspace's main direction
+    };
+    let resp = crate::routes::rest::run_spell(State(state.clone()), Json(req))
+        .await
+        .map_err(|(code, body)| format!("revive orchestrator failed ({code}): {}", body.0))?
+        .0;
+    resp.agents
+        .iter()
+        .find(|a| a.role == "orchestrator")
+        .or_else(|| resp.agents.first())
+        .map(|a| a.agent_id.clone())
+        .ok_or_else(|| "init spell spawned no orchestrator".to_string())
 }
 
 /// Background scheduler: every 30s, fire any enabled job whose 5-field cron
