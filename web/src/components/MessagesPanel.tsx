@@ -563,13 +563,50 @@ export function MessagesPanel({
     );
   }, [activeMembers]);
 
+  // @mention: a leading/inline `@<role|id-prefix>` token routes the message to
+  // THAT live worker instead of the default orchestrator (the token stays
+  // visible, Slack-style). Resolution is forgiving: exact role, then id prefix.
+  const explicitRecipient = useMemo(() => {
+    const m = body.match(/(?:^|\s)@(\S+)/);
+    if (!m) return null;
+    const tok = m[1].toLowerCase();
+    return (
+      activeMembers.find((a) => a.role.toLowerCase() === tok) ??
+      activeMembers.find((a) => a.agent_id.toLowerCase().startsWith(tok)) ??
+      null
+    );
+  }, [body, activeMembers]);
+
+  // @mention autocomplete: when the token being typed at the END of the input
+  // starts with `@`, offer matching members to insert.
+  const mentionQuery = useMemo(() => {
+    const m = body.match(/(?:^|\s)@(\S*)$/);
+    return m ? m[1].toLowerCase() : null;
+  }, [body]);
+  const mentionMatches = useMemo(() => {
+    if (mentionQuery == null) return [];
+    return activeMembers
+      .filter(
+        (a) =>
+          a.role.toLowerCase().includes(mentionQuery) ||
+          a.agent_id.toLowerCase().startsWith(mentionQuery),
+      )
+      .slice(0, 6);
+  }, [mentionQuery, activeMembers]);
+  const pickMention = (a: AgentInfo) => {
+    setBody((b) => b.replace(/@(\S*)$/, `@${a.role} `));
+    requestAnimationFrame(() => composerRef.current?.focus());
+  };
+
   const send = async () => {
     const trimmed = body.trim();
     if (!trimmed) return;
+    // @mention wins over the default orchestrator recipient.
+    const recipient = explicitRecipient ?? defaultRecipient;
     // No live recipient (workspace's orchestrator has exited). If the parent
     // wired `onSend`, route the message through it — it spawns the orchestrator
     // and delivers — so the user just types instead of first clicking 唤醒.
-    if (!defaultRecipient) {
+    if (!recipient) {
       if (!onSend) return;
       setSending(true);
       try {
@@ -592,7 +629,7 @@ export function MessagesPanel({
     try {
       const rec = await api.sendMessage({
         from: USER_SENDER,
-        to: defaultRecipient.agent_id,
+        to: recipient.agent_id,
         kind: KIND_DEFAULT,
         body: trimmed,
         in_reply_to: inReplyTo ?? undefined,
@@ -604,7 +641,7 @@ export function MessagesPanel({
       // wake recipient,而 scout 已经 STOP 在那等。fire 一发 manual wake
       // 让它去 swarm_list_messages 处理这条新消息。best-effort,失败也
       // 不阻塞 UI(下次 BlackboardChanged / Stop hook 自然会消化)。
-      api.wakeAgent(defaultRecipient.agent_id).catch(() => {
+      api.wakeAgent(recipient.agent_id).catch(() => {
         /* swallow */
       });
       try { window.localStorage.removeItem(draftKey); } catch { /* ignore */ }
@@ -1224,11 +1261,31 @@ export function MessagesPanel({
             )}
           </div>
         )}
+        {/* @mention autocomplete — appears while typing `@<token>` at the end
+            of the input; selecting routes the message to that worker. */}
+        {mentionMatches.length > 0 && (
+          <div className="mb-1 overflow-hidden rounded-lg border border-border-subtle bg-surface-elevated shadow-lg">
+            {mentionMatches.map((a) => (
+              <button
+                key={a.agent_id}
+                type="button"
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  pickMention(a);
+                }}
+                className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] hover:bg-surface-tertiary"
+              >
+                <span className="font-medium text-foreground-primary">@{a.role}</span>
+                <span className="font-mono text-[10px] text-foreground-tertiary">
+                  {a.agent_id.slice(0, 8)}
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
         <div className="flex items-end gap-2">
-          {/* picker(发给 XX ▼ + 换一个发送对象)已经去掉 —— 用户视角是
-              "跟一个 AI 接待员对话",所有消息默认发给 scout(它会自己
-              判断闲聊/转发/派活)。需要直接 ping 某个业务 agent 的高级
-              场景未来通过 @mention 实现。 */}
+          {/* default recipient = orchestrator/scout; an inline `@<role>` routes
+              to a specific worker (explicitRecipient wins in send()). */}
           <Textarea
             ref={composerRef}
             name="composer"
