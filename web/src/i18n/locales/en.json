@@ -688,6 +688,8 @@
     "cacheRead": "Cache read",
     "cacheWrite": "Cache write",
     "ctx": "Context",
+    "ctxPeak": "Peak context",
+    "updatedAt": "Updated {{time}}",
     "events": "Calls",
     "byDay": "Daily trend",
     "byModel": "By model",

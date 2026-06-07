@@ -89,7 +89,10 @@ struct ModelRow {
     events: i64,
     cost_usd: f64,
     priced: bool,
+    /// The model's static context-window cap (tokens); null for unknown models.
     context_window: Option<u32>,
+    /// Estimated peak context occupancy (tokens) — how full the window got.
+    context_peak: i64,
 }
 
 #[derive(Deserialize)]
@@ -140,6 +143,7 @@ pub async fn usage_summary(
             cost_usd: cost,
             priced,
             context_window: m.model.as_deref().and_then(context_window_for),
+            context_peak: m.context_peak,
         });
     }
 

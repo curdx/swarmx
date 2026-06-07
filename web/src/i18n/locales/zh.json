@@ -690,6 +690,8 @@
     "cacheRead": "缓存读",
     "cacheWrite": "缓存写",
     "ctx": "上下文窗口",
+    "ctxPeak": "峰值上下文",
+    "updatedAt": "更新于 {{time}}",
     "events": "调用次数",
     "byDay": "每日趋势",
     "byModel": "按模型",

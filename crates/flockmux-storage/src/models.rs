@@ -325,6 +325,10 @@ pub struct UsageByModel {
     pub cache_read_tokens: i64,
     pub cache_write_tokens: i64,
     pub events: i64,
+    /// Peak single-request context occupancy = MAX(input + cache_read +
+    /// cache_write) over events — i.e. how full the context window got, vs the
+    /// model's static cap. 0 when there are no events.
+    pub context_peak: i64,
 }
 
 /// Token usage aggregated by calendar day (UTC `YYYY-MM-DD`).

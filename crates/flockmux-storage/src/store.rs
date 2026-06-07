@@ -256,13 +256,17 @@ impl Store {
                     cache_read_tokens: row.get(3)?,
                     cache_write_tokens: row.get(4)?,
                     events: row.get(5)?,
+                    // MAX(input+cache_read+cache_write) per event ≈ peak context
+                    // sent in a single request. COALESCE so an empty group is 0.
+                    context_peak: row.get(6)?,
                 })
             }
             let rows = if let Some(ws) = &ws {
                 let mut stmt = conn.prepare(
                     "SELECT u.model, \
                             SUM(u.input_tokens), SUM(u.output_tokens), \
-                            SUM(u.cache_read_tokens), SUM(u.cache_write_tokens), COUNT(*) \
+                            SUM(u.cache_read_tokens), SUM(u.cache_write_tokens), COUNT(*), \
+                            COALESCE(MAX(u.input_tokens + u.cache_read_tokens + u.cache_write_tokens), 0) \
                      FROM agent_usage u JOIN agents a ON a.id = u.agent_id \
                      WHERE a.workspace_id = ?1 GROUP BY u.model \
                      ORDER BY SUM(u.input_tokens) + SUM(u.output_tokens) DESC",
@@ -273,7 +277,8 @@ impl Store {
                 let mut stmt = conn.prepare(
                     "SELECT model, \
                             SUM(input_tokens), SUM(output_tokens), \
-                            SUM(cache_read_tokens), SUM(cache_write_tokens), COUNT(*) \
+                            SUM(cache_read_tokens), SUM(cache_write_tokens), COUNT(*), \
+                            COALESCE(MAX(input_tokens + cache_read_tokens + cache_write_tokens), 0) \
                      FROM agent_usage GROUP BY model \
                      ORDER BY SUM(input_tokens) + SUM(output_tokens) DESC",
                 )?;

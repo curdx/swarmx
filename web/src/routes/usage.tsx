@@ -8,8 +8,9 @@
  * chart lib), and per-model / per-agent breakdowns. Cost is an ESTIMATE from a
  * built-in price table; unrecognised models show tokens only.
  */
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { RefreshCw } from "lucide-react";
 import { api } from "@/api/http";
 import type { UsageSummary } from "@/api/types";
 import { cn } from "@/lib/cn";
@@ -25,6 +26,11 @@ function fmtCost(n: number): string {
   if (n === 0) return "$0";
   if (n < 0.01) return "<$0.01";
   return `$${n.toFixed(2)}`;
+}
+/** "152.0k / 200.0k" — peak context occupancy vs the model's cap. */
+function fmtCtxPeak(peak: number, cap: number | null): string {
+  if (!peak) return "—";
+  return cap ? `${fmtTokens(peak)} / ${fmtTokens(cap)}` : fmtTokens(peak);
 }
 
 function StatCard({ label, value, hint }: { label: string; value: string; hint?: string }) {
@@ -45,24 +51,32 @@ export default function UsageRoute() {
   const [data, setData] = useState<UsageSummary | null>(null);
   const [err, setErr] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [updatedAt, setUpdatedAt] = useState<number | null>(null);
 
+  const load = useCallback(
+    async (showSpinner = false) => {
+      if (showSpinner) setLoading(true);
+      try {
+        const d = await api.getUsage(wsId || undefined);
+        setData(d);
+        setErr(false);
+        setUpdatedAt(Date.now());
+      } catch {
+        setErr(true);
+      } finally {
+        if (showSpinner) setLoading(false);
+      }
+    },
+    [wsId],
+  );
+
+  // Live-ish: first load (with spinner) on workspace change, then poll so the
+  // cost/token numbers don't sit frozen while workers keep burning tokens.
   useEffect(() => {
-    let alive = true;
-    setLoading(true);
-    api
-      .getUsage(wsId || undefined)
-      .then((d) => {
-        if (alive) {
-          setData(d);
-          setErr(false);
-        }
-      })
-      .catch(() => alive && setErr(true))
-      .finally(() => alive && setLoading(false));
-    return () => {
-      alive = false;
-    };
-  }, [wsId]);
+    load(true);
+    const id = window.setInterval(() => load(false), 8000);
+    return () => window.clearInterval(id);
+  }, [load]);
 
   const maxDay = data
     ? Math.max(1, ...data.by_day.map((d) => d.input_tokens + d.output_tokens))
@@ -76,7 +90,23 @@ export default function UsageRoute() {
             <h1 className="font-display text-lg text-foreground-primary">{t("usage.title")}</h1>
             <p className="font-caption text-xs text-foreground-tertiary">{t("usage.subtitle")}</p>
           </div>
-          <WorkspacePicker workspaces={workspaces} value={wsId} onChange={setWsId} allowAll />
+          <div className="flex shrink-0 items-center gap-2">
+            {updatedAt && (
+              <span className="font-caption text-[11px] text-foreground-tertiary">
+                {t("usage.updatedAt", { time: new Date(updatedAt).toLocaleTimeString() })}
+              </span>
+            )}
+            <button
+              type="button"
+              onClick={() => load(false)}
+              title={t("common.refresh")}
+              aria-label={t("common.refresh")}
+              className="rounded border border-border-subtle p-1 text-foreground-tertiary hover:bg-surface-tertiary hover:text-foreground-secondary"
+            >
+              <RefreshCw className="size-3.5" />
+            </button>
+            <WorkspacePicker workspaces={workspaces} value={wsId} onChange={setWsId} allowAll />
+          </div>
         </header>
 
         {loading && (
@@ -145,13 +175,13 @@ export default function UsageRoute() {
                 {t("usage.byModel")}
               </h2>
               <UsageTable
-                cols={[t("usage.model"), t("usage.input"), t("usage.output"), t("usage.cacheRead"), t("usage.ctx"), t("usage.totalCost")]}
+                cols={[t("usage.model"), t("usage.input"), t("usage.output"), t("usage.cacheRead"), t("usage.ctxPeak"), t("usage.totalCost")]}
                 rows={data.by_model.map((m) => [
                   m.model ?? "—",
                   fmtTokens(m.input_tokens),
                   fmtTokens(m.output_tokens),
                   fmtTokens(m.cache_read_tokens),
-                  m.context_window ? fmtTokens(m.context_window) : "—",
+                  fmtCtxPeak(m.context_peak, m.context_window),
                   m.priced ? fmtCost(m.cost_usd) : t("usage.tokensOnly"),
                 ])}
               />
