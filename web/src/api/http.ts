@@ -186,6 +186,10 @@ export const api = {
       note?: string;
     }>("POST", "/api/blackboard/compact", { path }),
   listCron: () => request<CronListResp>("GET", "/api/cron"),
+  // Live validation + next-run preview for the create form. next_run is unix ms
+  // (UTC) or null (valid but no occurrence within a year), the model evaluates.
+  cronPreview: (expr: string) =>
+    request<{ valid: boolean; next_run: number | null }>("GET", `/api/cron/preview${qs({ expr })}`),
   createCron: (req: {
     workspace_id: string;
     name: string;

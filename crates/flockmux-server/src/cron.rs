@@ -95,26 +95,64 @@ pub fn matches(expr: &str, f: Fields) -> bool {
         && dow_ok
 }
 
-/// Quick validity check for a 5-field expression (used by the REST layer to
-/// reject garbage before storing).
+/// Validate one field against its [min,max] range. Accepts `*`, `*/n` (n>0),
+/// `a-b` (both in range, a≤b), `a` (in range), and comma lists of those. A
+/// number outside the range (e.g. minute `99`) is rejected — the old check only
+/// tested that tokens *parsed*, so garbage like `99 99 99 99 99` was stored and
+/// then silently never fired.
+fn field_valid(field: &str, min: u32, max: u32) -> bool {
+    field.split(',').all(|p| {
+        let p = p.trim();
+        if p.is_empty() {
+            return false;
+        }
+        if p == "*" {
+            return true;
+        }
+        if let Some(s) = p.strip_prefix("*/") {
+            return s.parse::<u32>().map(|n| n != 0).unwrap_or(false);
+        }
+        if let Some((a, b)) = p.split_once('-') {
+            return match (a.parse::<u32>(), b.parse::<u32>()) {
+                (Ok(a), Ok(b)) => a >= min && a <= max && b >= min && b <= max && a <= b,
+                _ => false,
+            };
+        }
+        p.parse::<u32>().map(|n| n >= min && n <= max).unwrap_or(false)
+    })
+}
+
+/// Range-aware validity check for a 5-field expression (used by the REST layer to
+/// reject garbage before storing, and by the live preview).
 pub fn is_valid(expr: &str) -> bool {
     let parts: Vec<&str> = expr.split_whitespace().collect();
     if parts.len() != 5 {
         return false;
     }
-    let ok = |field: &str| -> bool {
-        field.split(',').all(|p| {
-            let p = p.trim();
-            !p.is_empty()
-                && (p == "*"
-                    || p.strip_prefix("*/").map(|s| s.parse::<u32>().is_ok()).unwrap_or(false)
-                    || p.split_once('-')
-                        .map(|(a, b)| a.parse::<u32>().is_ok() && b.parse::<u32>().is_ok())
-                        .unwrap_or(false)
-                    || p.parse::<u32>().is_ok())
-        })
-    };
-    parts.iter().all(|p| ok(p))
+    field_valid(parts[0], 0, 59)
+        && field_valid(parts[1], 0, 23)
+        && field_valid(parts[2], 1, 31)
+        && field_valid(parts[3], 1, 12)
+        && field_valid(parts[4], 0, 7) // dow 0–7 (7 = Sunday)
+}
+
+/// Next unix **seconds** (minute-aligned) strictly after `from_secs` at which
+/// `expr` fires, searching up to ~366 days. `None` if the expr is invalid or has
+/// no occurrence in that window (e.g. an impossible `0 0 30 2 *`). Reuses
+/// `matches` so the preview agrees exactly with the scheduler.
+pub fn next_after(expr: &str, from_secs: i64) -> Option<i64> {
+    if !is_valid(expr) {
+        return None;
+    }
+    let mut t = (from_secs / 60 + 1) * 60; // next whole minute
+    let limit = t + 366 * 86_400;
+    while t <= limit {
+        if matches(expr, fields_from_unix(t)) {
+            return Some(t);
+        }
+        t += 60;
+    }
+    None
 }
 
 // ── action + scheduler ──────────────────────────────────────────────────────
@@ -281,7 +319,32 @@ mod tests {
     fn validity() {
         assert!(is_valid("*/5 * * * *"));
         assert!(is_valid("0 9 * * 1-5"));
+        assert!(is_valid("0 0 1 1 0"));
         assert!(!is_valid("0 9 * *")); // 4 fields
         assert!(!is_valid("xx 9 * * *"));
+    }
+
+    #[test]
+    fn validity_rejects_out_of_range() {
+        assert!(!is_valid("99 99 99 99 99")); // the QA bug: parsed but never fires
+        assert!(!is_valid("60 0 * * *")); // minute 60
+        assert!(!is_valid("0 24 * * *")); // hour 24
+        assert!(!is_valid("0 0 0 1 0")); // dom 0
+        assert!(!is_valid("0 0 1 13 0")); // month 13
+        assert!(!is_valid("0 0 1 1 8")); // dow 8
+        assert!(!is_valid("5-1 * * * *")); // reversed range
+    }
+
+    #[test]
+    fn next_after_finds_upcoming() {
+        // 2021-01-01 00:00:00 UTC (Friday). Next "0 0 * * *" is the next midnight.
+        let base = 1_609_459_200;
+        assert_eq!(next_after("0 0 * * *", base), Some(base + 86_400));
+        // Every minute → the very next minute.
+        assert_eq!(next_after("* * * * *", base + 10), Some(base + 60));
+        // Impossible date → no occurrence within a year.
+        assert_eq!(next_after("0 0 30 2 *", base), None);
+        // Invalid → None.
+        assert_eq!(next_after("99 99 99 99 99", base), None);
     }
 }

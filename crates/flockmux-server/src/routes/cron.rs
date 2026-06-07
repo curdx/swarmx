@@ -6,7 +6,7 @@
 //! schedule.
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
     Json,
@@ -31,6 +31,25 @@ pub async fn list_cron(State(state): State<AppState>) -> impl IntoResponse {
 }
 
 #[derive(Deserialize)]
+pub struct PreviewQuery {
+    expr: String,
+}
+
+/// Live validation + next-run preview for the create form. `valid=false` → the
+/// expr is malformed or out-of-range; `next_run` is the next fire time (unix ms,
+/// UTC) the scheduler would pick, or null when valid-but-no-occurrence-within-a-
+/// year (e.g. `0 0 30 2 *`). Reuses the scheduler's own matcher.
+pub async fn preview_cron(Query(q): Query<PreviewQuery>) -> impl IntoResponse {
+    let valid = crate::cron::is_valid(&q.expr);
+    let next_run = if valid {
+        crate::cron::next_after(&q.expr, now_ms() / 1000).map(|s| s * 1000)
+    } else {
+        None
+    };
+    Json(json!({ "valid": valid, "next_run": next_run }))
+}
+
+#[derive(Deserialize)]
 pub struct CreateCronRequest {
     workspace_id: String,
     name: String,
@@ -45,7 +64,7 @@ pub async fn create_cron(
     if !crate::cron::is_valid(&req.cron_expr) {
         return (
             StatusCode::BAD_REQUEST,
-            Json(json!({ "error": format!("invalid cron expr `{}` (need 5 space-separated fields)", req.cron_expr) })),
+            Json(json!({ "error": format!("invalid cron expr `{}` (5 fields, each in range: min 0-59, hour 0-23, dom 1-31, month 1-12, dow 0-7)", req.cron_expr) })),
         )
             .into_response();
     }

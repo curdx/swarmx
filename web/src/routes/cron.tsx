@@ -25,6 +25,21 @@ export default function CronRoute() {
   const [expr, setExpr] = useState("0 9 * * *");
   const [prompt, setPrompt] = useState("");
   const [creating, setCreating] = useState(false);
+  // Live validation + next-run preview (debounced) so a typo'd expr is caught
+  // before create and the user sees when it will actually fire.
+  const [exprPreview, setExprPreview] = useState<{ valid: boolean; next_run: number | null } | null>(null);
+
+  useEffect(() => {
+    const e = expr.trim();
+    if (!e) {
+      setExprPreview(null);
+      return;
+    }
+    const id = setTimeout(() => {
+      api.cronPreview(e).then(setExprPreview).catch(() => setExprPreview(null));
+    }, 300);
+    return () => clearTimeout(id);
+  }, [expr]);
 
   // Run-now feedback: spinner on the firing row, a transient success notice
   // (previously only failures surfaced), and a two-step inline delete confirm.
@@ -109,8 +124,21 @@ export default function CronRoute() {
                 value={expr}
                 onChange={(e) => setExpr(e.target.value)}
                 placeholder="0 9 * * 1-5"
-                className="rounded border border-border-subtle bg-surface-primary px-2 py-1 font-mono text-[13px]"
+                className={cn(
+                  "rounded border bg-surface-primary px-2 py-1 font-mono text-[13px]",
+                  exprPreview && !exprPreview.valid ? "border-status-danger" : "border-border-subtle",
+                )}
               />
+              {exprPreview &&
+                (!exprPreview.valid ? (
+                  <span className="font-caption text-[11px] text-status-danger">{t("cron.invalidExpr")}</span>
+                ) : exprPreview.next_run ? (
+                  <span className="font-caption text-[11px] text-foreground-tertiary">
+                    {t("cron.nextRun", { time: new Date(exprPreview.next_run).toLocaleString() })}
+                  </span>
+                ) : (
+                  <span className="font-caption text-[11px] text-status-warning">{t("cron.noUpcoming")}</span>
+                ))}
             </label>
           </div>
           <label className="flex flex-col gap-1">
@@ -135,7 +163,9 @@ export default function CronRoute() {
           <div className="flex justify-end">
             <button
               type="button"
-              disabled={creating || !wsId || !expr.trim() || !prompt.trim()}
+              disabled={
+                creating || !wsId || !expr.trim() || !prompt.trim() || exprPreview?.valid === false
+              }
               onClick={create}
               className="rounded-md bg-accent-primary px-3 py-1.5 text-[13px] text-foreground-on-accent disabled:opacity-50"
             >

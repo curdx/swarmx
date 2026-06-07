@@ -294,6 +294,7 @@ async fn main() -> Result<()> {
         .route("/api/files/read", get(routes::files::read_file))
         .route("/ws/terminal", get(routes::terminal_ws::terminal_ws))
         .route("/api/cron", get(routes::cron::list_cron).post(routes::cron::create_cron))
+        .route("/api/cron/preview", get(routes::cron::preview_cron))
         .route("/api/cron/:id", delete(routes::cron::delete_cron).patch(routes::cron::toggle_cron))
         .route("/api/cron/:id/run", post(routes::cron::run_cron))
         // F1 模型设置页: per-CLI tier→concrete-model mapping (read/write).
