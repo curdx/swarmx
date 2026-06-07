@@ -1,0 +1,250 @@
+//! Minimal 5-field cron matcher (`min hour dom month dow`), UTC.
+//!
+//! No new dependency: we decompose a unix timestamp into calendar fields with
+//! Howard Hinnant's civil-from-days algorithm. Schedules are evaluated in **UTC**
+//! (documented in the UI) — keeping a tz database out of the build. Supports per
+//! field: `*`, `*/n`, `a`, `a-b`, `a,b` and comma-combinations. `dow` is 0–6 with
+//! 0 = Sunday (7 also accepted as Sunday).
+
+/// Calendar fields of an instant (UTC).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Fields {
+    pub minute: u32, // 0..=59
+    pub hour: u32,   // 0..=23
+    pub dom: u32,    // 1..=31
+    pub month: u32,  // 1..=12
+    pub dow: u32,    // 0..=6, 0=Sunday
+}
+
+/// Decompose unix **seconds** into UTC calendar fields.
+pub fn fields_from_unix(secs: i64) -> Fields {
+    let days = secs.div_euclid(86_400);
+    let secs_of_day = secs.rem_euclid(86_400);
+    let minute = ((secs_of_day / 60) % 60) as u32;
+    let hour = (secs_of_day / 3600) as u32;
+    let (_y, month, dom) = civil_from_days(days);
+    // 1970-01-01 was Thursday. With 0=Sunday: (days + 4) mod 7.
+    let dow = (days.rem_euclid(7) as u32 + 4) % 7;
+    Fields { minute, hour, dom, month, dow }
+}
+
+/// Howard Hinnant's `civil_from_days`: days since 1970-01-01 → (year, month, day).
+fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let z = z + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = (z - era * 146_097) as i64; // [0, 146096]
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365; // [0, 399]
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+    let mp = (5 * doy + 2) / 153; // [0, 11]
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32; // [1, 31]
+    let m = (if mp < 10 { mp + 3 } else { mp - 9 }) as u32; // [1, 12]
+    (if m <= 2 { y + 1 } else { y }, m, d)
+}
+
+/// Does one cron field match `value`? `min`/`max` bound `*` and `*/n` expansion.
+fn field_matches(field: &str, value: u32, min: u32, max: u32) -> bool {
+    for part in field.split(',') {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        if part == "*" {
+            return true;
+        }
+        if let Some(step_s) = part.strip_prefix("*/") {
+            if let Ok(step) = step_s.parse::<u32>() {
+                if step != 0 && (value.saturating_sub(min)) % step == 0 {
+                    return true;
+                }
+            }
+            continue;
+        }
+        if let Some((a, b)) = part.split_once('-') {
+            if let (Ok(a), Ok(b)) = (a.parse::<u32>(), b.parse::<u32>()) {
+                let (lo, hi) = (a.max(min), b.min(max));
+                if value >= lo && value <= hi {
+                    return true;
+                }
+            }
+            continue;
+        }
+        if let Ok(n) = part.parse::<u32>() {
+            if n == value {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// True if `expr` (5 fields) matches the given instant. Malformed expr → false.
+pub fn matches(expr: &str, f: Fields) -> bool {
+    let parts: Vec<&str> = expr.split_whitespace().collect();
+    if parts.len() != 5 {
+        return false;
+    }
+    // dow: accept 7 as Sunday by normalising the value side too.
+    let dow_field = parts[4];
+    let dow_ok = field_matches(dow_field, f.dow, 0, 6)
+        || (f.dow == 0 && field_matches(dow_field, 7, 0, 7));
+    field_matches(parts[0], f.minute, 0, 59)
+        && field_matches(parts[1], f.hour, 0, 23)
+        && field_matches(parts[2], f.dom, 1, 31)
+        && field_matches(parts[3], f.month, 1, 12)
+        && dow_ok
+}
+
+/// Quick validity check for a 5-field expression (used by the REST layer to
+/// reject garbage before storing).
+pub fn is_valid(expr: &str) -> bool {
+    let parts: Vec<&str> = expr.split_whitespace().collect();
+    if parts.len() != 5 {
+        return false;
+    }
+    let ok = |field: &str| -> bool {
+        field.split(',').all(|p| {
+            let p = p.trim();
+            !p.is_empty()
+                && (p == "*"
+                    || p.strip_prefix("*/").map(|s| s.parse::<u32>().is_ok()).unwrap_or(false)
+                    || p.split_once('-')
+                        .map(|(a, b)| a.parse::<u32>().is_ok() && b.parse::<u32>().is_ok())
+                        .unwrap_or(false)
+                    || p.parse::<u32>().is_ok())
+        })
+    };
+    parts.iter().all(|p| ok(p))
+}
+
+// ── action + scheduler ──────────────────────────────────────────────────────
+
+use crate::AppState;
+use flockmux_storage::CronJobRecord;
+use flockmux_swarm::NewMessage;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+fn now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+/// Fire one job NOW: deliver its prompt to the workspace's live orchestrator
+/// (message + wake), then stamp `last_run_at`. Returns Err (skipped) when no
+/// orchestrator is alive — cron wakes an existing one; spawning from cron is a
+/// future enhancement. Shared by the scheduler and the manual `POST /run`.
+pub async fn run_job(state: &AppState, job: &CronJobRecord) -> Result<(), String> {
+    let agents = state.store.list_agents().await.map_err(|e| e.to_string())?;
+    let orch = agents.into_iter().find(|a| {
+        a.killed_at.is_none()
+            && a.workspace_id.as_deref() == Some(job.workspace_id.as_str())
+            && a.role == "orchestrator"
+    });
+    let Some(orch) = orch else {
+        return Err("no live orchestrator in workspace".into());
+    };
+    let now = now_ms();
+    state
+        .swarm
+        .send_message(NewMessage {
+            from_agent: "cron".into(),
+            to_agent: orch.id.clone(),
+            kind: "note".into(),
+            body: job.prompt.clone(),
+            sent_at: now,
+            in_reply_to: None,
+            meta: Some(serde_json::json!({ "subtype": "cron", "job": job.name })),
+        })
+        .await
+        .map_err(|e| e.to_string())?;
+    let _ = crate::wake::deliver_manual_wake(&state.swarm, &state.registry, &orch.id).await;
+    let _ = state.store.touch_cron_run(job.id.clone(), now).await;
+    Ok(())
+}
+
+/// Background scheduler: every 30s, fire any enabled job whose 5-field cron
+/// expression matches the current UTC minute and hasn't already run this
+/// minute (`last_run_at` dedup). Runs for the process lifetime.
+pub fn spawn_scheduler(state: AppState) {
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs(30));
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            tick.tick().await;
+            let now = now_ms();
+            let f = fields_from_unix(now / 1000);
+            let cur_min = now / 60_000;
+            let jobs = match state.store.list_cron_jobs().await {
+                Ok(j) => j,
+                Err(_) => continue,
+            };
+            for job in jobs {
+                if !job.enabled || !matches(&job.cron_expr, f) {
+                    continue;
+                }
+                if job.last_run_at.map(|l| l / 60_000) == Some(cur_min) {
+                    continue; // already fired this minute
+                }
+                match run_job(&state, &job).await {
+                    Ok(()) => tracing::info!(job = %job.name, "cron: fired"),
+                    Err(e) => tracing::debug!(job = %job.name, %e, "cron: skipped"),
+                }
+            }
+        }
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decompose_known_instant() {
+        // 2021-01-01 00:00:00 UTC = 1609459200; a Friday (dow=5).
+        let f = fields_from_unix(1_609_459_200);
+        assert_eq!((f.minute, f.hour, f.dom, f.month, f.dow), (0, 0, 1, 1, 5));
+    }
+
+    #[test]
+    fn star_matches_anything() {
+        let f = fields_from_unix(1_609_459_200);
+        assert!(matches("* * * * *", f));
+    }
+
+    #[test]
+    fn exact_minute_hour() {
+        let f = Fields { minute: 30, hour: 9, dom: 15, month: 6, dow: 1 };
+        assert!(matches("30 9 * * *", f));
+        assert!(!matches("31 9 * * *", f));
+        assert!(!matches("30 10 * * *", f));
+    }
+
+    #[test]
+    fn step_and_range_and_list() {
+        let f = Fields { minute: 0, hour: 14, dom: 10, month: 6, dow: 3 };
+        assert!(matches("*/15 * * * *", f)); // 0 % 15 == 0
+        assert!(!matches("*/15 * * * *", Fields { minute: 7, ..f }));
+        assert!(matches("0 9-17 * * *", f)); // 14 in 9..17
+        assert!(matches("0 14 * * 1,3,5", f)); // dow 3 in list
+        assert!(!matches("0 14 * * 0,6", f)); // weekend only
+    }
+
+    #[test]
+    fn dow_sunday_seven_or_zero() {
+        // 2021-01-03 = Sunday. dow should match both 0 and 7.
+        let f = fields_from_unix(1_609_459_200 + 2 * 86_400);
+        assert_eq!(f.dow, 0);
+        assert!(matches("* * * * 0", f));
+        assert!(matches("* * * * 7", f));
+    }
+
+    #[test]
+    fn validity() {
+        assert!(is_valid("*/5 * * * *"));
+        assert!(is_valid("0 9 * * 1-5"));
+        assert!(!is_valid("0 9 * *")); // 4 fields
+        assert!(!is_valid("xx 9 * * *"));
+    }
+}

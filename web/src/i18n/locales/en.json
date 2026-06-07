@@ -71,6 +71,7 @@
     "tasks": "Tasks",
     "files": "Files",
     "terminal": "Terminal",
+    "cron": "Cron",
     "usage": "Usage",
     "settings": "Settings",
     "debug": "Debug"
@@ -619,6 +620,24 @@
     "previewError": "Render failed",
     "truncatedNotice": "Content too long — rendering the first {{n}} characters"
   },
+  "cron": {
+    "title": "Scheduled jobs",
+    "subtitle": "Deliver a prompt to a workspace's orchestrator on a 5-field cron (UTC). \"Run now\" fires immediately.",
+    "workspace": "Workspace",
+    "expr": "Cron expression",
+    "name": "Name",
+    "namePlaceholder": "e.g. Daily standup digest",
+    "prompt": "Prompt",
+    "promptPlaceholder": "What the orchestrator should do when it fires…",
+    "create": "Create",
+    "creating": "Creating…",
+    "empty": "No scheduled jobs yet.",
+    "runNow": "Run now",
+    "delete": "Delete",
+    "enable": "Enable",
+    "disable": "Disable",
+    "lastRun": "last"
+  },
   "files": {
     "title": "File browser",
     "previewHint": "Pick a file on the left to preview",
@@ -722,6 +741,7 @@
       "tasks": "Task board",
       "files": "Browse local files",
       "terminal": "Open a shell",
+      "cron": "Scheduled jobs",
       "usage": "Tokens & cost",
       "settings": "Preferences",
       "debug": "Legacy M2 grid"

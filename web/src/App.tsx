@@ -45,6 +45,7 @@ const UsageRoute = lazy(() => import("./routes/usage"));
 const TasksRoute = lazy(() => import("./routes/tasks"));
 const FilesRoute = lazy(() => import("./routes/files"));
 const TerminalRoute = lazy(() => import("./routes/terminal"));
+const CronRoute = lazy(() => import("./routes/cron"));
 const DebugRoute = lazy(() => import("./routes/debug"));
 
 /** Suspense wrapper for a lazily-loaded route element. Keeps the surrounding
@@ -101,6 +102,7 @@ export default function App() {
           <Route path="/tasks" element={lazyView(<TasksRoute />)} />
           <Route path="/files" element={lazyView(<FilesRoute />)} />
           <Route path="/terminal" element={lazyView(<TerminalRoute />)} />
+          <Route path="/cron" element={lazyView(<CronRoute />)} />
           <Route path="/notifications" element={lazyView(<NotificationsRoute />)} />
           <Route path="/settings" element={lazyView(<SettingsRoute />)} />
           <Route path="/settings/:section" element={lazyView(<SettingsRoute />)} />

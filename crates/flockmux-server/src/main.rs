@@ -13,6 +13,7 @@
 //! CORS, so the CORS layer alone is not a security boundary).
 
 mod acp;
+mod cron;
 mod models_config;
 mod plugins;
 mod pre_spawn;
@@ -280,6 +281,9 @@ async fn main() -> Result<()> {
     );
     info!("wake coordinator started");
 
+    cron::spawn_scheduler(state.clone());
+    info!("cron scheduler started");
+
     let mut app = Router::new()
         .route("/api/plugins", get(routes::rest::list_plugins))
         .route("/api/usage", get(routes::usage::usage_summary))
@@ -288,6 +292,9 @@ async fn main() -> Result<()> {
         .route("/api/files/list", get(routes::files::list_dir))
         .route("/api/files/read", get(routes::files::read_file))
         .route("/ws/terminal", get(routes::terminal_ws::terminal_ws))
+        .route("/api/cron", get(routes::cron::list_cron).post(routes::cron::create_cron))
+        .route("/api/cron/:id", delete(routes::cron::delete_cron).patch(routes::cron::toggle_cron))
+        .route("/api/cron/:id/run", post(routes::cron::run_cron))
         // F1 模型设置页: per-CLI tier→concrete-model mapping (read/write).
         .route(
             "/api/models",

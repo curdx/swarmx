@@ -71,6 +71,7 @@
     "tasks": "任务",
     "files": "文件",
     "terminal": "终端",
+    "cron": "定时",
     "usage": "用量",
     "settings": "设置",
     "debug": "Debug"
@@ -621,6 +622,24 @@
     "previewError": "渲染失败",
     "truncatedNotice": "内容过长，仅渲染前 {{n}} 字符"
   },
+  "cron": {
+    "title": "定时任务",
+    "subtitle": "按 5 段 cron(UTC)定时把一段提示词投递给某 workspace 的编排器。「立即运行」可直接触发。",
+    "workspace": "工作空间",
+    "expr": "cron 表达式",
+    "name": "名称",
+    "namePlaceholder": "如:每日晨会汇总",
+    "prompt": "提示词",
+    "promptPlaceholder": "到点要让编排器做什么…",
+    "create": "新建",
+    "creating": "创建中…",
+    "empty": "还没有定时任务。",
+    "runNow": "立即运行",
+    "delete": "删除",
+    "enable": "启用",
+    "disable": "停用",
+    "lastRun": "上次"
+  },
   "files": {
     "title": "文件浏览器",
     "previewHint": "选择左侧文件预览",
@@ -724,6 +743,7 @@
       "tasks": "任务看板",
       "files": "浏览本地文件",
       "terminal": "开个 shell",
+      "cron": "定时任务",
       "usage": "token 与成本",
       "settings": "偏好与模型",
       "debug": "调试面板"

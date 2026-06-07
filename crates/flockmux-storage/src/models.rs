@@ -348,6 +348,19 @@ pub struct UsageByAgent {
     pub events: i64,
 }
 
+/// A user-defined scheduled prompt (`cron_jobs` row).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CronJobRecord {
+    pub id: String,
+    pub workspace_id: String,
+    pub name: String,
+    pub cron_expr: String,
+    pub prompt: String,
+    pub enabled: bool,
+    pub created_at: i64,
+    pub last_run_at: Option<i64>,
+}
+
 /// A worker viewed as a Kanban task: its identity + the raw lifecycle signals
 /// the server needs to derive an effective status (alive/done/blocked/…), plus
 /// the human `task_status` override. The derivation itself lives in the server

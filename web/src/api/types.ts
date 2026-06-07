@@ -570,3 +570,18 @@ export interface FileReadResp {
   content: string | null;
   truncated: boolean;
 }
+
+// ── cron (GET/POST/DELETE/PATCH /api/cron) ─────────────────────────────────
+export interface CronJob {
+  id: string;
+  workspace_id: string;
+  name: string;
+  cron_expr: string;
+  prompt: string;
+  enabled: boolean;
+  created_at: number;
+  last_run_at: number | null;
+}
+export interface CronListResp {
+  jobs: CronJob[];
+}

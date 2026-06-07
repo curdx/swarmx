@@ -22,6 +22,7 @@ import type {
   SpellInfo,
   ThreadDiff,
   ThreadInfo,
+  CronListResp,
   FileListResp,
   FileReadResp,
   TasksResponse,
@@ -166,6 +167,18 @@ export const api = {
     request<FileListResp>("GET", `/api/files/list${dir ? qs({ dir }) : ""}`),
   filesRead: (path: string) =>
     request<FileReadResp>("GET", `/api/files/read${qs({ path })}`),
+  listCron: () => request<CronListResp>("GET", "/api/cron"),
+  createCron: (req: {
+    workspace_id: string;
+    name: string;
+    cron_expr: string;
+    prompt: string;
+  }) => request<{ ok: boolean; id?: string; error?: string }>("POST", "/api/cron", req),
+  deleteCron: (id: string) => request<{ ok: boolean }>("DELETE", `/api/cron/${id}`),
+  toggleCron: (id: string, enabled: boolean) =>
+    request<{ ok: boolean }>("PATCH", `/api/cron/${id}`, { enabled }),
+  runCron: (id: string) =>
+    request<{ ok: boolean; skipped?: string }>("POST", `/api/cron/${id}/run`),
   spawnAgent: (req: SpawnAgentRequest) =>
     request<SpawnAgentResponse>("POST", "/api/agent", req),
   killAgent: (id: string) => request<void>("DELETE", `/api/agent/${id}`),

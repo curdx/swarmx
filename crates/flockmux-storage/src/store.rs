@@ -376,6 +376,92 @@ impl Store {
         .context("spawn_blocking set_task_status")?
     }
 
+    // ── cron jobs ─────────────────────────────────────────────────────────
+
+    pub async fn record_cron_job(&self, rec: crate::models::CronJobRecord) -> Result<()> {
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<()> {
+            conn.execute(
+                "INSERT INTO cron_jobs (id, workspace_id, name, cron_expr, prompt, enabled, created_at, last_run_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    rec.id,
+                    rec.workspace_id,
+                    rec.name,
+                    rec.cron_expr,
+                    rec.prompt,
+                    rec.enabled as i64,
+                    rec.created_at,
+                    rec.last_run_at,
+                ],
+            )?;
+            Ok(())
+        }))
+        .await
+        .context("spawn_blocking record_cron_job")?
+    }
+
+    pub async fn list_cron_jobs(&self) -> Result<Vec<crate::models::CronJobRecord>> {
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<Vec<crate::models::CronJobRecord>> {
+            let mut stmt = conn.prepare(
+                "SELECT id, workspace_id, name, cron_expr, prompt, enabled, created_at, last_run_at \
+                 FROM cron_jobs ORDER BY created_at DESC",
+            )?;
+            let rows = stmt.query_map([], |row| {
+                Ok(crate::models::CronJobRecord {
+                    id: row.get(0)?,
+                    workspace_id: row.get(1)?,
+                    name: row.get(2)?,
+                    cron_expr: row.get(3)?,
+                    prompt: row.get(4)?,
+                    enabled: row.get::<_, i64>(5)? != 0,
+                    created_at: row.get(6)?,
+                    last_run_at: row.get(7)?,
+                })
+            })?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()
+        }))
+        .await
+        .context("spawn_blocking list_cron_jobs")?
+    }
+
+    pub async fn delete_cron_job(&self, id: String) -> Result<()> {
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<()> {
+            conn.execute("DELETE FROM cron_jobs WHERE id = ?1", params![id])?;
+            Ok(())
+        }))
+        .await
+        .context("spawn_blocking delete_cron_job")?
+    }
+
+    pub async fn set_cron_enabled(&self, id: String, enabled: bool) -> Result<()> {
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<()> {
+            conn.execute(
+                "UPDATE cron_jobs SET enabled = ?2 WHERE id = ?1",
+                params![id, enabled as i64],
+            )?;
+            Ok(())
+        }))
+        .await
+        .context("spawn_blocking set_cron_enabled")?
+    }
+
+    pub async fn touch_cron_run(&self, id: String, at_ms: i64) -> Result<()> {
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<()> {
+            conn.execute(
+                "UPDATE cron_jobs SET last_run_at = ?2 WHERE id = ?1",
+                params![id, at_ms],
+            )?;
+            Ok(())
+        }))
+        .await
+        .context("spawn_blocking touch_cron_run")?
+    }
+
     pub async fn list_agents(&self) -> Result<Vec<AgentRecord>> {
         let pool = self.pool.clone();
         tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<Vec<AgentRecord>> {
