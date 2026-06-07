@@ -11,6 +11,15 @@
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { RefreshCw } from "lucide-react";
+import {
+  ResponsiveContainer,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+} from "recharts";
 import { api } from "@/api/http";
 import type { UsageSummary } from "@/api/types";
 import { cn } from "@/lib/cn";
@@ -31,6 +40,29 @@ function fmtCost(n: number): string {
 function fmtCtxPeak(peak: number, cap: number | null): string {
   if (!peak) return "—";
   return cap ? `${fmtTokens(peak)} / ${fmtTokens(cap)}` : fmtTokens(peak);
+}
+/** "2026-06-07" → "6/7" for a compact x-axis tick. */
+function fmtDay(day: string): string {
+  const p = day.split("-");
+  return p.length === 3 ? `${+p[1]}/${+p[2]}` : day;
+}
+
+type DayDatum = { day: string; tokens: number; input: number; output: number };
+
+/** Themed recharts tooltip for the daily-trend bars. */
+function DayTooltip({ active, payload }: { active?: boolean; payload?: { payload: DayDatum }[] }) {
+  const { t } = useTranslation();
+  if (!active || !payload?.length) return null;
+  const d = payload[0].payload;
+  return (
+    <div className="rounded-md border border-border-subtle bg-surface-elevated px-2.5 py-1.5 font-caption text-[11px] shadow-md">
+      <div className="font-medium text-foreground-primary">{d.day}</div>
+      <div className="mt-0.5 text-foreground-primary">{fmtTokens(d.tokens)} tokens</div>
+      <div className="text-foreground-tertiary">
+        {t("usage.input")} {fmtTokens(d.input)} · {t("usage.output")} {fmtTokens(d.output)}
+      </div>
+    </div>
+  );
 }
 
 function StatCard({ label, value, hint }: { label: string; value: string; hint?: string }) {
@@ -78,9 +110,12 @@ export default function UsageRoute() {
     return () => window.clearInterval(id);
   }, [load]);
 
-  const maxDay = data
-    ? Math.max(1, ...data.by_day.map((d) => d.input_tokens + d.output_tokens))
-    : 1;
+  const chartData: DayDatum[] = (data?.by_day ?? []).map((d) => ({
+    day: d.day,
+    tokens: d.input_tokens + d.output_tokens,
+    input: d.input_tokens,
+    output: d.output_tokens,
+  }));
 
   return (
     <div className="h-full overflow-y-auto">
@@ -142,29 +177,43 @@ export default function UsageRoute() {
               <StatCard label={t("usage.events")} value={String(data.totals.events)} />
             </section>
 
-            {/* per-day trend (pure CSS) */}
-            {data.by_day.length > 0 && (
+            {/* per-day trend (recharts) */}
+            {chartData.length > 0 && (
               <section className="flex flex-col gap-2">
                 <h2 className="font-caption text-xs uppercase tracking-wide text-foreground-tertiary">
                   {t("usage.byDay")}
                 </h2>
-                <div className="flex h-32 items-end gap-1 rounded-lg border border-border-subtle bg-surface-secondary p-3">
-                  {data.by_day.map((d) => {
-                    const total = d.input_tokens + d.output_tokens;
-                    const h = Math.max(2, Math.round((total / maxDay) * 100));
-                    return (
-                      <div
-                        key={d.day}
-                        className="group relative flex h-full max-w-[2.5rem] flex-1 flex-col justify-end"
-                        title={`${d.day} · ${fmtTokens(total)}`}
-                      >
-                        <div
-                          className="w-full rounded-t bg-accent-primary/70 transition-all group-hover:bg-accent-primary"
-                          style={{ height: `${h}%` }}
-                        />
-                      </div>
-                    );
-                  })}
+                <div className="h-48 rounded-lg border border-border-subtle bg-surface-secondary p-3">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={chartData} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--color-border-subtle)" />
+                      <XAxis
+                        dataKey="day"
+                        tickFormatter={fmtDay}
+                        tick={{ fontSize: 10, fill: "var(--color-foreground-tertiary)" }}
+                        tickLine={false}
+                        axisLine={{ stroke: "var(--color-border-subtle)" }}
+                        minTickGap={16}
+                      />
+                      <YAxis
+                        tickFormatter={(v: number) => fmtTokens(v)}
+                        tick={{ fontSize: 10, fill: "var(--color-foreground-tertiary)" }}
+                        tickLine={false}
+                        axisLine={false}
+                        width={44}
+                      />
+                      <Tooltip
+                        cursor={{ fill: "var(--color-foreground-tertiary)", opacity: 0.08 }}
+                        content={<DayTooltip />}
+                      />
+                      <Bar
+                        dataKey="tokens"
+                        fill="var(--color-accent-primary)"
+                        radius={[3, 3, 0, 0]}
+                        maxBarSize={48}
+                      />
+                    </BarChart>
+                  </ResponsiveContainer>
                 </div>
               </section>
             )}
