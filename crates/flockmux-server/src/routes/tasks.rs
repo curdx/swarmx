@@ -9,7 +9,7 @@
 //! board while staying in sync with the existing handoff/wake machinery.
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
     Json,
@@ -57,8 +57,18 @@ struct TaskView {
     task: TaskRecord,
 }
 
-pub async fn list_tasks(State(state): State<AppState>) -> impl IntoResponse {
-    let rows = state.store.list_tasks().await.unwrap_or_default();
+#[derive(Deserialize)]
+pub struct ListTasksQuery {
+    /// Scope the board to one workspace; empty/absent = all workspaces.
+    workspace_id: Option<String>,
+}
+
+pub async fn list_tasks(
+    State(state): State<AppState>,
+    Query(q): Query<ListTasksQuery>,
+) -> impl IntoResponse {
+    let ws = q.workspace_id.filter(|s| !s.is_empty());
+    let rows = state.store.list_tasks(ws).await.unwrap_or_default();
     let views: Vec<TaskView> = rows
         .into_iter()
         .map(|t| TaskView {

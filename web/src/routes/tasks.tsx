@@ -16,6 +16,8 @@ import { useTranslation } from "react-i18next";
 import { api } from "@/api/http";
 import type { TaskRow } from "@/api/types";
 import { cn } from "@/lib/cn";
+import { useToolWorkspaces } from "@/lib/useToolWorkspaces";
+import { WorkspacePicker } from "@/components/WorkspacePicker";
 
 // Column order + the dot color per status. Derived statuses + operator-set ones
 // share this map so a human "blocked" lands in the same column as a derived one.
@@ -29,18 +31,19 @@ const COLUMNS: { key: string; dot: string }[] = [
 
 export default function TasksRoute() {
   const { t } = useTranslation();
+  const { workspaces, wsId, setWsId } = useToolWorkspaces();
   const [tasks, setTasks] = useState<TaskRow[] | null>(null);
   const [err, setErr] = useState(false);
 
   const load = useCallback(async () => {
     try {
-      const res = await api.listTasks();
+      const res = await api.listTasks(wsId || undefined);
       setTasks(res.tasks);
       setErr(false);
     } catch {
       setErr(true);
     }
-  }, []);
+  }, [wsId]);
 
   useEffect(() => {
     load();
@@ -78,11 +81,14 @@ export default function TasksRoute() {
           <h1 className="font-display text-lg text-foreground-primary">{t("tasks.title")}</h1>
           <p className="font-caption text-xs text-foreground-tertiary">{t("tasks.subtitle")}</p>
         </div>
-        {tasks && (
-          <span className="font-mono text-xs text-foreground-tertiary">
-            {t("tasks.count", { n: tasks.length })}
-          </span>
-        )}
+        <div className="flex items-center gap-3">
+          {tasks && (
+            <span className="font-mono text-xs text-foreground-tertiary">
+              {t("tasks.count", { n: tasks.length })}
+            </span>
+          )}
+          <WorkspacePicker workspaces={workspaces} value={wsId} onChange={setWsId} allowAll />
+        </div>
       </header>
 
       {err && (

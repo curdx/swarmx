@@ -242,17 +242,13 @@ impl Store {
 
     /// Usage aggregated by model (descending by total tokens). Cost is applied
     /// by the server's pricing table, not here.
-    pub async fn usage_by_model(&self) -> Result<Vec<crate::models::UsageByModel>> {
+    /// `ws = Some(id)` scopes to one workspace by joining `agents` (rows in
+    /// `agent_usage` carry only a loose `agent_id`). `None` keeps the original
+    /// no-JOIN aggregate so orphaned usage rows still count in the global total.
+    pub async fn usage_by_model(&self, ws: Option<String>) -> Result<Vec<crate::models::UsageByModel>> {
         let pool = self.pool.clone();
         tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<Vec<crate::models::UsageByModel>> {
-            let mut stmt = conn.prepare(
-                "SELECT model, \
-                        SUM(input_tokens), SUM(output_tokens), \
-                        SUM(cache_read_tokens), SUM(cache_write_tokens), COUNT(*) \
-                 FROM agent_usage GROUP BY model \
-                 ORDER BY SUM(input_tokens) + SUM(output_tokens) DESC",
-            )?;
-            let rows = stmt.query_map([], |row| {
+            fn map_row(row: &rusqlite::Row) -> rusqlite::Result<crate::models::UsageByModel> {
                 Ok(crate::models::UsageByModel {
                     model: row.get(0)?,
                     input_tokens: row.get(1)?,
@@ -261,24 +257,41 @@ impl Store {
                     cache_write_tokens: row.get(4)?,
                     events: row.get(5)?,
                 })
-            })?;
-            rows.collect::<rusqlite::Result<Vec<_>>>()
+            }
+            let rows = if let Some(ws) = &ws {
+                let mut stmt = conn.prepare(
+                    "SELECT u.model, \
+                            SUM(u.input_tokens), SUM(u.output_tokens), \
+                            SUM(u.cache_read_tokens), SUM(u.cache_write_tokens), COUNT(*) \
+                     FROM agent_usage u JOIN agents a ON a.id = u.agent_id \
+                     WHERE a.workspace_id = ?1 GROUP BY u.model \
+                     ORDER BY SUM(u.input_tokens) + SUM(u.output_tokens) DESC",
+                )?;
+                let v = stmt.query_map(params![ws], map_row)?.collect::<rusqlite::Result<Vec<_>>>()?;
+                v
+            } else {
+                let mut stmt = conn.prepare(
+                    "SELECT model, \
+                            SUM(input_tokens), SUM(output_tokens), \
+                            SUM(cache_read_tokens), SUM(cache_write_tokens), COUNT(*) \
+                     FROM agent_usage GROUP BY model \
+                     ORDER BY SUM(input_tokens) + SUM(output_tokens) DESC",
+                )?;
+                let v = stmt.query_map([], map_row)?.collect::<rusqlite::Result<Vec<_>>>()?;
+                v
+            };
+            Ok(rows)
         }))
         .await
         .context("spawn_blocking usage_by_model")?
     }
 
     /// Usage aggregated by UTC calendar day, oldest→newest, last `days` days.
-    pub async fn usage_by_day(&self, days: i64) -> Result<Vec<crate::models::UsageByDay>> {
+    /// `ws = Some(id)` scopes to one workspace (see `usage_by_model`).
+    pub async fn usage_by_day(&self, days: i64, ws: Option<String>) -> Result<Vec<crate::models::UsageByDay>> {
         let pool = self.pool.clone();
         tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<Vec<crate::models::UsageByDay>> {
-            let mut stmt = conn.prepare(
-                "SELECT date(at/1000, 'unixepoch') AS day, \
-                        SUM(input_tokens), SUM(output_tokens), \
-                        SUM(cache_read_tokens), SUM(cache_write_tokens) \
-                 FROM agent_usage GROUP BY day ORDER BY day ASC LIMIT ?1",
-            )?;
-            let rows = stmt.query_map(params![days.max(1)], |row| {
+            fn map_row(row: &rusqlite::Row) -> rusqlite::Result<crate::models::UsageByDay> {
                 Ok(crate::models::UsageByDay {
                     day: row.get(0)?,
                     input_tokens: row.get(1)?,
@@ -286,25 +299,40 @@ impl Store {
                     cache_read_tokens: row.get(3)?,
                     cache_write_tokens: row.get(4)?,
                 })
-            })?;
-            rows.collect::<rusqlite::Result<Vec<_>>>()
+            }
+            let limit = days.max(1);
+            let rows = if let Some(ws) = &ws {
+                let mut stmt = conn.prepare(
+                    "SELECT date(u.at/1000, 'unixepoch') AS day, \
+                            SUM(u.input_tokens), SUM(u.output_tokens), \
+                            SUM(u.cache_read_tokens), SUM(u.cache_write_tokens) \
+                     FROM agent_usage u JOIN agents a ON a.id = u.agent_id \
+                     WHERE a.workspace_id = ?1 GROUP BY day ORDER BY day ASC LIMIT ?2",
+                )?;
+                let v = stmt.query_map(params![ws, limit], map_row)?.collect::<rusqlite::Result<Vec<_>>>()?;
+                v
+            } else {
+                let mut stmt = conn.prepare(
+                    "SELECT date(at/1000, 'unixepoch') AS day, \
+                            SUM(input_tokens), SUM(output_tokens), \
+                            SUM(cache_read_tokens), SUM(cache_write_tokens) \
+                     FROM agent_usage GROUP BY day ORDER BY day ASC LIMIT ?1",
+                )?;
+                let v = stmt.query_map(params![limit], map_row)?.collect::<rusqlite::Result<Vec<_>>>()?;
+                v
+            };
+            Ok(rows)
         }))
         .await
         .context("spawn_blocking usage_by_day")?
     }
 
     /// Usage aggregated by agent (descending by total tokens).
-    pub async fn usage_by_agent(&self) -> Result<Vec<crate::models::UsageByAgent>> {
+    /// `ws = Some(id)` scopes to one workspace (see `usage_by_model`).
+    pub async fn usage_by_agent(&self, ws: Option<String>) -> Result<Vec<crate::models::UsageByAgent>> {
         let pool = self.pool.clone();
         tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<Vec<crate::models::UsageByAgent>> {
-            let mut stmt = conn.prepare(
-                "SELECT agent_id, \
-                        SUM(input_tokens), SUM(output_tokens), \
-                        SUM(cache_read_tokens), SUM(cache_write_tokens), COUNT(*) \
-                 FROM agent_usage GROUP BY agent_id \
-                 ORDER BY SUM(input_tokens) + SUM(output_tokens) DESC",
-            )?;
-            let rows = stmt.query_map([], |row| {
+            fn map_row(row: &rusqlite::Row) -> rusqlite::Result<crate::models::UsageByAgent> {
                 Ok(crate::models::UsageByAgent {
                     agent_id: row.get(0)?,
                     input_tokens: row.get(1)?,
@@ -313,8 +341,30 @@ impl Store {
                     cache_write_tokens: row.get(4)?,
                     events: row.get(5)?,
                 })
-            })?;
-            rows.collect::<rusqlite::Result<Vec<_>>>()
+            }
+            let rows = if let Some(ws) = &ws {
+                let mut stmt = conn.prepare(
+                    "SELECT u.agent_id, \
+                            SUM(u.input_tokens), SUM(u.output_tokens), \
+                            SUM(u.cache_read_tokens), SUM(u.cache_write_tokens), COUNT(*) \
+                     FROM agent_usage u JOIN agents a ON a.id = u.agent_id \
+                     WHERE a.workspace_id = ?1 GROUP BY u.agent_id \
+                     ORDER BY SUM(u.input_tokens) + SUM(u.output_tokens) DESC",
+                )?;
+                let v = stmt.query_map(params![ws], map_row)?.collect::<rusqlite::Result<Vec<_>>>()?;
+                v
+            } else {
+                let mut stmt = conn.prepare(
+                    "SELECT agent_id, \
+                            SUM(input_tokens), SUM(output_tokens), \
+                            SUM(cache_read_tokens), SUM(cache_write_tokens), COUNT(*) \
+                     FROM agent_usage GROUP BY agent_id \
+                     ORDER BY SUM(input_tokens) + SUM(output_tokens) DESC",
+                )?;
+                let v = stmt.query_map([], map_row)?.collect::<rusqlite::Result<Vec<_>>>()?;
+                v
+            };
+            Ok(rows)
         }))
         .await
         .context("spawn_blocking usage_by_agent")?
@@ -323,22 +373,12 @@ impl Store {
     /// List all workers as Kanban tasks, joined with their agent lifecycle and
     /// blackboard handoff signals. Ordered newest-first. The effective status is
     /// derived server-side (`routes::tasks`) from these raw fields.
-    pub async fn list_tasks(&self) -> Result<Vec<crate::models::TaskRecord>> {
+    /// `workspace_id = Some(id)` scopes the board to one workspace; `None`
+    /// returns every workspace's workers (the global view).
+    pub async fn list_tasks(&self, workspace_id: Option<String>) -> Result<Vec<crate::models::TaskRecord>> {
         let pool = self.pool.clone();
         tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<Vec<crate::models::TaskRecord>> {
-            let mut stmt = conn.prepare(
-                "SELECT w.agent_id, w.parent_agent_id, w.role_label, w.role_slug, \
-                        w.handoff_signal, w.task_status, w.spawned_at, \
-                        a.killed_at, a.shim_exit_code, a.last_activity_at, \
-                        a.workspace_id, a.thread_id, \
-                        (w.handoff_signal IS NOT NULL AND w.handoff_signal <> '' \
-                         AND EXISTS (SELECT 1 FROM blackboard_ops b WHERE b.path = w.handoff_signal)) AS handoff_done, \
-                        (w.handoff_signal IS NOT NULL AND w.handoff_signal <> '' \
-                         AND EXISTS (SELECT 1 FROM blackboard_ops b WHERE b.path = w.handoff_signal || '.error')) AS error_present \
-                 FROM workers w JOIN agents a ON a.id = w.agent_id \
-                 ORDER BY w.spawned_at DESC",
-            )?;
-            let rows = stmt.query_map([], |row| {
+            fn map_row(row: &rusqlite::Row) -> rusqlite::Result<crate::models::TaskRecord> {
                 Ok(crate::models::TaskRecord {
                     agent_id: row.get(0)?,
                     parent_agent_id: row.get(1)?,
@@ -355,8 +395,28 @@ impl Store {
                     handoff_done: row.get::<_, i64>(12)? != 0,
                     error_present: row.get::<_, i64>(13)? != 0,
                 })
-            })?;
-            rows.collect::<rusqlite::Result<Vec<_>>>()
+            }
+            let cols = "SELECT w.agent_id, w.parent_agent_id, w.role_label, w.role_slug, \
+                        w.handoff_signal, w.task_status, w.spawned_at, \
+                        a.killed_at, a.shim_exit_code, a.last_activity_at, \
+                        a.workspace_id, a.thread_id, \
+                        (w.handoff_signal IS NOT NULL AND w.handoff_signal <> '' \
+                         AND EXISTS (SELECT 1 FROM blackboard_ops b WHERE b.path = w.handoff_signal)) AS handoff_done, \
+                        (w.handoff_signal IS NOT NULL AND w.handoff_signal <> '' \
+                         AND EXISTS (SELECT 1 FROM blackboard_ops b WHERE b.path = w.handoff_signal || '.error')) AS error_present \
+                 FROM workers w JOIN agents a ON a.id = w.agent_id";
+            let rows = if let Some(ws) = &workspace_id {
+                let sql = format!("{cols} WHERE a.workspace_id = ?1 ORDER BY w.spawned_at DESC");
+                let mut stmt = conn.prepare(&sql)?;
+                let v = stmt.query_map(params![ws], map_row)?.collect::<rusqlite::Result<Vec<_>>>()?;
+                v
+            } else {
+                let sql = format!("{cols} ORDER BY w.spawned_at DESC");
+                let mut stmt = conn.prepare(&sql)?;
+                let v = stmt.query_map([], map_row)?.collect::<rusqlite::Result<Vec<_>>>()?;
+                v
+            };
+            Ok(rows)
         }))
         .await
         .context("spawn_blocking list_tasks")?

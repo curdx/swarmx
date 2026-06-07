@@ -5,11 +5,11 @@
  * commands, not a worker PTY. Minimal protocol: server sends binary PTY bytes,
  * we send keystrokes as binary + a `{type:"resize"}` JSON on fit.
  *
- * Persistent across navigation: we pass a stable per-tab `?session=<id>` (kept
- * in sessionStorage). Leaving the page detaches but does NOT kill the shell —
- * coming back replays the scrollback and resumes the same session, so a running
- * command or REPL isn't lost on a tab switch. A fresh browser tab gets a new id
- * (its own shell); the server reaps sessions left detached too long.
+ * Per-workspace + persistent: the session id is keyed by the selected workspace
+ * (`flockmux.terminal.session:<wsId>`, kept in sessionStorage), so each
+ * workspace has its own shell that survives navigation/F5 (the server replays
+ * scrollback on reattach). Switching the workspace picker tears down the view
+ * and attaches that workspace's shell; a first spawn starts in its cwd.
  */
 import { useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
@@ -17,19 +17,23 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import { WS_HOST, WS_PROTO } from "@/lib/apiBase";
+import { useToolWorkspaces } from "@/lib/useToolWorkspaces";
+import { WorkspacePicker } from "@/components/WorkspacePicker";
 
-/** Stable per-tab terminal session id, so navigating away and back reattaches
- *  to the same server-side shell instead of spawning a fresh one. */
-const SID_KEY = "flockmux.terminal.session";
-function terminalSessionId(): string {
+/** Stable per-tab, per-workspace terminal session id, so navigating away and
+ *  back reattaches to the same server-side shell instead of spawning a fresh
+ *  one — and each workspace keeps its own shell. */
+const SID_PREFIX = "flockmux.terminal.session:";
+function terminalSessionId(wsId: string): string {
+  const key = SID_PREFIX + wsId;
   try {
-    let id = sessionStorage.getItem(SID_KEY);
+    let id = sessionStorage.getItem(key);
     if (!id) {
       id =
         typeof crypto !== "undefined" && crypto.randomUUID
           ? crypto.randomUUID()
           : `t-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-      sessionStorage.setItem(SID_KEY, id);
+      sessionStorage.setItem(key, id);
     }
     return id;
   } catch {
@@ -39,9 +43,12 @@ function terminalSessionId(): string {
 
 export default function TerminalRoute() {
   const { t } = useTranslation();
+  const { workspaces, wsId, setWsId, ready } = useToolWorkspaces();
   const hostRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    // Wait until the workspace list resolved so we attach to the right shell.
+    if (!ready) return;
     const host = hostRef.current;
     if (!host) return;
 
@@ -56,8 +63,9 @@ export default function TerminalRoute() {
     term.open(host);
     fit.fit();
 
+    const wsParam = wsId ? `&workspace_id=${encodeURIComponent(wsId)}` : "";
     const ws = new WebSocket(
-      `${WS_PROTO}//${WS_HOST}/ws/terminal?session=${encodeURIComponent(terminalSessionId())}`,
+      `${WS_PROTO}//${WS_HOST}/ws/terminal?session=${encodeURIComponent(terminalSessionId(wsId))}${wsParam}`,
     );
     ws.binaryType = "arraybuffer";
 
@@ -96,12 +104,20 @@ export default function TerminalRoute() {
       ws.close();
       term.dispose();
     };
-  }, []);
+  }, [wsId, ready]);
 
   return (
     <div className="flex h-full flex-col">
-      <header className="border-b border-border-subtle px-4 py-2 font-display text-sm text-foreground-primary">
-        {t("nav.terminal")}
+      <header className="flex items-center gap-2 border-b border-border-subtle px-4 py-2">
+        <span className="font-display text-sm text-foreground-primary">{t("nav.terminal")}</span>
+        {workspaces.length > 0 && (
+          <WorkspacePicker
+            className="ml-auto"
+            workspaces={workspaces}
+            value={wsId}
+            onChange={setWsId}
+          />
+        )}
       </header>
       <div ref={hostRef} className="min-h-0 flex-1 overflow-hidden bg-[#0d0d0d] p-2" />
     </div>

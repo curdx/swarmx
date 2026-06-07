@@ -41,6 +41,7 @@ import type {
   MessageRecord,
   ThreadInfo,
 } from "../../api/types";
+import { setActiveWorkspaceId } from "../../lib/activeWorkspace";
 import { AgentDrawer } from "../../components/agent/AgentDrawer";
 import { CreateWizard } from "../../components/workspace/CreateWizard";
 import { ErrorBoundary } from "../../components/ErrorBoundary";
@@ -262,6 +263,13 @@ export default function WorkspaceShell() {
     },
     [activeThread, navigate, refreshWorkspaces, refreshAgents],
   );
+
+  // ── Record the active workspace for the global tool pages ───────────
+  // Files / terminal / tasks / usage live outside this shell and default to
+  // whatever workspace you last viewed here. Persist the UUID (not the slug).
+  useEffect(() => {
+    if (activeWs) setActiveWorkspaceId(activeWs.workspaceId);
+  }, [activeWs]);
 
   // ── ⌘1-4 global shortcut ───────────────────────────────────────────
   useEffect(() => {

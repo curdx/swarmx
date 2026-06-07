@@ -159,14 +159,24 @@ export const api = {
   mcpUninstall: (name: string, cli: "claude" | "codex") =>
     request<{ ok: boolean; output: string }>("POST", "/api/mcp/uninstall", { name, cli }),
   listAgents: () => request<AgentInfo[]>("GET", "/api/agent"),
-  getUsage: () => request<UsageSummary>("GET", "/api/usage"),
-  listTasks: () => request<TasksResponse>("GET", "/api/tasks"),
+  getUsage: (workspaceId?: string) =>
+    request<UsageSummary>("GET", `/api/usage${qs({ workspace_id: workspaceId })}`),
+  listTasks: (workspaceId?: string) =>
+    request<TasksResponse>("GET", `/api/tasks${qs({ workspace_id: workspaceId })}`),
   setTaskStatus: (agentId: string, status: string | null) =>
     request<{ ok: boolean }>("POST", `/api/tasks/${agentId}/status`, { status }),
-  filesList: (dir?: string) =>
-    request<FileListResp>("GET", `/api/files/list${dir ? qs({ dir }) : ""}`),
-  filesRead: (path: string) =>
-    request<FileReadResp>("GET", `/api/files/read${qs({ path })}`),
+  // `workspaceId` scopes the browser to that workspace's roots (jailed);
+  // `all` is the "browse whole filesystem" escape hatch that lifts the jail.
+  filesList: (dir?: string, workspaceId?: string, all?: boolean) =>
+    request<FileListResp>(
+      "GET",
+      `/api/files/list${qs({ dir, workspace_id: workspaceId, all: all ? "1" : undefined })}`,
+    ),
+  filesRead: (path: string, workspaceId?: string, all?: boolean) =>
+    request<FileReadResp>(
+      "GET",
+      `/api/files/read${qs({ path, workspace_id: workspaceId, all: all ? "1" : undefined })}`,
+    ),
   compactBlackboard: (path: string) =>
     request<{
       ok: boolean;

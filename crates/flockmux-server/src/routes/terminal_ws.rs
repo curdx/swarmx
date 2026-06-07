@@ -22,9 +22,10 @@
 
 use axum::{
     extract::ws::{Message, WebSocket, WebSocketUpgrade},
-    extract::Query,
+    extract::{Query, State},
     response::IntoResponse,
 };
+use crate::AppState;
 use bytes::Bytes;
 use flockmux_pty::{PtyBridge, PtyHandles, SpawnOpts};
 use futures::{SinkExt, StreamExt};
@@ -95,10 +96,11 @@ fn spawn_reaper() {
 }
 
 /// Spawn a fresh `$SHELL` with the worker env allowlist (flockmux-pty clears the
-/// rest, so the server's ambient secrets don't reach the shell).
-fn spawn_shell() -> anyhow::Result<PtyHandles> {
+/// rest, so the server's ambient secrets don't reach the shell). Starts in
+/// `cwd` (the picked workspace's root) when given, else $HOME.
+fn spawn_shell(cwd: Option<PathBuf>) -> anyhow::Result<PtyHandles> {
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
-    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let spawn_cwd = cwd.or_else(|| std::env::var_os("HOME").map(PathBuf::from));
 
     let mut env = HashMap::new();
     for k in ["HOME", "PATH", "LANG", "LC_ALL", "LC_CTYPE", "TMPDIR", "USER", "LOGNAME"] {
@@ -111,7 +113,7 @@ fn spawn_shell() -> anyhow::Result<PtyHandles> {
     let argv = vec![shell];
     PtyBridge::spawn(SpawnOpts {
         argv: &argv,
-        cwd: home.as_deref(),
+        cwd: spawn_cwd.as_deref(),
         env,
         cols: 80,
         rows: 24,
@@ -122,17 +124,37 @@ fn spawn_shell() -> anyhow::Result<PtyHandles> {
 pub struct TermQuery {
     /// Stable per-tab session id. Absent → an ephemeral one-shot session.
     session: Option<String>,
+    /// Workspace whose `cwd` the shell starts in. Only honoured on the FIRST
+    /// spawn of a session id (a reattach resumes the existing shell wherever
+    /// the user `cd`'d it); per-workspace session ids on the client keep this
+    /// a non-issue — each workspace has its own first spawn.
+    workspace_id: Option<String>,
 }
 
-pub async fn terminal_ws(ws: WebSocketUpgrade, Query(q): Query<TermQuery>) -> impl IntoResponse {
+pub async fn terminal_ws(
+    State(state): State<AppState>,
+    ws: WebSocketUpgrade,
+    Query(q): Query<TermQuery>,
+) -> impl IntoResponse {
     let sid = q
         .session
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-    ws.on_upgrade(move |sock| handle_terminal(sock, sid))
+    // Resolve the workspace cwd server-side (don't trust a raw client path).
+    let cwd = match q.workspace_id.as_deref().filter(|s| !s.is_empty()) {
+        Some(id) => state
+            .store
+            .get_workspace_by_id(id.to_string())
+            .await
+            .ok()
+            .flatten()
+            .map(|w| PathBuf::from(w.cwd)),
+        None => None,
+    };
+    ws.on_upgrade(move |sock| handle_terminal(sock, sid, cwd))
 }
 
-async fn handle_terminal(socket: WebSocket, sid: String) {
+async fn handle_terminal(socket: WebSocket, sid: String, cwd: Option<PathBuf>) {
     // Attach to an existing session or create one. The replay snapshot and the
     // live subscribe both happen under the ring lock (the pump appends+sends
     // under the same lock) so the pump can't slip a chunk between them — no
@@ -149,7 +171,7 @@ async fn handle_terminal(socket: WebSocket, sid: String) {
             debug!(%sid, "terminal: reattached (replay {} bytes)", replay.len());
             (s.bridge.clone(), rx, replay)
         } else {
-            let PtyHandles { bridge, mut output_rx } = match spawn_shell() {
+            let PtyHandles { bridge, mut output_rx } = match spawn_shell(cwd) {
                 Ok(h) => h,
                 Err(e) => {
                     warn!(?e, "terminal: failed to spawn shell");

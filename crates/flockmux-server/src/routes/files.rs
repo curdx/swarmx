@@ -6,14 +6,19 @@
 //! global `require_local_origin` middleware (browser requests carry an Origin),
 //! canonicalised, with size caps so a huge/binary file can't blow up the tab.
 //!
-//! Deliberately NOT chrooted to a workspace: a developer wants to peek at
-//! config / logs / sibling repos too. The threat model is loopback + same
-//! posture as the existing `/api/file`.
+//! Jail: when a `workspace_id` is supplied the browser is chrooted to that
+//! workspace's roots (its `cwd` + any attached roots) — listing/reading a path
+//! that escapes them returns 403. The UI passes `all=1` (the "browse whole
+//! filesystem" toggle) to opt out, restoring the original posture where a
+//! developer can peek at sibling repos / config / logs. A bare call with no
+//! `workspace_id` is unrestricted (loopback + same posture as `/api/file`).
 
-use axum::{extract::Query, http::StatusCode, response::IntoResponse, Json};
+use axum::{extract::Query, extract::State, http::StatusCode, response::IntoResponse, Json};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::path::{Path, PathBuf};
+
+use crate::AppState;
 
 /// Max bytes returned by `read` — beyond this we truncate (a file browser
 /// preview, not a download).
@@ -23,8 +28,13 @@ const MAX_ENTRIES: usize = 2000;
 
 #[derive(Deserialize)]
 pub struct ListQuery {
-    /// Absolute directory to list. Defaults to $HOME when absent/empty.
+    /// Absolute directory to list. Defaults to the workspace `cwd` when a
+    /// `workspace_id` is given, else $HOME.
     dir: Option<String>,
+    /// Jail to this workspace's roots unless `all` is truthy.
+    workspace_id: Option<String>,
+    /// Escape hatch: `1`/`true` disables the workspace jail for this request.
+    all: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -44,15 +54,71 @@ fn canon(p: &Path) -> Result<PathBuf, String> {
     std::fs::canonicalize(p).map_err(|e| format!("{}: {e}", p.display()))
 }
 
-pub async fn list_dir(Query(q): Query<ListQuery>) -> impl IntoResponse {
+/// `all=1` / `all=true` ⇒ disable the jail (serde won't coerce a query string
+/// into a bool, so we parse it ourselves).
+fn truthy(o: &Option<String>) -> bool {
+    matches!(o.as_deref(), Some("1") | Some("true"))
+}
+
+/// The canonicalised roots a workspace is allowed to browse: its `cwd` plus any
+/// attached roots. Roots that fail to canonicalise (e.g. a deleted dependency
+/// dir) are skipped rather than erroring. First entry, if any, is the `cwd` —
+/// used as the default directory for an empty `dir`.
+async fn allowed_roots(state: &AppState, ws_id: &str) -> Vec<PathBuf> {
+    let mut roots: Vec<PathBuf> = Vec::new();
+    if let Ok(Some(ws)) = state.store.get_workspace_by_id(ws_id.to_string()).await {
+        if let Ok(p) = std::fs::canonicalize(&ws.cwd) {
+            roots.push(p);
+        }
+    }
+    if let Ok(rs) = state.store.list_workspace_roots(ws_id.to_string()).await {
+        for r in rs {
+            if let Ok(p) = std::fs::canonicalize(&r.path) {
+                if !roots.contains(&p) {
+                    roots.push(p);
+                }
+            }
+        }
+    }
+    roots
+}
+
+/// True if a canonical absolute path is inside (or equal to) any allowed root.
+/// `Path::starts_with` is component-wise, so `/a/bc` is NOT inside `/a/b`.
+fn is_within_any(target: &Path, roots: &[PathBuf]) -> bool {
+    roots.iter().any(|r| target.starts_with(r))
+}
+
+fn jail_denied() -> axum::response::Response {
+    (
+        StatusCode::FORBIDDEN,
+        Json(json!({
+            "error": "path outside workspace; enable \"browse whole filesystem\" to view"
+        })),
+    )
+        .into_response()
+}
+
+pub async fn list_dir(State(state): State<AppState>, Query(q): Query<ListQuery>) -> impl IntoResponse {
+    let ws_id = q.workspace_id.as_deref().filter(|s| !s.is_empty());
+    // Fetch the jail roots once; reuse them for both the default dir and the gate.
+    let roots = match ws_id {
+        Some(id) => allowed_roots(&state, id).await,
+        None => Vec::new(),
+    };
     let raw = match q.dir {
-        Some(d) if !d.trim().is_empty() => PathBuf::from(d),
-        _ => home(),
+        Some(ref d) if !d.trim().is_empty() => PathBuf::from(d),
+        // No dir: default to the workspace cwd (first root) when scoped, else $HOME.
+        _ => roots.first().cloned().unwrap_or_else(home),
     };
     let dir = match canon(&raw) {
         Ok(p) => p,
         Err(e) => return (StatusCode::NOT_FOUND, Json(json!({ "error": e }))).into_response(),
     };
+    // Jail gate: scoped + not opted out + outside every root ⇒ 403.
+    if ws_id.is_some() && !truthy(&q.all) && !is_within_any(&dir, &roots) {
+        return jail_denied();
+    }
     if !dir.is_dir() {
         return (
             StatusCode::BAD_REQUEST,
@@ -96,13 +162,24 @@ pub async fn list_dir(Query(q): Query<ListQuery>) -> impl IntoResponse {
 #[derive(Deserialize)]
 pub struct ReadQuery {
     path: String,
+    /// Jail to this workspace's roots unless `all` is truthy.
+    workspace_id: Option<String>,
+    /// Escape hatch: `1`/`true` disables the workspace jail for this request.
+    all: Option<String>,
 }
 
-pub async fn read_file(Query(q): Query<ReadQuery>) -> impl IntoResponse {
+pub async fn read_file(State(state): State<AppState>, Query(q): Query<ReadQuery>) -> impl IntoResponse {
     let path = match canon(Path::new(&q.path)) {
         Ok(p) => p,
         Err(e) => return (StatusCode::NOT_FOUND, Json(json!({ "error": e }))).into_response(),
     };
+    let ws_id = q.workspace_id.as_deref().filter(|s| !s.is_empty());
+    if ws_id.is_some() && !truthy(&q.all) {
+        let roots = allowed_roots(&state, ws_id.unwrap()).await;
+        if !is_within_any(&path, &roots) {
+            return jail_denied();
+        }
+    }
     if !path.is_file() {
         return (
             StatusCode::BAD_REQUEST,
@@ -143,4 +220,38 @@ pub async fn read_file(Query(q): Query<ReadQuery>) -> impl IntoResponse {
         "truncated": truncated,
     }))
     .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn is_within_any_component_wise() {
+        let roots = vec![PathBuf::from("/a/b")];
+        assert!(is_within_any(Path::new("/a/b"), &roots)); // the root itself
+        assert!(is_within_any(Path::new("/a/b/c"), &roots)); // a child
+        assert!(!is_within_any(Path::new("/a/bc"), &roots)); // sibling sharing a string prefix
+        assert!(!is_within_any(Path::new("/a"), &roots)); // a parent
+        assert!(!is_within_any(Path::new("/x/y"), &roots)); // unrelated
+    }
+
+    #[test]
+    fn is_within_any_multi_root() {
+        let roots = vec![PathBuf::from("/proj"), PathBuf::from("/deps/lib")];
+        assert!(is_within_any(Path::new("/deps/lib/src"), &roots));
+        assert!(is_within_any(Path::new("/proj/x"), &roots));
+        assert!(!is_within_any(Path::new("/deps/other"), &roots));
+        assert!(!is_within_any(Path::new("/etc/passwd"), &roots));
+        assert!(!is_within_any(Path::new("/etc"), &[]));
+    }
+
+    #[test]
+    fn truthy_parses_query_strings() {
+        assert!(truthy(&Some("1".into())));
+        assert!(truthy(&Some("true".into())));
+        assert!(!truthy(&Some("0".into())));
+        assert!(!truthy(&Some(String::new())));
+        assert!(!truthy(&None));
+    }
 }

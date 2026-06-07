@@ -150,9 +150,13 @@
     "loading": "Loading…",
     "noMatch": "No match",
     "all": "All",
+    "allWorkspaces": "All workspaces",
     "system": "system",
     "live": "live",
     "off": "off"
+  },
+  "workspace": {
+    "picker": "Workspace"
   },
   "merge": {
     "button": "Merge to main",
@@ -645,7 +649,9 @@
     "title": "File browser",
     "previewHint": "Pick a file on the left to preview",
     "binary": "Binary file — no preview",
-    "truncated": "truncated"
+    "truncated": "truncated",
+    "browseAll": "Browse whole filesystem",
+    "jailBlocked": "Outside this workspace — turn on \"Browse whole filesystem\" to view."
   },
   "tasks": {
     "title": "Task board",

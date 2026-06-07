@@ -13,6 +13,8 @@ import { useTranslation } from "react-i18next";
 import { api } from "@/api/http";
 import type { UsageSummary } from "@/api/types";
 import { cn } from "@/lib/cn";
+import { useToolWorkspaces } from "@/lib/useToolWorkspaces";
+import { WorkspacePicker } from "@/components/WorkspacePicker";
 
 function fmtTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
@@ -39,6 +41,7 @@ function StatCard({ label, value, hint }: { label: string; value: string; hint?:
 
 export default function UsageRoute() {
   const { t } = useTranslation();
+  const { workspaces, wsId, setWsId } = useToolWorkspaces();
   const [data, setData] = useState<UsageSummary | null>(null);
   const [err, setErr] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -47,7 +50,7 @@ export default function UsageRoute() {
     let alive = true;
     setLoading(true);
     api
-      .getUsage()
+      .getUsage(wsId || undefined)
       .then((d) => {
         if (alive) {
           setData(d);
@@ -59,7 +62,7 @@ export default function UsageRoute() {
     return () => {
       alive = false;
     };
-  }, []);
+  }, [wsId]);
 
   const maxDay = data
     ? Math.max(1, ...data.by_day.map((d) => d.input_tokens + d.output_tokens))
@@ -68,9 +71,12 @@ export default function UsageRoute() {
   return (
     <div className="h-full overflow-y-auto">
       <div className="mx-auto flex max-w-5xl flex-col gap-6 px-6 py-6">
-        <header className="flex flex-col gap-1">
-          <h1 className="font-display text-lg text-foreground-primary">{t("usage.title")}</h1>
-          <p className="font-caption text-xs text-foreground-tertiary">{t("usage.subtitle")}</p>
+        <header className="flex items-start justify-between gap-3">
+          <div className="flex flex-col gap-1">
+            <h1 className="font-display text-lg text-foreground-primary">{t("usage.title")}</h1>
+            <p className="font-caption text-xs text-foreground-tertiary">{t("usage.subtitle")}</p>
+          </div>
+          <WorkspacePicker workspaces={workspaces} value={wsId} onChange={setWsId} allowAll />
         </header>
 
         {loading && (

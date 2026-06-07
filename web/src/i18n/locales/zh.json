@@ -150,9 +150,13 @@
     "loading": "加载中…",
     "noMatch": "没有匹配",
     "all": "全部",
+    "allWorkspaces": "全部工作空间",
     "system": "system",
     "live": "live",
     "off": "off"
+  },
+  "workspace": {
+    "picker": "工作空间"
   },
   "merge": {
     "button": "合并到主线",
@@ -647,7 +651,9 @@
     "title": "文件浏览器",
     "previewHint": "选择左侧文件预览",
     "binary": "二进制文件，不预览",
-    "truncated": "已截断"
+    "truncated": "已截断",
+    "browseAll": "浏览整个文件系统",
+    "jailBlocked": "超出当前工作空间范围 — 打开「浏览整个文件系统」以查看。"
   },
   "tasks": {
     "title": "任务看板",

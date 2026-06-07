@@ -10,8 +10,12 @@
 //! 2026) — a model we don't recognise contributes tokens but `cost_usd = 0`
 //! and flips `priced = false` so the UI can show "tokens only" honestly.
 
-use axum::{extract::State, response::IntoResponse, Json};
-use serde::Serialize;
+use axum::{
+    extract::{Query, State},
+    response::IntoResponse,
+    Json,
+};
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::AppState;
@@ -88,11 +92,21 @@ struct ModelRow {
     context_window: Option<u32>,
 }
 
-pub async fn usage_summary(State(state): State<AppState>) -> impl IntoResponse {
+#[derive(Deserialize)]
+pub struct UsageQuery {
+    /// Scope usage to one workspace; empty/absent = all workspaces.
+    workspace_id: Option<String>,
+}
+
+pub async fn usage_summary(
+    State(state): State<AppState>,
+    Query(q): Query<UsageQuery>,
+) -> impl IntoResponse {
     let store = &state.store;
-    let by_model = store.usage_by_model().await.unwrap_or_default();
-    let by_day = store.usage_by_day(90).await.unwrap_or_default();
-    let by_agent = store.usage_by_agent().await.unwrap_or_default();
+    let ws = q.workspace_id.filter(|s| !s.is_empty());
+    let by_model = store.usage_by_model(ws.clone()).await.unwrap_or_default();
+    let by_day = store.usage_by_day(90, ws.clone()).await.unwrap_or_default();
+    let by_agent = store.usage_by_agent(ws).await.unwrap_or_default();
 
     let mut models = Vec::with_capacity(by_model.len());
     let (mut t_in, mut t_out, mut t_cr, mut t_cw, mut t_ev, mut t_cost) = (0i64, 0i64, 0i64, 0i64, 0i64, 0f64);
