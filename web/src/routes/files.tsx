@@ -15,11 +15,40 @@ import type { FileListResp, FileReadResp } from "@/api/types";
 import { cn } from "@/lib/cn";
 import { useToolWorkspaces } from "@/lib/useToolWorkspaces";
 import { WorkspacePicker } from "@/components/WorkspacePicker";
+import { ChatMarkdown } from "@/components/ChatMarkdown";
+import { isImagePath, fileUrl } from "@/lib/imagePaths";
 
 function fmtSize(n: number): string {
   if (n >= 1 << 20) return `${(n / (1 << 20)).toFixed(1)}M`;
   if (n >= 1 << 10) return `${(n / (1 << 10)).toFixed(1)}K`;
   return `${n}B`;
+}
+
+const MD_EXT = new Set(["md", "markdown", "mdx"]);
+/** File extension → highlight.js language for the preview's fenced code block.
+ *  Unmapped extensions fall back to a plain (unhighlighted) block. */
+const CODE_LANG: Record<string, string> = {
+  ts: "typescript", tsx: "typescript", js: "javascript", jsx: "javascript", mjs: "javascript", cjs: "javascript",
+  py: "python", rs: "rust", go: "go", rb: "ruby", java: "java", kt: "kotlin", swift: "swift",
+  c: "c", h: "c", cpp: "cpp", cc: "cpp", hpp: "cpp", cs: "csharp", php: "php",
+  sh: "bash", bash: "bash", zsh: "bash", fish: "bash",
+  json: "json", yaml: "yaml", yml: "yaml", toml: "ini", ini: "ini", xml: "xml", html: "xml",
+  css: "css", scss: "scss", sql: "sql", lua: "lua", r: "r", dart: "dart", scala: "scala",
+};
+
+function extOf(path: string): string {
+  const base = path.split("/").pop() ?? "";
+  const i = base.lastIndexOf(".");
+  return i > 0 ? base.slice(i + 1).toLowerCase() : "";
+}
+
+/** Wrap raw file text in a fenced code block for ChatMarkdown's highlighter,
+ *  using a backtick run longer than any inside the file so it can't close
+ *  early. */
+function fenceWrap(lang: string, content: string): string {
+  const longest = (content.match(/`+/g) ?? []).reduce((m, s) => Math.max(m, s.length), 0);
+  const fence = "`".repeat(Math.max(3, longest + 1));
+  return `${fence}${lang}\n${content}\n${fence}`;
 }
 
 export default function FilesRoute() {
@@ -30,6 +59,7 @@ export default function FilesRoute() {
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [preview, setPreview] = useState<FileReadResp | null>(null);
+  const [previewPath, setPreviewPath] = useState<string | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
 
   const open = useCallback(
@@ -39,6 +69,7 @@ export default function FilesRoute() {
       // Reset the preview pane — otherwise the previously-selected file's content
       // lingers on the right while you browse into an unrelated directory.
       setPreview(null);
+      setPreviewPath(null);
       setPreviewLoading(false);
       try {
         setList(await api.filesList(dir, wsId || undefined, all));
@@ -62,8 +93,14 @@ export default function FilesRoute() {
 
   const openFile = useCallback(
     async (path: string, all = false) => {
-      setPreviewLoading(true);
+      setPreviewPath(path);
       setPreview(null);
+      // Images render via the <img> /api/file endpoint — no text read needed.
+      if (isImagePath(path)) {
+        setPreviewLoading(false);
+        return;
+      }
+      setPreviewLoading(true);
       try {
         setPreview(await api.filesRead(path, wsId || undefined, all));
       } catch (e) {
@@ -83,6 +120,9 @@ export default function FilesRoute() {
   };
 
   const join = (dir: string, name: string) => (dir.endsWith("/") ? dir + name : `${dir}/${name}`);
+
+  // The selected file when it's an image (rendered via <img>), else null.
+  const imgPath = previewPath && isImagePath(previewPath) ? previewPath : null;
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
@@ -153,12 +193,29 @@ export default function FilesRoute() {
               <Loader2 className="size-3.5 animate-spin" /> {t("common.loading")}
             </div>
           )}
-          {!previewLoading && !preview && (
+          {/* image: rendered via the /api/file endpoint, no text read */}
+          {!previewLoading && imgPath && (
+            <div className="flex min-h-0 flex-1 flex-col">
+              <div className="flex items-center gap-2 border-b border-border-subtle px-4 py-2 font-mono text-[11px] text-foreground-tertiary">
+                <span className="min-w-0 flex-1 truncate" title={imgPath}>
+                  {imgPath.split("/").pop()}
+                </span>
+              </div>
+              <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto bg-surface-tertiary/30 p-4">
+                <img
+                  src={fileUrl(imgPath)}
+                  alt={imgPath.split("/").pop() ?? ""}
+                  className="max-h-full max-w-full object-contain"
+                />
+              </div>
+            </div>
+          )}
+          {!previewLoading && !preview && !imgPath && (
             <div className="flex flex-1 items-center justify-center px-6 text-center font-caption text-sm text-foreground-tertiary">
               {t("files.previewHint")}
             </div>
           )}
-          {preview && (
+          {!previewLoading && preview && !imgPath && (
             <div className="flex min-h-0 flex-1 flex-col">
               <div className="flex items-center gap-2 border-b border-border-subtle px-4 py-2 font-mono text-[11px] text-foreground-tertiary">
                 <span className="min-w-0 flex-1 truncate" title={preview.path}>
@@ -172,9 +229,13 @@ export default function FilesRoute() {
                   {t("files.binary")}
                 </div>
               ) : (
-                <pre className="min-h-0 flex-1 overflow-auto whitespace-pre-wrap break-words px-4 py-3 font-mono text-[11px] text-foreground-secondary">
-                  {preview.content}
-                </pre>
+                <div className="min-h-0 flex-1 overflow-auto px-4 py-3">
+                  {MD_EXT.has(extOf(preview.path)) ? (
+                    <ChatMarkdown content={preview.content ?? ""} />
+                  ) : (
+                    <ChatMarkdown content={fenceWrap(CODE_LANG[extOf(preview.path)] ?? "", preview.content ?? "")} />
+                  )}
+                </div>
               )}
             </div>
           )}

@@ -43,6 +43,13 @@ export function extractImagePaths(text: string): string[] {
   return out;
 }
 
+const IMG_EXT_RE = new RegExp(`\\.(?:${IMG_EXT})$`, "i");
+
+/** True if `path` ends in an image extension the backend `/api/file` serves. */
+export function isImagePath(path: string): boolean {
+  return IMG_EXT_RE.test(path);
+}
+
 /** Backend URL that streams the local image at `path` (works in browser + Tauri
  *  via HTTP_BASE). */
 export function fileUrl(path: string): string {
