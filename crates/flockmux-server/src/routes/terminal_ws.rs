@@ -1,10 +1,17 @@
-//! `/ws/terminal` — a plain interactive shell in the browser.
+//! `/ws/terminal` — a persistent interactive shell in the browser.
 //!
 //! Distinct from `/ws/pty/:agent_id` (which bridges a *worker's* PTY with the
-//! seq/Hello/Resume/recording protocol): this is a throwaway `$SHELL` the
-//! developer opens for ad-hoc commands. No resume, no recording, no registry —
-//! a fresh shell each attach, killed when the socket closes. Protocol is
-//! deliberately minimal:
+//! seq/Hello/Resume/recording protocol): this is a `$SHELL` the developer opens
+//! for ad-hoc commands. Unlike a worker PTY it has no recording or resume
+//! protocol, but it IS persistent across navigation: the client passes a stable
+//! `?session=<id>` (one per browser tab, kept in sessionStorage) and the PTY
+//! lives in a process-wide registry keyed by that id. Closing the socket
+//! (navigating away, F5) detaches but does NOT kill the shell — a reattach
+//! replays the scrollback ring and resumes streaming, so a running command or
+//! REPL survives a page switch. A reaper kills sessions left with no attached
+//! client for `IDLE_REAP` so abandoned tabs don't leak shells.
+//!
+//! Protocol (unchanged, deliberately minimal):
 //!   server → client: binary frames = raw PTY bytes
 //!   client → server: binary = keystrokes; text = `{"type":"resize","cols","rows"}`
 //!
@@ -15,25 +22,84 @@
 
 use axum::{
     extract::ws::{Message, WebSocket, WebSocketUpgrade},
+    extract::Query,
     response::IntoResponse,
 };
 use bytes::Bytes;
 use flockmux_pty::{PtyBridge, PtyHandles, SpawnOpts};
 use futures::{SinkExt, StreamExt};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
+use tokio::sync::broadcast;
 use tracing::{debug, warn};
 
-pub async fn terminal_ws(ws: WebSocketUpgrade) -> impl IntoResponse {
-    ws.on_upgrade(handle_terminal)
+/// Bytes of raw PTY output kept for replay on reattach. Visual state (cursor,
+/// colours, alt-screen) is reconstructed by feeding the escape-sequence stream
+/// back to a fresh xterm, so this is just the scrollback the user re-sees.
+const SCROLLBACK_CAP: usize = 256 * 1024;
+/// Live-output fanout depth (chunks). A client that lags past this loses
+/// intermediate bytes (logged) but stays usable — fine for a dev shell.
+const BCAST_DEPTH: usize = 1024;
+/// A session left with zero attached clients this long is reclaimed.
+const IDLE_REAP: Duration = Duration::from_secs(30 * 60);
+
+/// One live shell, kept alive across socket attach/detach.
+struct TermSession {
+    /// Held here so the shell stays alive while detached; dropping the last
+    /// `Arc` (session removed from the registry) kills the process group.
+    bridge: Arc<PtyBridge>,
+    /// Scrollback ring (chunks + running byte total) replayed on reattach.
+    ring: Arc<Mutex<(VecDeque<Bytes>, usize)>>,
+    /// Live PTY-output fanout; each attach subscribes.
+    bcast: broadcast::Sender<Bytes>,
+    /// Attached-client count; stamps `detached_at` when it hits 0.
+    attached: usize,
+    detached_at: Option<Instant>,
 }
 
-async fn handle_terminal(socket: WebSocket) {
+/// Process-wide terminal-session registry. Lazily initialised (also arms the
+/// idle reaper). Mirrors the `OnceLock<Mutex<HashMap>>` caches elsewhere.
+fn registry() -> &'static Mutex<HashMap<String, TermSession>> {
+    static R: OnceLock<Mutex<HashMap<String, TermSession>>> = OnceLock::new();
+    R.get_or_init(|| {
+        spawn_reaper();
+        Mutex::new(HashMap::new())
+    })
+}
+
+/// Every minute, reclaim sessions that have been detached for `IDLE_REAP`.
+/// Removing a `TermSession` drops its `Arc<PtyBridge>` → the shell is killed.
+fn spawn_reaper() {
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(Duration::from_secs(60));
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            tick.tick().await;
+            let now = Instant::now();
+            let mut reg = registry().lock().unwrap();
+            reg.retain(|sid, s| {
+                let stale = s.attached == 0
+                    && s
+                        .detached_at
+                        .map(|t| now.duration_since(t) >= IDLE_REAP)
+                        .unwrap_or(false);
+                if stale {
+                    debug!(%sid, "terminal: reaping idle-detached session");
+                }
+                !stale
+            });
+        }
+    });
+}
+
+/// Spawn a fresh `$SHELL` with the worker env allowlist (flockmux-pty clears the
+/// rest, so the server's ambient secrets don't reach the shell).
+fn spawn_shell() -> anyhow::Result<PtyHandles> {
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
     let home = std::env::var_os("HOME").map(PathBuf::from);
 
-    // Allowlist: what an interactive shell legitimately needs. flockmux-pty
-    // clears the rest, so the server's ambient secrets don't reach the shell.
     let mut env = HashMap::new();
     for k in ["HOME", "PATH", "LANG", "LC_ALL", "LC_CTYPE", "TMPDIR", "USER", "LOGNAME"] {
         if let Ok(v) = std::env::var(k) {
@@ -42,34 +108,118 @@ async fn handle_terminal(socket: WebSocket) {
     }
     env.entry("TERM".to_string()).or_insert_with(|| "xterm-256color".to_string());
 
-    let argv = vec![shell.clone()];
-    let opts = SpawnOpts {
+    let argv = vec![shell];
+    PtyBridge::spawn(SpawnOpts {
         argv: &argv,
         cwd: home.as_deref(),
         env,
         cols: 80,
         rows: 24,
-    };
-    let PtyHandles { bridge, mut output_rx } = match PtyBridge::spawn(opts) {
-        Ok(h) => h,
-        Err(e) => {
-            warn!(?e, %shell, "terminal: failed to spawn shell");
-            return;
+    })
+}
+
+#[derive(serde::Deserialize)]
+pub struct TermQuery {
+    /// Stable per-tab session id. Absent → an ephemeral one-shot session.
+    session: Option<String>,
+}
+
+pub async fn terminal_ws(ws: WebSocketUpgrade, Query(q): Query<TermQuery>) -> impl IntoResponse {
+    let sid = q
+        .session
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    ws.on_upgrade(move |sock| handle_terminal(sock, sid))
+}
+
+async fn handle_terminal(socket: WebSocket, sid: String) {
+    // Attach to an existing session or create one. The replay snapshot and the
+    // live subscribe both happen under the ring lock (the pump appends+sends
+    // under the same lock) so the pump can't slip a chunk between them — no
+    // duplicate and no gap at the replay→live boundary.
+    let (bridge, mut rx, replay) = {
+        let mut reg = registry().lock().unwrap();
+        if let Some(s) = reg.get_mut(&sid) {
+            s.attached += 1;
+            s.detached_at = None;
+            let guard = s.ring.lock().unwrap();
+            let rx = s.bcast.subscribe();
+            let replay: Vec<u8> = guard.0.iter().flat_map(|b| b.iter().copied()).collect();
+            drop(guard);
+            debug!(%sid, "terminal: reattached (replay {} bytes)", replay.len());
+            (s.bridge.clone(), rx, replay)
+        } else {
+            let PtyHandles { bridge, mut output_rx } = match spawn_shell() {
+                Ok(h) => h,
+                Err(e) => {
+                    warn!(?e, "terminal: failed to spawn shell");
+                    return;
+                }
+            };
+            let bridge = Arc::new(bridge);
+            let ring = Arc::new(Mutex::new((VecDeque::<Bytes>::new(), 0usize)));
+            let (bcast, rx) = broadcast::channel::<Bytes>(BCAST_DEPTH);
+            // Pump: drain PTY output for the session's whole lifetime (not just
+            // while a client is attached) into the scrollback ring + fanout.
+            {
+                let ring = ring.clone();
+                let bcast = bcast.clone();
+                let sid = sid.clone();
+                tokio::spawn(async move {
+                    while let Some(chunk) = output_rx.recv().await {
+                        let mut g = ring.lock().unwrap();
+                        g.1 += chunk.len();
+                        g.0.push_back(chunk.clone());
+                        while g.1 > SCROLLBACK_CAP {
+                            match g.0.pop_front() {
+                                Some(old) => g.1 -= old.len(),
+                                None => break,
+                            }
+                        }
+                        // Send under the ring lock so a concurrent attach's
+                        // (subscribe + snapshot) is serialised against it.
+                        let _ = bcast.send(chunk);
+                    }
+                    // PTY EOF (shell exited) → drop the session so a later
+                    // attach with the same id starts a fresh shell.
+                    registry().lock().unwrap().remove(&sid);
+                    debug!(%sid, "terminal: shell exited, session removed");
+                });
+            }
+            reg.insert(
+                sid.clone(),
+                TermSession { bridge: bridge.clone(), ring, bcast, attached: 1, detached_at: None },
+            );
+            debug!(%sid, "terminal: shell spawned");
+            (bridge, rx, Vec::new())
         }
     };
-    debug!(%shell, "terminal: shell spawned");
+
     let input = bridge.input_sender();
     let (mut sink, mut stream) = socket.split();
 
-    // PTY output → WS binary frames.
+    // PTY output → WS: replay the scrollback first, then stream live chunks.
     let writer = tokio::spawn(async move {
-        while let Some(chunk) = output_rx.recv().await {
-            if sink.send(Message::Binary(chunk.to_vec())).await.is_err() {
-                break; // client gone
+        if !replay.is_empty() && sink.send(Message::Binary(replay)).await.is_err() {
+            return; // client gone before we finished replaying
+        }
+        loop {
+            match rx.recv().await {
+                Ok(chunk) => {
+                    if sink.send(Message::Binary(chunk.to_vec())).await.is_err() {
+                        break; // client gone
+                    }
+                }
+                Err(broadcast::error::RecvError::Lagged(n)) => {
+                    debug!(skipped = n, "terminal: client lagged, dropping frames");
+                }
+                Err(broadcast::error::RecvError::Closed) => {
+                    // Pump ended (shell exited) → close the socket.
+                    let _ = sink.send(Message::Close(None)).await;
+                    break;
+                }
             }
         }
-        // PTY EOF (shell exited) → close the socket.
-        let _ = sink.send(Message::Close(None)).await;
     });
 
     // WS → PTY (keystrokes) + resize control.
@@ -94,10 +244,20 @@ async fn handle_terminal(socket: WebSocket) {
         }
     }
 
-    // Socket closed or shell input channel dead → tear down: aborting the
-    // writer drops output_rx, and dropping `bridge` kills the shell process
-    // group (PtyBridge::Drop).
+    // Socket closed (navigation / reload / shell exit). Detach WITHOUT killing
+    // the shell: stop this client's writer, decrement the attach count, and
+    // stamp detached_at when we're the last viewer so the reaper can reclaim it.
+    // If the shell already exited, the pump removed the session — get_mut is a
+    // no-op then.
     writer.abort();
-    drop(bridge);
-    debug!("terminal: session closed");
+    {
+        let mut reg = registry().lock().unwrap();
+        if let Some(s) = reg.get_mut(&sid) {
+            s.attached = s.attached.saturating_sub(1);
+            if s.attached == 0 {
+                s.detached_at = Some(Instant::now());
+            }
+        }
+    }
+    debug!(%sid, "terminal: client detached (session kept alive)");
 }

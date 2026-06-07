@@ -1,10 +1,15 @@
 /**
  * Terminal page (`/terminal`).
  *
- * A throwaway interactive `$SHELL` in the browser over /ws/terminal — for
- * ad-hoc commands, not a worker PTY. Minimal protocol: server sends binary PTY
- * bytes, we send keystrokes as binary + a `{type:"resize"}` JSON on fit. A
- * fresh shell each mount; closing the page (WS close) kills it server-side.
+ * An interactive `$SHELL` in the browser over /ws/terminal — for ad-hoc
+ * commands, not a worker PTY. Minimal protocol: server sends binary PTY bytes,
+ * we send keystrokes as binary + a `{type:"resize"}` JSON on fit.
+ *
+ * Persistent across navigation: we pass a stable per-tab `?session=<id>` (kept
+ * in sessionStorage). Leaving the page detaches but does NOT kill the shell —
+ * coming back replays the scrollback and resumes the same session, so a running
+ * command or REPL isn't lost on a tab switch. A fresh browser tab gets a new id
+ * (its own shell); the server reaps sessions left detached too long.
  */
 import { useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
@@ -12,6 +17,25 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import { WS_HOST, WS_PROTO } from "@/lib/apiBase";
+
+/** Stable per-tab terminal session id, so navigating away and back reattaches
+ *  to the same server-side shell instead of spawning a fresh one. */
+const SID_KEY = "flockmux.terminal.session";
+function terminalSessionId(): string {
+  try {
+    let id = sessionStorage.getItem(SID_KEY);
+    if (!id) {
+      id =
+        typeof crypto !== "undefined" && crypto.randomUUID
+          ? crypto.randomUUID()
+          : `t-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      sessionStorage.setItem(SID_KEY, id);
+    }
+    return id;
+  } catch {
+    return `t-${Date.now()}`;
+  }
+}
 
 export default function TerminalRoute() {
   const { t } = useTranslation();
@@ -32,7 +56,9 @@ export default function TerminalRoute() {
     term.open(host);
     fit.fit();
 
-    const ws = new WebSocket(`${WS_PROTO}//${WS_HOST}/ws/terminal`);
+    const ws = new WebSocket(
+      `${WS_PROTO}//${WS_HOST}/ws/terminal?session=${encodeURIComponent(terminalSessionId())}`,
+    );
     ws.binaryType = "arraybuffer";
 
     const sendResize = () => {
