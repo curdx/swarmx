@@ -334,6 +334,21 @@ const COMPONENTS: Components = {
   ),
 };
 
+// LLMs sometimes wrap their ENTIRE reply in a single ```markdown / ```md fence
+// (a known habit when asked to "output markdown"). Rendered verbatim that shows
+// one giant grey code block instead of the formatted prose. Strip a SINGLE
+// outer md/markdown fence that encloses the whole message; leave everything
+// else (real code blocks, partial fences) untouched. Pure + conservative.
+function unwrapOuterMarkdownFence(s: string): string {
+  const m = s.match(/^\s*```(?:md|markdown)[^\n]*\n([\s\S]*?)\n```\s*$/);
+  if (!m) return s;
+  const inner = m[1];
+  // Only unwrap if the inner body has no UNbalanced fence of its own — i.e. the
+  // outer pair really is the whole-message wrapper, not the first of several.
+  const fenceCount = (inner.match(/^```/gm) || []).length;
+  return fenceCount % 2 === 0 ? inner : s;
+}
+
 // Guard rail: a pathologically long bubble (an agent pastes a multi-MB blob,
 // or echoes a huge tool result) would otherwise render to thousands of DOM
 // nodes and freeze the tab. Cap the markdown we feed react-markdown and show an
@@ -349,8 +364,9 @@ export const ChatMarkdown = memo(function ChatMarkdown({
   className?: string;
 }) {
   const { t } = useTranslation();
-  const tooLong = content.length > MAX_RENDER_CHARS;
-  const body = tooLong ? content.slice(0, MAX_RENDER_CHARS) : content;
+  const repaired = unwrapOuterMarkdownFence(content);
+  const tooLong = repaired.length > MAX_RENDER_CHARS;
+  const body = tooLong ? repaired.slice(0, MAX_RENDER_CHARS) : repaired;
   return (
     <div className={cn("prose-chat", className)}>
       <ReactMarkdown
