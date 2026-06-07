@@ -68,6 +68,8 @@
     "context": "Context",
     "notifications": "Notifications",
     "mcp": "MCP",
+    "tasks": "Tasks",
+    "usage": "Usage",
     "settings": "Settings",
     "debug": "Debug"
   },
@@ -612,7 +614,54 @@
     "imageBroken": "Image unavailable",
     "attachImage": "Attach image",
     "removeImage": "Remove",
-    "previewError": "Render failed"
+    "previewError": "Render failed",
+    "truncatedNotice": "Content too long — rendering the first {{n}} characters"
+  },
+  "tasks": {
+    "title": "Task board",
+    "subtitle": "Every worker is a task; status is derived from lifecycle automatically — or mark blocked / done / archived by hand.",
+    "count": "{{n}} tasks",
+    "loadError": "Failed to load tasks",
+    "empty": "No tasks yet — they appear once the orchestrator spawns workers.",
+    "untitled": "Untitled",
+    "manual": "manual",
+    "overriddenHint": "Status set by hand, overrides the derived value",
+    "status": {
+      "triage": "Triage",
+      "todo": "To do",
+      "ready": "Ready",
+      "running": "Running",
+      "blocked": "Blocked",
+      "done": "Done",
+      "archived": "Archived"
+    },
+    "action": {
+      "block": "Block",
+      "done": "Done",
+      "archive": "Archive",
+      "reopen": "Reopen"
+    }
+  },
+  "usage": {
+    "title": "Usage / Cost",
+    "subtitle": "Token usage scraped from each worker's session log; cost is estimated from a built-in price table (CLIs don't report spend over the PTY).",
+    "totalCost": "Total cost",
+    "totalTokens": "Total tokens",
+    "input": "Input",
+    "output": "Output",
+    "cacheRead": "Cache read",
+    "cacheWrite": "Cache write",
+    "events": "Calls",
+    "byDay": "Daily trend",
+    "byModel": "By model",
+    "byAgent": "By agent",
+    "model": "Model",
+    "agent": "Agent",
+    "estimated": "estimate",
+    "partialPrice": "some models unpriced (tokens only)",
+    "tokensOnly": "tokens only",
+    "empty": "No usage yet — token counts and cost appear here once workers run.",
+    "loadError": "Failed to load usage data"
   },
   "model": {
     "label": "Model",
@@ -662,6 +711,8 @@
       "context": "Blackboard",
       "notifications": "Notification Center",
       "mcp": "Tools for agents",
+      "tasks": "Task board",
+      "usage": "Tokens & cost",
       "settings": "Preferences",
       "debug": "Legacy M2 grid"
     },

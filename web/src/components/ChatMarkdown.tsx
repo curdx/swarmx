@@ -334,6 +334,13 @@ const COMPONENTS: Components = {
   ),
 };
 
+// Guard rail: a pathologically long bubble (an agent pastes a multi-MB blob,
+// or echoes a huge tool result) would otherwise render to thousands of DOM
+// nodes and freeze the tab. Cap the markdown we feed react-markdown and show an
+// honest notice — flockmux normally renders short labels, not raw payloads, so
+// this only ever trips on outliers, but the freeze it prevents is total.
+const MAX_RENDER_CHARS = 100_000;
+
 export const ChatMarkdown = memo(function ChatMarkdown({
   content,
   className,
@@ -341,6 +348,9 @@ export const ChatMarkdown = memo(function ChatMarkdown({
   content: string;
   className?: string;
 }) {
+  const { t } = useTranslation();
+  const tooLong = content.length > MAX_RENDER_CHARS;
+  const body = tooLong ? content.slice(0, MAX_RENDER_CHARS) : content;
   return (
     <div className={cn("prose-chat", className)}>
       <ReactMarkdown
@@ -348,8 +358,13 @@ export const ChatMarkdown = memo(function ChatMarkdown({
         rehypePlugins={REHYPE_PLUGINS}
         components={COMPONENTS}
       >
-        {content}
+        {body}
       </ReactMarkdown>
+      {tooLong && (
+        <div className="mt-1 rounded border border-border-subtle bg-surface-tertiary px-2 py-1 font-caption text-[11px] text-foreground-tertiary">
+          {t("messages.truncatedNotice", { n: MAX_RENDER_CHARS.toLocaleString() })}
+        </div>
+      )}
     </div>
   );
 });

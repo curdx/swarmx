@@ -102,6 +102,7 @@ async fn run(
             _ = tick.tick() => {
                 st.poll(&path, &swarm, agent_id).await;
                 persist_activity(&store, agent_id, st.last_emit_at, &mut persisted).await;
+                persist_usage(&store, agent_id, &mut st.pending_usage).await;
             }
             ev = rx.recv() => {
                 match ev {
@@ -110,6 +111,7 @@ async fn run(
                     {
                         st.poll(&path, &swarm, agent_id).await; // final flush
                         persist_activity(&store, agent_id, st.last_emit_at, &mut persisted).await;
+                        persist_usage(&store, agent_id, &mut st.pending_usage).await;
                         break;
                     }
                     Ok(_) => {}
@@ -139,6 +141,32 @@ async fn persist_activity(
             tracing::debug!(agent = %agent_id, ?e, "transcript: touch_agent_activity failed");
         }
         *persisted = last_emit_at;
+    }
+}
+
+/// Drain buffered token-usage events into the `agent_usage` table. Best-effort:
+/// a failed insert is logged, not fatal — usage stats are observability, never
+/// load-bearing for the wake/handoff machinery.
+async fn persist_usage(
+    store: &flockmux_storage::Store,
+    agent_id: &str,
+    pending: &mut Vec<UsageDelta>,
+) {
+    for u in pending.drain(..) {
+        if let Err(e) = store
+            .insert_agent_usage(
+                agent_id.to_string(),
+                u.model,
+                u.input,
+                u.output,
+                u.cache_read,
+                u.cache_write,
+                u.at,
+            )
+            .await
+        {
+            tracing::debug!(agent = %agent_id, ?e, "transcript: insert_agent_usage failed");
+        }
     }
 }
 
@@ -272,6 +300,10 @@ struct TailState {
     /// `touch_agent_activity` after a poll (avoids a redundant UPDATE on idle
     /// ticks that produced no new events).
     last_emit_at: Option<i64>,
+    /// Token-usage events parsed this poll, drained + persisted by the run loop.
+    /// Buffered here (rather than written inline) so `poll` stays free of the
+    /// store handle and the run loop owns all persistence.
+    pending_usage: Vec<UsageDelta>,
 }
 
 impl TailState {
@@ -283,6 +315,7 @@ impl TailState {
             pending: HashMap::new(),
             seq: 0,
             last_emit_at: None,
+            pending_usage: Vec::new(),
         }
     }
 
@@ -342,6 +375,11 @@ impl TailState {
             for t in tools {
                 self.emit(t, swarm, agent_id);
             }
+            // Same line may also carry token usage (claude assistant turn /
+            // codex token_count). Buffer it; the run loop persists.
+            if let Some(u) = parse_usage(self.flavor, &v) {
+                self.pending_usage.push(u);
+            }
         }
         // A single absurdly long line with no newline would grow unbounded —
         // drop it.
@@ -369,13 +407,19 @@ impl TailState {
                 );
                 emit_activity(swarm, agent_id, "running", label, seq, None, at);
             }
-            ParsedTool::End { tool_id, ok } => {
+            ParsedTool::End { tool_id, ok, result } => {
                 // A result for a tool we never saw start (we attached
                 // mid-session) is ignored — no running event to pair with.
                 if let Some(p) = self.pending.remove(&tool_id) {
                     let dur = (at - p.start_ms).max(0) as u32;
                     let phase = if ok { "ok" } else { "error" };
-                    emit_activity(swarm, agent_id, phase, p.label, p.seq, Some(dur), at);
+                    // Enrich the start label with a result blurb: "Bash git
+                    // status" → "Bash git status → 12 lines: On branch main".
+                    let label = match result {
+                        Some(r) => format!("{} → {}", p.label, r),
+                        None => p.label,
+                    };
+                    emit_activity(swarm, agent_id, phase, label, p.seq, Some(dur), at);
                 }
             }
         }
@@ -420,8 +464,17 @@ fn emit_activity(
 }
 
 enum ParsedTool {
-    Start { tool_id: String, label: String },
-    End { tool_id: String, ok: bool },
+    Start {
+        tool_id: String,
+        label: String,
+    },
+    End {
+        tool_id: String,
+        ok: bool,
+        /// Short result blurb (line count + first-line snippet), appended to
+        /// the label on completion. `None` when the result was empty/absent.
+        result: Option<String>,
+    },
 }
 
 /// claude: tool_use lives in an `assistant` row's `message.content[]`; the
@@ -455,9 +508,11 @@ fn parse_claude(v: &Value) -> Vec<ParsedTool> {
                         .get("is_error")
                         .and_then(|b| b.as_bool())
                         .unwrap_or(false);
+                    let result = claude_result_text(block).as_deref().and_then(result_summary);
                     out.push(ParsedTool::End {
                         tool_id: id.to_string(),
                         ok: !is_err,
+                        result,
                     });
                 }
             }
@@ -499,15 +554,95 @@ fn parse_codex(v: &Value) -> Vec<ParsedTool> {
         }
         Some("function_call_output" | "custom_tool_call_output") => {
             if let Some(id) = payload.get("call_id").and_then(|i| i.as_str()) {
+                // codex `output` is usually a raw string; tolerate an object
+                // with a `content` string too. No reliable error flag → ok.
+                let result = payload
+                    .get("output")
+                    .and_then(|o| match o {
+                        Value::String(s) => Some(s.clone()),
+                        other => other.get("content").and_then(|c| c.as_str()).map(str::to_string),
+                    })
+                    .as_deref()
+                    .and_then(result_summary);
                 out.push(ParsedTool::End {
                     tool_id: id.to_string(),
                     ok: true,
+                    result,
                 });
             }
         }
         _ => {}
     }
     out
+}
+
+/// One token-usage event parsed from a transcript line. Buffered on the
+/// `TailState` and persisted by the run loop into `agent_usage`.
+struct UsageDelta {
+    model: Option<String>,
+    input: i64,
+    output: i64,
+    cache_read: i64,
+    cache_write: i64,
+    at: i64,
+}
+
+fn usage_num(v: &Value, k: &str) -> i64 {
+    v.get(k).and_then(|x| x.as_i64()).unwrap_or(0)
+}
+
+/// Extract token usage from a transcript line, if it carries any.
+///   claude — `assistant` row's `message.usage` (per turn).
+///   codex  — `event_msg`/`token_count`'s `info.last_token_usage` (per-turn
+///            delta; the cumulative `total_token_usage` would double-count).
+/// Returns None for lines with no usage or an all-zero usage block.
+fn parse_usage(flavor: Flavor, v: &Value) -> Option<UsageDelta> {
+    match flavor {
+        Flavor::Claude => {
+            let msg = v.get("message")?;
+            let usage = msg.get("usage")?;
+            let input = usage_num(usage, "input_tokens");
+            let output = usage_num(usage, "output_tokens");
+            let cache_write = usage_num(usage, "cache_creation_input_tokens");
+            let cache_read = usage_num(usage, "cache_read_input_tokens");
+            if input == 0 && output == 0 && cache_read == 0 && cache_write == 0 {
+                return None;
+            }
+            Some(UsageDelta {
+                model: msg.get("model").and_then(|m| m.as_str()).map(str::to_string),
+                input,
+                output,
+                cache_read,
+                cache_write,
+                at: now_ms(),
+            })
+        }
+        Flavor::Codex => {
+            if v.get("type").and_then(|t| t.as_str()) != Some("event_msg") {
+                return None;
+            }
+            let payload = v.get("payload")?;
+            if payload.get("type").and_then(|t| t.as_str()) != Some("token_count") {
+                return None;
+            }
+            let info = payload.get("info")?;
+            let last = info.get("last_token_usage")?;
+            let input = usage_num(last, "input_tokens");
+            let output = usage_num(last, "output_tokens");
+            let cache_read = usage_num(last, "cached_input_tokens");
+            if input == 0 && output == 0 && cache_read == 0 {
+                return None;
+            }
+            Some(UsageDelta {
+                model: info.get("model").and_then(|m| m.as_str()).map(str::to_string),
+                input,
+                output,
+                cache_read,
+                cache_write: 0,
+                at: now_ms(),
+            })
+        }
+    }
 }
 
 /// MCP tools arrive as `mcp__<server>__<action>`; show just `<action>` so a
@@ -563,6 +698,43 @@ fn shorten(s: &str) -> String {
     }
 }
 
+/// Pull the text out of a claude `tool_result` block — its `content` is either
+/// a raw string or an array of `{type:"text", text}` parts.
+fn claude_result_text(block: &Value) -> Option<String> {
+    match block.get("content") {
+        Some(Value::String(s)) => Some(s.clone()),
+        Some(Value::Array(parts)) => {
+            let mut buf = String::new();
+            for p in parts {
+                if p.get("type").and_then(|t| t.as_str()) == Some("text") {
+                    if let Some(s) = p.get("text").and_then(|t| t.as_str()) {
+                        if !buf.is_empty() {
+                            buf.push('\n');
+                        }
+                        buf.push_str(s);
+                    }
+                }
+            }
+            (!buf.is_empty()).then_some(buf)
+        }
+        _ => None,
+    }
+}
+
+/// Short, scannable result blurb appended to a finished tool's label, e.g.
+/// `12 lines: On branch main`. Generic — claude/codex don't expose exit codes
+/// reliably here — but a line count + first-line snippet beats a bare `ok`.
+fn result_summary(text: &str) -> Option<String> {
+    let nonempty: Vec<&str> = text.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+    let first = *nonempty.first()?;
+    let snippet = shorten(&collapse_ws(first));
+    if nonempty.len() > 1 {
+        Some(format!("{} lines: {}", nonempty.len(), snippet))
+    } else {
+        Some(snippet)
+    }
+}
+
 fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -600,16 +772,32 @@ mod tests {
         let ok_line = r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_1","content":[{"type":"text","text":"done"}],"is_error":false}]}}"#;
         let v: Value = serde_json::from_str(ok_line).unwrap();
         match one(&parse_claude(&v)) {
-            ParsedTool::End { tool_id, ok } => {
+            ParsedTool::End { tool_id, ok, result } => {
                 assert_eq!(tool_id, "toolu_1");
                 assert!(ok);
+                assert_eq!(result.as_deref(), Some("done"));
             }
             _ => panic!("expected End"),
         }
         let err_line = r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_2","content":"boom","is_error":true}]}}"#;
         let v: Value = serde_json::from_str(err_line).unwrap();
         match one(&parse_claude(&v)) {
-            ParsedTool::End { ok, .. } => assert!(!ok),
+            ParsedTool::End { ok, result, .. } => {
+                assert!(!ok);
+                assert_eq!(result.as_deref(), Some("boom"));
+            }
+            _ => panic!("expected End"),
+        }
+    }
+
+    #[test]
+    fn claude_tool_result_summarizes_multiline() {
+        let line = r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t","content":[{"type":"text","text":"On branch main\nnothing to commit\nclean"}],"is_error":false}]}}"#;
+        let v: Value = serde_json::from_str(line).unwrap();
+        match one(&parse_claude(&v)) {
+            ParsedTool::End { result, .. } => {
+                assert_eq!(result.as_deref(), Some("3 lines: On branch main"));
+            }
             _ => panic!("expected End"),
         }
     }
@@ -643,9 +831,10 @@ mod tests {
         let out = r#"{"type":"response_item","payload":{"type":"function_call_output","call_id":"call_1","output":"on branch main"}}"#;
         let v: Value = serde_json::from_str(out).unwrap();
         match one(&parse_codex(&v)) {
-            ParsedTool::End { tool_id, ok } => {
+            ParsedTool::End { tool_id, ok, result } => {
                 assert_eq!(tool_id, "call_1");
                 assert!(ok);
+                assert_eq!(result.as_deref(), Some("on branch main"));
             }
             _ => panic!("expected End"),
         }
@@ -711,5 +900,42 @@ mod tests {
         // no embedded newlines/double spaces
         let v = serde_json::json!({ "command": "git\n  status" });
         assert_eq!(summarize("Bash", &v), "Bash git status");
+    }
+
+    // ── usage parsing ────────────────────────────────────────────────────────
+
+    #[test]
+    fn claude_usage_parsed_from_assistant_turn() {
+        let line = r#"{"type":"assistant","message":{"model":"claude-opus-4","usage":{"input_tokens":120,"output_tokens":45,"cache_creation_input_tokens":10,"cache_read_input_tokens":900}}}"#;
+        let v: Value = serde_json::from_str(line).unwrap();
+        let u = parse_usage(Flavor::Claude, &v).expect("usage");
+        assert_eq!(u.input, 120);
+        assert_eq!(u.output, 45);
+        assert_eq!(u.cache_write, 10);
+        assert_eq!(u.cache_read, 900);
+        assert_eq!(u.model.as_deref(), Some("claude-opus-4"));
+    }
+
+    #[test]
+    fn codex_usage_parsed_from_last_token_usage() {
+        let line = r#"{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":80,"output_tokens":20,"cached_input_tokens":5},"total_token_usage":{"input_tokens":9999}}}}"#;
+        let v: Value = serde_json::from_str(line).unwrap();
+        let u = parse_usage(Flavor::Codex, &v).expect("usage");
+        // per-turn delta, NOT the cumulative total
+        assert_eq!(u.input, 80);
+        assert_eq!(u.output, 20);
+        assert_eq!(u.cache_read, 5);
+    }
+
+    #[test]
+    fn non_usage_lines_yield_none() {
+        for (flavor, line) in [
+            (Flavor::Claude, r#"{"type":"user","message":{"content":[]}}"#),
+            (Flavor::Claude, r#"{"type":"assistant","message":{"usage":{"input_tokens":0,"output_tokens":0}}}"#),
+            (Flavor::Codex, r#"{"type":"response_item","payload":{"type":"function_call"}}"#),
+        ] {
+            let v: Value = serde_json::from_str(line).unwrap();
+            assert!(parse_usage(flavor, &v).is_none(), "should be None: {line}");
+        }
     }
 }

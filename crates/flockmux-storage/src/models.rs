@@ -314,3 +314,61 @@ pub struct RecordingRecord {
     pub rows: i64,
     pub last_seq: Option<i64>,
 }
+
+/// Token usage aggregated by model (`agent_usage` GROUP BY model). Cost is NOT
+/// here — the server applies its pricing table at query time.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UsageByModel {
+    pub model: Option<String>,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cache_read_tokens: i64,
+    pub cache_write_tokens: i64,
+    pub events: i64,
+}
+
+/// Token usage aggregated by calendar day (UTC `YYYY-MM-DD`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UsageByDay {
+    pub day: String,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cache_read_tokens: i64,
+    pub cache_write_tokens: i64,
+}
+
+/// Token usage aggregated by agent.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UsageByAgent {
+    pub agent_id: String,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cache_read_tokens: i64,
+    pub cache_write_tokens: i64,
+    pub events: i64,
+}
+
+/// A worker viewed as a Kanban task: its identity + the raw lifecycle signals
+/// the server needs to derive an effective status (alive/done/blocked/…), plus
+/// the human `task_status` override. The derivation itself lives in the server
+/// (`routes::tasks`) so it can be unit-tested without a DB.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskRecord {
+    pub agent_id: String,
+    pub parent_agent_id: String,
+    pub role_label: String,
+    pub role_slug: Option<String>,
+    pub handoff_signal: Option<String>,
+    /// Human override set from the board (NULL = derive from lifecycle).
+    pub task_status: Option<String>,
+    pub spawned_at: i64,
+    pub killed_at: Option<i64>,
+    pub shim_exit_code: Option<i64>,
+    pub last_activity_at: Option<i64>,
+    pub workspace_id: Option<String>,
+    pub thread_id: Option<String>,
+    /// True if the worker's `handoff_signal` key exists on the blackboard.
+    pub handoff_done: bool,
+    /// True if `<handoff_signal>.error` exists (producer-died fallback fired).
+    pub error_present: bool,
+}

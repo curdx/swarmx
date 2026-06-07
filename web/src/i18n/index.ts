@@ -36,6 +36,12 @@ i18n.use(initReactI18next).init({
   },
   lng: readLang(),
   fallbackLng: "zh",
+  // i18next already falls back per-KEY to `fallbackLng` when a key is missing
+  // in the active language. The one gap that default behaviour leaves is an
+  // *empty-string* value (present but ""), which would render blank instead of
+  // falling back — flip that off so a half-translated en entry still shows the
+  // zh text rather than nothing.
+  returnEmptyString: false,
   interpolation: { escapeValue: false },
 });
 

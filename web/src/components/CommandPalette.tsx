@@ -22,6 +22,7 @@ import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import {
   Activity,
+  BarChart3,
   Bell,
   Boxes,
   Bug,
@@ -61,6 +62,8 @@ const NAV = [
   // from ⌘K — typing "mcp" returned no match. Mirror the rail's Boxes icon and
   // sit it next to 设置, the other config surface.
   { labelKey: "nav.mcp", href: "/mcp", icon: Boxes, hintKey: "cmdk.navHint.mcp" },
+  { labelKey: "nav.tasks", href: "/tasks", icon: ClipboardList, hintKey: "cmdk.navHint.tasks" },
+  { labelKey: "nav.usage", href: "/usage", icon: BarChart3, hintKey: "cmdk.navHint.usage" },
   { labelKey: "nav.settings", href: "/settings", icon: SettingsIcon, hintKey: "cmdk.navHint.settings" },
   // /debug isn't purely dev tooling — it hosts the blackboard editor (operator
   // writes HITL approval keys) + spells launcher, which have no other home yet.

@@ -68,6 +68,8 @@
     "context": "上下文",
     "notifications": "通知",
     "mcp": "MCP",
+    "tasks": "任务",
+    "usage": "用量",
     "settings": "设置",
     "debug": "Debug"
   },
@@ -614,7 +616,54 @@
     "imageBroken": "图片不可用",
     "attachImage": "添加图片",
     "removeImage": "移除",
-    "previewError": "渲染失败"
+    "previewError": "渲染失败",
+    "truncatedNotice": "内容过长，仅渲染前 {{n}} 字符"
+  },
+  "tasks": {
+    "title": "任务看板",
+    "subtitle": "每个 worker 即一个任务，状态自动从生命周期推导；你也可以手动标记阻塞 / 完成 / 归档。",
+    "count": "{{n}} 个任务",
+    "loadError": "任务加载失败",
+    "empty": "暂无任务——orchestrator 派 worker 后会出现在这里。",
+    "untitled": "未命名",
+    "manual": "手动",
+    "overriddenHint": "状态由人工设定，覆盖自动推导",
+    "status": {
+      "triage": "待分诊",
+      "todo": "待办",
+      "ready": "就绪",
+      "running": "进行中",
+      "blocked": "阻塞",
+      "done": "完成",
+      "archived": "归档"
+    },
+    "action": {
+      "block": "阻塞",
+      "done": "完成",
+      "archive": "归档",
+      "reopen": "复位"
+    }
+  },
+  "usage": {
+    "title": "用量 / 成本",
+    "subtitle": "从各 worker 的会话日志采集的 token 用量；成本为按内置价目表估算（PTY 模式下 CLI 不回传花费）。",
+    "totalCost": "总成本",
+    "totalTokens": "总 token",
+    "input": "输入",
+    "output": "输出",
+    "cacheRead": "缓存读",
+    "cacheWrite": "缓存写",
+    "events": "调用次数",
+    "byDay": "每日趋势",
+    "byModel": "按模型",
+    "byAgent": "按 agent",
+    "model": "模型",
+    "agent": "Agent",
+    "estimated": "估算值",
+    "partialPrice": "部分模型无价目，仅 token",
+    "tokensOnly": "仅 token",
+    "empty": "暂无用量数据——派 worker 干活后这里会出现 token 与成本。",
+    "loadError": "用量数据加载失败"
   },
   "model": {
     "label": "模型",
@@ -664,6 +713,8 @@
       "context": "共享区",
       "notifications": "通知中心",
       "mcp": "为 agent 装工具",
+      "tasks": "任务看板",
+      "usage": "token 与成本",
       "settings": "偏好与模型",
       "debug": "调试面板"
     },

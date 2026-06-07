@@ -282,6 +282,9 @@ async fn main() -> Result<()> {
 
     let mut app = Router::new()
         .route("/api/plugins", get(routes::rest::list_plugins))
+        .route("/api/usage", get(routes::usage::usage_summary))
+        .route("/api/tasks", get(routes::tasks::list_tasks))
+        .route("/api/tasks/:id/status", post(routes::tasks::set_task_status))
         // F1 模型设置页: per-CLI tier→concrete-model mapping (read/write).
         .route(
             "/api/models",

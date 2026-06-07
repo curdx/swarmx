@@ -74,6 +74,15 @@ impl PtyBridge {
             .context("openpty failed")?;
 
         let mut cmd = CommandBuilder::new(&opts.argv[0]);
+        // Start the child from an EMPTY environment. portable-pty's
+        // `CommandBuilder::new` seeds itself from the parent's *full*
+        // environment (`std::env::vars_os`), so without this clear every
+        // spawned worker would inherit the server's entire env — including
+        // ad-hoc shell secrets (AWS_*, GITHUB_TOKEN, DB creds, raw API keys).
+        // The caller passes an explicit allowlist via `opts.env`; clearing
+        // here makes that allowlist (plus the TERM default below) the ONLY
+        // thing the child sees.
+        cmd.env_clear();
         for a in &opts.argv[1..] {
             cmd.arg(a);
         }
@@ -314,8 +323,10 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn cat_echoes_what_we_write() {
+        // Absolute path: the child env is cleared (no PATH to resolve a bare
+        // `cat`), mirroring how production passes an absolute shim path.
         let handles = PtyBridge::spawn(SpawnOpts {
-            argv: &["cat".into()],
+            argv: &["/bin/cat".into()],
             cwd: None,
             env: HashMap::new(),
             cols: 80,
@@ -359,6 +370,54 @@ mod tests {
 
             // Resize should not error.
             bridge.resize(120, 30).unwrap();
+        });
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn env_is_isolated_from_parent() {
+        // A secret in the *parent* env must NOT reach the child. portable-pty
+        // seeds CommandBuilder from std::env::vars_os(), so without env_clear()
+        // this canary would leak. Only opts.env (+ TERM) should survive.
+        std::env::set_var("FLOCKMUX_LEAK_CANARY", "leaked");
+        let mut env = HashMap::new();
+        env.insert("FOO".to_string(), "bar".to_string());
+        let handles = PtyBridge::spawn(SpawnOpts {
+            argv: &[
+                "/bin/sh".into(),
+                "-c".into(),
+                "printf 'CANARY=[%s] FOO=[%s]' \"$FLOCKMUX_LEAK_CANARY\" \"$FOO\"".into(),
+            ],
+            cwd: None,
+            env,
+            cols: 80,
+            rows: 24,
+        })
+        .expect("spawn sh");
+
+        let PtyHandles { bridge: _bridge, mut output_rx } = handles;
+        block_on(async move {
+            let mut got = Vec::new();
+            for _ in 0..50 {
+                match tokio::time::timeout(
+                    std::time::Duration::from_millis(200),
+                    output_rx.recv(),
+                )
+                .await
+                {
+                    Ok(Some(chunk)) => got.extend_from_slice(&chunk),
+                    _ => break,
+                }
+                if got.windows(b"FOO=[bar]".len()).any(|w| w == b"FOO=[bar]") {
+                    break;
+                }
+            }
+            let out = String::from_utf8_lossy(&got);
+            assert!(out.contains("FOO=[bar]"), "allowlisted var missing; got = {out:?}");
+            assert!(
+                out.contains("CANARY=[]"),
+                "parent secret leaked into child env; got = {out:?}"
+            );
         });
     }
 

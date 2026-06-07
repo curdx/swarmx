@@ -22,7 +22,9 @@ import type {
   SpellInfo,
   ThreadDiff,
   ThreadInfo,
+  TasksResponse,
   UnreadCountResponse,
+  UsageSummary,
   Workspace,
   WorkspaceRoot,
   WriteBlackboardRequest,
@@ -154,6 +156,10 @@ export const api = {
   mcpUninstall: (name: string, cli: "claude" | "codex") =>
     request<{ ok: boolean; output: string }>("POST", "/api/mcp/uninstall", { name, cli }),
   listAgents: () => request<AgentInfo[]>("GET", "/api/agent"),
+  getUsage: () => request<UsageSummary>("GET", "/api/usage"),
+  listTasks: () => request<TasksResponse>("GET", "/api/tasks"),
+  setTaskStatus: (agentId: string, status: string | null) =>
+    request<{ ok: boolean }>("POST", `/api/tasks/${agentId}/status`, { status }),
   spawnAgent: (req: SpawnAgentRequest) =>
     request<SpawnAgentResponse>("POST", "/api/agent", req),
   killAgent: (id: string) => request<void>("DELETE", `/api/agent/${id}`),

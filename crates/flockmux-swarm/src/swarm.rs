@@ -281,15 +281,47 @@ impl Swarm {
             .lock()
             .insert(target.clone(), sha.clone());
 
-        // Run the actual fs write off the runtime thread.
+        // Run the actual fs write off the runtime thread. Atomic write
+        // (tmp → fsync → rename) so a crash mid-write can't leave a truncated
+        // blackboard file — orchestrator/worker read these to make decisions,
+        // a half-written task.ledger.md would corrupt that. The temp name ends
+        // in `.tmp` so the blackboard watcher ignores it (watcher.rs skips
+        // *.tmp / *.swp) rather than firing a spurious self-loop event.
         let target_for_write = target.clone();
         let content_for_write = content.to_owned();
         tokio::task::spawn_blocking(move || -> Result<()> {
-            std::fs::write(&target_for_write, content_for_write.as_bytes())
-                .with_context(|| format!("write blackboard {}", target_for_write.display()))
+            use std::io::Write;
+            static TMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            let seq = TMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let fname = target_for_write
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "blackboard".into());
+            let mut tmp = target_for_write.clone();
+            // Unique per (pid, seq) so concurrent writes to the same path don't
+            // clobber each other's temp; same dir so the rename is atomic.
+            tmp.set_file_name(format!(".{fname}.flockmux.{}.{seq}.tmp", std::process::id()));
+
+            let write_then_rename = || -> Result<()> {
+                {
+                    let mut f = std::fs::File::create(&tmp)
+                        .with_context(|| format!("create tmp {}", tmp.display()))?;
+                    f.write_all(content_for_write.as_bytes())
+                        .with_context(|| format!("write tmp {}", tmp.display()))?;
+                    f.sync_all().ok();
+                }
+                std::fs::rename(&tmp, &target_for_write).with_context(|| {
+                    format!("rename {} -> {}", tmp.display(), target_for_write.display())
+                })
+            };
+            let res = write_then_rename();
+            if res.is_err() {
+                let _ = std::fs::remove_file(&tmp); // best-effort cleanup
+            }
+            res
         })
         .await
-        .context("spawn_blocking fs::write")??;
+        .context("spawn_blocking atomic write")??;
 
         let rel_owned = rel_path.to_string();
         let now = now_ms();

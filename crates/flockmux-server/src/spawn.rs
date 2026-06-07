@@ -204,9 +204,13 @@ pub fn spawn_agent(
         }
     }
 
-    // Env: pass through HOME so the CLI finds its OAuth credentials
-    // (~/.claude or ~/.codex). Drop everything else from the parent
-    // process — the CLI shouldn't inherit ad-hoc shell vars.
+    // Env: flockmux-pty starts the child from an EMPTY environment
+    // (`CommandBuilder::env_clear`), so the worker sees ONLY what we insert
+    // here. We forward what a CLI legitimately needs (HOME for OAuth creds,
+    // PATH, locale, proxy/TLS, and the provider's own config/keys) but NOT
+    // arbitrary shell secrets the server happened to be launched with
+    // (AWS_*, GITHUB_TOKEN, DB creds, …). This is the allowlist that realises
+    // the per-agent isolation goal.
     let mut env = HashMap::new();
     let home_var = if plugin.home_env.is_empty() {
         "HOME"
@@ -226,6 +230,45 @@ pub fn spawn_agent(
     // (e.g. `claude doctor` may exec `node`).
     if let Ok(path) = std::env::var("PATH") {
         env.insert("PATH".into(), path);
+    }
+    // Non-secret runtime essentials the CLI may need to reach the network /
+    // render unicode. Forwarded only if present. Locale (LC_*), temp dir,
+    // HTTP(S) proxy, and TLS CA bundles cover corporate / proxied setups
+    // (e.g. routing codex through a relay) that would otherwise break once we
+    // stopped inheriting the full env.
+    for key in [
+        "LC_ALL",
+        "LC_CTYPE",
+        "TMPDIR",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "NO_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "all_proxy",
+        "no_proxy",
+        "NODE_EXTRA_CA_CERTS",
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+        "REQUESTS_CA_BUNDLE",
+    ] {
+        if let Ok(v) = std::env::var(key) {
+            env.insert(key.into(), v);
+        }
+    }
+    // Provider config/creds the inner CLI authenticates with, matched by
+    // prefix so e.g. ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN / OPENAI_BASE_URL
+    // pass through (a worker still authenticates), while unrelated *_TOKEN /
+    // *_KEY shell secrets do NOT. `or_insert` so explicit entries below (e.g.
+    // per-agent CODEX_HOME) always win over an inherited value.
+    for (k, v) in std::env::vars() {
+        if ["ANTHROPIC_", "OPENAI_", "CLAUDE_"]
+            .iter()
+            .any(|p| k.starts_with(p))
+        {
+            env.entry(k).or_insert(v);
+        }
     }
     // Identity env passed to the CLI. codex picks `FLOCKMUX_AGENT_ID` /
     // `FLOCKMUX_SERVER_URL` up via the `env_vars` whitelist in

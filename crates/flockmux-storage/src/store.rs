@@ -203,6 +203,179 @@ impl Store {
         .context("spawn_blocking touch_agent_activity")?
     }
 
+    /// Record one token-usage event (claude assistant turn / codex token_count).
+    /// Append-only — one row per event; aggregation happens at query time. No
+    /// dedup needed: the tailer reads each JSONL line exactly once (offset only
+    /// advances), so a usage line can't be inserted twice.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn insert_agent_usage(
+        &self,
+        agent_id: String,
+        model: Option<String>,
+        input_tokens: i64,
+        output_tokens: i64,
+        cache_read_tokens: i64,
+        cache_write_tokens: i64,
+        at_ms: i64,
+    ) -> Result<()> {
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<()> {
+            conn.execute(
+                "INSERT INTO agent_usage \
+                   (agent_id, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    agent_id,
+                    model,
+                    input_tokens,
+                    output_tokens,
+                    cache_read_tokens,
+                    cache_write_tokens,
+                    at_ms
+                ],
+            )?;
+            Ok(())
+        }))
+        .await
+        .context("spawn_blocking insert_agent_usage")?
+    }
+
+    /// Usage aggregated by model (descending by total tokens). Cost is applied
+    /// by the server's pricing table, not here.
+    pub async fn usage_by_model(&self) -> Result<Vec<crate::models::UsageByModel>> {
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<Vec<crate::models::UsageByModel>> {
+            let mut stmt = conn.prepare(
+                "SELECT model, \
+                        SUM(input_tokens), SUM(output_tokens), \
+                        SUM(cache_read_tokens), SUM(cache_write_tokens), COUNT(*) \
+                 FROM agent_usage GROUP BY model \
+                 ORDER BY SUM(input_tokens) + SUM(output_tokens) DESC",
+            )?;
+            let rows = stmt.query_map([], |row| {
+                Ok(crate::models::UsageByModel {
+                    model: row.get(0)?,
+                    input_tokens: row.get(1)?,
+                    output_tokens: row.get(2)?,
+                    cache_read_tokens: row.get(3)?,
+                    cache_write_tokens: row.get(4)?,
+                    events: row.get(5)?,
+                })
+            })?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()
+        }))
+        .await
+        .context("spawn_blocking usage_by_model")?
+    }
+
+    /// Usage aggregated by UTC calendar day, oldest→newest, last `days` days.
+    pub async fn usage_by_day(&self, days: i64) -> Result<Vec<crate::models::UsageByDay>> {
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<Vec<crate::models::UsageByDay>> {
+            let mut stmt = conn.prepare(
+                "SELECT date(at/1000, 'unixepoch') AS day, \
+                        SUM(input_tokens), SUM(output_tokens), \
+                        SUM(cache_read_tokens), SUM(cache_write_tokens) \
+                 FROM agent_usage GROUP BY day ORDER BY day ASC LIMIT ?1",
+            )?;
+            let rows = stmt.query_map(params![days.max(1)], |row| {
+                Ok(crate::models::UsageByDay {
+                    day: row.get(0)?,
+                    input_tokens: row.get(1)?,
+                    output_tokens: row.get(2)?,
+                    cache_read_tokens: row.get(3)?,
+                    cache_write_tokens: row.get(4)?,
+                })
+            })?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()
+        }))
+        .await
+        .context("spawn_blocking usage_by_day")?
+    }
+
+    /// Usage aggregated by agent (descending by total tokens).
+    pub async fn usage_by_agent(&self) -> Result<Vec<crate::models::UsageByAgent>> {
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<Vec<crate::models::UsageByAgent>> {
+            let mut stmt = conn.prepare(
+                "SELECT agent_id, \
+                        SUM(input_tokens), SUM(output_tokens), \
+                        SUM(cache_read_tokens), SUM(cache_write_tokens), COUNT(*) \
+                 FROM agent_usage GROUP BY agent_id \
+                 ORDER BY SUM(input_tokens) + SUM(output_tokens) DESC",
+            )?;
+            let rows = stmt.query_map([], |row| {
+                Ok(crate::models::UsageByAgent {
+                    agent_id: row.get(0)?,
+                    input_tokens: row.get(1)?,
+                    output_tokens: row.get(2)?,
+                    cache_read_tokens: row.get(3)?,
+                    cache_write_tokens: row.get(4)?,
+                    events: row.get(5)?,
+                })
+            })?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()
+        }))
+        .await
+        .context("spawn_blocking usage_by_agent")?
+    }
+
+    /// List all workers as Kanban tasks, joined with their agent lifecycle and
+    /// blackboard handoff signals. Ordered newest-first. The effective status is
+    /// derived server-side (`routes::tasks`) from these raw fields.
+    pub async fn list_tasks(&self) -> Result<Vec<crate::models::TaskRecord>> {
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<Vec<crate::models::TaskRecord>> {
+            let mut stmt = conn.prepare(
+                "SELECT w.agent_id, w.parent_agent_id, w.role_label, w.role_slug, \
+                        w.handoff_signal, w.task_status, w.spawned_at, \
+                        a.killed_at, a.shim_exit_code, a.last_activity_at, \
+                        a.workspace_id, a.thread_id, \
+                        (w.handoff_signal IS NOT NULL AND w.handoff_signal <> '' \
+                         AND EXISTS (SELECT 1 FROM blackboard_ops b WHERE b.path = w.handoff_signal)) AS handoff_done, \
+                        (w.handoff_signal IS NOT NULL AND w.handoff_signal <> '' \
+                         AND EXISTS (SELECT 1 FROM blackboard_ops b WHERE b.path = w.handoff_signal || '.error')) AS error_present \
+                 FROM workers w JOIN agents a ON a.id = w.agent_id \
+                 ORDER BY w.spawned_at DESC",
+            )?;
+            let rows = stmt.query_map([], |row| {
+                Ok(crate::models::TaskRecord {
+                    agent_id: row.get(0)?,
+                    parent_agent_id: row.get(1)?,
+                    role_label: row.get(2)?,
+                    role_slug: row.get(3)?,
+                    handoff_signal: row.get(4)?,
+                    task_status: row.get(5)?,
+                    spawned_at: row.get(6)?,
+                    killed_at: row.get(7)?,
+                    shim_exit_code: row.get(8)?,
+                    last_activity_at: row.get(9)?,
+                    workspace_id: row.get(10)?,
+                    thread_id: row.get(11)?,
+                    handoff_done: row.get::<_, i64>(12)? != 0,
+                    error_present: row.get::<_, i64>(13)? != 0,
+                })
+            })?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()
+        }))
+        .await
+        .context("spawn_blocking list_tasks")?
+    }
+
+    /// Set (or clear, with `None`) the human task-status override on a worker.
+    pub async fn set_task_status(&self, agent_id: String, status: Option<String>) -> Result<()> {
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<()> {
+            conn.execute(
+                "UPDATE workers SET task_status = ?2 WHERE agent_id = ?1",
+                params![agent_id, status],
+            )?;
+            Ok(())
+        }))
+        .await
+        .context("spawn_blocking set_task_status")?
+    }
+
     pub async fn list_agents(&self) -> Result<Vec<AgentRecord>> {
         let pool = self.pool.clone();
         tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<Vec<AgentRecord>> {

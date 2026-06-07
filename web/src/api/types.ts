@@ -484,3 +484,70 @@ export interface ModelsResponse {
   config: ModelConfig;
   clis: ModelCliInfo[];
 }
+
+// ── usage / cost (GET /api/usage) ──────────────────────────────────────────
+export interface UsageModelRow {
+  model: string | null;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  events: number;
+  cost_usd: number;
+  /** false when this model isn't in the server pricing table (tokens only). */
+  priced: boolean;
+}
+export interface UsageDayRow {
+  day: string;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+}
+export interface UsageAgentRow {
+  agent_id: string;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  events: number;
+}
+export interface UsageSummary {
+  totals: {
+    input_tokens: number;
+    output_tokens: number;
+    cache_read_tokens: number;
+    cache_write_tokens: number;
+    events: number;
+    cost_usd: number;
+    priced: boolean;
+  };
+  by_model: UsageModelRow[];
+  by_day: UsageDayRow[];
+  by_agent: UsageAgentRow[];
+}
+
+// ── kanban tasks (GET /api/tasks) ──────────────────────────────────────────
+export interface TaskRow {
+  /** Effective status (human override else derived from lifecycle). */
+  status: string;
+  /** True when `status` is a human override (vs derived). */
+  overridden: boolean;
+  agent_id: string;
+  parent_agent_id: string;
+  role_label: string;
+  role_slug: string | null;
+  handoff_signal: string | null;
+  task_status: string | null;
+  spawned_at: number;
+  killed_at: number | null;
+  shim_exit_code: number | null;
+  last_activity_at: number | null;
+  workspace_id: string | null;
+  thread_id: string | null;
+  handoff_done: boolean;
+  error_present: boolean;
+}
+export interface TasksResponse {
+  tasks: TaskRow[];
+}
