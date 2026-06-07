@@ -167,6 +167,14 @@ export const api = {
     request<FileListResp>("GET", `/api/files/list${dir ? qs({ dir }) : ""}`),
   filesRead: (path: string) =>
     request<FileReadResp>("GET", `/api/files/read${qs({ path })}`),
+  compactBlackboard: (path: string) =>
+    request<{
+      ok: boolean;
+      changed: boolean;
+      before_tokens: number;
+      after_tokens: number;
+      note?: string;
+    }>("POST", "/api/blackboard/compact", { path }),
   listCron: () => request<CronListResp>("GET", "/api/cron"),
   createCron: (req: {
     workspace_id: string;

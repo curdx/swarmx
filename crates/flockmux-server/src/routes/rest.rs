@@ -4269,6 +4269,137 @@ pub async fn optimize_prompt(
     Json(OptimizePromptResponse { optimized: cleaned.to_string(), changed }).into_response()
 }
 
+const COMPACT_META_PROMPT: &str = "你是状态摘要器。把下面这份不断累积的「台账/黑板」内容压缩成简洁但**不丢关键信息**的摘要:保留所有未完成事项、关键决策、产出物路径、阻塞与错误;合并重复/过期条目;用简短 Markdown 条目。只输出压缩后的正文,不要任何解释或代码围栏。";
+
+#[derive(serde::Deserialize)]
+pub struct CompactBlackboardRequest {
+    pub path: String,
+}
+
+/// POST /api/blackboard/compact — summarize a long blackboard ledger in place
+/// via headless `claude -p` (small tier), to keep accumulated orchestrator
+/// state lean. The flockmux-shaped take on "context compression": the PTY CLIs
+/// manage their OWN context window, but the blackboard ledgers they read/write
+/// grow unbounded — this compacts those. Non-destructive in spirit: the
+/// blackboard op-log retains the pre-compaction version. Operator/agent-invoked.
+pub async fn compact_blackboard(
+    State(state): State<AppState>,
+    Json(req): Json<CompactBlackboardRequest>,
+) -> impl IntoResponse {
+    let path = req.path.trim().to_string();
+    if path.is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "path required" }))).into_response();
+    }
+    let content = match state.swarm.read_blackboard(&path).await {
+        Ok(Some(c)) => c,
+        Ok(None) => {
+            return (StatusCode::NOT_FOUND, Json(json!({ "error": "no such blackboard path" })))
+                .into_response()
+        }
+        Err(e) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() })))
+                .into_response()
+        }
+    };
+    let before_tokens = crate::tokens::estimate(&content);
+    let before_chars = content.chars().count();
+    if before_chars < 400 {
+        return Json(json!({
+            "ok": true, "changed": false,
+            "before_tokens": before_tokens, "after_tokens": before_tokens,
+            "note": "too small to compact"
+        }))
+        .into_response();
+    }
+
+    let (binary, plugin_id) = match state.plugins.get("claude") {
+        Some(p) => (p.binary.clone(), p.id.clone()),
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({ "error": "压缩需要 claude CLI，但未找到 claude 插件" })),
+            )
+                .into_response()
+        }
+    };
+    let model = { state.models.read().await.resolve(&plugin_id, Some("haiku")) };
+    let prompt = format!("{COMPACT_META_PROMPT}\n\n<台账>\n{content}\n</台账>");
+
+    let mut cmd = tokio::process::Command::new(&binary);
+    cmd.arg("-p").arg(&prompt);
+    if let Some(m) = &model {
+        cmd.arg("--model").arg(m);
+    }
+    cmd.current_dir(std::env::temp_dir())
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true);
+
+    let child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({ "error": format!("无法启动 claude：{e}（请确认已安装并登录）") })),
+            )
+                .into_response()
+        }
+    };
+    let out = match tokio::time::timeout(
+        std::time::Duration::from_secs(90),
+        child.wait_with_output(),
+    )
+    .await
+    {
+        Ok(Ok(o)) => o,
+        Ok(Err(e)) => {
+            return (StatusCode::BAD_GATEWAY, Json(json!({ "error": format!("claude 执行失败：{e}") })))
+                .into_response()
+        }
+        Err(_) => {
+            return (StatusCode::GATEWAY_TIMEOUT, Json(json!({ "error": "压缩超时（claude 无响应）" })))
+                .into_response()
+        }
+    };
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let detail = stderr
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .last()
+            .unwrap_or("claude 返回非零状态");
+        return (StatusCode::BAD_GATEWAY, Json(json!({ "error": format!("压缩失败：{detail}") })))
+            .into_response();
+    }
+
+    let summary = strip_code_fences(String::from_utf8_lossy(&out.stdout).trim()).to_string();
+    if summary.is_empty() || summary.chars().count() >= before_chars {
+        // Don't replace with an empty / bigger result.
+        return Json(json!({
+            "ok": true, "changed": false,
+            "before_tokens": before_tokens, "after_tokens": before_tokens,
+            "note": "no smaller summary produced"
+        }))
+        .into_response();
+    }
+    if let Err(e) = state
+        .swarm
+        .write_blackboard(Some("compact".to_string()), &path, &summary)
+        .await
+    {
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() })))
+            .into_response();
+    }
+    Json(json!({
+        "ok": true, "changed": true,
+        "before_tokens": before_tokens, "after_tokens": crate::tokens::estimate(&summary),
+        "before_chars": before_chars, "after_chars": summary.chars().count()
+    }))
+    .into_response()
+}
+
 /// Strip a single ``` fence (with optional language tag) the model may wrap the
 /// rewrite in despite being told not to. Leaves un-fenced text untouched.
 fn strip_code_fences(s: &str) -> &str {

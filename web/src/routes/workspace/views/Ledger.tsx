@@ -19,7 +19,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useTranslation } from "react-i18next";
-import { ClipboardList, RefreshCw, Activity, Radio } from "lucide-react";
+import { ClipboardList, RefreshCw, Activity, Radio, Sparkles } from "lucide-react";
 import { api, ApiError } from "../../../api/http";
 import type { BlackboardEntry, BlackboardSnapshot, SwarmEvent } from "../../../api/types";
 import { useSwarmFeed } from "../../../hooks/useSwarmFeed";
@@ -167,6 +167,37 @@ export default function LedgerView() {
     refresh();
   }, [refresh]);
 
+  // Context compaction: summarize the (unbounded-growth) ledgers in place via a
+  // headless small-model pass. Non-destructive — the blackboard op-log keeps the
+  // pre-compaction version. A flockmux-shaped "context compression": the PTY
+  // CLIs self-manage their own window; what grows here is the ledger state.
+  const [compacting, setCompacting] = useState(false);
+  const [compactNote, setCompactNote] = useState<string | null>(null);
+  const compact = useCallback(async () => {
+    setCompacting(true);
+    setCompactNote(null);
+    try {
+      const results = await Promise.all([
+        api.compactBlackboard(taskKey).catch(() => null),
+        api.compactBlackboard(progressKey).catch(() => null),
+      ]);
+      const saved = results
+        .filter((r): r is NonNullable<typeof r> => !!r && r.changed)
+        .reduce((acc, r) => acc + (r.before_tokens - r.after_tokens), 0);
+      if (mountedRef.current) {
+        setCompactNote(
+          saved > 0
+            ? t("ledger.compactSaved", { n: saved, defaultValue: "已压缩，省约 {{n}} tokens" })
+            : t("ledger.compactNoop", { defaultValue: "已是最简，无需压缩" }),
+        );
+        window.setTimeout(() => mountedRef.current && setCompactNote(null), 4000);
+      }
+      await refresh();
+    } finally {
+      if (mountedRef.current) setCompacting(false);
+    }
+  }, [taskKey, progressKey, refresh, t]);
+
   // 监听 blackboard_changed —— orchestrator 写 ledger 时立即重拉,
   // 别等用户手动 refresh。
   const lastEventIdRef = useRef<number>(0);
@@ -202,16 +233,32 @@ export default function LedgerView() {
             {t("ledger.subtitle", "orchestrator 的思考过程都在这里。左侧是任务台账(目标 + 计划),右侧是进展状态。")}
           </p>
         </div>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={refresh}
-          disabled={refreshing}
-          className="gap-1.5"
-        >
-          <RefreshCw className={cn("size-3.5", refreshing && "animate-spin")} />
-          {t("ledger.refresh", "刷新")}
-        </Button>
+        <div className="flex items-center gap-2">
+          {compactNote && (
+            <span className="font-caption text-[11px] text-foreground-tertiary">{compactNote}</span>
+          )}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={compact}
+            disabled={compacting || refreshing}
+            title={t("ledger.compactHint", "用小模型把台账压缩(保留关键信息,旧版进 op-log 可恢复)")}
+            className="gap-1.5"
+          >
+            <Sparkles className={cn("size-3.5", compacting && "animate-pulse")} />
+            {compacting ? t("ledger.compacting", "压缩中…") : t("ledger.compact", "压缩")}
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={refresh}
+            disabled={refreshing}
+            className="gap-1.5"
+          >
+            <RefreshCw className={cn("size-3.5", refreshing && "animate-spin")} />
+            {t("ledger.refresh", "刷新")}
+          </Button>
+        </div>
       </div>
 
       {/* 主体:上半 = 任务 + 进展(双卡),下半 = worker 近况(通栏) */}

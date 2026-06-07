@@ -23,6 +23,7 @@ mod roles;
 mod routes;
 mod spawn;
 mod spells;
+mod tokens;
 mod transcript;
 mod wake;
 // Git worktree helpers for thread isolation, wired into the thread REST
@@ -410,6 +411,7 @@ async fn main() -> Result<()> {
         .route("/api/spell/run", post(routes::rest::run_spell))
         // Composer 「优化」 button: one-shot headless prompt rewrite (claude -p).
         .route("/api/prompt/optimize", post(routes::rest::optimize_prompt))
+        .route("/api/blackboard/compact", post(routes::rest::compact_blackboard))
         // Local image preview: serve an image by abs path (chat/composer), and
         // accept a pasted/dropped bitmap upload (raised body limit for images).
         .route("/api/file", get(routes::rest::serve_file))
