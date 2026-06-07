@@ -779,6 +779,41 @@ mod model_overlay_tests {
 }
 
 #[cfg(test)]
+mod locate_tests {
+    use super::which_in_path;
+
+    #[test]
+    fn finds_a_file_on_path() {
+        let dir = std::env::temp_dir().join(format!("flockmux-which-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("flockmux-fake-bin");
+        std::fs::write(&f, b"x").unwrap();
+        let prev = std::env::var_os("PATH");
+        std::env::set_var("PATH", &dir);
+        let found = which_in_path("flockmux-fake-bin");
+        // restore PATH before asserting so a failure can't poison other tests
+        match prev {
+            Some(p) => std::env::set_var("PATH", p),
+            None => std::env::remove_var("PATH"),
+        }
+        std::fs::remove_dir_all(&dir).ok();
+        assert_eq!(found, Some(f));
+    }
+
+    #[test]
+    fn returns_none_for_absent() {
+        let prev = std::env::var_os("PATH");
+        std::env::set_var("PATH", std::env::temp_dir());
+        let r = which_in_path("flockmux-definitely-not-a-real-binary-xyz");
+        match prev {
+            Some(p) => std::env::set_var("PATH", p),
+            None => std::env::remove_var("PATH"),
+        }
+        assert_eq!(r, None);
+    }
+}
+
+#[cfg(test)]
 mod ready_plan_tests {
     use super::*;
     use crate::plugins::{ReadyStep, ReadyStepKind};
@@ -1023,19 +1058,49 @@ fn locate_sibling_bin(name: &str, env_override: &str) -> Result<PathBuf> {
     if let Ok(p) = std::env::var(env_override) {
         return Ok(PathBuf::from(p));
     }
-    let exe = std::env::current_exe().context("current_exe")?;
-    if let Some(dir) = exe.parent() {
-        let cand = dir.join(if cfg!(windows) {
-            format!("{name}.exe")
-        } else {
-            name.to_string()
-        });
-        if cand.is_file() {
-            return Ok(cand);
+    let file = if cfg!(windows) {
+        format!("{name}.exe")
+    } else {
+        name.to_string()
+    };
+    // Candidate chain (first existing wins):
+    //   1. next to current_exe — the installed/sidecar layout + `target/<profile>/`.
+    //   2. one level up — `current_exe` is `target/<profile>/deps/<exe>` under
+    //      `cargo run`/tests, where the sibling bin lives in `target/<profile>/`.
+    //      (The old impl only checked #1, contradicting its own doc comment.)
+    //   3. PATH — installed via `cargo install` / brew / packaged.
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            candidates.push(dir.join(&file));
+            if let Some(up) = dir.parent() {
+                candidates.push(up.join(&file));
+            }
         }
     }
+    for cand in &candidates {
+        if cand.is_file() {
+            return Ok(cand.clone());
+        }
+    }
+    if let Some(p) = which_in_path(&file) {
+        return Ok(p);
+    }
     anyhow::bail!(
-        "{name} not found next to flockmux-server. Build it with \
-         `cargo build -p {name}` or set {env_override}"
+        "{name} not found (looked next to flockmux-server, one level up, and on PATH). \
+         Build it with `cargo build -p {name}` or set {env_override}"
     )
+}
+
+/// First `file` found on `$PATH`, if any. Lets an installed (cargo install /
+/// brew / packaged) sidecar binary be located when it's not next to the server.
+fn which_in_path(file: &str) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    for dir in std::env::split_paths(&path) {
+        let cand = dir.join(file);
+        if cand.is_file() {
+            return Some(cand);
+        }
+    }
+    None
 }
