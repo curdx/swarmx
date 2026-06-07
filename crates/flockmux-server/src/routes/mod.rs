@@ -6,5 +6,6 @@ pub mod recording;
 pub mod rest;
 pub mod swarm;
 pub mod tasks;
+pub mod terminal_ws;
 pub mod usage;
 pub mod ws_swarm;

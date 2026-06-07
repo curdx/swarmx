@@ -70,6 +70,7 @@
     "mcp": "MCP",
     "tasks": "任务",
     "files": "文件",
+    "terminal": "终端",
     "usage": "用量",
     "settings": "设置",
     "debug": "Debug"
@@ -722,6 +723,7 @@
       "mcp": "为 agent 装工具",
       "tasks": "任务看板",
       "files": "浏览本地文件",
+      "terminal": "开个 shell",
       "usage": "token 与成本",
       "settings": "偏好与模型",
       "debug": "调试面板"

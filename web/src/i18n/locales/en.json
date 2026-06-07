@@ -70,6 +70,7 @@
     "mcp": "MCP",
     "tasks": "Tasks",
     "files": "Files",
+    "terminal": "Terminal",
     "usage": "Usage",
     "settings": "Settings",
     "debug": "Debug"
@@ -720,6 +721,7 @@
       "mcp": "Tools for agents",
       "tasks": "Task board",
       "files": "Browse local files",
+      "terminal": "Open a shell",
       "usage": "Tokens & cost",
       "settings": "Preferences",
       "debug": "Legacy M2 grid"

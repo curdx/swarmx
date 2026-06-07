@@ -36,6 +36,7 @@ import {
   Settings as SettingsIcon,
   Sun,
   SunMoon,
+  Terminal as TerminalIcon,
   Zap,
 } from "lucide-react";
 import { api } from "../api/http";
@@ -65,6 +66,7 @@ const NAV = [
   { labelKey: "nav.mcp", href: "/mcp", icon: Boxes, hintKey: "cmdk.navHint.mcp" },
   { labelKey: "nav.tasks", href: "/tasks", icon: ClipboardList, hintKey: "cmdk.navHint.tasks" },
   { labelKey: "nav.files", href: "/files", icon: FolderTree, hintKey: "cmdk.navHint.files" },
+  { labelKey: "nav.terminal", href: "/terminal", icon: TerminalIcon, hintKey: "cmdk.navHint.terminal" },
   { labelKey: "nav.usage", href: "/usage", icon: BarChart3, hintKey: "cmdk.navHint.usage" },
   { labelKey: "nav.settings", href: "/settings", icon: SettingsIcon, hintKey: "cmdk.navHint.settings" },
   // /debug isn't purely dev tooling — it hosts the blackboard editor (operator
