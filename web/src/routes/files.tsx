@@ -30,6 +30,10 @@ export default function FilesRoute() {
   const open = useCallback(async (dir?: string) => {
     setLoading(true);
     setErr(null);
+    // Reset the preview pane — otherwise the previously-selected file's content
+    // lingers on the right while you browse into an unrelated directory.
+    setPreview(null);
+    setPreviewLoading(false);
     try {
       const res = await api.filesList(dir);
       setList(res);
