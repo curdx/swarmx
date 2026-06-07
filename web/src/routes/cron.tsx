@@ -26,6 +26,18 @@ export default function CronRoute() {
   const [prompt, setPrompt] = useState("");
   const [creating, setCreating] = useState(false);
 
+  // Run-now feedback: spinner on the firing row, a transient success notice
+  // (previously only failures surfaced), and a two-step inline delete confirm.
+  const [notice, setNotice] = useState<string | null>(null);
+  const [runningId, setRunningId] = useState<string | null>(null);
+  const [confirmDel, setConfirmDel] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!notice) return;
+    const id = setTimeout(() => setNotice(null), 3500);
+    return () => clearTimeout(id);
+  }, [notice]);
+
   const load = useCallback(async () => {
     try {
       const [c, ws] = await Promise.all([api.listCron(), api.listWorkspaces().catch(() => [])]);
@@ -133,6 +145,7 @@ export default function CronRoute() {
         </section>
 
         {err && <div className="font-caption text-sm text-status-danger">{err}</div>}
+        {notice && <div className="font-caption text-sm text-status-success">{notice}</div>}
 
         {/* job list */}
         {loading ? (
@@ -171,27 +184,52 @@ export default function CronRoute() {
                 </div>
                 <button
                   type="button"
+                  disabled={runningId === j.id}
                   onClick={async () => {
-                    const r = await api.runCron(j.id);
-                    if (!r.ok && r.skipped) setErr(`${j.name}: ${r.skipped}`);
-                    load();
+                    setRunningId(j.id);
+                    setErr(null);
+                    setNotice(null);
+                    try {
+                      const r = await api.runCron(j.id);
+                      if (!r.ok && r.skipped) setErr(`${j.name}: ${r.skipped}`);
+                      else setNotice(`${j.name} · ${t("cron.ranOk")}`);
+                    } finally {
+                      setRunningId(null);
+                      load();
+                    }
                   }}
-                  title={t("cron.runNow")}
-                  className="shrink-0 rounded p-1 text-foreground-tertiary hover:bg-surface-tertiary hover:text-foreground-primary"
+                  title={runningId === j.id ? t("cron.running") : t("cron.runNow")}
+                  className="shrink-0 rounded p-1 text-foreground-tertiary hover:bg-surface-tertiary hover:text-foreground-primary disabled:opacity-60"
                 >
-                  <Play className="size-3.5" />
+                  {runningId === j.id ? (
+                    <Loader2 className="size-3.5 animate-spin" />
+                  ) : (
+                    <Play className="size-3.5" />
+                  )}
                 </button>
-                <button
-                  type="button"
-                  onClick={async () => {
-                    await api.deleteCron(j.id);
-                    load();
-                  }}
-                  title={t("cron.delete")}
-                  className="shrink-0 rounded p-1 text-foreground-tertiary hover:bg-surface-tertiary hover:text-status-danger"
-                >
-                  <Trash2 className="size-3.5" />
-                </button>
+                {confirmDel === j.id ? (
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      setConfirmDel(null);
+                      await api.deleteCron(j.id);
+                      load();
+                    }}
+                    title={t("cron.confirmDelete")}
+                    className="shrink-0 rounded bg-status-danger/10 px-1.5 py-1 font-caption text-[11px] text-status-danger hover:bg-status-danger/20"
+                  >
+                    {t("cron.confirmDelete")}
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setConfirmDel(j.id)}
+                    title={t("cron.delete")}
+                    className="shrink-0 rounded p-1 text-foreground-tertiary hover:bg-surface-tertiary hover:text-status-danger"
+                  >
+                    <Trash2 className="size-3.5" />
+                  </button>
+                )}
               </li>
             ))}
           </ul>

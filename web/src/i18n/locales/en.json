@@ -636,7 +636,10 @@
     "delete": "Delete",
     "enable": "Enable",
     "disable": "Disable",
-    "lastRun": "last"
+    "lastRun": "last",
+    "running": "Firing…",
+    "ranOk": "Fired — delivered to the orchestrator",
+    "confirmDelete": "Confirm delete"
   },
   "files": {
     "title": "File browser",

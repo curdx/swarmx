@@ -638,7 +638,10 @@
     "delete": "删除",
     "enable": "启用",
     "disable": "停用",
-    "lastRun": "上次"
+    "lastRun": "上次",
+    "running": "触发中…",
+    "ranOk": "已触发，投递给编排器",
+    "confirmDelete": "确认删除"
   },
   "files": {
     "title": "文件浏览器",
