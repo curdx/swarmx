@@ -119,7 +119,7 @@ export default function UsageRoute() {
                     return (
                       <div
                         key={d.day}
-                        className="group relative flex flex-1 flex-col justify-end"
+                        className="group relative flex h-full max-w-[2.5rem] flex-1 flex-col justify-end"
                         title={`${d.day} · ${fmtTokens(total)}`}
                       >
                         <div
