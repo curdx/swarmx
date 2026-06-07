@@ -139,12 +139,13 @@ export default function UsageRoute() {
                 {t("usage.byModel")}
               </h2>
               <UsageTable
-                cols={[t("usage.model"), t("usage.input"), t("usage.output"), t("usage.cacheRead"), t("usage.totalCost")]}
+                cols={[t("usage.model"), t("usage.input"), t("usage.output"), t("usage.cacheRead"), t("usage.ctx"), t("usage.totalCost")]}
                 rows={data.by_model.map((m) => [
                   m.model ?? "—",
                   fmtTokens(m.input_tokens),
                   fmtTokens(m.output_tokens),
                   fmtTokens(m.cache_read_tokens),
+                  m.context_window ? fmtTokens(m.context_window) : "—",
                   m.priced ? fmtCost(m.cost_usd) : t("usage.tokensOnly"),
                 ])}
               />

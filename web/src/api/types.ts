@@ -496,6 +496,8 @@ export interface UsageModelRow {
   cost_usd: number;
   /** false when this model isn't in the server pricing table (tokens only). */
   priced: boolean;
+  /** Estimated context window (tokens); null for unknown models. */
+  context_window: number | null;
 }
 export interface UsageDayRow {
   day: string;

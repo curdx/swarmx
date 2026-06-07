@@ -45,6 +45,25 @@ fn rate_for(model: &str) -> Option<Rate> {
     None
 }
 
+/// Best-effort context-window size (tokens) by model-name substring. Surfaced
+/// in the Usage table so the operator can eyeball headroom. Returns None for
+/// unknown models (UI shows "—"). Provider-aware where it matters (codex via
+/// OAuth caps lower than the model's nominal window).
+fn context_window_for(model: &str) -> Option<u32> {
+    let m = model.to_ascii_lowercase();
+    if m.contains("opus") || m.contains("sonnet") {
+        // 1M-context betas exist; the safe default for claude opus/sonnet is 200k.
+        return Some(if m.contains("[1m]") || m.contains("-1m") { 1_000_000 } else { 200_000 });
+    }
+    if m.contains("haiku") {
+        return Some(200_000);
+    }
+    if m.contains("gpt-5") || m.contains("gpt5") || m.contains("codex") || m.contains("o4") {
+        return Some(272_000);
+    }
+    None
+}
+
 fn cost_of(model: Option<&str>, input: i64, output: i64, cache_read: i64, cache_write: i64) -> Option<f64> {
     let r = rate_for(model.unwrap_or(""))?;
     let per = |toks: i64, rate: f64| (toks as f64) / 1_000_000.0 * rate;
@@ -66,6 +85,7 @@ struct ModelRow {
     events: i64,
     cost_usd: f64,
     priced: bool,
+    context_window: Option<u32>,
 }
 
 pub async fn usage_summary(State(state): State<AppState>) -> impl IntoResponse {
@@ -105,6 +125,7 @@ pub async fn usage_summary(State(state): State<AppState>) -> impl IntoResponse {
             events: m.events,
             cost_usd: cost,
             priced,
+            context_window: m.model.as_deref().and_then(context_window_for),
         });
     }
 

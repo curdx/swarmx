@@ -678,6 +678,7 @@
     "output": "Output",
     "cacheRead": "Cache read",
     "cacheWrite": "Cache write",
+    "ctx": "Context",
     "events": "Calls",
     "byDay": "Daily trend",
     "byModel": "By model",
