@@ -642,6 +642,21 @@ git config user.email "你的@邮箱"
 # 别动 global git config。
 ```
 
+## 作为 MCP server 挂到外部 Claude Code / IDE
+
+flockmux 既是 MCP 客户端(给 worker 注入工具),也可作为 **MCP server** 暴露给你自己的外部
+Claude Code / Codex / IDE——让它们直接读黑板、查 agent、发消息、派 worker:
+
+```bash
+# flockmux 在 127.0.0.1:7777 跑着时:
+claude mcp add flockmux -- env FLOCKMUX_SERVER_URL=http://127.0.0.1:7777 /path/to/flockmux-mcp
+```
+
+无需 agent 身份(默认以 `external` 操作)。暴露的工具:`swarm_read_blackboard` /
+`swarm_write_blackboard` / `swarm_list_blackboard` / `swarm_list_agents` /
+`swarm_send_message` / `swarm_list_messages` / `swarm_search_messages` /
+`swarm_spawn_worker` / `swarm_list_roles` / `swarm_name_thread`。
+
 ## License
 
 [MIT](LICENSE)。许可证全文见 LICENSE 文件。

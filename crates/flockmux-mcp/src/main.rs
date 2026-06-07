@@ -72,9 +72,14 @@ async fn main() -> Result<()> {
             Ok(())
         }
         None => {
-            let agent_id = cli
-                .agent_id
-                .context("--agent-id (or FLOCKMUX_AGENT_ID) required for stdio mode")?;
+            // A flockmux-spawned worker always gets FLOCKMUX_AGENT_ID. When the
+            // binary is instead mounted by an EXTERNAL client (a developer's own
+            // Claude Code / IDE pointing FLOCKMUX_SERVER_URL at a running
+            // flockmux), there's no agent identity — default to "external" so the
+            // swarm_* tools (read blackboard, list agents, send message, …) work
+            // out of the box. This is what makes flockmux usable as an OUTWARD
+            // MCP server, not just the inward per-worker one.
+            let agent_id = cli.agent_id.unwrap_or_else(|| "external".to_string());
             let ctx = ToolContext::new(agent_id.clone(), cli.server_url.clone())
                 .context("build ToolContext (reqwest client)")?;
             debug!(agent_id = %agent_id, server = %cli.server_url, "flockmux-mcp starting");
