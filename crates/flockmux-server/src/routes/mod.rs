@@ -1,3 +1,4 @@
+pub mod api;
 pub mod cron;
 pub mod files;
 pub mod mcp_admin;
@@ -9,4 +10,5 @@ pub mod swarm;
 pub mod tasks;
 pub mod terminal_ws;
 pub mod usage;
+pub mod workspaces;
 pub mod ws_swarm;

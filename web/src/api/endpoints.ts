@@ -1,0 +1,148 @@
+export type ApiMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+
+export interface ApiEndpoint {
+  name: string;
+  method: ApiMethod;
+  path: string;
+}
+
+type QueryValue = string | number | boolean | null | undefined;
+
+interface MessageListParams {
+  to?: string;
+  from?: string;
+  q?: string;
+  limit?: number;
+  only_undelivered?: boolean;
+}
+
+function endpoint(name: string, method: ApiMethod, path: string): ApiEndpoint {
+  if (!path.startsWith("/api/")) {
+    throw new Error(`API endpoint ${name} must stay under /api: ${path}`);
+  }
+  return { name, method, path };
+}
+
+export function queryString(params: Record<string, QueryValue>): string {
+  const parts: string[] = [];
+  for (const [key, value] of Object.entries(params)) {
+    if (value === undefined || value === null || value === "" || value === false) continue;
+    parts.push(`${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`);
+  }
+  return parts.length ? `?${parts.join("&")}` : "";
+}
+
+function encodePathSegments(path: string): string {
+  return path.split("/").map(encodeURIComponent).join("/");
+}
+
+export const apiRoutes = {
+  plugins: {
+    list: () => endpoint("plugins.list", "GET", "/api/plugins"),
+  },
+  mcp: {
+    env: () => endpoint("mcp.env", "GET", "/api/mcp/env"),
+    status: () => endpoint("mcp.status", "GET", "/api/mcp/status"),
+    install: () => endpoint("mcp.install", "POST", "/api/mcp/install"),
+    uninstall: () => endpoint("mcp.uninstall", "POST", "/api/mcp/uninstall"),
+  },
+  agents: {
+    list: () => endpoint("agents.list", "GET", "/api/agent"),
+    spawn: () => endpoint("agents.spawn", "POST", "/api/agent"),
+    kill: (id: string) => endpoint("agents.kill", "DELETE", `/api/agent/${encodeURIComponent(id)}`),
+    wake: (id: string) => endpoint("agents.wake", "POST", `/api/agent/${encodeURIComponent(id)}/wake`),
+    activity: (id: string) => endpoint("agents.activity", "GET", `/api/agent/${encodeURIComponent(id)}/activity`),
+    interrupt: (id: string) => endpoint("agents.interrupt", "POST", `/api/agent/${encodeURIComponent(id)}/interrupt`),
+    resume: (id: string) => endpoint("agents.resume", "POST", `/api/agent/${encodeURIComponent(id)}/resume`),
+    interruptAll: (workspaceId: string) =>
+      endpoint("agents.interruptAll", "POST", `/api/agent/interrupt-all${queryString({ workspace_id: workspaceId })}`),
+  },
+  usage: {
+    summary: (workspaceId?: string) =>
+      endpoint("usage.summary", "GET", `/api/usage${queryString({ workspace_id: workspaceId })}`),
+  },
+  tasks: {
+    list: (workspaceId?: string) =>
+      endpoint("tasks.list", "GET", `/api/tasks${queryString({ workspace_id: workspaceId })}`),
+    setStatus: (agentId: string) => endpoint("tasks.setStatus", "POST", `/api/tasks/${encodeURIComponent(agentId)}/status`),
+  },
+  files: {
+    list: (dir?: string, workspaceId?: string, all?: boolean) =>
+      endpoint("files.list", "GET", `/api/files/list${queryString({ dir, workspace_id: workspaceId, all: all ? "1" : undefined })}`),
+    read: (path: string, workspaceId?: string, all?: boolean) =>
+      endpoint("files.read", "GET", `/api/files/read${queryString({ path, workspace_id: workspaceId, all: all ? "1" : undefined })}`),
+    serve: (path: string) => `/api/file${queryString({ path })}`,
+  },
+  blackboard: {
+    list: () => endpoint("blackboard.list", "GET", "/api/blackboard"),
+    read: (path: string) => endpoint("blackboard.read", "GET", `/api/blackboard/${encodePathSegments(path)}`),
+    write: (path: string) => endpoint("blackboard.write", "PUT", `/api/blackboard/${encodePathSegments(path)}`),
+    history: (path: string, limit = 50, includeContent = false) =>
+      endpoint("blackboard.history", "GET", `/api/blackboard-history/${encodePathSegments(path)}${queryString({
+        limit,
+        include_content: includeContent,
+      })}`),
+    compact: () => endpoint("blackboard.compact", "POST", "/api/blackboard/compact"),
+  },
+  cron: {
+    list: () => endpoint("cron.list", "GET", "/api/cron"),
+    preview: (expr: string) => endpoint("cron.preview", "GET", `/api/cron/preview${queryString({ expr })}`),
+    create: () => endpoint("cron.create", "POST", "/api/cron"),
+    delete: (id: string) => endpoint("cron.delete", "DELETE", `/api/cron/${encodeURIComponent(id)}`),
+    toggle: (id: string) => endpoint("cron.toggle", "PATCH", `/api/cron/${encodeURIComponent(id)}`),
+    run: (id: string) => endpoint("cron.run", "POST", `/api/cron/${encodeURIComponent(id)}/run`),
+  },
+  messages: {
+    list: (params: MessageListParams) => endpoint("messages.list", "GET", `/api/message${queryString({
+      to: params.to,
+      from: params.from,
+      q: params.q,
+      limit: params.limit,
+      only_undelivered: params.only_undelivered,
+    })}`),
+    send: () => endpoint("messages.send", "POST", "/api/message"),
+    markRead: () => endpoint("messages.markRead", "POST", "/api/message/read"),
+    unreadCount: (to: string) => endpoint("messages.unreadCount", "GET", `/api/message/unread_count${queryString({ to })}`),
+  },
+  recordings: {
+    list: (agentId?: string) => endpoint("recordings.list", "GET", `/api/recording${queryString({ agent_id: agentId })}`),
+    cast: (id: string) => `/api/recording/${encodeURIComponent(id)}`,
+  },
+  spells: {
+    list: () => endpoint("spells.list", "GET", "/api/spells"),
+    run: () => endpoint("spells.run", "POST", "/api/spell/run"),
+  },
+  workspaces: {
+    list: () => endpoint("workspaces.list", "GET", "/api/workspaces"),
+    create: () => endpoint("workspaces.create", "POST", "/api/workspaces"),
+    delete: (id: string) => endpoint("workspaces.delete", "DELETE", `/api/workspaces/${encodeURIComponent(id)}`),
+    roots: (id: string) => endpoint("workspaces.roots", "POST", `/api/workspaces/${encodeURIComponent(id)}/roots`),
+    deleteRoot: (id: string, rootId: string) =>
+      endpoint("workspaces.deleteRoot", "DELETE", `/api/workspaces/${encodeURIComponent(id)}/roots${queryString({ id: rootId })}`),
+    rootSuggestions: (id: string, projectPath?: string) =>
+      endpoint("workspaces.rootSuggestions", "GET", `/api/workspaces/${encodeURIComponent(id)}/root-suggestions${queryString({ path: projectPath })}`),
+    branches: (id: string) => endpoint("workspaces.branches", "GET", `/api/workspaces/${encodeURIComponent(id)}/branches`),
+    threads: (id: string) => endpoint("workspaces.threads", "GET", `/api/workspaces/${encodeURIComponent(id)}/threads`),
+    createThread: (id: string) => endpoint("workspaces.createThread", "POST", `/api/workspaces/${encodeURIComponent(id)}/threads`),
+    updateThread: (id: string, threadId: string) =>
+      endpoint("workspaces.updateThread", "PATCH", `/api/workspaces/${encodeURIComponent(id)}/threads/${encodeURIComponent(threadId)}`),
+    setThreadModel: (id: string, threadId: string) =>
+      endpoint("workspaces.setThreadModel", "PUT", `/api/workspaces/${encodeURIComponent(id)}/threads/${encodeURIComponent(threadId)}/model`),
+    deleteThread: (id: string, threadId: string) =>
+      endpoint("workspaces.deleteThread", "DELETE", `/api/workspaces/${encodeURIComponent(id)}/threads/${encodeURIComponent(threadId)}`),
+    threadDiff: (id: string, threadId: string) =>
+      endpoint("workspaces.threadDiff", "GET", `/api/workspaces/${encodeURIComponent(id)}/threads/${encodeURIComponent(threadId)}/diff`),
+    mergeThread: (id: string, threadId: string) =>
+      endpoint("workspaces.mergeThread", "POST", `/api/workspaces/${encodeURIComponent(id)}/threads/${encodeURIComponent(threadId)}/merge`),
+  },
+  prompt: {
+    optimize: () => endpoint("prompt.optimize", "POST", "/api/prompt/optimize"),
+  },
+  attachments: {
+    upload: (name?: string) => `/api/attachment${queryString({ name })}`,
+  },
+  models: {
+    get: () => endpoint("models.get", "GET", "/api/models"),
+    put: () => endpoint("models.put", "PUT", "/api/models"),
+  },
+} as const;

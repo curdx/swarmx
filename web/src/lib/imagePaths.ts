@@ -8,6 +8,7 @@
  * (browsers can't load `file:///` from an http origin).
  */
 import { HTTP_BASE } from "./apiBase";
+import { apiRoutes } from "../api/endpoints";
 
 const IMG_EXT = "png|jpe?g|gif|webp|bmp|avif|svg|ico";
 
@@ -53,7 +54,7 @@ export function isImagePath(path: string): boolean {
 /** Backend URL that streams the local image at `path` (works in browser + Tauri
  *  via HTTP_BASE). */
 export function fileUrl(path: string): string {
-  return `${HTTP_BASE}/api/file?path=${encodeURIComponent(path)}`;
+  return `${HTTP_BASE}${apiRoutes.files.serve(path)}`;
 }
 
 /** Basename of a path, for alt text / chip labels. */

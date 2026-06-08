@@ -34,6 +34,8 @@ import type {
 } from "./types";
 
 import { HTTP_BASE } from "../lib/apiBase";
+import { apiRoutes } from "./endpoints";
+import type { ApiEndpoint } from "./endpoints";
 
 /** Thrown by `request()` on any non-2xx response. Carries the HTTP `status`
  *  (so callers can special-case 404 → empty-state instead of a red error)
@@ -49,14 +51,6 @@ export class ApiError extends Error {
     this.status = status;
     this.detail = detail;
   }
-}
-
-/** Percent-encode each path segment but keep the `/` separators intact —
- *  blackboard keys are slash-delimited (`<wsId>/task.ledger.md`). Using a
- *  bare `encodeURI` left reserved delimiters (`? # &`) unescaped, so a key
- *  containing them got silently truncated into a bogus query/fragment. */
-function encodePath(path: string): string {
-  return path.split("/").map(encodeURIComponent).join("/");
 }
 
 async function request<T>(
@@ -100,21 +94,20 @@ async function request<T>(
   return res.json() as Promise<T>;
 }
 
+function requestEndpoint<T>(
+  route: ApiEndpoint,
+  body?: unknown,
+  signal?: AbortSignal,
+): Promise<T> {
+  return request<T>(route.method, route.path, body, signal);
+}
+
 export interface ListMessagesQuery {
   to?: string;
   from?: string;
   q?: string;
   limit?: number;
   only_undelivered?: boolean;
-}
-
-function qs(params: Record<string, string | number | boolean | undefined>): string {
-  const parts: string[] = [];
-  for (const [k, v] of Object.entries(params)) {
-    if (v === undefined || v === "" || v === false) continue;
-    parts.push(`${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`);
-  }
-  return parts.length ? `?${parts.join("&")}` : "";
 }
 
 /** One detected runtime (node / npm / uv) for the MCP env probe. */
@@ -146,156 +139,142 @@ export interface McpStatus {
 }
 
 export const api = {
-  listPlugins: () => request<CliPluginInfo[]>("GET", "/api/plugins"),
+  listPlugins: () => requestEndpoint<CliPluginInfo[]>(apiRoutes.plugins.list()),
   // MCP admin (「快捷装 MCP」页面)
-  mcpEnv: () => request<McpEnv>("GET", "/api/mcp/env"),
-  mcpStatus: () => request<McpStatus>("GET", "/api/mcp/status"),
+  mcpEnv: () => requestEndpoint<McpEnv>(apiRoutes.mcp.env()),
+  mcpStatus: () => requestEndpoint<McpStatus>(apiRoutes.mcp.status()),
   mcpInstall: (name: string, cli: "claude" | "codex", apiKey?: string) =>
-    request<{ ok: boolean; output: string }>("POST", "/api/mcp/install", {
+    requestEndpoint<{ ok: boolean; output: string }>(apiRoutes.mcp.install(), {
       name,
       cli,
       ...(apiKey ? { api_key: apiKey } : {}),
     }),
   mcpUninstall: (name: string, cli: "claude" | "codex") =>
-    request<{ ok: boolean; output: string }>("POST", "/api/mcp/uninstall", { name, cli }),
-  listAgents: () => request<AgentInfo[]>("GET", "/api/agent"),
+    requestEndpoint<{ ok: boolean; output: string }>(apiRoutes.mcp.uninstall(), { name, cli }),
+  listAgents: () => requestEndpoint<AgentInfo[]>(apiRoutes.agents.list()),
   getUsage: (workspaceId?: string) =>
-    request<UsageSummary>("GET", `/api/usage${qs({ workspace_id: workspaceId })}`),
+    requestEndpoint<UsageSummary>(apiRoutes.usage.summary(workspaceId)),
   listTasks: (workspaceId?: string) =>
-    request<TasksResponse>("GET", `/api/tasks${qs({ workspace_id: workspaceId })}`),
+    requestEndpoint<TasksResponse>(apiRoutes.tasks.list(workspaceId)),
   setTaskStatus: (agentId: string, status: string | null) =>
-    request<{ ok: boolean }>("POST", `/api/tasks/${agentId}/status`, { status }),
+    requestEndpoint<{ ok: boolean }>(apiRoutes.tasks.setStatus(agentId), { status }),
   // `workspaceId` scopes the browser to that workspace's roots (jailed);
   // `all` is the "browse whole filesystem" escape hatch that lifts the jail.
   filesList: (dir?: string, workspaceId?: string, all?: boolean) =>
-    request<FileListResp>(
-      "GET",
-      `/api/files/list${qs({ dir, workspace_id: workspaceId, all: all ? "1" : undefined })}`,
-    ),
+    requestEndpoint<FileListResp>(apiRoutes.files.list(dir, workspaceId, all)),
   filesRead: (path: string, workspaceId?: string, all?: boolean) =>
-    request<FileReadResp>(
-      "GET",
-      `/api/files/read${qs({ path, workspace_id: workspaceId, all: all ? "1" : undefined })}`,
-    ),
+    requestEndpoint<FileReadResp>(apiRoutes.files.read(path, workspaceId, all)),
   compactBlackboard: (path: string) =>
-    request<{
+    requestEndpoint<{
       ok: boolean;
       changed: boolean;
       before_tokens: number;
       after_tokens: number;
       note?: string;
-    }>("POST", "/api/blackboard/compact", { path }),
-  listCron: () => request<CronListResp>("GET", "/api/cron"),
+    }>(apiRoutes.blackboard.compact(), { path }),
+  listCron: () => requestEndpoint<CronListResp>(apiRoutes.cron.list()),
   // Live validation + next-run preview for the create form. next_run is unix ms
   // (UTC) or null (valid but no occurrence within a year), the model evaluates.
   cronPreview: (expr: string) =>
-    request<{ valid: boolean; next_run: number | null }>("GET", `/api/cron/preview${qs({ expr })}`),
+    requestEndpoint<{ valid: boolean; next_run: number | null }>(apiRoutes.cron.preview(expr)),
   createCron: (req: {
     workspace_id: string;
     name: string;
     cron_expr: string;
     prompt: string;
-  }) => request<{ ok: boolean; id?: string; error?: string }>("POST", "/api/cron", req),
-  deleteCron: (id: string) => request<{ ok: boolean }>("DELETE", `/api/cron/${id}`),
+  }) => requestEndpoint<{ ok: boolean; id?: string; error?: string }>(apiRoutes.cron.create(), req),
+  deleteCron: (id: string) => requestEndpoint<{ ok: boolean }>(apiRoutes.cron.delete(id)),
   toggleCron: (id: string, enabled: boolean) =>
-    request<{ ok: boolean }>("PATCH", `/api/cron/${id}`, { enabled }),
+    requestEndpoint<{ ok: boolean }>(apiRoutes.cron.toggle(id), { enabled }),
   runCron: (id: string) =>
-    request<{ ok: boolean; skipped?: string }>("POST", `/api/cron/${id}/run`),
+    requestEndpoint<{ ok: boolean; skipped?: string }>(apiRoutes.cron.run(id)),
   spawnAgent: (req: SpawnAgentRequest) =>
-    request<SpawnAgentResponse>("POST", "/api/agent", req),
-  killAgent: (id: string) => request<void>("DELETE", `/api/agent/${id}`),
+    requestEndpoint<SpawnAgentResponse>(apiRoutes.agents.spawn(), req),
+  killAgent: (id: string) => requestEndpoint<void>(apiRoutes.agents.kill(id)),
   // M6e: 操作者手动 ⚡ 唤醒。后端走 mailbox + PTY-kick（同主路径），
   // body 写"manual wake from operator"。挡在 M6d-6 quiet gate 后面，
   // agent 正在 stream 时只投 mailbox 不戳 PTY。
-  wakeAgent: (id: string) => request<void>("POST", `/api/agent/${id}/wake`),
+  wakeAgent: (id: string) => requestEndpoint<void>(apiRoutes.agents.wake(id)),
   // Recent tool-level activity from the transcript tailer's ring — backfills
   // the drawer's Activity tab on a cold open (the live WS stream is
   // forward-only). Shares the live stream's `seq` space so they merge by it.
   getAgentActivity: (id: string) =>
-    request<AgentActivity[]>("GET", `/api/agent/${id}/activity`),
+    requestEndpoint<AgentActivity[]>(apiRoutes.agents.activity(id)),
   // 不杀 PTY 的暂停:发 Ctrl-C 取消当前 turn + 设 paused flag。WakeCoordinator
   // 跳过这个 agent 的自动唤醒,manual ⚡ 仍然能用。
   interruptAgent: (id: string) =>
-    request<{ ok: boolean; agent_id: string; paused: boolean }>(
-      "POST",
-      `/api/agent/${id}/interrupt`,
+    requestEndpoint<{ ok: boolean; agent_id: string; paused: boolean }>(
+      apiRoutes.agents.interrupt(id),
     ),
   resumeAgent: (id: string) =>
-    request<{ ok: boolean; agent_id: string; paused: boolean }>(
-      "POST",
-      `/api/agent/${id}/resume`,
+    requestEndpoint<{ ok: boolean; agent_id: string; paused: boolean }>(
+      apiRoutes.agents.resume(id),
     ),
   // workspace 级"全停"。后端遍历 registry 找匹配 workspace_id 的 live agent,
   // 逐个 interrupt。返回 { interrupted, agent_ids, failed }。
   interruptAllInWorkspace: (workspaceId: string) =>
-    request<{
+    requestEndpoint<{
       ok: boolean;
       interrupted: number;
       agent_ids: string[];
       failed: Array<{ agent_id: string; error: string }>;
-    }>("POST", `/api/agent/interrupt-all${qs({ workspace_id: workspaceId })}`),
+    }>(apiRoutes.agents.interruptAll(workspaceId)),
 
   // M3 swarm
   listMessages: (q: ListMessagesQuery = {}) =>
-    request<MessageRecord[]>("GET", `/api/message${qs(q as Record<string, string | number | boolean | undefined>)}`),
+    requestEndpoint<MessageRecord[]>(apiRoutes.messages.list(q)),
   sendMessage: (req: SendMessageRequest) =>
-    request<MessageRecord>("POST", "/api/message", req),
+    requestEndpoint<MessageRecord>(apiRoutes.messages.send(), req),
   markMessagesRead: (to: string, ids: number[]) =>
-    request<MarkReadResponse>("POST", "/api/message/read", { to, ids }),
+    requestEndpoint<MarkReadResponse>(apiRoutes.messages.markRead(), { to, ids }),
   unreadCount: (to: string) =>
-    request<UnreadCountResponse>("GET", `/api/message/unread_count${qs({ to })}`),
+    requestEndpoint<UnreadCountResponse>(apiRoutes.messages.unreadCount(to)),
   listBlackboard: () =>
-    request<BlackboardEntry[]>("GET", "/api/blackboard"),
+    requestEndpoint<BlackboardEntry[]>(apiRoutes.blackboard.list()),
   readBlackboard: (path: string) =>
-    request<BlackboardSnapshot>("GET", `/api/blackboard/${encodePath(path)}`),
+    requestEndpoint<BlackboardSnapshot>(apiRoutes.blackboard.read(path)),
   writeBlackboard: (path: string, req: WriteBlackboardRequest) =>
-    request<{ id: number; path: string; sha256: string; at: number }>(
-      "PUT",
-      `/api/blackboard/${encodePath(path)}`,
+    requestEndpoint<{ id: number; path: string; sha256: string; at: number }>(
+      apiRoutes.blackboard.write(path),
       req,
     ),
   listBlackboardHistory: (path: string, limit = 50, includeContent = false) =>
-    request<BlackboardHistoryEntry[]>(
-      "GET",
-      `/api/blackboard-history/${encodePath(path)}${qs({ limit, include_content: includeContent })}`,
+    requestEndpoint<BlackboardHistoryEntry[]>(
+      apiRoutes.blackboard.history(path, limit, includeContent),
     ),
 
   // M3 recordings
   listRecordings: (agentId?: string) =>
-    request<RecordingInfo[]>(
-      "GET",
-      `/api/recording${qs({ agent_id: agentId })}`,
-    ),
+    requestEndpoint<RecordingInfo[]>(apiRoutes.recordings.list(agentId)),
   // Prefix HTTP_BASE so direct <a href> / fetch() outside the api.* layer
   // (asciinema-player, castPreview, download link) still resolves in Tauri prod.
   recordingCastUrl: (id: string) =>
-    `${HTTP_BASE}/api/recording/${encodeURIComponent(id)}`,
+    `${HTTP_BASE}${apiRoutes.recordings.cast(id)}`,
 
   // M5c spells
-  listSpells: () => request<SpellInfo[]>("GET", "/api/spells"),
+  listSpells: () => requestEndpoint<SpellInfo[]>(apiRoutes.spells.list()),
   runSpell: (req: RunSpellRequest) =>
-    request<RunSpellResponse>("POST", "/api/spell/run", req),
+    requestEndpoint<RunSpellResponse>(apiRoutes.spells.run(), req),
 
   // workspaces (workspace-as-first-class refactor)
-  listWorkspaces: () => request<Workspace[]>("GET", "/api/workspaces"),
+  listWorkspaces: () => requestEndpoint<Workspace[]>(apiRoutes.workspaces.list()),
   createWorkspace: (req: CreateWorkspaceRequest) =>
-    request<Workspace>("POST", "/api/workspaces", req),
+    requestEndpoint<Workspace>(apiRoutes.workspaces.create(), req),
   deleteWorkspace: (id: string) =>
-    request<void>("DELETE", `/api/workspaces/${id}`),
+    requestEndpoint<void>(apiRoutes.workspaces.delete(id)),
   // threads (directions within a workspace). `id` here is the workspace UUID
   // (workspaceId), matching the server's path param.
   listThreads: (id: string) =>
-    request<ThreadInfo[]>("GET", `/api/workspaces/${id}/threads`),
+    requestEndpoint<ThreadInfo[]>(apiRoutes.workspaces.threads(id)),
   // Local branches of a workspace's repo, for the "open existing branch as a
   // direction" picker.
   listBranches: (id: string) =>
-    request<BranchInfo[]>("GET", `/api/workspaces/${id}/branches`),
+    requestEndpoint<BranchInfo[]>(apiRoutes.workspaces.branches(id)),
   createThread: (id: string, req: CreateThreadRequest) =>
-    request<ThreadInfo>("POST", `/api/workspaces/${id}/threads`, req),
+    requestEndpoint<ThreadInfo>(apiRoutes.workspaces.createThread(id), req),
   updateThread: (id: string, threadId: string, req: { name: string }) =>
-    request<ThreadInfo>(
-      "PATCH",
-      `/api/workspaces/${id}/threads/${threadId}`,
+    requestEndpoint<ThreadInfo>(
+      apiRoutes.workspaces.updateThread(id, threadId),
       req,
     ),
   // Per-direction model + reasoning override. The body is the COMPLETE desired
@@ -307,52 +286,46 @@ export const api = {
     threadId: string,
     cfg: { tier: string | null; reasoning: string | null },
   ) =>
-    request<ThreadInfo>(
-      "PUT",
-      `/api/workspaces/${id}/threads/${threadId}/model`,
+    requestEndpoint<ThreadInfo>(
+      apiRoutes.workspaces.setThreadModel(id, threadId),
       cfg,
     ),
   deleteThread: (id: string, threadId: string) =>
-    request<void>("DELETE", `/api/workspaces/${id}/threads/${threadId}`),
+    requestEndpoint<void>(apiRoutes.workspaces.deleteThread(id, threadId)),
   // Preview what a direction changed before merging it back to the main line.
   threadDiff: (id: string, threadId: string) =>
-    request<ThreadDiff>(
-      "GET",
-      `/api/workspaces/${id}/threads/${threadId}/diff`,
+    requestEndpoint<ThreadDiff>(
+      apiRoutes.workspaces.threadDiff(id, threadId),
     ),
   // Merge a direction back to the main line. Clean → "merged"; conflicts →
   // "resolving" (an AI agent was spawned to finish the merge).
   mergeThread: (id: string, threadId: string) =>
-    request<MergeResult>(
-      "POST",
-      `/api/workspaces/${id}/threads/${threadId}/merge`,
+    requestEndpoint<MergeResult>(
+      apiRoutes.workspaces.mergeThread(id, threadId),
     ),
   // attached dependency-source roots (post-create management)
   addWorkspaceRoot: (id: string, root: WorkspaceRoot) =>
-    request<WorkspaceRoot>("POST", `/api/workspaces/${id}/roots`, root),
+    requestEndpoint<WorkspaceRoot>(apiRoutes.workspaces.roots(id), root),
   /** Remove a root node (by its server id); the backend cascade-deletes any
    *  children mounted under it. */
   deleteWorkspaceRoot: (id: string, rootId: string) =>
-    request<{ deleted: number }>(
-      "DELETE",
-      `/api/workspaces/${id}/roots?id=${encodeURIComponent(rootId)}`,
+    requestEndpoint<{ deleted: number }>(
+      apiRoutes.workspaces.deleteRoot(id, rootId),
     ),
   /** Candidate local source deps parsed from a project's manifests
    *  (package.json file:/link:, Cargo path, go.mod replace, uv sources).
    *  `projectPath` scopes the scan to a specific project dir; defaults to the
    *  primary cwd when omitted. */
   rootSuggestions: (id: string, projectPath?: string) =>
-    request<WorkspaceRoot[]>(
-      "GET",
-      `/api/workspaces/${id}/root-suggestions${projectPath ? `?path=${encodeURIComponent(projectPath)}` : ""}`,
+    requestEndpoint<WorkspaceRoot[]>(
+      apiRoutes.workspaces.rootSuggestions(id, projectPath),
     ),
 
   // Composer 「优化」 button: one-shot headless prompt rewrite (server runs
   // `claude -p` on a fast tier). Returns the improved text + whether it changed.
   optimizePrompt: (input: string, signal?: AbortSignal) =>
-    request<{ optimized: string; changed: boolean }>(
-      "POST",
-      "/api/prompt/optimize",
+    requestEndpoint<{ optimized: string; changed: boolean }>(
+      apiRoutes.prompt.optimize(),
       { input },
       signal,
     ),
@@ -362,7 +335,7 @@ export const api = {
   // read it). Not via request() — the body is binary, not JSON.
   uploadAttachment: async (blob: Blob, name?: string): Promise<{ path: string }> => {
     const res = await fetch(
-      `${HTTP_BASE}/api/attachment${name ? `?name=${encodeURIComponent(name)}` : ""}`,
+      `${HTTP_BASE}${apiRoutes.attachments.upload(name)}`,
       {
         method: "POST",
         headers: { "content-type": blob.type || "application/octet-stream" },
@@ -376,7 +349,7 @@ export const api = {
   },
 
   // F1 model settings: per-CLI tier→concrete-model mapping.
-  getModels: () => request<ModelsResponse>("GET", "/api/models"),
+  getModels: () => requestEndpoint<ModelsResponse>(apiRoutes.models.get()),
   putModels: (config: ModelConfig) =>
-    request<{ config: ModelConfig }>("PUT", "/api/models", config),
+    requestEndpoint<{ config: ModelConfig }>(apiRoutes.models.put(), config),
 };
