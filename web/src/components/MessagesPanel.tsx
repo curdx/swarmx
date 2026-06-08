@@ -21,6 +21,8 @@
  */
 
 import {
+  lazy,
+  Suspense,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -51,11 +53,14 @@ import {
 } from "@/components/ui/popover";
 import { cn } from "@/lib/cn";
 import { AgentChip } from "@/components/agent/AgentChip";
-import { ChatMarkdown } from "@/components/ChatMarkdown";
 import { ImageAttachments } from "@/components/ImageAttachments";
 import { ModelPicker } from "@/components/ModelPicker";
 import { extractImagePaths, fileUrl, baseName } from "@/lib/imagePaths";
 import { roleColorClass as roleColor } from "@/lib/agent";
+
+const ChatMarkdown = lazy(() =>
+  import("@/components/ChatMarkdown").then((m) => ({ default: m.ChatMarkdown })),
+);
 
 interface Props {
   /** Latest swarm `message` event observed by the parent (or null). */
@@ -1177,10 +1182,18 @@ export function MessagesPanel({
                       )}
                       {/* Agent output is GFM markdown (headings/lists/code/
                           tables) — render it, don't show literal `##`/```. */}
-                      <ChatMarkdown
-                        content={m.body}
-                        className="selectable text-foreground-primary"
-                      />
+                      <Suspense
+                        fallback={
+                          <p className="whitespace-pre-wrap text-foreground-primary">
+                            {m.body}
+                          </p>
+                        }
+                      >
+                        <ChatMarkdown
+                          content={m.body}
+                          className="selectable text-foreground-primary"
+                        />
+                      </Suspense>
                       <ImageAttachments paths={extractImagePaths(m.body)} />
 
                       {/* hover-only actions — top-right of the turn */}

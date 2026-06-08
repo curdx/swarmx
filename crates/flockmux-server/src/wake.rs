@@ -286,11 +286,7 @@ pub fn agents_to_rewake(
 /// existing pattern in `rest.rs::run_spell` spell bootstrap injection
 /// (parking_lot guard held briefly to clone the sender, sender held
 /// across `await`). Best-effort: caller logs failures.
-pub async fn inject_wake_kick(
-    registry: &Registry,
-    agent_id: &str,
-    key: &str,
-) -> Result<()> {
+pub async fn inject_wake_kick(registry: &Registry, agent_id: &str, key: &str) -> Result<()> {
     // Standard "key updated, please check" text. For TTL nudges where
     // the agent is the *producer* of the overdue key (not a subscriber),
     // the caller should use `inject_with_kick_text` directly so the
@@ -381,17 +377,14 @@ pub async fn inject_with_kick_text(
 /// best-effort — failure usually means the agent has exited, in which
 /// case the mailbox entry is also moot but we've already returned Ok
 /// (caller wanted a fire-and-forget signal, not a delivery guarantee).
-pub async fn deliver_manual_wake(
-    swarm: &Swarm,
-    registry: &Registry,
-    target: &str,
-) -> Result<()> {
+pub async fn deliver_manual_wake(swarm: &Swarm, registry: &Registry, target: &str) -> Result<()> {
     let now = now_ms();
     let msg = NewMessage {
         from_agent: "system".into(),
         to_agent: target.into(),
         kind: "wake".into(),
-        body: "操作员唤醒——请先查收邮箱里的新消息（可能是用户的新指令），再检查共享区，然后继续".into(),
+        body: "操作员唤醒——请先查收邮箱里的新消息（可能是用户的新指令），再检查共享区，然后继续"
+            .into(),
         sent_at: now,
         in_reply_to: None,
         // Operator-initiated wake → keep it visible in the feed (a real
@@ -542,7 +535,8 @@ impl WakeCoordinator {
                     // worker finish printing its final scroll, let the
                     // recording flush) so the agent list and DAG return
                     // to ground truth without operator action.
-                    self.maybe_auto_kill_on_handoff(&path, writer.as_deref()).await;
+                    self.maybe_auto_kill_on_handoff(&path, writer.as_deref())
+                        .await;
                 }
                 Ok(SwarmEvent::AgentState { agent_id, state }) => {
                     if matches!(state, flockmux_protocol::ws_swarm::AgentState::Exited) {
@@ -610,8 +604,7 @@ impl WakeCoordinator {
             let store = self.store.clone();
             let sig = path.to_string();
             tokio::spawn(async move {
-                tokio::time::sleep(std::time::Duration::from_millis(AUTO_KILL_GRACE_MS))
-                    .await;
+                tokio::time::sleep(std::time::Duration::from_millis(AUTO_KILL_GRACE_MS)).await;
                 // Re-check: agent might already be gone.
                 let slot = match registry.remove(&agent_id) {
                     Some(s) => s,
@@ -626,10 +619,7 @@ impl WakeCoordinator {
                 // the one to follow up with, but new users have no such
                 // intuition. One sentence in the dying worker's voice
                 // fixes the entire confusion class.
-                let signal_label = sig
-                    .rsplit_once('/')
-                    .map(|(_, last)| last)
-                    .unwrap_or(&sig);
+                let signal_label = sig.rsplit_once('/').map(|(_, last)| last).unwrap_or(&sig);
                 let body = format!(
                     "✓ 已交付 {signal_label} 并解散。继续改 / 加新需求,直接跟 orchestrator 说就行,我俩看同一份 ledger,它清楚我刚才干了啥。",
                 );
@@ -707,10 +697,7 @@ impl WakeCoordinator {
         // crashed before producing its own; that's the case we owe an
         // `.error` for.
         let store = self.swarm.store();
-        let fresh = match store
-            .list_blackboard_ops(Some(signal.clone()))
-            .await
-        {
+        let fresh = match store.list_blackboard_ops(Some(signal.clone())).await {
             Ok(rows) => rows
                 .first()
                 .map(|r| r.at >= ek.spawned_at_ms)
@@ -750,7 +737,11 @@ impl WakeCoordinator {
             "at": now_ms(),
         });
         let body_str = serde_json::to_string_pretty(&body).unwrap_or_else(|_| body.to_string());
-        match self.swarm.write_blackboard(Some("system".into()), &error_key, &body_str).await {
+        match self
+            .swarm
+            .write_blackboard(Some("system".into()), &error_key, &body_str)
+            .await
+        {
             Ok(_) => {
                 tracing::info!(
                     agent_id,
@@ -760,12 +751,7 @@ impl WakeCoordinator {
                 );
             }
             Err(err) => {
-                tracing::warn!(
-                    ?err,
-                    agent_id,
-                    error_key,
-                    "failed to write .error fallback"
-                );
+                tracing::warn!(?err, agent_id, error_key, "failed to write .error fallback");
                 // Don't bail — still try to wake subscribers below so
                 // they at least get a mailbox note describing the
                 // upstream failure, even if the .error file is missing.
@@ -847,7 +833,11 @@ impl WakeCoordinator {
         // entries from this paused window. Manual wakes bypass this gate
         // (they go through deliver_manual_wake, not deliver_wake).
         if let Some(slot) = self.registry.get(target) {
-            if slot.lock().paused.load(std::sync::atomic::Ordering::Relaxed) {
+            if slot
+                .lock()
+                .paused
+                .load(std::sync::atomic::Ordering::Relaxed)
+            {
                 tracing::debug!(target, key, "wake skipped: agent is paused");
                 return;
             }
@@ -992,10 +982,7 @@ mod tests {
 
     #[test]
     fn select_targets_excludes_writer() {
-        let m = build_subs(&[
-            ("test-a", &["x.done"]),
-            ("self-watcher", &["x.done"]),
-        ]);
+        let m = build_subs(&[("test-a", &["x.done"]), ("self-watcher", &["x.done"])]);
         let t = select_targets(&m, "x.done", Some("self-watcher"));
         assert_eq!(t, vec!["test-a".to_string()]);
     }
@@ -1004,11 +991,7 @@ mod tests {
     fn select_targets_external_edit_wakes_all_subscribers() {
         // writer = None means an external (filesystem) edit; everyone
         // subscribed to the key should be woken.
-        let m = build_subs(&[
-            ("a", &["k"]),
-            ("b", &["k"]),
-            ("c", &["other"]),
-        ]);
+        let m = build_subs(&[("a", &["k"]), ("b", &["k"]), ("c", &["other"])]);
         let mut t = select_targets(&m, "k", None);
         t.sort();
         assert_eq!(t, vec!["a".to_string(), "b".to_string()]);
@@ -1139,7 +1122,10 @@ mod tests {
         let minted = "ws_ab12/dark-mode/frontend.done";
         let m = build_subs(&[("consumer", &[minted])]);
         // The producer's minted write wakes it.
-        assert_eq!(select_targets(&m, minted, Some("frontend")), vec!["consumer"]);
+        assert_eq!(
+            select_targets(&m, minted, Some("frontend")),
+            vec!["consumer"]
+        );
         // A drifted key (missing the workspace/thread prefix — the exact F3
         // failure) matches NOTHING. Under the old free-string scheme this is
         // how a dependent hung forever; under P0-A both sides are server-minted
@@ -1164,7 +1150,11 @@ mod tests {
         for k in &keys {
             woke.extend(select_targets(&m, k, Some("frontend")));
         }
-        assert_eq!(woke, vec!["consumer"], "the .done waiter is woken on .error");
+        assert_eq!(
+            woke,
+            vec!["consumer"],
+            "the .done waiter is woken on .error"
+        );
     }
 
     #[tokio::test]
@@ -1180,8 +1170,10 @@ mod tests {
     async fn register_ignores_empty_keys() {
         let subs: WakeSubs = Arc::new(RwLock::new(HashMap::new()));
         register_wake_subs(&subs, "a".into(), vec![]).await;
-        assert!(subs.read().await.get("a").is_none(),
-            "empty depends_on shouldn't pollute the map");
+        assert!(
+            subs.read().await.get("a").is_none(),
+            "empty depends_on shouldn't pollute the map"
+        );
     }
 
     #[tokio::test]
@@ -1206,7 +1198,10 @@ mod tests {
         .await;
         let stored = keys.read().await.get("a").cloned();
         assert_eq!(stored.as_ref().map(|k| k.role.as_str()), Some("frontend"));
-        assert_eq!(stored.as_ref().map(|k| k.handoff_signal.as_str()), Some("frontend.done"));
+        assert_eq!(
+            stored.as_ref().map(|k| k.handoff_signal.as_str()),
+            Some("frontend.done")
+        );
         assert_eq!(stored.map(|k| k.spawned_at_ms), Some(1_700_000_000_000));
         unregister_exit_key(&keys, "a").await;
         assert!(keys.read().await.get("a").is_none());
@@ -1232,12 +1227,18 @@ mod tests {
 
     #[test]
     fn base_key_aliases_strips_error_suffix() {
-        assert_eq!(base_key_aliases("frontend.done.error"), vec!["frontend.done"]);
+        assert_eq!(
+            base_key_aliases("frontend.done.error"),
+            vec!["frontend.done"]
+        );
     }
 
     #[test]
     fn base_key_aliases_strips_failed_suffix() {
-        assert_eq!(base_key_aliases("backend.done.failed"), vec!["backend.done"]);
+        assert_eq!(
+            base_key_aliases("backend.done.failed"),
+            vec!["backend.done"]
+        );
     }
 
     #[test]
@@ -1273,7 +1274,10 @@ mod tests {
     // ── cycle detection ─────────────────────────────────────────────────
 
     fn map(entries: &[(&str, &str)]) -> HashMap<String, String> {
-        entries.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+        entries
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
     }
     fn mapv(entries: &[(&str, &[&str])]) -> HashMap<String, Vec<String>> {
         entries

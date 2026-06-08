@@ -187,7 +187,6 @@ fn build_worker_prompt(
     out
 }
 
-
 pub async fn list_plugins(State(state): State<AppState>) -> impl IntoResponse {
     let plugins: Vec<CliPluginInfo> = state
         .plugins
@@ -211,10 +210,7 @@ pub async fn list_plugins(State(state): State<AppState>) -> impl IntoResponse {
 /// immediately instead of waiting out a fixed timeout — the readiness-probe
 /// pattern, replacing the old fixed 2500ms MCP-settle sleep. Idempotent;
 /// 404 if the agent isn't (or is no longer) live.
-pub async fn mcp_ready(
-    State(state): State<AppState>,
-    Path(agent_id): Path<String>,
-) -> StatusCode {
+pub async fn mcp_ready(State(state): State<AppState>, Path(agent_id): Path<String>) -> StatusCode {
     match state.registry.get(&agent_id) {
         Some(slot) => {
             slot.lock().mcp_ready.send_replace(true);
@@ -269,10 +265,11 @@ pub async fn spawn(
     };
     // Trailing args: spell_run_id=None (standalone), thread_id=None (a single
     // ad-hoc agent lands on the workspace's main thread).
-    let outcome =
-        spawn_with_bookkeeping(&state, &req.cli, req.role, req.model, None, layout, ws.id, None, None)
-            .await
-            .map_err(|(status, msg)| (status, Json(json!({"error": msg}))))?;
+    let outcome = spawn_with_bookkeeping(
+        &state, &req.cli, req.role, req.model, None, layout, ws.id, None, None,
+    )
+    .await
+    .map_err(|(status, msg)| (status, Json(json!({"error": msg}))))?;
     Ok(Json(SpawnAgentResponse {
         agent_id: outcome.agent_id,
         cli: outcome.cli,
@@ -395,9 +392,7 @@ pub(crate) async fn spawn_with_bookkeeping(
     // pump a writer handle. If the recorder fails to open, we still spawn
     // the agent (recording is best-effort, not load-bearing for M3).
     let recording_id = format!("rec-{}", &Uuid::new_v4().to_string()[..12]);
-    let recording_path = state
-        .recordings_root
-        .join(format!("{}.cast", recording_id));
+    let recording_path = state.recordings_root.join(format!("{}.cast", recording_id));
     let recorder = match Recorder::start(RecorderConfig {
         agent_id: String::new(), // filled in by the writer config; informational only
         cols: 120,
@@ -472,9 +467,7 @@ pub(crate) async fn spawn_with_bookkeeping(
                 match lifecycle_rx.recv().await {
                     Ok(LifecycleEvent::ShimReady) => {
                         let at = now_ms();
-                        if let Err(e) =
-                            store.record_shim_ready(agent_for_task.clone(), at).await
-                        {
+                        if let Err(e) = store.record_shim_ready(agent_for_task.clone(), at).await {
                             tracing::warn!(?e, agent = %agent_for_task, "record_shim_ready failed");
                         }
                         swarm.publish_event(SwarmEvent::AgentState {
@@ -586,9 +579,8 @@ pub async fn list_agents(State(state): State<AppState>) -> impl IntoResponse {
         .map(|r| (r.manifest.id.clone(), r.manifest.handoff_signal.clone()))
         .collect();
 
-    let handoff_for = |role: &str| -> String {
-        role_handoff.get(role).cloned().unwrap_or_default()
-    };
+    let handoff_for =
+        |role: &str| -> String { role_handoff.get(role).cloned().unwrap_or_default() };
     // depends_on used to come from `wake_subs`, but that table is the
     // INTERNAL "wake me when this key lands" registration — Magentic-One's
     // append_wake_sub bug-#48 fix made the orchestrator subscribe to every
@@ -603,8 +595,7 @@ pub async fn list_agents(State(state): State<AppState>) -> impl IntoResponse {
     // Build a snapshot of the live in-memory registry first — for live
     // agents the in-memory `Lifecycle` is the source of truth (it tracks
     // OSC markers that may not yet be persisted to SQLite).
-    let mut live: std::collections::HashMap<String, AgentInfo> =
-        std::collections::HashMap::new();
+    let mut live: std::collections::HashMap<String, AgentInfo> = std::collections::HashMap::new();
     for (id, slot) in state.registry.list() {
         let slot = slot.lock();
         let lc = *slot.lifecycle.lock();
@@ -727,7 +718,10 @@ pub async fn list_agents(State(state): State<AppState>) -> impl IntoResponse {
                 }
             }
             Err(e) => {
-                tracing::warn!(?e, "list_agents: list_workers_by_ids failed; parent edges omitted");
+                tracing::warn!(
+                    ?e,
+                    "list_agents: list_workers_by_ids failed; parent edges omitted"
+                );
             }
         }
     }
@@ -1015,7 +1009,10 @@ pub(crate) fn spawn_bootstrap_inject(
         // Diagnostic: flag a surviving `{task}` / `{<role>_id}` placeholder
         // (computed before `prompt` is consumed by `into_bytes`).
         let has_unsubst = prompt.contains("{task}")
-            || ctx.role_keys.iter().any(|r| prompt.contains(&format!("{{{r}_id}}")));
+            || ctx
+                .role_keys
+                .iter()
+                .any(|r| prompt.contains(&format!("{{{r}_id}}")));
         let body = prompt.into_bytes();
         let body_len = body.len();
         // Submit as separate frames (paste body, settle, then \r): claude/
@@ -1191,7 +1188,9 @@ pub async fn spawn_worker(
     if resolved_cli.is_empty() {
         return Err((
             StatusCode::BAD_REQUEST,
-            Json(json!({"error": format!("role '{role_slug}' has no default_cli and no cli override was given")})),
+            Json(
+                json!({"error": format!("role '{role_slug}' has no default_cli and no cli override was given")}),
+            ),
         ));
     }
     // Precedence: explicit spawn request → role's pinned tier → the direction's
@@ -1248,10 +1247,23 @@ pub async fn spawn_worker(
     // is the structural fix for the F3 drift class: a typo/unknown dep is
     // rejected here with valid options, never a silent never-wake. Pure logic
     // lives in `resolve_consumes_to_deps` (unit-tested).
+    let role_consumes: Vec<flockmux_protocol::rest::ConsumeRef> = manifest
+        .consumes
+        .iter()
+        .map(|c| flockmux_protocol::rest::ConsumeRef {
+            from_role: c.from_role.clone(),
+            kind: c.kind.clone(),
+        })
+        .collect();
+    let effective_consumes = if req.consumes.is_empty() {
+        role_consumes
+    } else {
+        req.consumes.clone()
+    };
     let depends_on = resolve_consumes_to_deps(
         &registry,
         &role_slug,
-        &req.consumes,
+        &effective_consumes,
         &req.workspace_id,
         &thread_slug,
     )
@@ -1259,10 +1271,15 @@ pub async fn spawn_worker(
 
     // The orchestrator's prompt + an INPUTS wait-gate (if it has deps) + an
     // explicit copy-verbatim handoff block.
-    let system_prompt =
-        build_worker_prompt(&req.system_prompt, &minted_produces, &error_key, &depends_on);
+    let system_prompt = build_worker_prompt(
+        &req.system_prompt,
+        &minted_produces,
+        &error_key,
+        &depends_on,
+    );
     let produces_json = serde_json::to_string(&produces).unwrap_or_else(|_| "[]".to_string());
-    let consumes_json = serde_json::to_string(&req.consumes).unwrap_or_else(|_| "[]".to_string());
+    let consumes_json =
+        serde_json::to_string(&effective_consumes).unwrap_or_else(|_| "[]".to_string());
 
     // Fork-bomb guard (F4), recursion arm: bound the delegation depth so a
     // worker that spawns a worker that spawns a worker… can't recurse without
@@ -1317,7 +1334,7 @@ pub async fn spawn_worker(
         resolved_reasoning,
         layout,
         req.workspace_id.clone(),
-        None,             // ad-hoc workers don't belong to a spell run
+        None,              // ad-hoc workers don't belong to a spell run
         thread_id.clone(), // P3③: inherit the caller's direction (None = main)
     )
     .await
@@ -1452,7 +1469,9 @@ async fn interrupt_one_inner(state: &AppState, agent_id: &str) -> Result<(), Str
         // see paused=true before we even send the Ctrl-C. The Ordering
         // is Relaxed both here and at the load site — we don't need
         // cross-thread sync beyond visibility.
-        guard.paused.store(true, std::sync::atomic::Ordering::Relaxed);
+        guard
+            .paused
+            .store(true, std::sync::atomic::Ordering::Relaxed);
         guard.input_tx.clone()
     };
     // Best-effort Ctrl-C. If the PTY is already dead (shim_exit fired
@@ -1525,7 +1544,11 @@ pub async fn interrupt_all(
     State(state): State<AppState>,
     Query(q): Query<HashMap<String, String>>,
 ) -> impl IntoResponse {
-    let workspace_id = match q.get("workspace_id").map(|s| s.trim()).filter(|s| !s.is_empty()) {
+    let workspace_id = match q
+        .get("workspace_id")
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+    {
         Some(w) => w.to_string(),
         None => {
             return (
@@ -1629,16 +1652,12 @@ pub async fn run_spell(
     State(state): State<AppState>,
     Json(req): Json<RunSpellRequest>,
 ) -> Result<Json<RunSpellResponse>, (StatusCode, Json<serde_json::Value>)> {
-    let spell = state
-        .spells
-        .get(&req.name)
-        .cloned()
-        .ok_or_else(|| {
-            (
-                StatusCode::NOT_FOUND,
-                Json(json!({"error": format!("unknown spell: {}", req.name)})),
-            )
-        })?;
+    let spell = state.spells.get(&req.name).cloned().ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": format!("unknown spell: {}", req.name)})),
+        )
+    })?;
 
     // Resolve every `[[agents]]` entry against the role registry up-
     // front. Failing here is much friendlier than half-spawning agents
@@ -1710,11 +1729,7 @@ pub async fn run_spell(
     //      tab" bug: a spell launch with no workspace context is now an
     //      error instead of silently creating an unowned spawn.
     let workspace_id: String = if let Some(caller) = req.caller_agent_id.as_ref() {
-        match state
-            .store
-            .get_workspace_id_for_agent(caller.clone())
-            .await
-        {
+        match state.store.get_workspace_id_for_agent(caller.clone()).await {
             Ok(Some(ws_id)) => ws_id,
             Ok(None) => {
                 return Err((
@@ -1875,8 +1890,7 @@ pub async fn run_spell(
         .as_ref()
         .and_then(|t| t.reasoning_effort.clone())
         .filter(|s| !s.trim().is_empty());
-    let mut outcomes: Vec<(SpawnOutcome, String)> =
-        Vec::with_capacity(resolved_agents.len());
+    let mut outcomes: Vec<(SpawnOutcome, String)> = Vec::with_capacity(resolved_agents.len());
     for resolved in &resolved_agents {
         let agent_model = state
             .roles
@@ -1934,12 +1948,8 @@ pub async fn run_spell(
                 );
             }
         }
-        crate::wake::register_wake_subs(
-            &state.wake_subs,
-            out.agent_id.clone(),
-            rendered_deps,
-        )
-        .await;
+        crate::wake::register_wake_subs(&state.wake_subs, out.agent_id.clone(), rendered_deps)
+            .await;
         // M6c step 5: also remember which signal THIS agent is supposed
         // to produce + the moment we registered it. If the agent exits
         // without writing the signal, the wake coordinator turns that
@@ -1988,8 +1998,13 @@ pub async fn run_spell(
         if raw_prompt.trim().is_empty() {
             continue;
         }
-        let prompt =
-            spells::render_prompt(raw_prompt, &req.task, &workspace_id, &thread_slug, &role_to_id);
+        let prompt = spells::render_prompt(
+            raw_prompt,
+            &req.task,
+            &workspace_id,
+            &thread_slug,
+            &role_to_id,
+        );
         // Bootstrap inject — shared with spawn_worker (see
         // spawn_bootstrap_inject). Spell agents inject the RENDERED prompt
         // ({task}/{workspace_id}/{<role>_id} substituted above) and pass the
@@ -2059,9 +2074,11 @@ pub struct OptimizePromptResponse {
 /// POST /api/prompt/optimize — one-shot, headless prompt rewrite for the chat
 /// composer's 「优化」 button.
 ///
-/// Runs `claude -p` (print mode) on a small/fast tier using the operator's
-/// existing login (HOME/PATH inherited from the server process), so it needs no
-/// extra API key and reuses the CLI flockmux already orchestrates.
+/// Historically this endpoint ran `claude -p` (print mode). Claude's current
+/// billing docs treat print/SDK usage as a separate Agent SDK credit surface,
+/// so flockmux disables this by default to preserve the interactive
+/// subscription-PTY promise. Users can opt in with
+/// `FLOCKMUX_ALLOW_CLAUDE_PRINT=1`.
 ///
 /// SAFETY: this rewrites a DRAFT the user has not sent yet, so claude must never
 /// *act* on it. We therefore (1) do NOT pass `--dangerously-skip-permissions`
@@ -2078,7 +2095,20 @@ pub async fn optimize_prompt(
     // Empty / too short to meaningfully improve — return unchanged (the button
     // is also disabled client-side; this is the server backstop).
     if input.chars().count() < 8 {
-        return Json(OptimizePromptResponse { optimized: original, changed: false })
+        return Json(OptimizePromptResponse {
+            optimized: original,
+            changed: false,
+        })
+        .into_response();
+    }
+
+    if !crate::billing::claude_print_opt_in_enabled() {
+        return (
+            StatusCode::PAYMENT_REQUIRED,
+            Json(json!({
+                "error": crate::billing::claude_print_block_message("提示词优化")
+            })),
+        )
             .into_response();
     }
 
@@ -2122,28 +2152,26 @@ pub async fn optimize_prompt(
         }
     };
 
-    let out = match tokio::time::timeout(
-        std::time::Duration::from_secs(45),
-        child.wait_with_output(),
-    )
-    .await
-    {
-        Ok(Ok(o)) => o,
-        Ok(Err(e)) => {
-            return (
-                StatusCode::BAD_GATEWAY,
-                Json(json!({ "error": format!("claude 执行失败：{e}") })),
-            )
-                .into_response();
-        }
-        Err(_) => {
-            return (
-                StatusCode::GATEWAY_TIMEOUT,
-                Json(json!({ "error": "优化超时（claude 无响应）" })),
-            )
-                .into_response();
-        }
-    };
+    let out =
+        match tokio::time::timeout(std::time::Duration::from_secs(45), child.wait_with_output())
+            .await
+        {
+            Ok(Ok(o)) => o,
+            Ok(Err(e)) => {
+                return (
+                    StatusCode::BAD_GATEWAY,
+                    Json(json!({ "error": format!("claude 执行失败：{e}") })),
+                )
+                    .into_response();
+            }
+            Err(_) => {
+                return (
+                    StatusCode::GATEWAY_TIMEOUT,
+                    Json(json!({ "error": "优化超时（claude 无响应）" })),
+                )
+                    .into_response();
+            }
+        };
 
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr);
@@ -2164,11 +2192,18 @@ pub async fn optimize_prompt(
     let cleaned = strip_code_fences(raw.trim());
     if cleaned.is_empty() {
         // Never hand back an empty composer — fall back to the original.
-        return Json(OptimizePromptResponse { optimized: original, changed: false })
-            .into_response();
+        return Json(OptimizePromptResponse {
+            optimized: original,
+            changed: false,
+        })
+        .into_response();
     }
     let changed = cleaned != original.trim();
-    Json(OptimizePromptResponse { optimized: cleaned.to_string(), changed }).into_response()
+    Json(OptimizePromptResponse {
+        optimized: cleaned.to_string(),
+        changed,
+    })
+    .into_response()
 }
 
 const COMPACT_META_PROMPT: &str = "你是状态摘要器。把下面这份不断累积的「台账/黑板」内容压缩成简洁但**不丢关键信息**的摘要:保留所有未完成事项、关键决策、产出物路径、阻塞与错误;合并重复/过期条目;用简短 Markdown 条目。只输出压缩后的正文,不要任何解释或代码围栏。";
@@ -2180,7 +2215,9 @@ pub struct CompactBlackboardRequest {
 
 /// POST /api/blackboard/compact — summarize a long blackboard ledger in place
 /// via headless `claude -p` (small tier), to keep accumulated orchestrator
-/// state lean. The flockmux-shaped take on "context compression": the PTY CLIs
+/// state lean. Disabled by default because print/SDK mode can use a separate
+/// Claude billing surface; set `FLOCKMUX_ALLOW_CLAUDE_PRINT=1` to opt in. The
+/// flockmux-shaped take on "context compression": the PTY CLIs
 /// manage their OWN context window, but the blackboard ledgers they read/write
 /// grow unbounded — this compacts those. Non-destructive in spirit: the
 /// blackboard op-log retains the pre-compaction version. Operator/agent-invoked.
@@ -2190,16 +2227,26 @@ pub async fn compact_blackboard(
 ) -> impl IntoResponse {
     let path = req.path.trim().to_string();
     if path.is_empty() {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "path required" }))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "path required" })),
+        )
+            .into_response();
     }
     let content = match state.swarm.read_blackboard(&path).await {
         Ok(Some(c)) => c,
         Ok(None) => {
-            return (StatusCode::NOT_FOUND, Json(json!({ "error": "no such blackboard path" })))
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "no such blackboard path" })),
+            )
                 .into_response()
         }
         Err(e) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() })))
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": e.to_string() })),
+            )
                 .into_response()
         }
     };
@@ -2212,6 +2259,16 @@ pub async fn compact_blackboard(
             "note": "too small to compact"
         }))
         .into_response();
+    }
+
+    if !crate::billing::claude_print_opt_in_enabled() {
+        return (
+            StatusCode::PAYMENT_REQUIRED,
+            Json(json!({
+                "error": crate::billing::claude_print_block_message("黑板压缩")
+            })),
+        )
+            .into_response();
     }
 
     let (binary, plugin_id) = match state.plugins.get("claude") {
@@ -2248,22 +2305,26 @@ pub async fn compact_blackboard(
                 .into_response()
         }
     };
-    let out = match tokio::time::timeout(
-        std::time::Duration::from_secs(90),
-        child.wait_with_output(),
-    )
-    .await
-    {
-        Ok(Ok(o)) => o,
-        Ok(Err(e)) => {
-            return (StatusCode::BAD_GATEWAY, Json(json!({ "error": format!("claude 执行失败：{e}") })))
-                .into_response()
-        }
-        Err(_) => {
-            return (StatusCode::GATEWAY_TIMEOUT, Json(json!({ "error": "压缩超时（claude 无响应）" })))
-                .into_response()
-        }
-    };
+    let out =
+        match tokio::time::timeout(std::time::Duration::from_secs(90), child.wait_with_output())
+            .await
+        {
+            Ok(Ok(o)) => o,
+            Ok(Err(e)) => {
+                return (
+                    StatusCode::BAD_GATEWAY,
+                    Json(json!({ "error": format!("claude 执行失败：{e}") })),
+                )
+                    .into_response()
+            }
+            Err(_) => {
+                return (
+                    StatusCode::GATEWAY_TIMEOUT,
+                    Json(json!({ "error": "压缩超时（claude 无响应）" })),
+                )
+                    .into_response()
+            }
+        };
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr);
         let detail = stderr
@@ -2272,7 +2333,10 @@ pub async fn compact_blackboard(
             .filter(|l| !l.is_empty())
             .last()
             .unwrap_or("claude 返回非零状态");
-        return (StatusCode::BAD_GATEWAY, Json(json!({ "error": format!("压缩失败：{detail}") })))
+        return (
+            StatusCode::BAD_GATEWAY,
+            Json(json!({ "error": format!("压缩失败：{detail}") })),
+        )
             .into_response();
     }
 
@@ -2291,7 +2355,10 @@ pub async fn compact_blackboard(
         .write_blackboard(Some("compact".to_string()), &path, &summary)
         .await
     {
-        return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() })))
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e.to_string() })),
+        )
             .into_response();
     }
     Json(json!({
@@ -2429,7 +2496,10 @@ pub async fn serve_file(
     let h = resp.headers_mut();
     h.insert(header::CONTENT_TYPE, ctype.parse().unwrap());
     h.insert("x-content-type-options", "nosniff".parse().unwrap());
-    h.insert(header::CACHE_CONTROL, "private, max-age=60".parse().unwrap());
+    h.insert(
+        header::CACHE_CONTROL,
+        "private, max-age=60".parse().unwrap(),
+    );
     if ext == "svg" {
         h.insert(
             header::CONTENT_SECURITY_POLICY,
@@ -2511,7 +2581,10 @@ mod p0_tests {
     use flockmux_protocol::rest::ConsumeRef;
 
     fn consume(from: &str, kind: &str) -> ConsumeRef {
-        ConsumeRef { from_role: from.into(), kind: kind.into() }
+        ConsumeRef {
+            from_role: from.into(),
+            kind: kind.into(),
+        }
     }
 
     #[test]
@@ -2520,7 +2593,10 @@ mod p0_tests {
         let png = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0];
         assert!(sniff_is_image("png", &png));
         // a text file renamed to .png is rejected (the exfil guard)
-        assert!(!sniff_is_image("png", b"-----BEGIN OPENSSH PRIVATE KEY-----"));
+        assert!(!sniff_is_image(
+            "png",
+            b"-----BEGIN OPENSSH PRIVATE KEY-----"
+        ));
         // jpeg / gif magic
         assert!(sniff_is_image("jpg", &[0xFF, 0xD8, 0xFF, 0xE0]));
         assert!(sniff_is_image("gif", b"GIF89a...."));
@@ -2571,8 +2647,14 @@ mod p0_tests {
     #[test]
     fn resolve_consumes_unknown_role_suggests_closest() {
         let reg = RoleRegistry::builtin();
-        let err = resolve_consumes_to_deps(&reg, "reviewer", &[consume("bakend", "done")], "ws1", "main")
-            .unwrap_err();
+        let err = resolve_consumes_to_deps(
+            &reg,
+            "reviewer",
+            &[consume("bakend", "done")],
+            "ws1",
+            "main",
+        )
+        .unwrap_err();
         assert!(err.contains("unknown role 'bakend'"), "got: {err}");
         assert!(err.contains("did you mean 'backend'"), "got: {err}");
     }
@@ -2581,16 +2663,28 @@ mod p0_tests {
     fn resolve_consumes_rejects_kind_not_produced() {
         let reg = RoleRegistry::builtin();
         // builtin backend produces ["done"] only.
-        let err = resolve_consumes_to_deps(&reg, "reviewer", &[consume("backend", "spec")], "ws1", "main")
-            .unwrap_err();
+        let err = resolve_consumes_to_deps(
+            &reg,
+            "reviewer",
+            &[consume("backend", "spec")],
+            "ws1",
+            "main",
+        )
+        .unwrap_err();
         assert!(err.contains("does not produce kind 'spec'"), "got: {err}");
     }
 
     #[test]
     fn resolve_consumes_rejects_self_dependency() {
         let reg = RoleRegistry::builtin();
-        let err = resolve_consumes_to_deps(&reg, "frontend", &[consume("frontend", "done")], "ws1", "main")
-            .unwrap_err();
+        let err = resolve_consumes_to_deps(
+            &reg,
+            "frontend",
+            &[consume("frontend", "done")],
+            "ws1",
+            "main",
+        )
+        .unwrap_err();
         assert!(err.contains("self-dependency"), "got: {err}");
     }
 
@@ -2604,8 +2698,15 @@ mod p0_tests {
 
     #[test]
     fn closest_match_within_threshold_only() {
-        let cands = vec!["frontend".to_string(), "backend".to_string(), "reviewer".to_string()];
-        assert_eq!(closest_match("fronend", &cands).as_deref(), Some("frontend"));
+        let cands = vec![
+            "frontend".to_string(),
+            "backend".to_string(),
+            "reviewer".to_string(),
+        ];
+        assert_eq!(
+            closest_match("fronend", &cands).as_deref(),
+            Some("frontend")
+        );
         // Garbage far from everything → no suggestion.
         assert_eq!(closest_match("zzzzzzzz", &cands), None);
     }
@@ -2630,7 +2731,10 @@ mod p0_tests {
     #[test]
     fn readiness_gate_first_unsatisfied_dep() {
         use std::collections::HashSet;
-        let deps = vec!["ws/main/backend.done".to_string(), "ws/main/db.ready".to_string()];
+        let deps = vec![
+            "ws/main/backend.done".to_string(),
+            "ws/main/db.ready".to_string(),
+        ];
 
         // nothing present → first dep is unsatisfied
         let empty = HashSet::new();

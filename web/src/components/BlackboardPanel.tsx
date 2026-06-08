@@ -10,6 +10,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api/http";
 import type { BlackboardEntry, BlackboardHistoryEntry } from "../api/types";
+import {
+  ConfirmActionDialog,
+  type ConfirmActionState,
+} from "@/components/ConfirmActionDialog";
 
 interface Props {
   /** Latest swarm `blackboard_changed` event observed by the parent. */
@@ -38,6 +42,7 @@ export function BlackboardPanel({ liveChange }: Props) {
   const [rejectOpen, setRejectOpen] = useState(false);
   const [rejectReason, setRejectReason] = useState("");
   const [gateBusy, setGateBusy] = useState(false);
+  const [discardConfirm, setDiscardConfirm] = useState<ConfirmActionState | null>(null);
 
   const isDirty = useMemo(() => content !== originalContent, [content, originalContent]);
 
@@ -63,11 +68,7 @@ export function BlackboardPanel({ liveChange }: Props) {
     }
   };
 
-  const openPath = async (path: string) => {
-    if (isDirty && selected && selected !== path) {
-      const ok = confirm(`放弃未保存的修改"${selected}"？`);
-      if (!ok) return;
-    }
+  const loadPath = async (path: string) => {
     setSelected(path);
     setInfo(null);
     setVersionPreview(null);
@@ -84,6 +85,20 @@ export function BlackboardPanel({ liveChange }: Props) {
     // Best-effort: history count drives the toggle label; failures are
     // logged into `error` but don't block the editor.
     refreshHistory(path);
+  };
+
+  const openPath = async (path: string) => {
+    if (isDirty && selected && selected !== path) {
+      setDiscardConfirm({
+        title: "放弃未保存的修改？",
+        description: `“${selected}”还有未保存内容，切换到“${path}”会丢弃这些修改。`,
+        confirmLabel: "放弃修改",
+        variant: "destructive",
+        onConfirm: () => loadPath(path),
+      });
+      return;
+    }
+    await loadPath(path);
   };
 
   const openVersion = async (entry: BlackboardHistoryEntry) => {
@@ -205,10 +220,12 @@ export function BlackboardPanel({ liveChange }: Props) {
   }, [liveChange]);
 
   return (
+    <>
     <div style={{ display: "flex", height: "100%", minHeight: 0 }}>
       <div style={leftCol}>
         <div style={headerRow}>
           <input
+            name="blackboard-new-path"
             value={newPath}
             onChange={(e) => setNewPath(e.target.value)}
             placeholder="新文件路径（如 tasks.md）"
@@ -284,6 +301,7 @@ export function BlackboardPanel({ liveChange }: Props) {
             {selected === "design.md" && rejectOpen && (
               <div style={rejectInlineRow}>
                 <input
+                  name="blackboard-reject-reason"
                   type="text"
                   value={rejectReason}
                   onChange={(e) => setRejectReason(e.target.value)}
@@ -386,6 +404,13 @@ export function BlackboardPanel({ liveChange }: Props) {
         {error && <div style={errorRow}>{error}</div>}
       </div>
     </div>
+    <ConfirmActionDialog
+      action={discardConfirm}
+      onOpenChange={(open) => {
+        if (!open) setDiscardConfirm(null);
+      }}
+    />
+    </>
   );
 }
 

@@ -1,6 +1,7 @@
 pub mod api;
 pub mod cron;
 pub mod files;
+pub mod goals;
 pub mod mcp_admin;
 pub mod models_admin;
 pub mod pty_ws;

@@ -221,7 +221,11 @@ pub async fn blackboard_history(
                 path: r.path,
                 sha256: r.sha256,
                 at: r.at,
-                content: if include_content { Some(r.content) } else { None },
+                content: if include_content {
+                    Some(r.content)
+                } else {
+                    None
+                },
             })
             .collect(),
     ))

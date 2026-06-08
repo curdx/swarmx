@@ -83,6 +83,8 @@ pub fn spawn_agent(
         WorkspaceLayout::Shared { dir } => ensure_shared_workspace(dir)?,
     };
 
+    enforce_billing_policy(plugin)?;
+
     // L4 transport seam: the ACP (structured JSON-RPC-over-stdio) session
     // driver isn't wired yet. `crate::acp` now has both the codec AND the async
     // `Connection` layer (request/response correlation + notification/peer-
@@ -138,7 +140,11 @@ pub fn spawn_agent(
     // effort_levels; the result substitutes into effort_args (claude `--effort`,
     // codex `-c model_reasoning_effort=`). Unknown/"default" level or a CLI with
     // no effort support → emit nothing = the model's own default.
-    if let Some(level) = reasoning.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+    if let Some(level) = reasoning
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
         match plugin.effort_levels.get(level) {
             Some(concrete) if !plugin.effort_args.is_empty() => {
                 argv.extend(effort_overlay_args(concrete, &plugin.effort_args));
@@ -263,6 +269,15 @@ pub fn spawn_agent(
     // *_KEY shell secrets do NOT. `or_insert` so explicit entries below (e.g.
     // per-agent CODEX_HOME) always win over an inherited value.
     for (k, v) in std::env::vars() {
+        if env_blocked(plugin, &k) {
+            tracing::debug!(
+                agent = %agent_id,
+                cli = %plugin.id,
+                env = %k,
+                "provider env var blocked by plugin policy"
+            );
+            continue;
+        }
         if ["ANTHROPIC_", "OPENAI_", "CLAUDE_"]
             .iter()
             .any(|p| k.starts_with(p))
@@ -302,16 +317,16 @@ pub fn spawn_agent(
     // exact session JSONL (`<uuid>.jsonl`) instead of guessing the newest file
     // in the project dir — a stale prior session in the same workspace would
     // otherwise win. codex gets None (it locates via its per-agent CODEX_HOME).
-    let transcript_session_id =
-        if plugin.mcp_format == crate::plugins::McpFormat::ClaudeLocalScope {
-            let sid = Uuid::new_v4().to_string();
-            argv.push("--session-id".into());
-            argv.push(sid.clone());
-            tracing::info!(agent = %agent_id, session_id = %sid, "claude --session-id forced for transcript location");
-            Some(sid)
-        } else {
-            None
-        };
+    let transcript_session_id = if plugin.mcp_format == crate::plugins::McpFormat::ClaudeLocalScope
+    {
+        let sid = Uuid::new_v4().to_string();
+        argv.push("--session-id".into());
+        argv.push(sid.clone());
+        tracing::info!(agent = %agent_id, session_id = %sid, "claude --session-id forced for transcript location");
+        Some(sid)
+    } else {
+        None
+    };
 
     let argv_strings: Vec<String> = argv;
 
@@ -403,6 +418,17 @@ pub fn spawn_agent(
     })
 }
 
+fn enforce_billing_policy(plugin: &CliPlugin) -> Result<()> {
+    crate::billing::enforce_spawn_billing_policy(plugin).map_err(anyhow::Error::msg)
+}
+
+fn env_blocked(plugin: &CliPlugin, key: &str) -> bool {
+    plugin
+        .blocked_env_prefixes
+        .iter()
+        .any(|p| !p.is_empty() && key.starts_with(p))
+}
+
 /// Server-side OSC scanner. Identical algorithm to the M2 client-side
 /// scanner in `pty_ws.rs`, lifted here so it runs exactly once per agent
 /// regardless of how many WS subscribers are attached.
@@ -477,8 +503,7 @@ fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 
 fn ensure_workspace(root: &Path, agent_id: &str) -> Result<PathBuf> {
     let dir = root.join(agent_id);
-    std::fs::create_dir_all(&dir)
-        .with_context(|| format!("create workspace {}", dir.display()))?;
+    std::fs::create_dir_all(&dir).with_context(|| format!("create workspace {}", dir.display()))?;
     // Resolve symlinks so the path matches what the spawned CLI sees after
     // its own canonicalize step. On macOS `/tmp` is a symlink to
     // `/private/tmp`, and claude / codex both trust by canonical path —
@@ -589,8 +614,10 @@ impl ReadyPlanRunner {
                     | ReadyStepKind::WaitFor
                     | ReadyStepKind::ExtractSessionId
             );
-            let needs_response =
-                matches!(step.kind, ReadyStepKind::AnswerDialog | ReadyStepKind::Input);
+            let needs_response = matches!(
+                step.kind,
+                ReadyStepKind::AnswerDialog | ReadyStepKind::Input
+            );
             if needs_needle && step.needle.is_empty() {
                 tracing::warn!(agent = %agent_id, kind = ?step.kind, "ready_plan: step missing needle; skipping");
                 continue;
@@ -742,7 +769,10 @@ impl ReadyPlanRunner {
 fn extract_token_after(buf: &[u8], start: usize) -> String {
     let tail = buf.get(start..).unwrap_or(&[]);
     let trimmed: &[u8] = {
-        let lead = tail.iter().take_while(|b| **b == b' ' || **b == b'\t').count();
+        let lead = tail
+            .iter()
+            .take_while(|b| **b == b' ' || **b == b'\t')
+            .count();
         &tail[lead..]
     };
     let end = trimmed
@@ -892,7 +922,10 @@ mod ready_plan_tests {
         let (mut r, mut rx) = make_pair();
         r.scan(b"Trust this folder? hook count: 0");
         r.scan(b"reviewing your code changes now");
-        assert!(rx.try_recv().is_err(), "substring 'hook' / 'review' alone must NOT trigger");
+        assert!(
+            rx.try_recv().is_err(),
+            "substring 'hook' / 'review' alone must NOT trigger"
+        );
         assert_eq!(r.cursor, 0, "still waiting on the real needle");
     }
 
@@ -944,11 +977,17 @@ mod ready_plan_tests {
         ];
         let mut r = ReadyPlanRunner::from_plan(&plan, tx, "seq").expect("runner");
         r.scan(b"booting...\n");
-        assert!(rx.try_recv().is_err(), "input must NOT fire before the wait_for matches");
+        assert!(
+            rx.try_recv().is_err(),
+            "input must NOT fire before the wait_for matches"
+        );
         assert_eq!(r.cursor, 0);
         r.scan(b"all systems READY now\n");
         // wait_for matched → cursor advances → input fires immediately.
-        assert_eq!(&rx.try_recv().expect("input injected after wait")[..], b"go\r");
+        assert_eq!(
+            &rx.try_recv().expect("input injected after wait")[..],
+            b"go\r"
+        );
         assert_eq!(r.cursor, 2, "plan complete");
     }
 
@@ -958,16 +997,27 @@ mod ready_plan_tests {
         let plan = vec![step(ReadyStepKind::Input, "", "hi\r", "")];
         let mut r = ReadyPlanRunner::from_plan(&plan, tx, "in").expect("runner");
         r.scan(b"any output at all");
-        assert_eq!(&rx.try_recv().expect("input fired on first scan")[..], b"hi\r");
+        assert_eq!(
+            &rx.try_recv().expect("input fired on first scan")[..],
+            b"hi\r"
+        );
     }
 
     #[tokio::test]
     async fn extract_session_id_captures_token() {
         let (tx, _rx) = mpsc::channel::<Bytes>(8);
-        let plan = vec![step(ReadyStepKind::ExtractSessionId, "Session id:", "", "sid")];
+        let plan = vec![step(
+            ReadyStepKind::ExtractSessionId,
+            "Session id:",
+            "",
+            "sid",
+        )];
         let mut r = ReadyPlanRunner::from_plan(&plan, tx, "ex").expect("runner");
         r.scan(b"banner\nSession id:  abc-123-def \ntrailing output\n");
-        assert_eq!(r.captured().get("sid").map(String::as_str), Some("abc-123-def"));
+        assert_eq!(
+            r.captured().get("sid").map(String::as_str),
+            Some("abc-123-def")
+        );
         assert_eq!(r.cursor, 1, "advanced after capture");
     }
 
@@ -975,6 +1025,74 @@ mod ready_plan_tests {
     fn extract_token_after_skips_leading_space_and_stops_at_whitespace() {
         assert_eq!(extract_token_after(b"   tok-99\nrest", 0), "tok-99");
         assert_eq!(extract_token_after(b"x", 1), ""); // start at EOF → empty
+    }
+}
+
+#[cfg(test)]
+mod billing_policy_tests {
+    use super::*;
+    use crate::plugins::{
+        BillingSurface, McpFormat, ReadyStep, StopHookFormat, Transport, TrustFormat,
+    };
+
+    fn minimal_plugin(id: &str) -> CliPlugin {
+        CliPlugin {
+            id: id.to_string(),
+            display_name: id.to_string(),
+            binary: id.to_string(),
+            default_args: Vec::new(),
+            home_env: "HOME".to_string(),
+            billing_surface: BillingSurface::Unknown,
+            requires_explicit_billing_opt_in: false,
+            blocked_env_prefixes: Vec::new(),
+            auto_trust_workspace: false,
+            auto_dismiss_update: false,
+            auto_inject_mcp: false,
+            auto_inject_stop_hook: false,
+            ready_plan: Vec::<ReadyStep>::new(),
+            trust_format: TrustFormat::None,
+            mcp_format: McpFormat::None,
+            stop_hook_format: StopHookFormat::None,
+            stop_hook_timeout: 10_000,
+            input_settle_ms: 0,
+            model_args: Vec::new(),
+            default_model: None,
+            native_tiers: false,
+            effort_args: Vec::new(),
+            effort_levels: HashMap::new(),
+            transport: Transport::Pty,
+            structured_args: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn blocks_configured_env_prefixes() {
+        let mut p = minimal_plugin("claude");
+        p.blocked_env_prefixes = vec!["ANTHROPIC_".into()];
+        assert!(env_blocked(&p, "ANTHROPIC_API_KEY"));
+        assert!(env_blocked(&p, "ANTHROPIC_BASE_URL"));
+        assert!(!env_blocked(&p, "OPENAI_API_KEY"));
+    }
+
+    #[test]
+    fn claude_non_pty_requires_paid_transport_opt_in() {
+        std::env::remove_var("FLOCKMUX_ALLOW_PAID_TRANSPORT");
+        let mut p = minimal_plugin("claude");
+        p.mcp_format = McpFormat::ClaudeLocalScope;
+        p.billing_surface = BillingSurface::InteractiveSubscription;
+        p.transport = Transport::Acp;
+        let err = enforce_billing_policy(&p).expect_err("non-PTY Claude must be rejected");
+        assert!(err.to_string().contains("interactive subscription PTY"));
+    }
+
+    #[test]
+    fn paid_sdk_surface_requires_opt_in_when_declared() {
+        std::env::remove_var("FLOCKMUX_ALLOW_PAID_TRANSPORT");
+        let mut p = minimal_plugin("claude-sdk");
+        p.billing_surface = BillingSurface::AgentSdkCredits;
+        p.requires_explicit_billing_opt_in = true;
+        let err = enforce_billing_policy(&p).expect_err("paid SDK surface must be rejected");
+        assert!(err.to_string().contains("requires explicit opt-in"));
     }
 }
 
@@ -988,13 +1106,19 @@ mod ready_plan_tests {
 /// unit-tested so the spawn argv path stays trivial. Caller decides whether a
 /// model is in effect; this only renders the template.
 fn model_overlay_args(model: &str, template: &[String]) -> Vec<String> {
-    template.iter().map(|a| a.replace("{model}", model)).collect()
+    template
+        .iter()
+        .map(|a| a.replace("{model}", model))
+        .collect()
 }
 
 /// Substitute the concrete effort value into a CLI's `effort_args` template
 /// (`{effort}` placeholder). Mirrors `model_overlay_args`.
 fn effort_overlay_args(effort: &str, template: &[String]) -> Vec<String> {
-    template.iter().map(|a| a.replace("{effort}", effort)).collect()
+    template
+        .iter()
+        .map(|a| a.replace("{effort}", effort))
+        .collect()
 }
 
 /// Cache key is `(binary, flag)` so different plugins probing different
@@ -1041,15 +1165,16 @@ fn binary_supports_flag(binary: &str, flag: &str) -> bool {
         Ok(Err(_)) => false, // spawn / IO error
         Err(_) => {
             // recv timed out — the probe took longer than PROBE_TIMEOUT.
-            tracing::warn!(binary, flag, "binary flag probe timed out; assuming unsupported");
+            tracing::warn!(
+                binary,
+                flag,
+                "binary flag probe timed out; assuming unsupported"
+            );
             false
         }
     };
 
-    tracing::info!(
-        binary, flag, supported,
-        "binary flag probe result"
-    );
+    tracing::info!(binary, flag, supported, "binary flag probe result");
     cache.lock().insert(key, supported);
     supported
 }

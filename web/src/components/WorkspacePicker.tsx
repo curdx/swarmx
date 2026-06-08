@@ -25,6 +25,7 @@ export function WorkspacePicker({
   const { t } = useTranslation();
   return (
     <select
+      name="workspace"
       aria-label={t("workspace.picker")}
       value={value}
       onChange={(e) => onChange(e.target.value)}

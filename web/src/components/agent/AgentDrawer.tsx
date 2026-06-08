@@ -64,6 +64,10 @@ import { AgentActivityLog } from "./AgentActivityLog";
 import { useSwarmFeed } from "../../hooks/useSwarmFeed";
 import { Button } from "@/components/ui/button";
 import {
+  ConfirmActionDialog,
+  type ConfirmActionState,
+} from "@/components/ConfirmActionDialog";
+import {
   Sheet,
   SheetContent,
   SheetDescription,
@@ -112,15 +116,17 @@ interface Props {
 }
 
 export function AgentDrawer({ agentId, activities, onClose }: Props) {
+  const { t } = useTranslation();
   const [info, setInfo] = useState<AgentInfo | null>(null);
+  const [infoResolved, setInfoResolved] = useState(false);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+  const [confirm, setConfirm] = useState<ConfirmActionState | null>(null);
   // Tab lives in the URL (?tab=…) so it survives a drawer remount (e.g. a
   // background agents refresh) instead of snapping back to "terminal", and so
   // it deep-links. Defaults to terminal when the param is absent/unknown.
   const [searchParams, setSearchParams] = useSearchParams();
-  // Assume live until info loads, so a genuinely live agent never flickers off
-  // the terminal default.
-  const liveAgent = info ? info.killed_at == null && info.shim_exit == null : true;
+  const liveAgent =
+    infoResolved && !!info && info.killed_at == null && info.shim_exit == null;
   const explicitTab: TabId | null = TABS.some((x) => x.id === searchParams.get("tab"))
     ? (searchParams.get("tab") as TabId)
     : null;
@@ -128,7 +134,7 @@ export function AgentDrawer({ agentId, activities, onClose }: Props) {
   // clicking its avatar in chat used to open an empty/error drawer. Default a
   // dead agent to its recordings — the richest "what did this agent do" view —
   // instead. An explicit ?tab= always wins (deep-link / user pick).
-  const defaultTab: TabId = liveAgent ? "terminal" : "recordings";
+  const defaultTab: TabId = !infoResolved || liveAgent ? "terminal" : "recordings";
   const tab: TabId = explicitTab ?? defaultTab;
   // Drop the param only for the section's natural default so the URL stays
   // clean there — and crucially so clicking a NON-default tab (e.g. 终端 on a
@@ -180,10 +186,14 @@ export function AgentDrawer({ agentId, activities, onClose }: Props) {
       setInfo(found);
     } catch {
       /* best-effort */
+    } finally {
+      setInfoResolved(true);
     }
   };
 
   useEffect(() => {
+    setInfo(null);
+    setInfoResolved(false);
     refreshInfo();
     // Canonical workspace list — needed to map the agent's workspace_id (a
     // full FK id) to the workspace's URL slug for Recordings/Context links.
@@ -208,7 +218,19 @@ export function AgentDrawer({ agentId, activities, onClose }: Props) {
     },
   });
 
-  const wake = () => api.wakeAgent(agentId).catch(() => {});
+  const wake = () =>
+    setConfirm({
+      title: t("agent.confirm.wake.title", {
+        role: info?.role ?? agentId.slice(0, 8),
+        defaultValue: "唤醒 agent？",
+      }),
+      description: t(
+        "agent.confirm.wake.desc",
+        "会向该 agent 投递一条手动唤醒消息，推动它继续读取 mailbox / blackboard。仅在它确实卡住或需要人工催促时使用。",
+      ),
+      confirmLabel: t("agent.wake"),
+      onConfirm: () => api.wakeAgent(agentId).catch(() => {}),
+    });
   // Pause toggles between interrupt (active → paused) and resume
   // (paused → active). Both refresh the local AgentInfo so the button
   // label flips immediately without waiting for the swarm feed.
@@ -224,6 +246,32 @@ export function AgentDrawer({ agentId, activities, onClose }: Props) {
       // eslint-disable-next-line no-console
       console.warn("toggle pause failed", e);
     }
+  };
+  const requestTogglePause = () => {
+    const paused = !!info?.paused;
+    setConfirm({
+      title: paused
+        ? t("agent.confirm.resume.title", {
+            role: info?.role ?? agentId.slice(0, 8),
+            defaultValue: "恢复 agent？",
+          })
+        : t("agent.confirm.pause.title", {
+            role: info?.role ?? agentId.slice(0, 8),
+            defaultValue: "暂停 agent？",
+          }),
+      description: paused
+        ? t(
+            "agent.confirm.resume.desc",
+            "会恢复该 agent 的自动唤醒，并投递一次手动唤醒让它继续处理当前工作。",
+          )
+        : t(
+            "agent.confirm.pause.desc",
+            "会发送 Ctrl-C 中断当前 turn，并让自动唤醒跳过该 agent，直到你恢复它。",
+          ),
+      confirmLabel: paused ? t("agent.resume") : t("agent.pause"),
+      variant: paused ? "default" : "destructive",
+      onConfirm: togglePause,
+    });
   };
 
   // The URL slug (≠ id, and NOT the id's first 8 chars — slug is generated
@@ -266,14 +314,16 @@ export function AgentDrawer({ agentId, activities, onClose }: Props) {
           agentId={agentId}
           now={now}
           onWake={wake}
-          onTogglePause={togglePause}
+          onTogglePause={requestTogglePause}
         />
         <TabBar tab={tab} onChange={setTab} />
         <div className="min-h-0 flex-1 overflow-hidden">
           {/* Mount all tabs concurrently is tempting (keeps terminal alive
               across tab switches), but xterm holds a WebGL slot and a WS
               so we'd burn budget on idle panes. Switch-unmount instead. */}
-          {tab === "terminal" && <TerminalTab agentId={agentId} live={liveAgent} />}
+          {tab === "terminal" && (
+            <TerminalTab agentId={agentId} live={liveAgent} loading={!infoResolved} />
+          )}
           {tab === "activity" && (
             <AgentActivityLog activities={mergedActivities} />
           )}
@@ -286,6 +336,12 @@ export function AgentDrawer({ agentId, activities, onClose }: Props) {
           )}
         </div>
         <StatBar info={info} now={now} />
+        <ConfirmActionDialog
+          action={confirm}
+          onOpenChange={(next) => {
+            if (!next) setConfirm(null);
+          }}
+        />
       </SheetContent>
     </Sheet>
   );
@@ -437,8 +493,25 @@ function TabBar({ tab, onChange }: { tab: TabId; onChange: (t: TabId) => void })
 
 // ── Tab: Terminal ────────────────────────────────────────────────────────
 
-function TerminalTab({ agentId, live }: { agentId: string; live: boolean }) {
+function TerminalTab({
+  agentId,
+  live,
+  loading,
+}: {
+  agentId: string;
+  live: boolean;
+  loading: boolean;
+}) {
   const { t } = useTranslation();
+  if (loading) {
+    return (
+      <div className="flex h-full items-center justify-center bg-surface-inverse p-6">
+        <p className="max-w-xs text-center font-caption text-sm text-foreground-inverse-secondary">
+          {t("agent.terminalLoading")}
+        </p>
+      </div>
+    );
+  }
   // A killed agent has no PTY — connecting the xterm WS would just error. Show a
   // plain note pointing at the historical tabs instead of a dead/error terminal.
   if (!live) {
@@ -502,53 +575,61 @@ function RecordingsTab({
       {items.map((r) => {
         const live = r.finalized_at == null;
         return (
-          <Link
+          <div
             key={r.id}
-            // 没拿到 wsId（agent 无 workspace 或还在加载）就退回 chat 主页 —
-            // 录像本身没法在 Shell 外播放，给个能登陆的入口比 404 强。
-            to={
-              wsId
-                ? `/chat/${wsId}/replays/${encodeURIComponent(r.id)}`
-                : "/chat"
-            }
-            className="group flex items-center gap-3 rounded-md border border-border-subtle bg-surface-primary p-3 hover:border-accent-primary"
+            className="group flex items-center gap-2 rounded-md border border-border-subtle bg-surface-primary p-2.5 hover:border-accent-primary sm:gap-3 sm:p-3"
           >
-            <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-term-bg text-term-green">
-              <Play className="size-4" />
-            </span>
-            <div className="min-w-0 flex-1">
-              <div className="truncate font-mono text-xs text-foreground-primary">
-                {r.id}
-              </div>
-              <div className="font-caption text-[11px] text-foreground-tertiary">
-                {r.cols}×{r.rows}
-                {r.duration_ms != null && (
-                  <> · {formatDelta(r.duration_ms)}</>
-                )}{" "}
-                · {formatTime(r.started_at)}
-              </div>
-            </div>
-            <span
-              className={cn(
-                "rounded-full px-2 py-0.5 font-caption text-[10px]",
-                live
-                  ? "bg-status-running-soft text-status-running"
-                  : "bg-surface-tertiary text-foreground-tertiary",
-              )}
+            <Link
+              // 没拿到 wsId（agent 无 workspace 或还在加载）就退回 chat 主页 —
+              // 录像本身没法在 Shell 外播放，给个能登陆的入口比 404 强。
+              to={
+                wsId
+                  ? `/chat/${wsId}/replays/${encodeURIComponent(r.id)}`
+                  : "/chat"
+              }
+              className="flex min-w-0 flex-1 items-center gap-2 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary sm:gap-3"
+              title={r.id}
             >
-              {live ? t("replays.live") : t("replays.completed")}
-            </span>
+              <span className="hidden size-9 shrink-0 items-center justify-center rounded-md bg-term-bg text-term-green sm:flex">
+                <Play className="size-4" />
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="truncate font-mono text-xs text-foreground-primary">
+                  {r.id}
+                </div>
+                <div className="font-caption text-[11px] text-foreground-tertiary">
+                  {r.cols}×{r.rows}
+                  {r.duration_ms != null && (
+                    <> · {formatDelta(r.duration_ms)}</>
+                  )}{" "}
+                  · {formatTime(r.started_at)}
+                </div>
+              </div>
+              <span
+                className={cn(
+                  "hidden rounded-full px-2 py-0.5 font-caption text-[10px] sm:inline-flex",
+                  live
+                    ? "bg-status-running-soft text-status-running"
+                    : "bg-surface-tertiary text-foreground-tertiary",
+                )}
+              >
+                {live ? t("replays.live") : t("replays.completed")}
+              </span>
+              <ChevronRight className="hidden size-4 shrink-0 text-foreground-tertiary sm:block" />
+            </Link>
             <a
               href={api.recordingCastUrl(r.id)}
               download={`${r.id}.cast`}
-              onClick={(e) => e.stopPropagation()}
-              className="flex size-7 items-center justify-center rounded-md text-foreground-tertiary hover:bg-surface-tertiary"
+              className="flex size-7 shrink-0 items-center justify-center rounded-md text-foreground-tertiary hover:bg-surface-tertiary"
+              aria-label={t("agent.downloadCastNamed", {
+                id: r.id,
+                defaultValue: "下载 {{id}} .cast",
+              })}
               title={t("agent.downloadCast")}
             >
               <Download className="size-3.5" />
             </a>
-            <ChevronRight className="size-4 text-foreground-tertiary" />
-          </Link>
+          </div>
         );
       })}
     </div>

@@ -71,6 +71,11 @@ export default function FilesRoute() {
       setPreview(null);
       setPreviewPath(null);
       setPreviewLoading(false);
+      if (!all && !wsId) {
+        setList(null);
+        setLoading(false);
+        return;
+      }
       try {
         setList(await api.filesList(dir, wsId || undefined, all));
       } catch (e) {
@@ -88,7 +93,15 @@ export default function FilesRoute() {
   useEffect(() => {
     if (!ready) return;
     setBrowseAll(false);
-    open(undefined, false);
+    if (wsId) {
+      open(undefined, false);
+    } else {
+      setList(null);
+      setErr(null);
+      setLoading(false);
+      setPreview(null);
+      setPreviewPath(null);
+    }
   }, [wsId, ready, open]);
 
   const openFile = useCallback(
@@ -133,8 +146,19 @@ export default function FilesRoute() {
           {list?.dir}
         </span>
         <div className="ml-auto flex items-center gap-3">
-          <label className="flex items-center gap-1.5 font-caption text-[11px] text-foreground-tertiary">
-            <input type="checkbox" checked={browseAll} onChange={toggleBrowseAll} className="size-3.5" />
+          <label
+            htmlFor="browse-all-files"
+            className="flex items-center gap-1.5 font-caption text-[11px] text-foreground-tertiary"
+          >
+            <input
+              id="browse-all-files"
+              type="checkbox"
+              name="browse-all-files"
+              aria-label={t("files.browseAll")}
+              checked={browseAll}
+              onChange={toggleBrowseAll}
+              className="size-3.5"
+            />
             {t("files.browseAll")}
           </label>
           {workspaces.length > 0 && (

@@ -510,6 +510,9 @@ export interface UsageDayRow {
 }
 export interface UsageAgentRow {
   agent_id: string;
+  role?: string | null;
+  workspace_id?: string | null;
+  thread_id?: string | null;
   input_tokens: number;
   output_tokens: number;
   cache_read_tokens: number;
@@ -529,6 +532,73 @@ export interface UsageSummary {
   by_model: UsageModelRow[];
   by_day: UsageDayRow[];
   by_agent: UsageAgentRow[];
+}
+export interface UsagePricingRate {
+  input: number;
+  output: number;
+  cache_read: number;
+  cache_write: number;
+}
+export interface UsagePricingRule {
+  id: string;
+  provider: string;
+  label: string;
+  matchers: string[];
+  context_window: number | null;
+  rates_usd_per_mtok: UsagePricingRate;
+  note: string;
+}
+export interface UsagePricingResponse {
+  unit: string;
+  source: "default" | "user" | string;
+  path: string;
+  rules: UsagePricingRule[];
+}
+
+// ── goals (GET/POST/PATCH /api/goals) ─────────────────────────────────────
+export type GoalStatus = "active" | "paused" | "blocked" | "complete" | "archived";
+export interface GoalRecord {
+  id: string;
+  workspace_id: string;
+  thread_id: string | null;
+  objective: string;
+  success_criteria: string[];
+  status: GoalStatus;
+  budget_tokens: number | null;
+  created_at: number;
+  updated_at: number;
+  completed_at: number | null;
+}
+export interface GoalEvidenceRecord {
+  id: string;
+  goal_id: string;
+  kind: string;
+  summary: string;
+  source_agent_id: string | null;
+  blackboard_path: string | null;
+  command: string | null;
+  created_at: number;
+}
+export interface GoalsResponse {
+  goals: GoalRecord[];
+}
+export interface GoalEvidenceResponse {
+  evidence: GoalEvidenceRecord[];
+}
+export interface CreateGoalRequest {
+  workspace_id: string;
+  thread_id?: string | null;
+  objective: string;
+  success_criteria?: string[];
+  budget_tokens?: number | null;
+  status?: GoalStatus;
+}
+export interface AddGoalEvidenceRequest {
+  kind: string;
+  summary: string;
+  source_agent_id?: string | null;
+  blackboard_path?: string | null;
+  command?: string | null;
 }
 
 // ── kanban tasks (GET /api/tasks) ──────────────────────────────────────────

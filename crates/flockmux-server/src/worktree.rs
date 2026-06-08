@@ -41,7 +41,11 @@ fn git(cwd: &Path, args: &[&str]) -> Result<GitOut> {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         // output() drains stdout+stderr (so git can't deadlock on a full pipe).
-        let out = Command::new("git").arg("-C").arg(&cwd).args(&owned).output();
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(&cwd)
+            .args(&owned)
+            .output();
         let _ = tx.send(out);
     });
     match rx.recv_timeout(GIT_TIMEOUT) {
@@ -168,7 +172,9 @@ pub(crate) fn sanitize_suffix(branch: &str) -> String {
     while s.contains("--") {
         s = s.replace("--", "-");
     }
-    let s = s.trim_matches(|c| c == '-' || c == '.' || c == '_').to_string();
+    let s = s
+        .trim_matches(|c| c == '-' || c == '.' || c == '_')
+        .to_string();
     if s.is_empty() {
         // A fully non-ASCII name (e.g. Chinese "深色模式") would otherwise
         // collapse to the SAME literal for every such name, so distinct
@@ -324,7 +330,10 @@ pub fn delete_branch(repo_cwd: &Path, branch: &str) -> Result<()> {
 /// call covers the main worktree and all direction worktrees. Idempotent;
 /// best-effort no-op for a non-git dir.
 pub fn ignore_managed_artifacts(repo_cwd: &Path) {
-    ignore_paths_locally(repo_cwd, &[".claude/settings.local.json", ".codex/hooks.json"]);
+    ignore_paths_locally(
+        repo_cwd,
+        &[".claude/settings.local.json", ".codex/hooks.json"],
+    );
 }
 
 /// Append `patterns` to the repo's LOCAL `.git/info/exclude` (idempotent),
@@ -558,8 +567,14 @@ mod tests {
             git(
                 repo,
                 &[
-                    "-c", "user.email=t@t.t", "-c", "user.name=t",
-                    "commit", "-q", "-m", msg,
+                    "-c",
+                    "user.email=t@t.t",
+                    "-c",
+                    "user.name=t",
+                    "commit",
+                    "-q",
+                    "-m",
+                    msg,
                 ],
             )
             .unwrap();
@@ -575,7 +590,10 @@ mod tests {
         commit(&repo, "feat");
         git(&repo, &["checkout", "-q", &base]).unwrap();
 
-        assert_eq!(diff_summary(&repo, &base, "feature"), vec!["b.txt".to_string()]);
+        assert_eq!(
+            diff_summary(&repo, &base, "feature"),
+            vec!["b.txt".to_string()]
+        );
         match merge_into_base(&repo, &base, "feature") {
             MergeOutcome::Clean { files } => assert_eq!(files, 1),
             other => panic!("expected clean, got {other:?}"),
@@ -595,7 +613,10 @@ mod tests {
             }
             other => panic!("expected conflict, got {other:?}"),
         }
-        assert!(!conflicted_files(&repo).is_empty(), "mid-merge has conflicts");
+        assert!(
+            !conflicted_files(&repo).is_empty(),
+            "mid-merge has conflicts"
+        );
         let _ = git(&repo, &["merge", "--abort"]); // tidy up the in-progress merge
     }
 
@@ -612,7 +633,16 @@ mod tests {
             git(repo, &["add", "-A"]).unwrap();
             git(
                 repo,
-                &["-c", "user.email=t@t.t", "-c", "user.name=t", "commit", "-q", "-m", msg],
+                &[
+                    "-c",
+                    "user.email=t@t.t",
+                    "-c",
+                    "user.name=t",
+                    "commit",
+                    "-q",
+                    "-m",
+                    msg,
+                ],
             )
             .unwrap();
         };
@@ -627,7 +657,11 @@ mod tests {
         git(&repo, &["checkout", "-q", &base]).unwrap();
         commit(&repo, "a.txt", "base2\n", "base2");
 
-        assert_eq!(ahead_behind(&repo, &base, "feat"), Some((2, 1)), "ahead 2, behind 1");
+        assert_eq!(
+            ahead_behind(&repo, &base, "feat"),
+            Some((2, 1)),
+            "ahead 2, behind 1"
+        );
         // base vs itself → None (main direction is its own base).
         assert_eq!(ahead_behind(&repo, &base, &base), None);
         // No divergence (fresh branch off base) → (0, 0).
@@ -648,7 +682,10 @@ mod tests {
         ignore_managed_artifacts(&repo);
         let exclude = repo.join(".git/info/exclude");
         let body = std::fs::read_to_string(&exclude).unwrap();
-        assert!(body.contains(".claude/settings.local.json"), "claude pattern added");
+        assert!(
+            body.contains(".claude/settings.local.json"),
+            "claude pattern added"
+        );
         assert!(body.contains(".codex/hooks.json"), "codex pattern added");
 
         // Idempotent: a second call must not duplicate the entries.

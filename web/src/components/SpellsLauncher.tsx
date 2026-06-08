@@ -112,6 +112,7 @@ export function SpellsLauncher({ onSpellLaunched }: Props) {
   return (
     <div style={wrap}>
       <input
+        name="spell-task"
         type="text"
         value={task}
         onChange={(e) => setTask(e.target.value)}
@@ -168,6 +169,7 @@ export function SpellsLauncher({ onSpellLaunched }: Props) {
       </button>
       {showAdvanced && (
         <input
+          name="spell-workspace-dir"
           type="text"
           value={workspaceDir}
           onChange={(e) => setWorkspaceDir(e.target.value)}

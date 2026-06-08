@@ -78,7 +78,11 @@ pub async fn create_cron(
     let rec = CronJobRecord {
         id: uuid::Uuid::new_v4().to_string(),
         workspace_id: req.workspace_id,
-        name: if req.name.trim().is_empty() { req.cron_expr.clone() } else { req.name },
+        name: if req.name.trim().is_empty() {
+            req.cron_expr.clone()
+        } else {
+            req.name
+        },
         cron_expr: req.cron_expr,
         prompt: req.prompt,
         enabled: true,
@@ -95,7 +99,10 @@ pub async fn create_cron(
     }
 }
 
-pub async fn delete_cron(State(state): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
+pub async fn delete_cron(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
     match state.store.delete_cron_job(id).await {
         Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))).into_response(),
         Err(e) => (
@@ -129,11 +136,19 @@ pub async fn toggle_cron(
 pub async fn run_cron(State(state): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
     let jobs = state.store.list_cron_jobs().await.unwrap_or_default();
     let Some(job) = jobs.into_iter().find(|j| j.id == id) else {
-        return (StatusCode::NOT_FOUND, Json(json!({ "error": "no such job" }))).into_response();
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "no such job" })),
+        )
+            .into_response();
     };
     match crate::cron::run_job(&state, &job).await {
         Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))).into_response(),
         // A "skipped" (no live orchestrator) is not a server error — report it.
-        Err(skip) => (StatusCode::OK, Json(json!({ "ok": false, "skipped": skip }))).into_response(),
+        Err(skip) => (
+            StatusCode::OK,
+            Json(json!({ "ok": false, "skipped": skip })),
+        )
+            .into_response(),
     }
 }

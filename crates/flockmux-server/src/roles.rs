@@ -153,8 +153,8 @@ impl RoleRegistry {
         if !dir.exists() {
             return Ok(Self { roles });
         }
-        let read = std::fs::read_dir(dir)
-            .with_context(|| format!("read_dir({})", dir.display()))?;
+        let read =
+            std::fs::read_dir(dir).with_context(|| format!("read_dir({})", dir.display()))?;
         for entry in read {
             let entry = entry?;
             let path = entry.path();
@@ -193,13 +193,25 @@ impl RoleRegistry {
     /// embeds `warn!` + skip — a parse slip in one role never aborts startup.
     pub fn builtin() -> Self {
         const BUILTIN: &[(&str, &str)] = &[
-            ("orchestrator.md", include_str!("../../../roles/orchestrator.md")),
+            (
+                "orchestrator.md",
+                include_str!("../../../roles/orchestrator.md"),
+            ),
             ("frontend.md", include_str!("../../../roles/frontend.md")),
             ("backend.md", include_str!("../../../roles/backend.md")),
             ("reviewer.md", include_str!("../../../roles/reviewer.md")),
-            ("test-runner.md", include_str!("../../../roles/test-runner.md")),
-            ("docs-writer.md", include_str!("../../../roles/docs-writer.md")),
-            ("researcher.md", include_str!("../../../roles/researcher.md")),
+            (
+                "test-runner.md",
+                include_str!("../../../roles/test-runner.md"),
+            ),
+            (
+                "docs-writer.md",
+                include_str!("../../../roles/docs-writer.md"),
+            ),
+            (
+                "researcher.md",
+                include_str!("../../../roles/researcher.md"),
+            ),
             ("fixer.md", include_str!("../../../roles/fixer.md")),
         ];
         let mut roles = HashMap::new();
@@ -282,8 +294,8 @@ fn parse_role(content: &str, source_path: &Path) -> Result<Role> {
     // later (e.g. roles want YAML support) without rippling.
     let (front_matter, body) = split_front_matter(content)
         .ok_or_else(|| anyhow!("no `+++` front-matter delimiters found"))?;
-    let manifest: RoleManifest = toml::from_str(front_matter)
-        .with_context(|| "parse role front-matter as TOML")?;
+    let manifest: RoleManifest =
+        toml::from_str(front_matter).with_context(|| "parse role front-matter as TOML")?;
     validate_manifest(&manifest)?;
     Ok(Role {
         manifest,
@@ -319,7 +331,28 @@ fn validate_manifest(m: &RoleManifest) -> Result<()> {
             "role manifest `system_prompt_template` must be non-empty"
         ));
     }
+    validate_optional_enum(
+        "default_model_tier",
+        &m.default_model_tier,
+        &["opus", "sonnet", "haiku"],
+    )?;
+    validate_optional_enum(
+        "modality",
+        &m.modality,
+        &["ui", "backend", "docs", "shell", "research", "review"],
+    )?;
+    validate_optional_enum("risk", &m.risk, &["normal", "high"])?;
     Ok(())
+}
+
+fn validate_optional_enum(field: &str, value: &str, allowed: &[&str]) -> Result<()> {
+    let v = value.trim();
+    if v.is_empty() || allowed.contains(&v) {
+        return Ok(());
+    }
+    Err(anyhow!(
+        "role manifest `{field}` must be one of {allowed:?}; got `{v}`"
+    ))
 }
 
 #[cfg(test)]
@@ -516,6 +549,20 @@ system_prompt_template = "x"
         // kind omitted → defaults to "done"
         assert_eq!(r.manifest.consumes[1].from_role, "planner");
         assert_eq!(r.manifest.consumes[1].kind, "done");
+    }
+
+    #[test]
+    fn manifest_rejects_unknown_capability_metadata() {
+        let src = concat!(
+            "+++\n",
+            "id = \"frontend\"\n",
+            "default_cli = \"claude\"\n",
+            "modality = \"whatever\"\n",
+            "system_prompt_template = \"x\"\n",
+            "+++\n",
+        );
+        let err = parse_role(src, Path::new("/tmp/f.md")).unwrap_err();
+        assert!(format!("{err:#}").contains("modality"), "got: {err:#}");
     }
 
     #[test]

@@ -62,6 +62,7 @@ export function RecordingsPanel({ refreshTick }: Props) {
     <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
       <div style={headerRow}>
         <input
+          name="recording-agent-filter"
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
           placeholder="按 agent_id 过滤"

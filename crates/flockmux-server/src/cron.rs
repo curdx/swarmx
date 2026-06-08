@@ -25,7 +25,13 @@ pub fn fields_from_unix(secs: i64) -> Fields {
     let (_y, month, dom) = civil_from_days(days);
     // 1970-01-01 was Thursday. With 0=Sunday: (days + 4) mod 7.
     let dow = (days.rem_euclid(7) as u32 + 4) % 7;
-    Fields { minute, hour, dom, month, dow }
+    Fields {
+        minute,
+        hour,
+        dom,
+        month,
+        dow,
+    }
 }
 
 /// Howard Hinnant's `civil_from_days`: days since 1970-01-01 → (year, month, day).
@@ -86,8 +92,8 @@ pub fn matches(expr: &str, f: Fields) -> bool {
     }
     // dow: accept 7 as Sunday by normalising the value side too.
     let dow_field = parts[4];
-    let dow_ok = field_matches(dow_field, f.dow, 0, 6)
-        || (f.dow == 0 && field_matches(dow_field, 7, 0, 7));
+    let dow_ok =
+        field_matches(dow_field, f.dow, 0, 6) || (f.dow == 0 && field_matches(dow_field, 7, 0, 7));
     field_matches(parts[0], f.minute, 0, 59)
         && field_matches(parts[1], f.hour, 0, 23)
         && field_matches(parts[2], f.dom, 1, 31)
@@ -118,7 +124,9 @@ fn field_valid(field: &str, min: u32, max: u32) -> bool {
                 _ => false,
             };
         }
-        p.parse::<u32>().map(|n| n >= min && n <= max).unwrap_or(false)
+        p.parse::<u32>()
+            .map(|n| n >= min && n <= max)
+            .unwrap_or(false)
     })
 }
 
@@ -290,7 +298,13 @@ mod tests {
 
     #[test]
     fn exact_minute_hour() {
-        let f = Fields { minute: 30, hour: 9, dom: 15, month: 6, dow: 1 };
+        let f = Fields {
+            minute: 30,
+            hour: 9,
+            dom: 15,
+            month: 6,
+            dow: 1,
+        };
         assert!(matches("30 9 * * *", f));
         assert!(!matches("31 9 * * *", f));
         assert!(!matches("30 10 * * *", f));
@@ -298,7 +312,13 @@ mod tests {
 
     #[test]
     fn step_and_range_and_list() {
-        let f = Fields { minute: 0, hour: 14, dom: 10, month: 6, dow: 3 };
+        let f = Fields {
+            minute: 0,
+            hour: 14,
+            dom: 10,
+            month: 6,
+            dow: 3,
+        };
         assert!(matches("*/15 * * * *", f)); // 0 % 15 == 0
         assert!(!matches("*/15 * * * *", Fields { minute: 7, ..f }));
         assert!(matches("0 9-17 * * *", f)); // 14 in 9..17

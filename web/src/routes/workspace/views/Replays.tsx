@@ -174,6 +174,7 @@ export default function ReplaysView() {
         <div className="flex h-8 w-60 items-center gap-2 rounded-md bg-surface-primary px-3">
           <Search className="size-3.5 text-foreground-tertiary" />
           <input
+            name="replay-search"
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
             placeholder={t("replays.search")}

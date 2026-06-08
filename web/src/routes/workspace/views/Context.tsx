@@ -36,6 +36,7 @@ import { buildRoleLookup } from "@/lib/agent";
 import { AgentChip } from "@/components/agent/AgentChip";
 import { cn } from "@/lib/cn";
 import { useWorkspaceContext } from "../Shell";
+import { MarkdownInput, MarkdownLink } from "@/lib/markdownLinks";
 
 interface TreeNode {
   name: string;
@@ -357,6 +358,7 @@ export default function ContextView() {
         <div className="flex h-8 w-60 items-center gap-2 rounded-md bg-surface-primary px-3">
           <Search className="size-3.5 text-foreground-tertiary" />
           <input
+            name="context-search"
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
             placeholder={t("context.search")}
@@ -453,7 +455,10 @@ export default function ContextView() {
             )}
             {selected && !loadingDoc && snap && view === "rendered" && (
               <article className="prose-context max-w-3xl text-foreground-primary">
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                <ReactMarkdown
+                  remarkPlugins={[remarkGfm]}
+                  components={{ a: MarkdownLink, input: MarkdownInput }}
+                >
                   {snap.content}
                 </ReactMarkdown>
               </article>

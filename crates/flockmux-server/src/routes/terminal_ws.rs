@@ -20,12 +20,12 @@
 //! workers (flockmux-pty `env_clear` + the vars we set), so it doesn't leak the
 //! server's ambient secrets.
 
+use crate::AppState;
 use axum::{
     extract::ws::{Message, WebSocket, WebSocketUpgrade},
     extract::{Query, State},
     response::IntoResponse,
 };
-use crate::AppState;
 use bytes::Bytes;
 use flockmux_pty::{PtyBridge, PtyHandles, SpawnOpts};
 use futures::{SinkExt, StreamExt};
@@ -82,8 +82,7 @@ fn spawn_reaper() {
             let mut reg = registry().lock().unwrap();
             reg.retain(|sid, s| {
                 let stale = s.attached == 0
-                    && s
-                        .detached_at
+                    && s.detached_at
                         .map(|t| now.duration_since(t) >= IDLE_REAP)
                         .unwrap_or(false);
                 if stale {
@@ -103,12 +102,15 @@ fn spawn_shell(cwd: Option<PathBuf>) -> anyhow::Result<PtyHandles> {
     let spawn_cwd = cwd.or_else(|| std::env::var_os("HOME").map(PathBuf::from));
 
     let mut env = HashMap::new();
-    for k in ["HOME", "PATH", "LANG", "LC_ALL", "LC_CTYPE", "TMPDIR", "USER", "LOGNAME"] {
+    for k in [
+        "HOME", "PATH", "LANG", "LC_ALL", "LC_CTYPE", "TMPDIR", "USER", "LOGNAME",
+    ] {
         if let Ok(v) = std::env::var(k) {
             env.insert(k.to_string(), v);
         }
     }
-    env.entry("TERM".to_string()).or_insert_with(|| "xterm-256color".to_string());
+    env.entry("TERM".to_string())
+        .or_insert_with(|| "xterm-256color".to_string());
 
     let argv = vec![shell];
     PtyBridge::spawn(SpawnOpts {
@@ -171,7 +173,10 @@ async fn handle_terminal(socket: WebSocket, sid: String, cwd: Option<PathBuf>) {
             debug!(%sid, "terminal: reattached (replay {} bytes)", replay.len());
             (s.bridge.clone(), rx, replay)
         } else {
-            let PtyHandles { bridge, mut output_rx } = match spawn_shell(cwd) {
+            let PtyHandles {
+                bridge,
+                mut output_rx,
+            } = match spawn_shell(cwd) {
                 Ok(h) => h,
                 Err(e) => {
                     warn!(?e, "terminal: failed to spawn shell");
@@ -210,7 +215,13 @@ async fn handle_terminal(socket: WebSocket, sid: String, cwd: Option<PathBuf>) {
             }
             reg.insert(
                 sid.clone(),
-                TermSession { bridge: bridge.clone(), ring, bcast, attached: 1, detached_at: None },
+                TermSession {
+                    bridge: bridge.clone(),
+                    ring,
+                    bcast,
+                    attached: 1,
+                    detached_at: None,
+                },
             );
             debug!(%sid, "terminal: shell spawned");
             (bridge, rx, Vec::new())

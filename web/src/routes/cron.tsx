@@ -106,6 +106,7 @@ export default function CronRoute() {
             <label className="flex flex-col gap-1">
               <span className="font-caption text-[11px] text-foreground-tertiary">{t("cron.workspace")}</span>
               <select
+                name="cron-workspace"
                 value={wsId}
                 onChange={(e) => setWsId(e.target.value)}
                 className="rounded border border-border-subtle bg-surface-primary px-2 py-1 text-[13px]"
@@ -121,6 +122,7 @@ export default function CronRoute() {
             <label className="flex flex-col gap-1">
               <span className="font-caption text-[11px] text-foreground-tertiary">{t("cron.expr")} (UTC)</span>
               <input
+                name="cron-expression"
                 value={expr}
                 onChange={(e) => setExpr(e.target.value)}
                 placeholder="0 9 * * 1-5"
@@ -144,6 +146,7 @@ export default function CronRoute() {
           <label className="flex flex-col gap-1">
             <span className="font-caption text-[11px] text-foreground-tertiary">{t("cron.name")}</span>
             <input
+              name="cron-name"
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder={t("cron.namePlaceholder")}
@@ -153,6 +156,7 @@ export default function CronRoute() {
           <label className="flex flex-col gap-1">
             <span className="font-caption text-[11px] text-foreground-tertiary">{t("cron.prompt")}</span>
             <textarea
+              name="cron-prompt"
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
               rows={2}

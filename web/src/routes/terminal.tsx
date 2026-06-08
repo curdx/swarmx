@@ -11,14 +11,16 @@
  * scrollback on reattach). Switching the workspace picker tears down the view
  * and attaches that workspace's shell; a first spawn starts in its cwd.
  */
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Terminal } from "@xterm/xterm";
+import { Terminal as XtermTerminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
+import { ShieldAlert, Terminal as TerminalIcon } from "lucide-react";
 import { WS_HOST, WS_PROTO } from "@/lib/apiBase";
 import { useToolWorkspaces } from "@/lib/useToolWorkspaces";
 import { WorkspacePicker } from "@/components/WorkspacePicker";
+import { Button } from "@/components/ui/button";
 
 /** Stable per-tab, per-workspace terminal session id, so navigating away and
  *  back reattaches to the same server-side shell instead of spawning a fresh
@@ -45,14 +47,20 @@ export default function TerminalRoute() {
   const { t } = useTranslation();
   const { workspaces, wsId, setWsId, ready } = useToolWorkspaces();
   const hostRef = useRef<HTMLDivElement>(null);
+  const [armed, setArmed] = useState(false);
+  const activeWs = workspaces.find((w) => w.id === wsId) ?? null;
+
+  useEffect(() => {
+    setArmed(false);
+  }, [wsId]);
 
   useEffect(() => {
     // Wait until the workspace list resolved so we attach to the right shell.
-    if (!ready) return;
+    if (!ready || !armed) return;
     const host = hostRef.current;
     if (!host) return;
 
-    const term = new Terminal({
+    const term = new XtermTerminal({
       fontSize: 13,
       fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
       cursorBlink: true,
@@ -104,7 +112,7 @@ export default function TerminalRoute() {
       ws.close();
       term.dispose();
     };
-  }, [wsId, ready]);
+  }, [wsId, ready, armed]);
 
   return (
     <div className="flex h-full flex-col">
@@ -119,7 +127,37 @@ export default function TerminalRoute() {
           />
         )}
       </header>
-      <div ref={hostRef} className="min-h-0 flex-1 overflow-hidden bg-[#0d0d0d] p-2" />
+      {armed ? (
+        <div ref={hostRef} className="min-h-0 flex-1 overflow-hidden bg-[#0d0d0d] p-2" />
+      ) : (
+        <div className="flex min-h-0 flex-1 items-center justify-center bg-surface-primary px-6">
+          <section className="flex w-full max-w-lg flex-col gap-4 rounded-lg border border-border-subtle bg-surface-elevated p-5">
+            <div className="flex items-start gap-3">
+              <span className="flex size-10 shrink-0 items-center justify-center rounded-md bg-status-warning-soft text-status-warning">
+                <ShieldAlert className="size-5" />
+              </span>
+              <div className="min-w-0 flex-1">
+                <h1 className="font-heading text-base font-semibold text-foreground-primary">
+                  {t("terminal.confirmTitle")}
+                </h1>
+                <p className="mt-1 font-caption text-xs leading-relaxed text-foreground-secondary">
+                  {t("terminal.confirmDesc", {
+                    workspace: activeWs?.name ?? t("common.all"),
+                  })}
+                </p>
+              </div>
+            </div>
+            <Button
+              className="self-start gap-1.5"
+              onClick={() => ready && setArmed(true)}
+              disabled={!ready}
+            >
+              <TerminalIcon className="size-3.5" />
+              {ready ? t("terminal.connect") : t("common.loading")}
+            </Button>
+          </section>
+        </div>
+      )}
     </div>
   );
 }

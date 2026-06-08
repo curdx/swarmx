@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "skills": {
+    "find-skills": {
+      "source": "vercel-labs/skills",
+      "sourceType": "github",
+      "skillPath": "skills/find-skills/SKILL.md",
+      "computedHash": "9e1c8b3103f92fa8092568a44fe64858de7c5c9dc65ce4bea8f168080e889cfd"
+    },
+    "improve-codebase-architecture": {
+      "source": "mattpocock/skills",
+      "sourceType": "github",
+      "skillPath": "skills/engineering/improve-codebase-architecture/SKILL.md",
+      "computedHash": "ef32aea0a8fab9b365ff9e08a95f8d353e20ca21ea46ec2e73587c86dd341351"
+    },
+    "request-refactor-plan": {
+      "source": "mattpocock/skills",
+      "sourceType": "github",
+      "skillPath": "skills/deprecated/request-refactor-plan/SKILL.md",
+      "computedHash": "176cf1d0c4dc4fc4d958c4bc4ed67f222f2656bda2f3f15e3a3e98b2e5edaf2f"
+    },
+    "to-issues": {
+      "source": "mattpocock/skills",
+      "sourceType": "github",
+      "skillPath": "skills/engineering/to-issues/SKILL.md",
+      "computedHash": "47f648f3414848ccfc62cb41d2828b7e575fb5e7cbd6c4bdf630c063b5dc5e82"
+    },
+    "to-prd": {
+      "source": "mattpocock/skills",
+      "sourceType": "github",
+      "skillPath": "skills/engineering/to-prd/SKILL.md",
+      "computedHash": "a6d6d475f1d01c201937fa0c306e55b7056b02023ad615bc92f57514e831dd31"
+    },
+    "triage": {
+      "source": "mattpocock/skills",
+      "sourceType": "github",
+      "skillPath": "skills/engineering/triage/SKILL.md",
+      "computedHash": "2b6efb6da12d92551772fcc04acf331f4e0e6f7bd9d4cb23ce0b301e0b128feb"
+    }
+  }
+}

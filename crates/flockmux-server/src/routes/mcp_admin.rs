@@ -30,7 +30,10 @@ async fn probe_version(bin: &str, arg: &str) -> Option<String> {
     // Some tools echo their own name (`uv --version` → "uv 0.9.2 (…)"). The UI
     // shows the name as a chip label already, so strip a leading "<bin> " to
     // avoid rendering "uv uv 0.9.2". node/npm print a bare version → untouched.
-    let s = s.strip_prefix(&format!("{bin} ")).map(str::to_string).unwrap_or(s);
+    let s = s
+        .strip_prefix(&format!("{bin} "))
+        .map(str::to_string)
+        .unwrap_or(s);
     if !s.is_empty() {
         return Some(s);
     }
@@ -49,7 +52,13 @@ const NODE_MIN_MAJOR: u32 = 18;
 
 /// Parse the major version out of a `node --version` string ("v22.17.0" → 22).
 fn node_major(version: &str) -> Option<u32> {
-    version.trim().trim_start_matches('v').split('.').next()?.parse().ok()
+    version
+        .trim()
+        .trim_start_matches('v')
+        .split('.')
+        .next()?
+        .parse()
+        .ok()
 }
 
 pub async fn mcp_env(State(_s): State<AppState>) -> impl IntoResponse {
@@ -208,7 +217,10 @@ fn claude_key(name: &str) -> Option<String> {
         .and_then(|m| m.get(name))
         .and_then(|s| s.get("args"))
         .and_then(|a| a.as_array())?;
-    let toks: Vec<String> = args.iter().filter_map(|a| a.as_str().map(String::from)).collect();
+    let toks: Vec<String> = args
+        .iter()
+        .filter_map(|a| a.as_str().map(String::from))
+        .collect();
     extract_key_after_flag(&toks)
 }
 
@@ -297,7 +309,11 @@ pub async fn mcp_install(
     Json(req): Json<McpMutate>,
 ) -> impl IntoResponse {
     if !valid_name(&req.name) {
-        return (StatusCode::BAD_REQUEST, Json(json!({"error": "非法 server 名"}))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "非法 server 名"})),
+        )
+            .into_response();
     }
     let Some(k) = known(&req.name) else {
         return (
@@ -349,9 +365,7 @@ pub async fn mcp_install(
                 k.command.into(),
             ],
         ),
-        _ => {
-            return (StatusCode::BAD_REQUEST, Json(json!({"error": "未知 CLI"}))).into_response()
-        }
+        _ => return (StatusCode::BAD_REQUEST, Json(json!({"error": "未知 CLI"}))).into_response(),
     };
     a.extend(svc_args);
     // upsert：先 remove(忽略「不存在」的失败)，让「改 key / 重装」幂等 —— 不会
@@ -380,7 +394,11 @@ pub async fn mcp_uninstall(
     Json(req): Json<McpMutate>,
 ) -> impl IntoResponse {
     if !valid_name(&req.name) {
-        return (StatusCode::BAD_REQUEST, Json(json!({"error": "非法 server 名"}))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "非法 server 名"})),
+        )
+            .into_response();
     }
     let res = match req.cli.as_str() {
         "claude" => run("claude", &["mcp", "remove", &req.name, "--scope", "user"]).await,

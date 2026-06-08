@@ -24,6 +24,10 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
+  ConfirmActionDialog,
+  type ConfirmActionState,
+} from "@/components/ConfirmActionDialog";
+import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
@@ -213,6 +217,7 @@ export default function ChatView() {
   // orchestrator back; its bootstrap detects the existing ledger and
   // short-circuits, so it just becomes available to chat with again.
   const [reviving, setReviving] = useState(false);
+  const [confirm, setConfirm] = useState<ConfirmActionState | null>(null);
   const reviveOrchestrator = useCallback(async () => {
     if (reviving) return;
     setReviving(true);
@@ -234,6 +239,24 @@ export default function ChatView() {
       setReviving(false);
     }
   }, [reviving, workspace.path, workspace.workspaceId, refreshAgents]);
+
+  const requestWakeAgent = useCallback(
+    (agent: AgentInfo) => {
+      setConfirm({
+        title: t("agent.confirm.wake.title", {
+          role: agent.role,
+          defaultValue: "唤醒 agent？",
+        }),
+        description: t(
+          "agent.confirm.wake.desc",
+          "会向该 agent 投递一条手动唤醒消息，推动它继续读取 mailbox / blackboard。仅在它确实卡住或需要人工催促时使用。",
+        ),
+        confirmLabel: t("agent.wake"),
+        onConfirm: () => api.wakeAgent(agent.agent_id).catch(() => {}),
+      });
+    },
+    [t],
+  );
 
   // ── Per-direction model switch ───────────────────────────────────────
   // The chat model picker calls this. We persist the direction's model_tier,
@@ -727,7 +750,7 @@ export default function ChatView() {
                       className="size-7 text-foreground-tertiary hover:text-state-wake"
                       onClick={(e) => {
                         e.stopPropagation();
-                        api.wakeAgent(a.agent_id).catch(() => {});
+                        requestWakeAgent(a);
                       }}
                     >
                       <Zap className="size-4" />
@@ -772,6 +795,12 @@ export default function ChatView() {
             </ul>
           </div>
         )}
+        <ConfirmActionDialog
+          action={confirm}
+          onOpenChange={(next) => {
+            if (!next) setConfirm(null);
+          }}
+        />
       </aside>
     </div>
   );

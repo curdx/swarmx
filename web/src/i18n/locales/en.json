@@ -12,6 +12,13 @@
     "needsNode": "needs Node.js LTS",
     "nodeMissing": "Node.js not detected — npx-based MCP servers (incl. chrome-devtools) can't run. Install Node.js LTS first.",
     "realWriteHint": "Toggles write directly to claude / codex MCP config (user scope, applies to all workspaces' agents). More MCP servers coming.",
+    "userScopeWarning": "These toggles write to user-level claude / codex config and affect every workspace plus running agents. Enable or disable only when you trust this local project.",
+    "enableTitle": "Enable this MCP?",
+    "enableDesc": "This writes to the CLI's user-level config and applies to agents in every workspace. Enable only when you trust this local project and MCP server.",
+    "enableConfirm": "Enable",
+    "disableTitle": "Disable this MCP?",
+    "disableDesc": "This removes the MCP from the CLI's user-level config and affects agents in every workspace immediately; agents relying on it may lose capability. You can re-enable it later.",
+    "disableConfirm": "Disable",
     "keyTitle": "Enter API Key",
     "keyDesc": "claude and codex share one key — enter it once; saving syncs to both enabled CLIs.",
     "keyShared": "· shared by claude / codex",
@@ -68,6 +75,7 @@
     "context": "Context",
     "notifications": "Notifications",
     "mcp": "MCP",
+    "goals": "Goals",
     "tasks": "Tasks",
     "files": "Files",
     "terminal": "Terminal",
@@ -398,7 +406,19 @@
     "pausedCount": "{{count}} paused",
     "interruptedToast": "Paused {{count}} agent(s)",
     "resumedToast": "Resumed {{count}} agent(s)",
-    "paused": "Paused"
+    "paused": "Paused",
+    "confirm": {
+      "interruptAll": {
+        "title": "Pause all agents?",
+        "desc": "This interrupts every running agent in the current workspace and stops auto-wake until you resume them.",
+        "confirm": "Pause all"
+      },
+      "resumeAll": {
+        "title": "Resume all paused agents?",
+        "desc": "This resumes each paused agent in the current workspace and lets them continue working.",
+        "confirm": "Resume all"
+      }
+    }
   },
   "replays": {
     "title": "Replays",
@@ -436,7 +456,7 @@
   },
   "context": {
     "title": "Context board",
-    "subtitle": "{{count}} key(s) · read + history (edit in /debug)",
+    "subtitle": "{{count}} key(s) · read + history (written by agents)",
     "search": "Search keys",
     "empty": "Blackboard is empty",
     "selectKey": "Pick a key on the left",
@@ -492,8 +512,23 @@
     "wake": "Wake",
     "pause": "Pause",
     "resume": "Resume",
+    "confirm": {
+      "wake": {
+        "title": "Wake {{role}}?",
+        "desc": "This sends a manual wake message so the agent reads its mailbox / blackboard. Use it only when the agent is actually stuck or needs a human nudge."
+      },
+      "pause": {
+        "title": "Pause {{role}}?",
+        "desc": "This sends Ctrl-C to interrupt the current turn and makes auto-wake skip this agent until you resume it."
+      },
+      "resume": {
+        "title": "Resume {{role}}?",
+        "desc": "This restores auto-wake for the agent and sends one manual wake so it can continue working."
+      }
+    },
     "restart": "Restart",
     "notImplemented": "Not implemented yet",
+    "terminalLoading": "Checking agent status…",
     "terminalExited": "This agent has exited — its terminal is gone. See what it did in the Recordings / Messages / Context tabs.",
     "tabs": {
       "terminal": "Terminal",
@@ -516,6 +551,7 @@
     "injectPlaceholder": "Send the agent a note; it'll be delivered on the next wake",
     "send": "Send",
     "downloadCast": "Download .cast",
+    "downloadCastNamed": "Download {{id}} .cast",
     "stat": {
       "spawn": "SPAWN",
       "turn": "TURN",
@@ -542,6 +578,10 @@
     "step1": "Name the workspace",
     "namePlaceholder": "e.g. My Todo App",
     "aiNamed": "AI suggested",
+    "errAbsolutePath": "Enter an absolute path, e.g. /Users/you/code/project",
+    "errDirMissing": "That directory doesn't exist — check the path is correct and points to an existing absolute path.",
+    "pathChecking": "Checking directory…",
+    "pathOk": "Directory is accessible",
     "step2": "Project folders",
     "step2Hint": "First is the primary project (where the AI's terminal lands). Optionally attach peer projects you develop alongside it, or the source of its dependencies / tools — each mount picks its own kind (peer / dependency / tool), and AI reads every source directly instead of decompiling.",
     "dirPlaceholder1": "e.g. /Users/<you>/code/my-project",
@@ -682,11 +722,65 @@
       "done": "Done",
       "archive": "Archive",
       "reopen": "Reopen"
+    },
+    "confirm": {
+      "blocked": {
+        "title": "Mark \"{{role}}\" as blocked?",
+        "desc": "This writes a manual status and overrides the derived lifecycle status until you reopen it.",
+        "confirm": "Mark blocked"
+      },
+      "done": {
+        "title": "Mark \"{{role}}\" as done?",
+        "desc": "This writes a manual status and overrides the derived lifecycle status until you reopen it.",
+        "confirm": "Mark done"
+      },
+      "archived": {
+        "title": "Archive \"{{role}}\"?",
+        "desc": "Archived tasks move out of the normal task flow. Reopen clears the manual override.",
+        "confirm": "Archive"
+      },
+      "reopen": {
+        "title": "Clear manual status for \"{{role}}\"?",
+        "desc": "The task will return to lifecycle-derived status after this.",
+        "confirm": "Reopen"
+      }
+    }
+  },
+  "goals": {
+    "title": "Goals",
+    "subtitle": "Track the objective, acceptance criteria, status, and token budget for long-running agent work.",
+    "newGoal": "New goal",
+    "objective": "Objective",
+    "objectivePlaceholder": "Ship the feature upgrade without moving Claude onto paid SDK/API transport",
+    "criteria": "Acceptance criteria",
+    "criteriaPlaceholder": "- Claude stays on interactive PTY by default\n- Goal API and UI are tested\n- Full workspace tests pass",
+    "budget": "Token budget",
+    "budgetShort": "Budget {{budget}}",
+    "thread": "Direction",
+    "allDirections": "All directions",
+    "mainDirection": "Main direction",
+    "create": "Create goal",
+    "creating": "Creating…",
+    "empty": "No goals yet — create one to give the run a durable target.",
+    "updated": "Updated {{time}}",
+    "evidence": "Evidence",
+    "evidenceKind": "Evidence kind",
+    "evidenceSummary": "Evidence summary",
+    "evidencePlaceholder": "What proves progress, completion, or a blocker?",
+    "addEvidence": "Add",
+    "noEvidence": "No evidence recorded yet.",
+    "status": {
+      "active": "Active",
+      "paused": "Paused",
+      "blocked": "Blocked",
+      "complete": "Complete",
+      "archived": "Archived"
     }
   },
   "usage": {
     "title": "Usage / Cost",
     "subtitle": "Token usage scraped from each worker's session log; cost is estimated from a built-in price table (CLIs don't report spend over the PTY).",
+    "trustHint": "Prices are estimated from the server's built-in table; unknown models count tokens only. Click an agent row to inspect it in the workspace drawer.",
     "totalCost": "Total cost",
     "totalTokens": "Total tokens",
     "input": "Input",
@@ -705,8 +799,22 @@
     "estimated": "estimate",
     "partialPrice": "some models unpriced (tokens only)",
     "tokensOnly": "tokens only",
+    "pricingTitle": "Pricing table",
+    "pricingMeta": "{{unit}} · {{source}} · {{path}}",
+    "pricingDefault": "built-in default",
+    "pricingUser": "user config",
+    "pricingReset": "Reset default",
+    "confirmResetTitle": "Reset to built-in pricing?",
+    "confirmResetDesc": "This deletes the current user pricing config and uses the server defaults again. Config path: {{path}}",
+    "pricingRule": "Rule",
+    "pricingMatchers": "Match",
     "empty": "No usage yet — token counts and cost appear here once workers run.",
     "loadError": "Failed to load usage data"
+  },
+  "terminal": {
+    "confirmTitle": "Connect local terminal",
+    "confirmDesc": "This opens a real shell for \"{{workspace}}\" and runs commands you type in that workspace directory.",
+    "connect": "Connect terminal"
   },
   "model": {
     "label": "Model",
@@ -741,6 +849,7 @@
   "cmdk": {
     "placeholder": "Search commands, jumps, wake agents…",
     "groups": {
+      "frequent": "Frequent",
       "nav": "Navigate",
       "currentWsView": "Current workspace view",
       "workspaces": "Workspaces",
@@ -756,6 +865,7 @@
       "context": "Blackboard",
       "notifications": "Notification Center",
       "mcp": "Tools for agents",
+      "goals": "Goal mode",
       "tasks": "Task board",
       "files": "Browse local files",
       "terminal": "Open a shell",
@@ -766,6 +876,9 @@
     },
     "switchWs": "Switch to this workspace",
     "wake": "Wake {{role}}",
+    "confirmWakeTitle": "Wake {{role}}?",
+    "confirmWakeDesc": "This sends a manual wake message and nudges the agent to continue. Use it only when it actually needs a manual wake.",
+    "confirmWake": "Wake",
     "switchToLight": "Switch to light",
     "switchToDark": "Switch to dark",
     "followSystem": "Follow system",

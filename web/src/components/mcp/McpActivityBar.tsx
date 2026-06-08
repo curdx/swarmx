@@ -9,7 +9,7 @@
  * 入口。图标/标签与 CommandPalette 的 NAV 保持一致。
  */
 
-import { useEffect, useState, type ComponentType, type ReactElement } from "react";
+import { cloneElement, useEffect, useState, type ComponentType, type ReactElement } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import {
@@ -19,6 +19,7 @@ import {
   ChevronsRight,
   ClipboardList,
   Clock,
+  Flag,
   FolderTree,
   Settings,
   Terminal,
@@ -44,6 +45,7 @@ const NAV: ReadonlyArray<{
   { href: "/files", labelKey: "nav.files", fallback: "文件", icon: FolderTree },
   { href: "/terminal", labelKey: "nav.terminal", fallback: "终端", icon: Terminal },
   { href: "/cron", labelKey: "nav.cron", fallback: "定时", icon: Clock },
+  { href: "/goals", labelKey: "nav.goals", fallback: "目标", icon: Flag },
   { href: "/tasks", labelKey: "nav.tasks", fallback: "任务", icon: ClipboardList },
   { href: "/usage", labelKey: "nav.usage", fallback: "用量", icon: BarChart3 },
 ];
@@ -100,14 +102,14 @@ export function McpActivityBar() {
   };
 
   // 收起态下菜单项只剩图标 → 用 tooltip 补回标签。
-  const withTip = (label: string, node: ReactElement) =>
+  const withTip = (label: string, node: ReactElement, key?: string) =>
     collapsed ? (
-      <Tooltip>
+      <Tooltip key={key}>
         <TooltipTrigger asChild>{node}</TooltipTrigger>
         <TooltipContent side="right">{label}</TooltipContent>
       </Tooltip>
     ) : (
-      node
+      cloneElement(node, { key })
     );
 
   return (
@@ -123,7 +125,6 @@ export function McpActivityBar() {
         return withTip(
           label,
           <NavLink
-            key={href}
             to={href}
             aria-label={label}
             className={linkClass(pathname.startsWith(href))}
@@ -131,6 +132,7 @@ export function McpActivityBar() {
             <Icon className="size-[18px] shrink-0" />
             {!collapsed && <span className="font-heading">{label}</span>}
           </NavLink>,
+          href,
         );
       })}
 
@@ -145,6 +147,7 @@ export function McpActivityBar() {
           <Settings className="size-[18px] shrink-0" />
           {!collapsed && <span className="font-heading">{t("nav.settings", "设置")}</span>}
         </NavLink>,
+        "settings",
       )}
 
       {/* 底部：菜单展开/收起开关 */}
@@ -165,6 +168,7 @@ export function McpActivityBar() {
             </>
           )}
         </button>,
+        "collapse-toggle",
       )}
     </aside>
   );

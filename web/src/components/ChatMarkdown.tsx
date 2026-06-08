@@ -30,6 +30,7 @@ import rehypeHighlight from "rehype-highlight";
 import rehypeSanitize from "rehype-sanitize";
 import { Check, Code2, Copy, ExternalLink, Eye, Loader2 } from "lucide-react";
 import { cn } from "@/lib/cn";
+import { MarkdownInput, MarkdownLink } from "@/lib/markdownLinks";
 
 // Module-level constants: react-markdown re-parses when plugin/component refs
 // change identity each render, so keep these stable.
@@ -327,11 +328,8 @@ const COMPONENTS: Components = {
     );
   },
   // External-safe links (agent-provided URLs open in a new tab, no referrer).
-  a: ({ children, ...props }) => (
-    <a {...props} target="_blank" rel="noopener noreferrer">
-      {children}
-    </a>
-  ),
+  a: MarkdownLink,
+  input: MarkdownInput,
 };
 
 // LLMs sometimes wrap their ENTIRE reply in a single ```markdown / ```md fence

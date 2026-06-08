@@ -19,6 +19,10 @@ import { cn } from "@/lib/cn";
 import { relTime } from "@/lib/relTime";
 import { useToolWorkspaces } from "@/lib/useToolWorkspaces";
 import { WorkspacePicker } from "@/components/WorkspacePicker";
+import {
+  ConfirmActionDialog,
+  type ConfirmActionState,
+} from "@/components/ConfirmActionDialog";
 
 /** Cards shown per column before a "show all" expander kicks in. */
 const COLUMN_CAP = 12;
@@ -39,6 +43,7 @@ export default function TasksRoute() {
   const [tasks, setTasks] = useState<TaskRow[] | null>(null);
   const [err, setErr] = useState(false);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [confirm, setConfirm] = useState<ConfirmActionState | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -78,6 +83,21 @@ export default function TasksRoute() {
   );
 
   const byCol = (key: string) => (tasks ?? []).filter((tk) => tk.status === key);
+
+  const requestStatus = useCallback(
+    (task: TaskRow, status: string | null) => {
+      const role = task.role_label || task.role_slug || task.agent_id.slice(0, 8);
+      const actionKey = status ?? "reopen";
+      setConfirm({
+        title: t(`tasks.confirm.${actionKey}.title`, { role }),
+        description: t(`tasks.confirm.${actionKey}.desc`),
+        confirmLabel: t(`tasks.confirm.${actionKey}.confirm`),
+        variant: status === "archived" ? "destructive" : "default",
+        onConfirm: () => setStatus(task.agent_id, status),
+      });
+    },
+    [setStatus, t],
+  );
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
@@ -123,7 +143,7 @@ export default function TasksRoute() {
                 </div>
                 <div className="flex flex-col gap-2">
                   {shown.map((tk) => (
-                    <TaskCard key={tk.agent_id} task={tk} onSet={setStatus} t={t} />
+                    <TaskCard key={tk.agent_id} task={tk} onSet={requestStatus} t={t} />
                   ))}
                   {items.length > COLUMN_CAP && (
                     <button
@@ -140,6 +160,12 @@ export default function TasksRoute() {
           })}
         </div>
       )}
+      <ConfirmActionDialog
+        action={confirm}
+        onOpenChange={(next) => {
+          if (!next) setConfirm(null);
+        }}
+      />
     </div>
   );
 }
@@ -150,7 +176,7 @@ function TaskCard({
   t,
 }: {
   task: TaskRow;
-  onSet: (agentId: string, status: string | null) => void;
+  onSet: (task: TaskRow, status: string | null) => void;
   t: (k: string, o?: Record<string, unknown>) => string;
 }) {
   return (
@@ -189,16 +215,16 @@ function TaskCard({
       </div>
       <div className="flex flex-wrap gap-1">
         {task.status !== "blocked" && (
-          <CardBtn onClick={() => onSet(task.agent_id, "blocked")}>{t("tasks.action.block")}</CardBtn>
+          <CardBtn onClick={() => onSet(task, "blocked")}>{t("tasks.action.block")}</CardBtn>
         )}
         {task.status !== "done" && (
-          <CardBtn onClick={() => onSet(task.agent_id, "done")}>{t("tasks.action.done")}</CardBtn>
+          <CardBtn onClick={() => onSet(task, "done")}>{t("tasks.action.done")}</CardBtn>
         )}
         {task.status !== "archived" && (
-          <CardBtn onClick={() => onSet(task.agent_id, "archived")}>{t("tasks.action.archive")}</CardBtn>
+          <CardBtn onClick={() => onSet(task, "archived")}>{t("tasks.action.archive")}</CardBtn>
         )}
         {task.overridden && (
-          <CardBtn onClick={() => onSet(task.agent_id, null)}>{t("tasks.action.reopen")}</CardBtn>
+          <CardBtn onClick={() => onSet(task, null)}>{t("tasks.action.reopen")}</CardBtn>
         )}
       </div>
     </div>

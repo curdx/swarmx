@@ -13,6 +13,15 @@ binary = "claude"
 # autonomous coordination.
 default_args = ["--dangerously-skip-permissions"]
 home_env = "HOME"
+# Claude must stay on the interactive subscription surface by default. Do not
+# switch this plugin to `claude -p`, SDK, or ACP-adapter flows without an
+# explicit paid-transport opt-in in server code.
+billing_surface = "interactive-subscription"
+requires_explicit_billing_opt_in = false
+# Keep ambient API credentials out of the child by default. If ANTHROPIC_API_KEY
+# reaches Claude Code, it can prefer API billing over the user's interactive
+# Claude subscription login.
+blocked_env_prefixes = ["ANTHROPIC_"]
 # Workspaces we create under ~/.flockmux/workspaces/ are trusted by
 # construction; pre-patch the per-project flag so claude doesn't prompt.
 auto_trust_workspace = true

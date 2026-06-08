@@ -26,6 +26,7 @@ import { useSwarmFeed } from "../../../hooks/useSwarmFeed";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
 import { useWorkspaceContext } from "../Shell";
+import { MarkdownInput, MarkdownLink } from "@/lib/markdownLinks";
 
 function fmtAgo(at: number | null, nowTick: number): string {
   if (at == null) return "—";
@@ -393,7 +394,10 @@ function LedgerCard({
           </p>
         ) : snap.content ? (
           <article className="prose prose-sm max-w-none font-body text-[13px] text-foreground-primary">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+            <ReactMarkdown
+              remarkPlugins={[remarkGfm]}
+              components={{ a: MarkdownLink, input: MarkdownInput }}
+            >
               {stripLedgerHeading(snap.content)}
             </ReactMarkdown>
           </article>

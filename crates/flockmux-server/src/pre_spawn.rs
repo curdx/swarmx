@@ -48,7 +48,9 @@ fn home_path() -> Option<PathBuf> {
 static CONFIG_PATCH_LOCK: Mutex<()> = Mutex::new(());
 
 fn lock_config_patch() -> std::sync::MutexGuard<'static, ()> {
-    CONFIG_PATCH_LOCK.lock().unwrap_or_else(PoisonError::into_inner)
+    CONFIG_PATCH_LOCK
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
 }
 
 /// Temp sibling for an atomic write, unique per process-and-call so concurrent
@@ -70,8 +72,7 @@ fn unique_tmp_path(target: &Path) -> PathBuf {
 fn write_json_atomic(target: &Path, root: &Value) -> Result<()> {
     let tmp = unique_tmp_path(target);
     {
-        let mut f = fs::File::create(&tmp)
-            .with_context(|| format!("create {}", tmp.display()))?;
+        let mut f = fs::File::create(&tmp).with_context(|| format!("create {}", tmp.display()))?;
         f.write_all(&serde_json::to_vec_pretty(root)?)?;
         f.sync_all().ok();
     }
@@ -174,16 +175,13 @@ pub fn mark_codex_workspace_trusted(workspace: &Path) -> Result<()> {
 
 fn patch_codex_trust_at(cfg: &Path, workspace: &Path) -> Result<()> {
     let _guard = lock_config_patch();
-    let existing = fs::read_to_string(cfg)
-        .with_context(|| format!("read {}", cfg.display()))?;
+    let existing = fs::read_to_string(cfg).with_context(|| format!("read {}", cfg.display()))?;
 
     let key = workspace.to_string_lossy();
     // codex emits exactly this header style; matching it on its own line is
     // enough — flockmux paths never need TOML literal-key escaping.
     let header = format!("[projects.\"{key}\"]");
-    let already = existing
-        .lines()
-        .any(|line| line.trim() == header);
+    let already = existing.lines().any(|line| line.trim() == header);
     if already {
         return Ok(());
     }
@@ -203,8 +201,7 @@ fn patch_codex_trust_at(cfg: &Path, workspace: &Path) -> Result<()> {
     // start, so a half-written file would be poison.
     let tmp = unique_tmp_path(cfg);
     {
-        let mut f = fs::File::create(&tmp)
-            .with_context(|| format!("create {}", tmp.display()))?;
+        let mut f = fs::File::create(&tmp).with_context(|| format!("create {}", tmp.display()))?;
         f.write_all(out.as_bytes())?;
         f.sync_all().ok();
     }
@@ -266,9 +263,7 @@ fn patch_claude_mcp_at(
         .as_object_mut()
         .context(".claude.json project entry is not an object")?;
 
-    let mcp_servers = project
-        .entry("mcpServers")
-        .or_insert_with(|| json!({}));
+    let mcp_servers = project.entry("mcpServers").or_insert_with(|| json!({}));
     let mcp_servers = mcp_servers
         .as_object_mut()
         .context(".claude.json mcpServers is not an object")?;
@@ -351,8 +346,7 @@ pub fn ensure_codex_mcp_global(mcp_bin: &Path) -> Result<()> {
 
     let tmp = unique_tmp_path(&cfg);
     {
-        let mut f = fs::File::create(&tmp)
-            .with_context(|| format!("create {}", tmp.display()))?;
+        let mut f = fs::File::create(&tmp).with_context(|| format!("create {}", tmp.display()))?;
         f.write_all(updated.as_bytes())?;
         f.sync_all().ok();
     }
@@ -427,7 +421,9 @@ pub fn write_codex_per_agent_home(agent_id: &str, workspace: &Path, mcp_bin: &Pa
     };
 
     // Base = user's config minus their MCP servers; then append ours + trust.
-    let mut cfg = strip_codex_mcp_sections(&user_cfg_text).trim_end().to_string();
+    let mut cfg = strip_codex_mcp_sections(&user_cfg_text)
+        .trim_end()
+        .to_string();
     if !cfg.is_empty() {
         cfg.push_str("\n\n");
     }
@@ -565,9 +561,9 @@ fn merge_stop_hook(root: &mut Value, command: &str, timeout: i64) {
             .get("hooks")
             .and_then(|v| v.as_array())
             .map(|inner| {
-                inner.iter().any(|h| {
-                    h.get("command").and_then(|v| v.as_str()) == Some(command)
-                })
+                inner
+                    .iter()
+                    .any(|h| h.get("command").and_then(|v| v.as_str()) == Some(command))
             })
             .unwrap_or(false);
         !matches
@@ -600,8 +596,7 @@ pub fn install_claude_stop_hook(
     timeout: i64,
 ) -> Result<()> {
     let cfg_dir = workspace.join(".claude");
-    fs::create_dir_all(&cfg_dir)
-        .with_context(|| format!("mkdir {}", cfg_dir.display()))?;
+    fs::create_dir_all(&cfg_dir).with_context(|| format!("mkdir {}", cfg_dir.display()))?;
     // Keep our managed file out of git's "dirty" accounting (sidebar dot,
     // merge-to-main base check) without touching the user's tracked .gitignore.
     crate::worktree::ignore_managed_artifacts(workspace);
@@ -617,8 +612,7 @@ fn install_claude_stop_hook_at(
 ) -> Result<()> {
     let mut root: Value = if cfg.is_file() {
         let bytes = fs::read(cfg).with_context(|| format!("read {}", cfg.display()))?;
-        serde_json::from_slice(&bytes)
-            .with_context(|| format!("parse {}", cfg.display()))?
+        serde_json::from_slice(&bytes).with_context(|| format!("parse {}", cfg.display()))?
     } else {
         json!({})
     };
@@ -638,8 +632,7 @@ pub fn install_codex_stop_hook(
     timeout: i64,
 ) -> Result<()> {
     let cfg_dir = workspace.join(".codex");
-    fs::create_dir_all(&cfg_dir)
-        .with_context(|| format!("mkdir {}", cfg_dir.display()))?;
+    fs::create_dir_all(&cfg_dir).with_context(|| format!("mkdir {}", cfg_dir.display()))?;
     // Keep our managed file out of git's "dirty" accounting (see claude variant).
     crate::worktree::ignore_managed_artifacts(workspace);
     let cfg = cfg_dir.join("hooks.json");
@@ -654,8 +647,7 @@ fn install_codex_stop_hook_at(
 ) -> Result<()> {
     let mut root: Value = if cfg.is_file() {
         let bytes = fs::read(cfg).with_context(|| format!("read {}", cfg.display()))?;
-        serde_json::from_slice(&bytes)
-            .with_context(|| format!("parse {}", cfg.display()))?
+        serde_json::from_slice(&bytes).with_context(|| format!("parse {}", cfg.display()))?
     } else {
         json!({})
     };
@@ -678,11 +670,7 @@ fn install_codex_stop_hook_at(
 /// by `plugin.id`. So adding a CLI that reuses an existing config format is
 /// pure config (`cli-plugins/<id>.toml`); a CLI with a genuinely new format
 /// adds one enum variant (in `plugins.rs`) + one writer below + one match arm.
-pub fn run_patches(
-    plugin: &crate::plugins::CliPlugin,
-    workspace: &Path,
-    ctx: &PreSpawnCtx,
-) {
+pub fn run_patches(plugin: &crate::plugins::CliPlugin, workspace: &Path, ctx: &PreSpawnCtx) {
     use crate::plugins::{McpFormat, StopHookFormat, TrustFormat};
 
     // 1. Trust: pre-accept the "do you trust this folder?" gate.
@@ -734,8 +722,7 @@ pub fn run_patches(
                 // the worker doesn't inherit the user's personal ~/.codex MCP
                 // servers (which stall a headless worker at startup). spawn.rs
                 // sets CODEX_HOME when the per-agent config.toml exists.
-                if let Err(err) =
-                    write_codex_per_agent_home(&ctx.agent_id, workspace, &ctx.mcp_bin)
+                if let Err(err) = write_codex_per_agent_home(&ctx.agent_id, workspace, &ctx.mcp_bin)
                 {
                     tracing::warn!(?err, "codex: per-agent CODEX_HOME write failed");
                 }
@@ -755,12 +742,18 @@ pub fn run_patches(
     //    claude = ms, codex = seconds).
     if plugin.auto_inject_stop_hook {
         let res = match plugin.stop_hook_format {
-            StopHookFormat::ClaudeSettingsLocal => {
-                install_claude_stop_hook(workspace, &ctx.mcp_bin, &ctx.server_url, plugin.stop_hook_timeout)
-            }
-            StopHookFormat::CodexHooksJson => {
-                install_codex_stop_hook(workspace, &ctx.mcp_bin, &ctx.server_url, plugin.stop_hook_timeout)
-            }
+            StopHookFormat::ClaudeSettingsLocal => install_claude_stop_hook(
+                workspace,
+                &ctx.mcp_bin,
+                &ctx.server_url,
+                plugin.stop_hook_timeout,
+            ),
+            StopHookFormat::CodexHooksJson => install_codex_stop_hook(
+                workspace,
+                &ctx.mcp_bin,
+                &ctx.server_url,
+                plugin.stop_hook_timeout,
+            ),
             StopHookFormat::None => {
                 tracing::warn!(cli = %plugin.id, "auto_inject_stop_hook set but stop_hook_format = none; agent will never be re-woken");
                 Ok(())
@@ -818,7 +811,11 @@ pub fn write_claude_per_agent_mcp_config(
 /// launch time. Returns `None` if `$HOME` is not set (then claude has no
 /// home anyway and would have failed earlier).
 pub fn claude_per_agent_mcp_config_path(agent_id: &str) -> Option<PathBuf> {
-    home_path().map(|h| h.join(".flockmux").join("mcp").join(format!("{agent_id}.json")))
+    home_path().map(|h| {
+        h.join(".flockmux")
+            .join("mcp")
+            .join(format!("{agent_id}.json"))
+    })
 }
 
 /// Per-spawn context that the host computes once and threads into pre-spawn
@@ -879,7 +876,11 @@ trust_level = \"trusted\"\n";
     fn claude_trust_sets_flag_for_new_workspace() {
         let dir = tempdir().unwrap();
         let cfg = dir.path().join("claude.json");
-        fs::write(&cfg, serde_json::to_vec(&json!({ "projects": {} })).unwrap()).unwrap();
+        fs::write(
+            &cfg,
+            serde_json::to_vec(&json!({ "projects": {} })).unwrap(),
+        )
+        .unwrap();
 
         let workspace = dir.path().join("ws-A");
         patch_claude_trust_at(&cfg, &workspace).unwrap();
@@ -993,12 +994,22 @@ trust_level = \"trusted\"
         patch_codex_trust_at(&cfg, &ws).unwrap();
 
         let after = fs::read_to_string(&cfg).unwrap();
-        assert!(after.contains("# user comment that must survive"), "comments preserved");
-        assert!(after.contains("[projects.\"/some/other\"]"), "existing section kept");
+        assert!(
+            after.contains("# user comment that must survive"),
+            "comments preserved"
+        );
+        assert!(
+            after.contains("[projects.\"/some/other\"]"),
+            "existing section kept"
+        );
         let expected_header = format!("[projects.\"{}\"]", ws.to_string_lossy());
         assert!(after.contains(&expected_header), "new header appended");
         assert!(
-            after.lines().rev().take(3).any(|l| l == "trust_level = \"trusted\""),
+            after
+                .lines()
+                .rev()
+                .take(3)
+                .any(|l| l == "trust_level = \"trusted\""),
             "trust_level set in new section",
         );
     }
@@ -1009,15 +1020,17 @@ trust_level = \"trusted\"
         let cfg = dir.path().join("config.toml");
         let ws = dir.path().join("ws-Y");
         let header = format!("[projects.\"{}\"]", ws.to_string_lossy());
-        let original = format!(
-            "model = \"gpt-5.5\"\n\n{header}\ntrust_level = \"trusted\"\n"
-        );
+        let original = format!("model = \"gpt-5.5\"\n\n{header}\ntrust_level = \"trusted\"\n");
         fs::write(&cfg, &original).unwrap();
         let before = fs::read(&cfg).unwrap();
 
         patch_codex_trust_at(&cfg, &ws).unwrap();
 
-        assert_eq!(fs::read(&cfg).unwrap(), before, "no-op when already present");
+        assert_eq!(
+            fs::read(&cfg).unwrap(),
+            before,
+            "no-op when already present"
+        );
     }
 
     #[test]
@@ -1041,22 +1054,19 @@ trust_level = \"trusted\"
     fn claude_mcp_local_writes_new_entry() {
         let dir = tempdir().unwrap();
         let cfg = dir.path().join("claude.json");
-        fs::write(&cfg, serde_json::to_vec(&json!({ "projects": {} })).unwrap()).unwrap();
+        fs::write(
+            &cfg,
+            serde_json::to_vec(&json!({ "projects": {} })).unwrap(),
+        )
+        .unwrap();
         let ws = dir.path().join("ws-A");
         let bin = dir.path().join("flockmux-mcp");
 
-        patch_claude_mcp_at(
-            &cfg,
-            &ws,
-            "claude-aaa",
-            &bin,
-            "http://127.0.0.1:7777",
-        )
-        .unwrap();
+        patch_claude_mcp_at(&cfg, &ws, "claude-aaa", &bin, "http://127.0.0.1:7777").unwrap();
 
         let written: Value = serde_json::from_slice(&fs::read(&cfg).unwrap()).unwrap();
-        let entry = &written["projects"][ws.to_string_lossy().as_ref()]["mcpServers"]
-            ["flockmux-swarm"];
+        let entry =
+            &written["projects"][ws.to_string_lossy().as_ref()]["mcpServers"]["flockmux-swarm"];
         assert_eq!(entry["type"], json!("stdio"));
         assert_eq!(entry["command"], json!(bin.to_string_lossy().as_ref()));
         assert_eq!(entry["args"], json!(["--agent-id", "claude-aaa"]));
@@ -1071,7 +1081,11 @@ trust_level = \"trusted\"
     fn claude_mcp_local_noop_when_identical() {
         let dir = tempdir().unwrap();
         let cfg = dir.path().join("claude.json");
-        fs::write(&cfg, serde_json::to_vec(&json!({ "projects": {} })).unwrap()).unwrap();
+        fs::write(
+            &cfg,
+            serde_json::to_vec(&json!({ "projects": {} })).unwrap(),
+        )
+        .unwrap();
         let ws = dir.path().join("ws-B");
         let bin = dir.path().join("flockmux-mcp");
 
@@ -1109,7 +1123,10 @@ trust_level = \"trusted\"
         let after: Value = serde_json::from_slice(&fs::read(&cfg).unwrap()).unwrap();
         let mcp = &after["projects"][&ws_key]["mcpServers"];
         assert_eq!(mcp["user-other"]["command"], json!("/usr/bin/other"));
-        assert_eq!(mcp["flockmux-swarm"]["env"]["FLOCKMUX_AGENT_ID"], json!("claude-ccc"));
+        assert_eq!(
+            mcp["flockmux-swarm"]["env"]["FLOCKMUX_AGENT_ID"],
+            json!("claude-ccc")
+        );
     }
 
     // ── codex MCP global-config patch ────────────────────────────────────
@@ -1251,8 +1268,7 @@ trust_level = \"trusted\"\n";
     fn find_section_range_matches_until_next_header() {
         let body = "\
 [a]\nx = 1\n\n[mcp_servers.flockmux-swarm]\ncommand = \"foo\"\nenv_vars = []\n\n[c]\ny = 2\n";
-        let (start, end) =
-            find_section_range(body, "[mcp_servers.flockmux-swarm]").unwrap();
+        let (start, end) = find_section_range(body, "[mcp_servers.flockmux-swarm]").unwrap();
         let section = &body[start..end];
         assert!(section.contains("command = \"foo\""));
         assert!(!section.contains("[c]"), "section bled past next header");
@@ -1261,8 +1277,7 @@ trust_level = \"trusted\"\n";
     #[test]
     fn find_section_range_matches_until_eof_when_last_section() {
         let body = "[mcp_servers.flockmux-swarm]\ncommand = \"foo\"\n";
-        let (start, end) =
-            find_section_range(body, "[mcp_servers.flockmux-swarm]").unwrap();
+        let (start, end) = find_section_range(body, "[mcp_servers.flockmux-swarm]").unwrap();
         assert_eq!(end, body.len());
         let section = &body[start..end];
         assert!(section.contains("command = \"foo\""));
@@ -1278,7 +1293,9 @@ trust_level = \"trusted\"\n";
         install_claude_stop_hook_at(&cfg, &bin, "http://127.0.0.1:7777", 10_000).unwrap();
 
         let root: Value = serde_json::from_slice(&fs::read(&cfg).unwrap()).unwrap();
-        let stop = root["hooks"]["Stop"].as_array().expect("hooks.Stop is array");
+        let stop = root["hooks"]["Stop"]
+            .as_array()
+            .expect("hooks.Stop is array");
         assert_eq!(stop.len(), 1);
         let inner = stop[0]["hooks"][0].clone();
         assert_eq!(inner["type"], json!("command"));
@@ -1286,10 +1303,16 @@ trust_level = \"trusted\"\n";
         let cmd = inner["command"].as_str().unwrap();
         assert!(cmd.contains("wake-check"), "got: {cmd}");
         assert!(cmd.contains("--server http://127.0.0.1:7777"), "got: {cmd}");
-        assert!(cmd.contains(bin.to_string_lossy().as_ref()), "absolute bin path: {cmd}");
+        assert!(
+            cmd.contains(bin.to_string_lossy().as_ref()),
+            "absolute bin path: {cmd}"
+        );
         // Trust-stability invariant: command must NOT carry per-spawn identity,
         // otherwise codex 0.130+ would re-prompt /hooks on every new agent.
-        assert!(!cmd.contains("--agent-id"), "agent_id must NOT be in command: {cmd}");
+        assert!(
+            !cmd.contains("--agent-id"),
+            "agent_id must NOT be in command: {cmd}"
+        );
     }
 
     #[test]
@@ -1300,7 +1323,9 @@ trust_level = \"trusted\"\n";
         install_codex_stop_hook_at(&cfg, &bin, "http://127.0.0.1:7777", 10).unwrap();
 
         let root: Value = serde_json::from_slice(&fs::read(&cfg).unwrap()).unwrap();
-        let stop = root["hooks"]["Stop"].as_array().expect("hooks.Stop is array");
+        let stop = root["hooks"]["Stop"]
+            .as_array()
+            .expect("hooks.Stop is array");
         assert_eq!(stop.len(), 1);
         let inner = stop[0]["hooks"][0].clone();
         assert_eq!(inner["type"], json!("command"));
@@ -1312,7 +1337,10 @@ trust_level = \"trusted\"\n";
         let cmd = inner["command"].as_str().unwrap();
         assert!(cmd.contains("wake-check"), "got: {cmd}");
         // See claude_stop_hook_creates_settings_local for the why.
-        assert!(!cmd.contains("--agent-id"), "agent_id must NOT be in command: {cmd}");
+        assert!(
+            !cmd.contains("--agent-id"),
+            "agent_id must NOT be in command: {cmd}"
+        );
     }
 
     #[test]
@@ -1342,17 +1370,27 @@ trust_level = \"trusted\"\n";
         // PreToolUse must be untouched.
         let pre = after["hooks"]["PreToolUse"].as_array().unwrap();
         assert_eq!(pre.len(), 1);
-        assert_eq!(pre[0]["hooks"][0]["command"], json!("/usr/local/bin/user-lint"));
+        assert_eq!(
+            pre[0]["hooks"][0]["command"],
+            json!("/usr/local/bin/user-lint")
+        );
         // Stop now has TWO entries: the user's (first) and flockmux (last).
         let stop = after["hooks"]["Stop"].as_array().unwrap();
-        assert_eq!(stop.len(), 2, "user hook should be preserved + wake-check appended");
+        assert_eq!(
+            stop.len(),
+            2,
+            "user hook should be preserved + wake-check appended"
+        );
         assert_eq!(
             stop[0]["hooks"][0]["command"],
             json!("/usr/local/bin/user-stop"),
             "user hook stays first",
         );
         let cmd = stop[1]["hooks"][0]["command"].as_str().unwrap();
-        assert!(cmd.contains("wake-check"), "flockmux entry appended at end: {cmd}");
+        assert!(
+            cmd.contains("wake-check"),
+            "flockmux entry appended at end: {cmd}"
+        );
     }
 
     #[test]
@@ -1367,7 +1405,11 @@ trust_level = \"trusted\"\n";
 
         let root: Value = serde_json::from_slice(&fs::read(&cfg).unwrap()).unwrap();
         let stop = root["hooks"]["Stop"].as_array().unwrap();
-        assert_eq!(stop.len(), 1, "repeated install must not accumulate entries");
+        assert_eq!(
+            stop.len(),
+            1,
+            "repeated install must not accumulate entries"
+        );
     }
 
     /// Trust-persistence guard: every spawn must produce the EXACT same hook

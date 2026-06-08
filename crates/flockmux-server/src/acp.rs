@@ -31,7 +31,7 @@
 #![allow(dead_code)]
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -112,8 +112,16 @@ impl Message {
     /// Classify a parsed JSON value into a JSON-RPC message. Per the 2.0 spec:
     /// `method` present ⇒ request (has `id`) or notification (no `id`);
     /// otherwise `id` + `result`/`error` ⇒ response.
+    ///
+    /// Codex app-server uses JSON-RPC-shaped messages over JSONL but omits the
+    /// `"jsonrpc":"2.0"` field on the wire. Normalize that field before typed
+    /// deserialization so the same codec can drive both strict ACP peers and
+    /// Codex app-server without duplicating transport code.
     pub fn from_value(v: Value) -> Result<Message, CodecError> {
-        let obj = v.as_object().ok_or(CodecError::NotAnObject)?;
+        let mut v = v;
+        let obj = v.as_object_mut().ok_or(CodecError::NotAnObject)?;
+        obj.entry("jsonrpc")
+            .or_insert_with(|| Value::String(JSONRPC_VERSION.into()));
         let has_method = obj.contains_key("method");
         let has_id = obj.contains_key("id");
         if has_method {
@@ -357,11 +365,7 @@ impl Connection {
     /// Send a request and await its correlated response. Resolves to the
     /// `result` value, or `ConnError::Rpc` if the peer returned an error, or
     /// `ConnError::Closed` if the peer went away first.
-    pub async fn request(
-        &self,
-        method: &str,
-        params: Option<Value>,
-    ) -> Result<Value, ConnError> {
+    pub async fn request(&self, method: &str, params: Option<Value>) -> Result<Value, ConnError> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = oneshot::channel();
         self.pending.lock().unwrap().insert(id, tx);
@@ -402,6 +406,156 @@ impl Connection {
     }
 }
 
+/// Minimal typed session driver for Codex `app-server`. This is the first
+/// structured-transport session layer above [`Connection`]: it owns the
+/// required initialize/initialized handshake and the core thread/turn calls.
+/// Spawn integration stays opt-in/future; this module gives that branch a
+/// tested, small interface instead of open-coded JSON-RPC calls.
+pub struct CodexAppServerSession {
+    conn: Connection,
+    notifications: mpsc::UnboundedReceiver<Notification>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CodexAppEvent {
+    TurnStarted {
+        turn_id: Option<String>,
+    },
+    AgentMessageDelta {
+        text: String,
+    },
+    ItemStarted {
+        item_id: Option<String>,
+        item_type: Option<String>,
+    },
+    ItemCompleted {
+        item_id: Option<String>,
+        item_type: Option<String>,
+    },
+    TurnCompleted {
+        status: Option<String>,
+    },
+    Other {
+        method: String,
+        params: Option<Value>,
+    },
+}
+
+impl CodexAppServerSession {
+    pub fn from_handles(handles: ConnectionHandles) -> Self {
+        Self {
+            conn: handles.conn,
+            notifications: handles.notifications,
+        }
+    }
+
+    pub async fn initialize(
+        &self,
+        name: &str,
+        title: &str,
+        version: &str,
+    ) -> Result<Value, ConnError> {
+        let result = self
+            .conn
+            .request(
+                "initialize",
+                Some(json!({
+                    "clientInfo": {
+                        "name": name,
+                        "title": title,
+                        "version": version,
+                    }
+                })),
+            )
+            .await?;
+        self.conn.notify("initialized", Some(json!({}))).await?;
+        Ok(result)
+    }
+
+    pub async fn start_thread(&self, model: Option<&str>) -> Result<String, ConnError> {
+        let mut params = serde_json::Map::new();
+        if let Some(model) = model.filter(|s| !s.trim().is_empty()) {
+            params.insert("model".into(), Value::String(model.to_string()));
+        }
+        let result = self
+            .conn
+            .request("thread/start", Some(Value::Object(params)))
+            .await?;
+        Ok(result
+            .get("thread")
+            .and_then(|t| t.get("id"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string())
+    }
+
+    pub async fn start_turn(&self, thread_id: &str, text: &str) -> Result<Value, ConnError> {
+        self.conn
+            .request(
+                "turn/start",
+                Some(json!({
+                    "threadId": thread_id,
+                    "input": [{ "type": "text", "text": text }],
+                })),
+            )
+            .await
+    }
+
+    pub async fn next_event(&mut self) -> Option<CodexAppEvent> {
+        self.notifications.recv().await.map(map_codex_notification)
+    }
+}
+
+fn map_codex_notification(n: Notification) -> CodexAppEvent {
+    let params = n.params.clone();
+    match n.method.as_str() {
+        "turn/started" => CodexAppEvent::TurnStarted {
+            turn_id: params
+                .as_ref()
+                .and_then(|p| p.get("turn"))
+                .and_then(|t| t.get("id"))
+                .and_then(Value::as_str)
+                .map(str::to_string),
+        },
+        "item/agentMessage/delta" => CodexAppEvent::AgentMessageDelta {
+            text: params
+                .as_ref()
+                .and_then(|p| p.get("delta").or_else(|| p.get("text")))
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+        },
+        "item/started" => CodexAppEvent::ItemStarted {
+            item_id: item_field(params.as_ref(), "id"),
+            item_type: item_field(params.as_ref(), "type"),
+        },
+        "item/completed" => CodexAppEvent::ItemCompleted {
+            item_id: item_field(params.as_ref(), "id"),
+            item_type: item_field(params.as_ref(), "type"),
+        },
+        "turn/completed" => CodexAppEvent::TurnCompleted {
+            status: params
+                .as_ref()
+                .and_then(|p| p.get("status"))
+                .and_then(Value::as_str)
+                .map(str::to_string),
+        },
+        _ => CodexAppEvent::Other {
+            method: n.method,
+            params,
+        },
+    }
+}
+
+fn item_field(params: Option<&Value>, field: &str) -> Option<String> {
+    params
+        .and_then(|p| p.get("item"))
+        .and_then(|i| i.get(field))
+        .or_else(|| params.and_then(|p| p.get(field)))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -413,10 +567,8 @@ mod tests {
         let line = Message::Request(req).encode_line();
         assert_eq!(*line.last().unwrap(), b'\n');
         // round-trips back to the same request
-        let back = Message::from_value(
-            serde_json::from_slice(&line[..line.len() - 1]).unwrap(),
-        )
-        .unwrap();
+        let back =
+            Message::from_value(serde_json::from_slice(&line[..line.len() - 1]).unwrap()).unwrap();
         match back {
             Message::Request(r) => {
                 assert_eq!(r.method, "initialize");
@@ -447,6 +599,37 @@ mod tests {
             }
             other => panic!("expected error response, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn accepts_codex_app_server_jsonrpc_omitted_frames() {
+        let req = Message::from_value(json!({
+            "id": 10,
+            "method": "thread/start",
+            "params": { "model": "gpt-5.4" }
+        }))
+        .unwrap();
+        match req {
+            Message::Request(r) => {
+                assert_eq!(r.jsonrpc, JSONRPC_VERSION);
+                assert_eq!(r.method, "thread/start");
+            }
+            other => panic!("expected request, got {other:?}"),
+        }
+
+        let note = Message::from_value(json!({
+            "method": "turn/started",
+            "params": { "turn": { "id": "turn_1" } }
+        }))
+        .unwrap();
+        assert!(matches!(note, Message::Notification(_)));
+
+        let ok = Message::from_value(json!({
+            "id": 10,
+            "result": { "thread": { "id": "thr_1" } }
+        }))
+        .unwrap();
+        assert!(matches!(ok, Message::Response(_)));
     }
 
     #[test]
@@ -481,7 +664,11 @@ mod tests {
     fn decoder_tolerates_crlf_and_blank_lines() {
         let mut dec = LineDecoder::new();
         let got = dec.push(b"\r\n  \n{\"jsonrpc\":\"2.0\",\"method\":\"x\"}\r\n");
-        assert_eq!(got.len(), 1, "blank + whitespace lines skipped, CRLF trimmed");
+        assert_eq!(
+            got.len(),
+            1,
+            "blank + whitespace lines skipped, CRLF trimmed"
+        );
         assert!(matches!(got[0].as_ref().unwrap(), Message::Notification(_)));
     }
 
@@ -537,7 +724,10 @@ mod conn_tests {
                 result: Some(json!({"pong": true})),
                 error: None,
             };
-            peer_w.write_all(&Message::Response(resp).encode_line()).await.unwrap();
+            peer_w
+                .write_all(&Message::Response(resp).encode_line())
+                .await
+                .unwrap();
         });
         let got = h.conn.request("ping", Some(json!({"n": 1}))).await.unwrap();
         assert_eq!(got, json!({"pong": true}));
@@ -555,9 +745,16 @@ mod conn_tests {
                 jsonrpc: JSONRPC_VERSION.into(),
                 id: req.id,
                 result: None,
-                error: Some(RpcError { code: -32601, message: "no method".into(), data: None }),
+                error: Some(RpcError {
+                    code: -32601,
+                    message: "no method".into(),
+                    data: None,
+                }),
             };
-            peer_w.write_all(&Message::Response(resp).encode_line()).await.unwrap();
+            peer_w
+                .write_all(&Message::Response(resp).encode_line())
+                .await
+                .unwrap();
         });
         let err = h.conn.request("nope", None).await.unwrap_err();
         assert!(matches!(err, ConnError::Rpc(e) if e.code == -32601));
@@ -569,16 +766,27 @@ mod conn_tests {
         let (mut h, _peer_r, mut peer_w) = pair();
         // Peer pushes a notification then a server→client request.
         peer_w
-            .write_all(&Message::Notification(Notification::new("update", Some(json!({"x": 1})))).encode_line())
+            .write_all(
+                &Message::Notification(Notification::new("update", Some(json!({"x": 1}))))
+                    .encode_line(),
+            )
             .await
             .unwrap();
         peer_w
             .write_all(&Message::Request(Request::new(7, "permission/request", None)).encode_line())
             .await
             .unwrap();
-        let n = h.notifications.recv().await.expect("notification delivered");
+        let n = h
+            .notifications
+            .recv()
+            .await
+            .expect("notification delivered");
         assert_eq!(n.method, "update");
-        let req = h.incoming_requests.recv().await.expect("peer request delivered");
+        let req = h
+            .incoming_requests
+            .recv()
+            .await
+            .expect("peer request delivered");
         assert_eq!(req.method, "permission/request");
         assert_eq!(req.id, json!(7));
     }
@@ -591,5 +799,104 @@ mod conn_tests {
         drop(peer_w);
         let err = h.conn.request("ping", None).await.unwrap_err();
         assert!(matches!(err, ConnError::Closed));
+    }
+
+    #[tokio::test]
+    async fn codex_session_initializes_starts_thread_turn_and_maps_events() {
+        let (h, mut peer_r, mut peer_w) = pair();
+        let server = tokio::spawn(async move {
+            let mut line = String::new();
+            peer_r.read_line(&mut line).await.unwrap();
+            let init: Request = serde_json::from_str(line.trim()).unwrap();
+            assert_eq!(init.method, "initialize");
+            peer_w
+                .write_all(
+                    &Message::Response(Response {
+                        jsonrpc: JSONRPC_VERSION.into(),
+                        id: init.id,
+                        result: Some(json!({"platformFamily": "mac"})),
+                        error: None,
+                    })
+                    .encode_line(),
+                )
+                .await
+                .unwrap();
+
+            line.clear();
+            peer_r.read_line(&mut line).await.unwrap();
+            let initialized: Notification = serde_json::from_str(line.trim()).unwrap();
+            assert_eq!(initialized.method, "initialized");
+
+            line.clear();
+            peer_r.read_line(&mut line).await.unwrap();
+            let thread_start: Request = serde_json::from_str(line.trim()).unwrap();
+            assert_eq!(thread_start.method, "thread/start");
+            assert_eq!(
+                thread_start.params.as_ref().unwrap().get("model").unwrap(),
+                "gpt-5.4"
+            );
+            peer_w
+                .write_all(
+                    &Message::Response(Response {
+                        jsonrpc: JSONRPC_VERSION.into(),
+                        id: thread_start.id,
+                        result: Some(json!({"thread": {"id": "thr_1"}})),
+                        error: None,
+                    })
+                    .encode_line(),
+                )
+                .await
+                .unwrap();
+
+            line.clear();
+            peer_r.read_line(&mut line).await.unwrap();
+            let turn_start: Request = serde_json::from_str(line.trim()).unwrap();
+            assert_eq!(turn_start.method, "turn/start");
+            assert_eq!(
+                turn_start.params.as_ref().unwrap().get("threadId").unwrap(),
+                "thr_1"
+            );
+            peer_w
+                .write_all(
+                    &Message::Notification(Notification::new(
+                        "item/agentMessage/delta",
+                        Some(json!({"delta": "hello"})),
+                    ))
+                    .encode_line(),
+                )
+                .await
+                .unwrap();
+            peer_w
+                .write_all(
+                    &Message::Response(Response {
+                        jsonrpc: JSONRPC_VERSION.into(),
+                        id: turn_start.id,
+                        result: Some(json!({"turn": {"id": "turn_1"}})),
+                        error: None,
+                    })
+                    .encode_line(),
+                )
+                .await
+                .unwrap();
+        });
+
+        let mut session = CodexAppServerSession::from_handles(h);
+        let init = session
+            .initialize("flockmux", "flockmux", "0.1.0")
+            .await
+            .unwrap();
+        assert_eq!(init.get("platformFamily").unwrap(), "mac");
+        let thread_id = session.start_thread(Some("gpt-5.4")).await.unwrap();
+        assert_eq!(thread_id, "thr_1");
+        let turn = session.start_turn(&thread_id, "say hello").await.unwrap();
+        assert_eq!(turn.get("turn").unwrap().get("id").unwrap(), "turn_1");
+        let ev = session.next_event().await.unwrap();
+        assert_eq!(
+            ev,
+            CodexAppEvent::AgentMessageDelta {
+                text: "hello".into()
+            }
+        );
+        server.await.unwrap();
     }
 }

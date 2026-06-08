@@ -45,7 +45,9 @@ struct Entry {
 }
 
 fn home() -> PathBuf {
-    std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("/"))
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/"))
 }
 
 /// Canonicalise a requested path. Returns an error string on a missing path so
@@ -99,7 +101,10 @@ fn jail_denied() -> axum::response::Response {
         .into_response()
 }
 
-pub async fn list_dir(State(state): State<AppState>, Query(q): Query<ListQuery>) -> impl IntoResponse {
+pub async fn list_dir(
+    State(state): State<AppState>,
+    Query(q): Query<ListQuery>,
+) -> impl IntoResponse {
     let ws_id = q.workspace_id.as_deref().filter(|s| !s.is_empty());
     // Fetch the jail roots once; reuse them for both the default dir and the gate.
     let roots = match ws_id {
@@ -168,7 +173,10 @@ pub struct ReadQuery {
     all: Option<String>,
 }
 
-pub async fn read_file(State(state): State<AppState>, Query(q): Query<ReadQuery>) -> impl IntoResponse {
+pub async fn read_file(
+    State(state): State<AppState>,
+    Query(q): Query<ReadQuery>,
+) -> impl IntoResponse {
     let path = match canon(Path::new(&q.path)) {
         Ok(p) => p,
         Err(e) => return (StatusCode::NOT_FOUND, Json(json!({ "error": e }))).into_response(),

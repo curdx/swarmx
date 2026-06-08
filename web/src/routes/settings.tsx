@@ -39,6 +39,10 @@ import {
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
+import {
+  ConfirmActionDialog,
+  type ConfirmActionState,
+} from "@/components/ConfirmActionDialog";
 import { cn } from "@/lib/cn";
 
 const STORAGE_KEY = "flockmux:settings:v1";
@@ -399,6 +403,10 @@ function ShortcutsPanel() {
 
 const MODEL_TIERS = ["opus", "sonnet", "haiku"] as const;
 
+function formNamePart(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9_-]+/g, "-");
+}
+
 function ModelsPanel() {
   const { t } = useTranslation();
   const [data, setData] = useState<ModelsResponse | null>(null);
@@ -516,6 +524,7 @@ function ModelsPanel() {
             ) : (
               <div className="flex flex-col gap-3">
                 <ModelRow
+                  name={`model-${formNamePart(cli.id)}-default`}
                   label={t("settings.models.default")}
                   placeholder={t("settings.models.cliDefaultPlaceholder")}
                   value={cliOf(cli.id).default}
@@ -528,6 +537,7 @@ function ModelsPanel() {
                   MODEL_TIERS.map((tier) => (
                     <ModelRow
                       key={tier}
+                      name={`model-${formNamePart(cli.id)}-${tier}`}
                       label={tier}
                       placeholder={t("settings.models.tierPlaceholder")}
                       value={cliOf(cli.id).tiers[tier] ?? ""}
@@ -537,6 +547,7 @@ function ModelsPanel() {
                   ))}
                 <div className="mt-1 h-px bg-border-subtle" />
                 <EffortRow
+                  name={`model-${formNamePart(cli.id)}-effort`}
                   label={t("settings.models.effort")}
                   hint={t("settings.models.effortHint")}
                   // codex's reasoning effort tops out at xhigh (极高); picking
@@ -573,12 +584,14 @@ function ModelsPanel() {
 }
 
 function ModelRow({
+  name,
   label,
   placeholder,
   value,
   onChange,
   mono,
 }: {
+  name: string;
   label: string;
   placeholder?: string;
   value: string;
@@ -599,6 +612,7 @@ function ModelRow({
       </Label>
       <input
         id={id}
+        name={name}
         type="text"
         spellCheck={false}
         value={value}
@@ -613,12 +627,14 @@ function ModelRow({
 /** Default reasoning-effort selector for a CLI (a fixed-option dropdown, not a
  *  free-text model id). "" = the model's own default. */
 function EffortRow({
+  name,
   label,
   hint,
   note,
   value,
   onChange,
 }: {
+  name: string;
   label: string;
   hint?: string;
   /** Extra CLI-specific caveat shown below the hint (e.g. codex effort cap). */
@@ -640,6 +656,7 @@ function EffortRow({
       <div className="flex flex-1 flex-col gap-1">
         <select
           id={id}
+          name={name}
           value={value}
           onChange={(e) => onChange(e.target.value)}
           className="w-full rounded-md border border-border-subtle bg-surface-primary px-3 py-1.5 text-xs text-foreground-primary outline-none focus:border-accent-primary"
@@ -754,6 +771,7 @@ function flockmuxLocalStorageKeys(): string[] {
 function PrivacyPanel() {
   const { t } = useTranslation();
   const [toast, setToast] = useState<string | null>(null);
+  const [confirm, setConfirm] = useState<ConfirmActionState | null>(null);
 
   const exportJson = () => {
     const data: Record<string, unknown> = {};
@@ -779,13 +797,21 @@ function PrivacyPanel() {
     URL.revokeObjectURL(url);
   };
 
-  const clearAll = () => {
-    // eslint-disable-next-line no-alert
-    if (!window.confirm(t("settings.privacy.clearConfirm"))) return;
+  const clearAllNow = () => {
     const keys = flockmuxLocalStorageKeys();
     for (const k of keys) window.localStorage.removeItem(k);
     setToast(t("settings.privacy.cleared", { count: keys.length }));
     window.setTimeout(() => setToast(null), 3000);
+  };
+
+  const clearAll = () => {
+    setConfirm({
+      title: t("settings.privacy.clearTitle"),
+      description: t("settings.privacy.clearConfirm"),
+      confirmLabel: t("settings.privacy.clearButton"),
+      variant: "destructive",
+      onConfirm: clearAllNow,
+    });
   };
 
   return (
@@ -830,6 +856,12 @@ function PrivacyPanel() {
           {toast}
         </div>
       )}
+      <ConfirmActionDialog
+        action={confirm}
+        onOpenChange={(open) => {
+          if (!open) setConfirm(null);
+        }}
+      />
     </div>
   );
 }
@@ -868,6 +900,11 @@ const DEPS: { name: string; ver: string; what: string }[] = [
 
 function AboutPanel() {
   const { t } = useTranslation();
+  const apiEndpoint = HTTP_BASE
+    ? HTTP_BASE.replace(/^https?:\/\//, "")
+    : import.meta.env.DEV
+      ? `127.0.0.1:7777 (${window.location.host} proxy)`
+      : window.location.host;
   return (
     <div className="mx-auto flex max-w-2xl flex-col gap-8 p-8">
       <PanelTitle
@@ -899,9 +936,7 @@ function AboutPanel() {
 
       <Field label={t("settings.about.endpointTitle")} hint={t("settings.about.endpointHint")}>
         <code className="inline-block rounded border border-border-subtle bg-surface-tertiary px-2 py-1 font-mono text-xs text-foreground-primary">
-          {/* Derive from the live connection instead of hardcoding 7777 — a
-              FLOCKMUX_PORT instance (or vite proxy) is no longer mislabeled. */}
-          {HTTP_BASE ? HTTP_BASE.replace(/^https?:\/\//, "") : window.location.host}
+          {apiEndpoint}
         </code>
       </Field>
 

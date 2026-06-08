@@ -13,6 +13,7 @@
 //! CORS, so the CORS layer alone is not a security boundary).
 
 mod acp;
+mod billing;
 mod cron;
 mod models_config;
 mod plugins;
@@ -201,7 +202,10 @@ async fn main() -> Result<()> {
     // without one by a prior crash mid-write, so it's visible to discovery
     // again. Cheap + idempotent (one query + inserts only for missing paths).
     match swarm.reconcile_oplog_from_disk().await {
-        Ok(n) if n > 0 => info!(reconciled = n, "backfilled blackboard op rows missing from a prior crash"),
+        Ok(n) if n > 0 => info!(
+            reconciled = n,
+            "backfilled blackboard op rows missing from a prior crash"
+        ),
         Ok(_) => {}
         Err(err) => tracing::warn!(?err, "blackboard op-log reconcile failed"),
     }
@@ -241,8 +245,8 @@ async fn main() -> Result<()> {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(7777);
-    let server_url = std::env::var("FLOCKMUX_SERVER_URL")
-        .unwrap_or_else(|_| format!("http://127.0.0.1:{port}"));
+    let server_url =
+        std::env::var("FLOCKMUX_SERVER_URL").unwrap_or_else(|_| format!("http://127.0.0.1:{port}"));
 
     let wake_subs: wake::WakeSubs =
         std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new()));
@@ -658,8 +662,8 @@ mod origin_tests {
     #[test]
     fn allows_local_origins() {
         for o in [
-            "http://localhost:5173",   // vite dev
-            "http://127.0.0.1:7777",   // bundle served by the server
+            "http://localhost:5173", // vite dev
+            "http://127.0.0.1:7777", // bundle served by the server
             "http://localhost:7777",
             "http://127.0.0.1:4173",   // vite preview / sidecar test recipe
             "tauri://localhost",       // macOS asset scheme

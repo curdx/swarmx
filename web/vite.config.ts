@@ -50,4 +50,45 @@ export default defineConfig({
       },
     },
   },
+  build: {
+    // Main route chunks are kept under the default 500KB warning threshold.
+    // Mermaid's optional diagram internals still emit a couple of lazy chunks
+    // around 560-615KB; they load only when an agent message previews a diagram.
+    chunkSizeWarningLimit: 650,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (!id.includes("node_modules")) return undefined;
+          if (
+            id.includes("/react/") ||
+            id.includes("/react-dom/") ||
+            id.includes("/react-router-dom/") ||
+            id.includes("/scheduler/") ||
+            id.includes("/radix-ui/") ||
+            id.includes("/@radix-ui/") ||
+            id.includes("/cmdk/")
+          ) {
+            return "vendor-react-ui";
+          }
+          if (id.includes("/lucide-react/")) return "vendor-icons";
+          if (
+            id.includes("/react-markdown/") ||
+            id.includes("/remark-") ||
+            id.includes("/rehype-") ||
+            id.includes("/highlight.js/") ||
+            id.includes("/hast-") ||
+            id.includes("/mdast-") ||
+            id.includes("/micromark") ||
+            id.includes("/unified/") ||
+            id.includes("/unist-")
+          ) {
+            return "vendor-markdown";
+          }
+          if (id.includes("/recharts/")) return "vendor-charts";
+          if (id.includes("/@xterm/")) return "vendor-xterm";
+          return undefined;
+        },
+      },
+    },
+  },
 });

@@ -8,7 +8,7 @@
  * (browsers can't load `file:///` from an http origin).
  */
 import { HTTP_BASE } from "./apiBase";
-import { apiRoutes } from "../api/endpoints";
+import { apiRoutes } from "@/api/endpoints";
 
 const IMG_EXT = "png|jpe?g|gif|webp|bmp|avif|svg|ico";
 

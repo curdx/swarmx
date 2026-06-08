@@ -8,16 +8,21 @@
  * when nothing's alive (or the wizard hasn't been run yet).
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../../api/http";
 import type { AgentInfo, SwarmEvent, Workspace } from "../../api/types";
 import { useSwarmFeed } from "../../hooks/useSwarmFeed";
 import { accentToCssVar } from "../../lib/workspace";
-import { CreateWizard } from "../../components/workspace/CreateWizard";
 import { Welcome } from "../../components/Welcome";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { WorkspaceList, type WorkspaceSummary } from "../workspace/Shell";
+
+const CreateWizard = lazy(() =>
+  import("@/components/workspace/CreateWizard").then((m) => ({
+    default: m.CreateWizard,
+  })),
+);
 
 function splitWorkspacePath(path: string): { name: string; parent: string } {
   if (!path || path === "(no workspace)") return { name: path || "", parent: "" };
@@ -161,19 +166,23 @@ export default function ChatHome() {
          *  在只画一行小提示 (WorkspaceList 内部已经做了)，主屏负责讲
          *  清楚 flockmux 是干啥的 + 主 CTA。 */}
         <Welcome onCreateWorkspace={() => setWizardOpen(true)} />
-        <CreateWizard
-          open={wizardOpen}
-          onClose={() => setWizardOpen(false)}
-          onCreated={(ws) => {
-            refreshAgents();
-            // Await the refetch before navigating so the destination Shell
-            // already has the new slug in its workspace list (otherwise its
-            // not-found redirect bounces back to the first workspace).
-            void refreshWorkspaces().then(() => {
-              if (ws) navigate(`/chat/${ws.slug}`);
-            });
-          }}
-        />
+        {wizardOpen && (
+          <Suspense fallback={null}>
+            <CreateWizard
+              open={wizardOpen}
+              onClose={() => setWizardOpen(false)}
+              onCreated={(ws) => {
+                refreshAgents();
+                // Await the refetch before navigating so the destination Shell
+                // already has the new slug in its workspace list (otherwise its
+                // not-found redirect bounces back to the first workspace).
+                void refreshWorkspaces().then(() => {
+                  if (ws) navigate(`/chat/${ws.slug}`);
+                });
+              }}
+            />
+          </Suspense>
+        )}
       </div>
     </TooltipProvider>
   );

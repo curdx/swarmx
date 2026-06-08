@@ -212,7 +212,10 @@ mod tests {
     #[test]
     fn claude_tiers_identity_legacy_behaviour() {
         let c = ModelConfig::shipped();
-        assert_eq!(c.resolve("claude", Some("sonnet")).as_deref(), Some("sonnet"));
+        assert_eq!(
+            c.resolve("claude", Some("sonnet")).as_deref(),
+            Some("sonnet")
+        );
         assert_eq!(c.resolve("claude", Some("opus")).as_deref(), Some("opus"));
     }
 
@@ -228,7 +231,10 @@ mod tests {
     #[test]
     fn codex_mapped_tier_uses_concrete_model() {
         let c = with_codex_map(&[("sonnet", "gpt-5.5")], "");
-        assert_eq!(c.resolve("codex", Some("sonnet")).as_deref(), Some("gpt-5.5"));
+        assert_eq!(
+            c.resolve("codex", Some("sonnet")).as_deref(),
+            Some("gpt-5.5")
+        );
     }
 
     #[test]
@@ -241,8 +247,14 @@ mod tests {
     fn concrete_model_id_passes_through_verbatim() {
         // Not a known tier ⇒ an orchestrator pinned an exact model ⇒ verbatim.
         let c = ModelConfig::shipped();
-        assert_eq!(c.resolve("codex", Some("gpt-5.5")).as_deref(), Some("gpt-5.5"));
-        assert_eq!(c.resolve("claude", Some("claude-opus-4-8")).as_deref(), Some("claude-opus-4-8"));
+        assert_eq!(
+            c.resolve("codex", Some("gpt-5.5")).as_deref(),
+            Some("gpt-5.5")
+        );
+        assert_eq!(
+            c.resolve("claude", Some("claude-opus-4-8")).as_deref(),
+            Some("claude-opus-4-8")
+        );
     }
 
     #[test]
@@ -259,7 +271,10 @@ mod tests {
         // unknown cli, known tier, no config → None (no bare-tier forward)
         assert_eq!(c.resolve("gemini", Some("sonnet")), None);
         // unknown cli, concrete id → verbatim
-        assert_eq!(c.resolve("gemini", Some("gemini-2.0")).as_deref(), Some("gemini-2.0"));
+        assert_eq!(
+            c.resolve("gemini", Some("gemini-2.0")).as_deref(),
+            Some("gemini-2.0")
+        );
     }
 
     #[test]

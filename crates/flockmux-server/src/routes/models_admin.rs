@@ -63,7 +63,9 @@ pub async fn put_models(
         if !eff.is_empty() && !["low", "medium", "high", "xhigh", "max"].contains(&eff) {
             return Err((
                 StatusCode::BAD_REQUEST,
-                Json(json!({"error": format!("cli '{cli}' has invalid effort '{eff}' — valid: low|medium|high|xhigh|max or empty")})),
+                Json(
+                    json!({"error": format!("cli '{cli}' has invalid effort '{eff}' — valid: low|medium|high|xhigh|max or empty")}),
+                ),
             ));
         }
     }
@@ -75,6 +77,9 @@ pub async fn put_models(
         ));
     }
     *state.models.write().await = config.clone();
-    tracing::info!(clis = config.clis.len(), "model config updated via /api/models");
+    tracing::info!(
+        clis = config.clis.len(),
+        "model config updated via /api/models"
+    );
     Ok(Json(json!({ "config": config })))
 }

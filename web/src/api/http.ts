@@ -6,8 +6,13 @@ import type {
   BlackboardSnapshot,
   BranchInfo,
   CliPluginInfo,
+  AddGoalEvidenceRequest,
+  CreateGoalRequest,
   CreateThreadRequest,
   CreateWorkspaceRequest,
+  GoalStatus,
+  GoalEvidenceResponse,
+  GoalsResponse,
   MarkReadResponse,
   MergeResult,
   MessageRecord,
@@ -27,6 +32,8 @@ import type {
   FileReadResp,
   TasksResponse,
   UnreadCountResponse,
+  UsagePricingResponse,
+  UsagePricingRule,
   UsageSummary,
   Workspace,
   WorkspaceRoot,
@@ -34,6 +41,7 @@ import type {
 } from "./types";
 
 import { HTTP_BASE } from "../lib/apiBase";
+import { dedupe } from "@/lib/requestDedupe";
 import { apiRoutes } from "./endpoints";
 import type { ApiEndpoint } from "./endpoints";
 
@@ -139,7 +147,8 @@ export interface McpStatus {
 }
 
 export const api = {
-  listPlugins: () => requestEndpoint<CliPluginInfo[]>(apiRoutes.plugins.list()),
+  listPlugins: () =>
+    dedupe("plugins", 30_000, () => requestEndpoint<CliPluginInfo[]>(apiRoutes.plugins.list())),
   // MCP admin (「快捷装 MCP」页面)
   mcpEnv: () => requestEndpoint<McpEnv>(apiRoutes.mcp.env()),
   mcpStatus: () => requestEndpoint<McpStatus>(apiRoutes.mcp.status()),
@@ -154,6 +163,21 @@ export const api = {
   listAgents: () => requestEndpoint<AgentInfo[]>(apiRoutes.agents.list()),
   getUsage: (workspaceId?: string) =>
     requestEndpoint<UsageSummary>(apiRoutes.usage.summary(workspaceId)),
+  getUsagePricing: () => requestEndpoint<UsagePricingResponse>(apiRoutes.usage.pricing()),
+  putUsagePricing: (rules: UsagePricingRule[]) =>
+    requestEndpoint<UsagePricingResponse>(apiRoutes.usage.updatePricing(), { rules }),
+  resetUsagePricing: () =>
+    requestEndpoint<UsagePricingResponse>(apiRoutes.usage.resetPricing()),
+  listGoals: (workspaceId?: string, threadId?: string | null) =>
+    requestEndpoint<GoalsResponse>(apiRoutes.goals.list(workspaceId, threadId)),
+  createGoal: (req: CreateGoalRequest) =>
+    requestEndpoint<{ ok: boolean; id: string }>(apiRoutes.goals.create(), req),
+  updateGoalStatus: (id: string, status: GoalStatus) =>
+    requestEndpoint<{ ok: boolean }>(apiRoutes.goals.updateStatus(id), { status }),
+  listGoalEvidence: (id: string, limit?: number) =>
+    requestEndpoint<GoalEvidenceResponse>(apiRoutes.goals.evidence(id, limit)),
+  addGoalEvidence: (id: string, req: AddGoalEvidenceRequest) =>
+    requestEndpoint<{ ok: boolean; id: string }>(apiRoutes.goals.addEvidence(id), req),
   listTasks: (workspaceId?: string) =>
     requestEndpoint<TasksResponse>(apiRoutes.tasks.list(workspaceId)),
   setTaskStatus: (agentId: string, status: string | null) =>
@@ -257,7 +281,8 @@ export const api = {
     requestEndpoint<RunSpellResponse>(apiRoutes.spells.run(), req),
 
   // workspaces (workspace-as-first-class refactor)
-  listWorkspaces: () => requestEndpoint<Workspace[]>(apiRoutes.workspaces.list()),
+  listWorkspaces: () =>
+    dedupe("workspaces", 0, () => requestEndpoint<Workspace[]>(apiRoutes.workspaces.list())),
   createWorkspace: (req: CreateWorkspaceRequest) =>
     requestEndpoint<Workspace>(apiRoutes.workspaces.create(), req),
   deleteWorkspace: (id: string) =>

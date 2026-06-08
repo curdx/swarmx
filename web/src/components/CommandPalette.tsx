@@ -2,7 +2,7 @@
  * CommandPalette — ⌘K (or Ctrl+K) global launcher.
  *
  * Sections:
- *   - 导航: jump to /chat /dag /replays /context /notifications /settings /debug
+ *   - 导航: jump to /chat /dag /replays /context /notifications /settings
  *   - 工作空间: switch active workspace (from live /api/agent group-by)
  *   - 唤醒 agent: wake any alive agent by role + id
  *   - 主题: light / dark / system (calls lib/theme.setTheme directly)
@@ -28,6 +28,7 @@ import {
   Bug,
   ClipboardList,
   Clock,
+  Flag,
   FolderTree,
   GitBranch,
   MessageSquare,
@@ -42,8 +43,13 @@ import {
 } from "lucide-react";
 import { api } from "../api/http";
 import type { AgentInfo, Workspace } from "../api/types";
+import {
+  ConfirmActionDialog,
+  type ConfirmActionState,
+} from "@/components/ConfirmActionDialog";
 import { setTheme, type ThemeMode } from "@/lib/theme";
 import { directionBase } from "@/lib/thread";
+import { DEBUG_ENABLED } from "@/lib/debug";
 import {
   CommandDialog,
   CommandEmpty,
@@ -58,25 +64,27 @@ import {
 // route，不存在"全局视图"了。CommandPalette 改成：先列对话/通知/设置等
 // app-level 入口，再用 WORKSPACE_VIEWS 给当前 workspace 加 4 个内部 view
 // 跳转项（只在用户已经选了 workspace 时显示）。
-const NAV = [
+const BASE_NAV = [
   { labelKey: "nav.chat", href: "/chat", icon: MessageSquare, hintKey: "cmdk.navHint.chat" },
   { labelKey: "nav.notifications", href: "/notifications", icon: Bell, hintKey: "cmdk.navHint.notifications" },
   // MCP is a primary left-rail destination (McpActivityBar) but was missing
   // from ⌘K — typing "mcp" returned no match. Mirror the rail's Boxes icon and
   // sit it next to 设置, the other config surface.
   { labelKey: "nav.mcp", href: "/mcp", icon: Boxes, hintKey: "cmdk.navHint.mcp" },
+  { labelKey: "nav.goals", href: "/goals", icon: Flag, hintKey: "cmdk.navHint.goals" },
   { labelKey: "nav.tasks", href: "/tasks", icon: ClipboardList, hintKey: "cmdk.navHint.tasks" },
   { labelKey: "nav.files", href: "/files", icon: FolderTree, hintKey: "cmdk.navHint.files" },
   { labelKey: "nav.terminal", href: "/terminal", icon: TerminalIcon, hintKey: "cmdk.navHint.terminal" },
   { labelKey: "nav.cron", href: "/cron", icon: Clock, hintKey: "cmdk.navHint.cron" },
   { labelKey: "nav.usage", href: "/usage", icon: BarChart3, hintKey: "cmdk.navHint.usage" },
   { labelKey: "nav.settings", href: "/settings", icon: SettingsIcon, hintKey: "cmdk.navHint.settings" },
-  // /debug isn't purely dev tooling — it hosts the blackboard editor (operator
-  // writes HITL approval keys) + spells launcher, which have no other home yet.
-  // Keep it reachable; the misleading "Legacy M2 grid" hint was fixed to
-  // "调试面板" instead (FAULT-005/006).
+] as const;
+
+const DEBUG_NAV = [
   { labelKey: "nav.debug", href: "/debug", icon: Bug, hintKey: "cmdk.navHint.debug" },
 ] as const;
+
+const NAV = DEBUG_ENABLED ? [...BASE_NAV, ...DEBUG_NAV] : BASE_NAV;
 
 // Keep in sync with buildTabs() in routes/workspace/Shell.tsx — same order,
 // same ⌘1-4 mapping (index + 1). The "context" view was replaced by "ledger"
@@ -117,6 +125,7 @@ export function CommandPalette() {
   const [currentThreadSlug, setCurrentThreadSlug] = useState<string | null>(null);
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+  const [confirm, setConfirm] = useState<ConfirmActionState | null>(null);
   const navigate = useNavigate();
 
   // Global ⌘K / Ctrl+K opens, Esc closes (handled by Dialog).
@@ -164,6 +173,10 @@ export function CommandPalette() {
     },
     [navigate, close],
   );
+  const openWizard = useCallback(() => {
+    window.dispatchEvent(new CustomEvent("flockmux:open-wizard"));
+    close();
+  }, [close]);
 
   const wsIds = new Set(workspaces.map((w) => w.id));
   // Live agents, scoped to those whose workspace still exists. Drops orphan
@@ -178,23 +191,51 @@ export function CommandPalette() {
   );
 
   return (
-    <CommandDialog
-      open={open}
-      onOpenChange={setOpen}
-      title={t("cmdk.placeholder")}
-      description={t("cmdk.kbd.openHint")}
-    >
-      <CommandInput placeholder={t("cmdk.placeholder")} />
-      <CommandList>
-        <CommandEmpty>{t("common.noMatch")}</CommandEmpty>
+    <>
+      <CommandDialog
+        open={open}
+        onOpenChange={setOpen}
+        title={t("cmdk.placeholder")}
+        description={t("cmdk.kbd.openHint")}
+      >
+        <CommandInput placeholder={t("cmdk.placeholder")} />
+        <CommandList>
+          <CommandEmpty>{t("common.noMatch")}</CommandEmpty>
 
-        <CommandGroup heading={t("cmdk.groups.nav")}>
+          <CommandGroup heading={t("cmdk.groups.frequent", "常用")}>
+            <CommandItem
+              value={`quick new workspace create ${t("cmdk.newWorkspace")} ${t("cmdk.openWizard")}`}
+              onSelect={openWizard}
+            >
+              <Plus />
+              <span>{t("cmdk.newWorkspace")}</span>
+              <CommandShortcut>{t("cmdk.openWizard")}</CommandShortcut>
+            </CommandItem>
+            <CommandItem
+              value={`quick chat workspace ${t("nav.chat")} ${t("cmdk.navHint.chat")}`}
+              onSelect={() => go(currentWsId ? `/chat/${currentWsId}` : "/chat")}
+            >
+              <MessageSquare />
+              <span>{t("nav.chat")}</span>
+              <CommandShortcut>{t("cmdk.navHint.chat")}</CommandShortcut>
+            </CommandItem>
+            <CommandItem
+              value={`quick mcp tools settings ${t("nav.mcp")} ${t("cmdk.navHint.mcp")}`}
+              onSelect={() => go("/mcp")}
+            >
+              <Boxes />
+              <span>{t("nav.mcp")}</span>
+              <CommandShortcut>{t("cmdk.navHint.mcp")}</CommandShortcut>
+            </CommandItem>
+          </CommandGroup>
+
+          <CommandGroup heading={t("cmdk.groups.nav")}>
           {NAV.map((n) => {
             const Icon = n.icon;
             return (
               <CommandItem
                 key={n.href}
-                value={`${n.href} ${t(n.labelKey)}`}
+                value={`${n.href} ${t(n.labelKey)} ${t(n.hintKey)}`}
                 onSelect={() => go(n.href)}
               >
                 <Icon />
@@ -203,10 +244,10 @@ export function CommandPalette() {
               </CommandItem>
             );
           })}
-        </CommandGroup>
+          </CommandGroup>
 
-        {currentWsId && (
-          <CommandGroup heading={t("cmdk.groups.currentWsView")}>
+          {currentWsId && (
+            <CommandGroup heading={t("cmdk.groups.currentWsView")}>
             {WORKSPACE_VIEWS.map((v, i) => {
               const Icon = v.icon;
               const href = `${directionBase(currentWsId, currentThreadSlug)}${v.suffix}`;
@@ -222,11 +263,11 @@ export function CommandPalette() {
                 </CommandItem>
               );
             })}
-          </CommandGroup>
-        )}
+            </CommandGroup>
+          )}
 
-        {workspaces.length > 0 && (
-          <CommandGroup heading={t("cmdk.groups.workspaces")}>
+          {workspaces.length > 0 && (
+            <CommandGroup heading={t("cmdk.groups.workspaces")}>
             {workspaces.map((ws) => (
               <CommandItem
                 key={ws.id}
@@ -238,18 +279,27 @@ export function CommandPalette() {
                 <CommandShortcut>{t("cmdk.switchWs")}</CommandShortcut>
               </CommandItem>
             ))}
-          </CommandGroup>
-        )}
+            </CommandGroup>
+          )}
 
-        {liveAgents.length > 0 && (
-          <CommandGroup heading={t("cmdk.groups.wakeAgent")}>
+          {liveAgents.length > 0 && (
+            <CommandGroup heading={t("cmdk.groups.wakeAgent")}>
             {liveAgents.map((a) => (
               <CommandItem
                 key={a.agent_id}
-                value={`wake ${a.role} ${a.agent_id}`}
+                value={`wake ${t("cmdk.groups.wakeAgent")} ${t("cmdk.wake", { role: a.role })} ${a.role} ${a.agent_id}`}
                 onSelect={() => {
-                  api.wakeAgent(a.agent_id).catch(() => {});
                   close();
+                  setConfirm({
+                    title: t("cmdk.confirmWakeTitle", { role: a.role, defaultValue: "唤醒 agent？" }),
+                    description: t("cmdk.confirmWakeDesc", {
+                      id: a.agent_id,
+                      defaultValue:
+                        "会向该 agent 投递一条手动唤醒消息并推动它继续处理当前工作。仅在确认它确实需要人工唤醒时使用。",
+                    }),
+                    confirmLabel: t("cmdk.confirmWake", "唤醒"),
+                    onConfirm: () => api.wakeAgent(a.agent_id).catch(() => {}),
+                  });
                 }}
               >
                 <Zap className="text-state-wake" />
@@ -257,12 +307,12 @@ export function CommandPalette() {
                 <CommandShortcut>{a.agent_id}</CommandShortcut>
               </CommandItem>
             ))}
-          </CommandGroup>
-        )}
+            </CommandGroup>
+          )}
 
-        <CommandGroup heading={t("cmdk.groups.theme")}>
+          <CommandGroup heading={t("cmdk.groups.theme")}>
           <CommandItem
-            value="theme light"
+            value={`theme light ${t("cmdk.switchToLight")}`}
             onSelect={() => {
               persistTheme("light");
               close();
@@ -273,7 +323,7 @@ export function CommandPalette() {
             <CommandShortcut>light</CommandShortcut>
           </CommandItem>
           <CommandItem
-            value="theme dark"
+            value={`theme dark ${t("cmdk.switchToDark")}`}
             onSelect={() => {
               persistTheme("dark");
               close();
@@ -284,7 +334,7 @@ export function CommandPalette() {
             <CommandShortcut>dark</CommandShortcut>
           </CommandItem>
           <CommandItem
-            value="theme system"
+            value={`theme system ${t("cmdk.followSystem")}`}
             onSelect={() => {
               persistTheme("system");
               close();
@@ -294,27 +344,9 @@ export function CommandPalette() {
             <span>{t("cmdk.followSystem")}</span>
             <CommandShortcut>system</CommandShortcut>
           </CommandItem>
-        </CommandGroup>
+          </CommandGroup>
 
-        <CommandGroup heading={t("cmdk.groups.actions")}>
-          <CommandItem
-            value="new workspace"
-            onSelect={() => {
-              // 用 window-level 事件让 chat 路由的 wizard 自己开，避免把
-              // wizard open state 沿 route 树拽下来。
-              window.dispatchEvent(new CustomEvent("flockmux:open-wizard"));
-              go("/chat");
-            }}
-          >
-            <Plus />
-            <span>{t("cmdk.newWorkspace")}</span>
-            <CommandShortcut>{t("cmdk.openWizard")}</CommandShortcut>
-          </CommandItem>
-          {/* 旧"运行配方"项删了 —— 它和"新建工作空间"打开的是同一个创建
-              向导（已无 spell 选择器），重复入口徒增困惑。 */}
-        </CommandGroup>
-
-        <CommandGroup heading={t("cmdk.groups.settings")}>
+          <CommandGroup heading={t("cmdk.groups.settings")}>
           {SETTINGS_SECTIONS.map((s, i) => {
             const label = t(s.labelKey);
             // cmdk 只看 `value` 过滤，把英文 id + 翻译后的 label 都塞进
@@ -331,9 +363,16 @@ export function CommandPalette() {
               </CommandItem>
             );
           })}
-        </CommandGroup>
-      </CommandList>
-    </CommandDialog>
+          </CommandGroup>
+        </CommandList>
+      </CommandDialog>
+      <ConfirmActionDialog
+        action={confirm}
+        onOpenChange={(next) => {
+          if (!next) setConfirm(null);
+        }}
+      />
+    </>
   );
 }
 

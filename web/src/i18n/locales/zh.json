@@ -12,6 +12,13 @@
     "needsNode": "需 Node.js LTS",
     "nodeMissing": "未检测到 Node.js — npx 类 MCP（含 chrome-devtools）无法运行，请先安装 Node.js LTS。",
     "realWriteHint": "开关直接改 claude / codex 的 MCP 配置（用户级，对所有工作区的 agent 生效）。更多 MCP 陆续接入。",
+    "userScopeWarning": "这里的开关会写入用户级 claude / codex 配置，并对所有工作区和正在运行的 agent 生效。启用或关闭前请确认当前项目可信。",
+    "enableTitle": "启用这个 MCP？",
+    "enableDesc": "会写入该 CLI 的用户级配置，对所有工作区的 agent 生效。请只在信任当前本机项目与该 MCP server 时启用。",
+    "enableConfirm": "启用",
+    "disableTitle": "关闭这个 MCP？",
+    "disableDesc": "会从该 CLI 的用户级配置里移除此 MCP，对所有工作区的 agent 即时生效；正在依赖它的 agent 可能失能。随时可重新开启。",
+    "disableConfirm": "关闭",
     "keyTitle": "填写 API Key",
     "keyDesc": "claude 与 codex 共用同一个 key，填写一次即可；保存后会同步到双方已启用的 CLI。",
     "keyShared": "· claude / codex 共用",
@@ -68,6 +75,7 @@
     "context": "上下文",
     "notifications": "通知",
     "mcp": "MCP",
+    "goals": "目标",
     "tasks": "任务",
     "files": "文件",
     "terminal": "终端",
@@ -398,7 +406,19 @@
     "pausedCount": "{{count}} 已暂停",
     "interruptedToast": "已暂停 {{count}} 个 agent",
     "resumedToast": "已恢复 {{count}} 个 agent",
-    "paused": "已暂停"
+    "paused": "已暂停",
+    "confirm": {
+      "interruptAll": {
+        "title": "暂停所有 agent？",
+        "desc": "会向当前工作空间所有运行中的 agent 发送中断，并停止它们的自动唤醒，直到你恢复。",
+        "confirm": "全停"
+      },
+      "resumeAll": {
+        "title": "恢复所有暂停 agent？",
+        "desc": "会逐个恢复当前工作空间内暂停的 agent，并让它们继续处理当前工作。",
+        "confirm": "全恢复"
+      }
+    }
   },
   "replays": {
     "title": "录像",
@@ -436,7 +456,7 @@
   },
   "context": {
     "title": "上下文",
-    "subtitle": "{{count}} 个 key · 浏览 + 历史（编辑请前往 /debug）",
+    "subtitle": "{{count}} 个 key · 浏览 + 历史（由 agent 写入）",
     "search": "按 key 搜索",
     "empty": "共享区暂无内容",
     "selectKey": "左侧选一个 key 查看",
@@ -492,8 +512,23 @@
     "wake": "唤醒",
     "pause": "暂停",
     "resume": "恢复",
+    "confirm": {
+      "wake": {
+        "title": "唤醒 {{role}}？",
+        "desc": "会向该 agent 投递一条手动唤醒消息，推动它继续读取 mailbox / blackboard。仅在它确实卡住或需要人工催促时使用。"
+      },
+      "pause": {
+        "title": "暂停 {{role}}？",
+        "desc": "会发送 Ctrl-C 中断当前 turn，并让自动唤醒跳过该 agent，直到你恢复它。"
+      },
+      "resume": {
+        "title": "恢复 {{role}}？",
+        "desc": "会恢复该 agent 的自动唤醒，并投递一次手动唤醒让它继续处理当前工作。"
+      }
+    },
     "restart": "重启",
     "notImplemented": "暂未实现",
+    "terminalLoading": "正在确认 agent 状态…",
     "terminalExited": "这个 agent 已退出，终端不可用。它干了什么可以在「录像 / 消息 / 上下文」里回看。",
     "tabs": {
       "terminal": "终端",
@@ -516,6 +551,7 @@
     "injectPlaceholder": "给 agent 发一条 note，下回合 wake 后收到",
     "send": "发送",
     "downloadCast": "下载 .cast",
+    "downloadCastNamed": "下载 {{id}} .cast",
     "stat": {
       "spawn": "SPAWN",
       "turn": "TURN",
@@ -544,6 +580,8 @@
     "aiNamed": "AI 起名",
     "errAbsolutePath": "请填写绝对路径（以 / 开头），例如 /Users/你的用户名/code/项目",
     "errDirMissing": "这个目录不存在——请确认路径填对了，且指向一个已存在的绝对路径。",
+    "pathChecking": "正在检查目录…",
+    "pathOk": "目录可访问",
     "step2": "项目文件夹",
     "step2Hint": "第一个是主项目（AI 的终端落在这里）；可再挂上平级的其它项目，或它依赖的源码/工具——每个挂载都能单独选「对等 / 依赖 / 工具」，AI 都直接读源码、不反编译",
     "dirPlaceholder1": "例如：/Users/你的用户名/code/我的项目",
@@ -684,11 +722,65 @@
       "done": "完成",
       "archive": "归档",
       "reopen": "复位"
+    },
+    "confirm": {
+      "blocked": {
+        "title": "将「{{role}}」标为阻塞？",
+        "desc": "这会写入人工状态，覆盖系统自动推导，直到你复位。",
+        "confirm": "标为阻塞"
+      },
+      "done": {
+        "title": "将「{{role}}」标为完成？",
+        "desc": "这会写入人工状态，覆盖系统自动推导，直到你复位。",
+        "confirm": "标为完成"
+      },
+      "archived": {
+        "title": "归档「{{role}}」？",
+        "desc": "归档后它会从常规任务流里移走；可通过复位撤销人工覆盖。",
+        "confirm": "归档"
+      },
+      "reopen": {
+        "title": "复位「{{role}}」的人工状态？",
+        "desc": "复位后任务状态会重新跟随 agent 生命周期自动推导。",
+        "confirm": "复位"
+      }
+    }
+  },
+  "goals": {
+    "title": "目标",
+    "subtitle": "为长任务记录目标、验收标准、状态和 token 预算，防止 agent 跑偏。",
+    "newGoal": "新目标",
+    "objective": "目标",
+    "objectivePlaceholder": "完成项目功能升级，同时不把 Claude 默认切到付费 SDK/API 传输",
+    "criteria": "验收标准",
+    "criteriaPlaceholder": "- Claude 默认保持交互式 PTY\n- Goal API 与界面有测试覆盖\n- 完整 workspace 测试通过",
+    "budget": "Token 预算",
+    "budgetShort": "预算 {{budget}}",
+    "thread": "方向",
+    "allDirections": "全部方向",
+    "mainDirection": "主方向",
+    "create": "创建目标",
+    "creating": "创建中…",
+    "empty": "暂无目标。先创建一个，让这轮工作有可追踪的终点。",
+    "updated": "更新于 {{time}}",
+    "evidence": "证据",
+    "evidenceKind": "证据类型",
+    "evidenceSummary": "证据摘要",
+    "evidencePlaceholder": "记录什么能证明进展、完成或阻塞？",
+    "addEvidence": "添加",
+    "noEvidence": "还没有记录证据。",
+    "status": {
+      "active": "活跃",
+      "paused": "暂停",
+      "blocked": "阻塞",
+      "complete": "完成",
+      "archived": "归档"
     }
   },
   "usage": {
     "title": "用量 / 成本",
     "subtitle": "从各 worker 的会话日志采集的 token 用量；成本为按内置价目表估算（PTY 模式下 CLI 不回传花费）。",
+    "trustHint": "价格按服务端内置价目表估算；未知模型只计 token，不计入金额。点击 agent 行可回到对应工作区查看上下文。",
     "totalCost": "总成本",
     "totalTokens": "总 token",
     "input": "输入",
@@ -707,8 +799,22 @@
     "estimated": "估算值",
     "partialPrice": "部分模型无价目，仅 token",
     "tokensOnly": "仅 token",
+    "pricingTitle": "价目表",
+    "pricingMeta": "{{unit}} · {{source}} · {{path}}",
+    "pricingDefault": "内置默认",
+    "pricingUser": "用户配置",
+    "pricingReset": "恢复默认",
+    "confirmResetTitle": "恢复内置价目表？",
+    "confirmResetDesc": "这会删除当前用户价目表配置，并重新使用服务端默认价格。配置路径：{{path}}",
+    "pricingRule": "规则",
+    "pricingMatchers": "匹配",
     "empty": "暂无用量数据——派 worker 干活后这里会出现 token 与成本。",
     "loadError": "用量数据加载失败"
+  },
+  "terminal": {
+    "confirmTitle": "连接本机终端",
+    "confirmDesc": "将为「{{workspace}}」打开一个真实 shell，会在该工作空间目录执行你输入的命令。",
+    "connect": "连接终端"
   },
   "model": {
     "label": "模型",
@@ -743,6 +849,7 @@
   "cmdk": {
     "placeholder": "搜索命令、跳转、唤醒 agent…",
     "groups": {
+      "frequent": "常用",
       "nav": "导航",
       "currentWsView": "当前工作空间视图",
       "workspaces": "工作空间",
@@ -758,6 +865,7 @@
       "context": "共享区",
       "notifications": "通知中心",
       "mcp": "为 agent 装工具",
+      "goals": "目标模式",
       "tasks": "任务看板",
       "files": "浏览本地文件",
       "terminal": "开个 shell",
@@ -768,6 +876,9 @@
     },
     "switchWs": "切到此工作空间",
     "wake": "唤醒 {{role}}",
+    "confirmWakeTitle": "唤醒 {{role}}？",
+    "confirmWakeDesc": "会向该 agent 投递一条手动唤醒消息并推动它继续处理当前工作。仅在确认它确实需要人工唤醒时使用。",
+    "confirmWake": "唤醒",
     "switchToLight": "切换到浅色",
     "switchToDark": "切换到深色",
     "followSystem": "跟随系统",

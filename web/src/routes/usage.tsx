@@ -8,23 +8,32 @@
  * chart lib), and per-model / per-agent breakdowns. Cost is an ESTIMATE from a
  * built-in price table; unrecognised models show tokens only.
  */
-import { useCallback, useEffect, useState } from "react";
-import { useTranslation } from "react-i18next";
-import { RefreshCw } from "lucide-react";
 import {
-  ResponsiveContainer,
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-} from "recharts";
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
+import { Link } from "react-router-dom";
+import { useTranslation } from "react-i18next";
+import { RefreshCw, RotateCcw, Save } from "lucide-react";
 import { api } from "@/api/http";
-import type { UsageSummary } from "@/api/types";
+import type {
+  UsageAgentRow,
+  UsagePricingResponse,
+  UsagePricingRule,
+  UsageSummary,
+} from "@/api/types";
 import { cn } from "@/lib/cn";
 import { useToolWorkspaces } from "@/lib/useToolWorkspaces";
 import { WorkspacePicker } from "@/components/WorkspacePicker";
+import {
+  ConfirmActionDialog,
+  type ConfirmActionState,
+} from "@/components/ConfirmActionDialog";
 
 function fmtTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
@@ -36,34 +45,21 @@ function fmtCost(n: number): string {
   if (n < 0.01) return "<$0.01";
   return `$${n.toFixed(2)}`;
 }
+function fmtRate(n: number): string {
+  return Number.isInteger(n) ? String(n) : String(Number(n.toFixed(3)));
+}
 /** "152.0k / 200.0k" — peak context occupancy vs the model's cap. */
 function fmtCtxPeak(peak: number, cap: number | null): string {
   if (!peak) return "—";
   return cap ? `${fmtTokens(peak)} / ${fmtTokens(cap)}` : fmtTokens(peak);
 }
 /** "2026-06-07" → "6/7" for a compact x-axis tick. */
-function fmtDay(day: string): string {
-  const p = day.split("-");
-  return p.length === 3 ? `${+p[1]}/${+p[2]}` : day;
-}
-
 type DayDatum = { day: string; tokens: number; input: number; output: number };
-
-/** Themed recharts tooltip for the daily-trend bars. */
-function DayTooltip({ active, payload }: { active?: boolean; payload?: { payload: DayDatum }[] }) {
-  const { t } = useTranslation();
-  if (!active || !payload?.length) return null;
-  const d = payload[0].payload;
-  return (
-    <div className="rounded-md border border-border-subtle bg-surface-elevated px-2.5 py-1.5 font-caption text-[11px] shadow-md">
-      <div className="font-medium text-foreground-primary">{d.day}</div>
-      <div className="mt-0.5 text-foreground-primary">{fmtTokens(d.tokens)} tokens</div>
-      <div className="text-foreground-tertiary">
-        {t("usage.input")} {fmtTokens(d.input)} · {t("usage.output")} {fmtTokens(d.output)}
-      </div>
-    </div>
-  );
-}
+const UsageTrendChart = lazy(() =>
+  import("@/components/UsageTrendChart").then((m) => ({
+    default: m.UsageTrendChart,
+  })),
+);
 
 function StatCard({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return (
@@ -84,6 +80,11 @@ export default function UsageRoute() {
   const [err, setErr] = useState(false);
   const [loading, setLoading] = useState(true);
   const [updatedAt, setUpdatedAt] = useState<number | null>(null);
+  const [pricing, setPricing] = useState<UsagePricingResponse | null>(null);
+  const [pricingDraft, setPricingDraft] = useState<UsagePricingRule[]>([]);
+  const [pricingSaving, setPricingSaving] = useState(false);
+  const [pricingError, setPricingError] = useState<string | null>(null);
+  const [confirm, setConfirm] = useState<ConfirmActionState | null>(null);
 
   const load = useCallback(
     async (showSpinner = false) => {
@@ -110,12 +111,75 @@ export default function UsageRoute() {
     return () => window.clearInterval(id);
   }, [load]);
 
+  const loadPricing = useCallback(async () => {
+    try {
+      const p = await api.getUsagePricing();
+      setPricing(p);
+      setPricingDraft(p.rules);
+      setPricingError(null);
+    } catch (e) {
+      setPricingError((e as Error).message);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadPricing();
+  }, [loadPricing]);
+
+  const pricingDirty =
+    pricing != null && JSON.stringify(pricing.rules) !== JSON.stringify(pricingDraft);
+
+  const savePricing = async () => {
+    setPricingSaving(true);
+    setPricingError(null);
+    try {
+      const p = await api.putUsagePricing(pricingDraft);
+      setPricing(p);
+      setPricingDraft(p.rules);
+      await load(false);
+    } catch (e) {
+      setPricingError((e as Error).message);
+    } finally {
+      setPricingSaving(false);
+    }
+  };
+
+  const resetPricing = async () => {
+    setPricingSaving(true);
+    setPricingError(null);
+    try {
+      const p = await api.resetUsagePricing();
+      setPricing(p);
+      setPricingDraft(p.rules);
+      await load(false);
+    } catch (e) {
+      setPricingError((e as Error).message);
+    } finally {
+      setPricingSaving(false);
+    }
+  };
+
+  const confirmResetPricing = () =>
+    setConfirm({
+      title: t("usage.confirmResetTitle"),
+      description: t("usage.confirmResetDesc", {
+        path: pricing?.path ?? "~/.flockmux/pricing.json",
+      }),
+      confirmLabel: t("usage.pricingReset"),
+      variant: "destructive",
+      onConfirm: resetPricing,
+    });
+
   const chartData: DayDatum[] = (data?.by_day ?? []).map((d) => ({
     day: d.day,
     tokens: d.input_tokens + d.output_tokens,
     input: d.input_tokens,
     output: d.output_tokens,
   }));
+  const workspaceById = useMemo(
+    () => new Map(workspaces.map((w) => [w.id, w])),
+    [workspaces],
+  );
 
   return (
     <div className="h-full overflow-y-auto">
@@ -124,6 +188,9 @@ export default function UsageRoute() {
           <div className="flex flex-col gap-1">
             <h1 className="font-display text-lg text-foreground-primary">{t("usage.title")}</h1>
             <p className="font-caption text-xs text-foreground-tertiary">{t("usage.subtitle")}</p>
+            <p className="font-caption text-[11px] text-foreground-tertiary">
+              {t("usage.trustHint")}
+            </p>
           </div>
           <div className="flex shrink-0 items-center gap-2">
             {updatedAt && (
@@ -159,6 +226,19 @@ export default function UsageRoute() {
           </div>
         )}
 
+        {pricing && (
+          <PricingEditor
+            pricing={pricing}
+            rules={pricingDraft}
+            dirty={pricingDirty}
+            saving={pricingSaving}
+            error={pricingError}
+            onChange={setPricingDraft}
+            onSave={savePricing}
+            onReset={confirmResetPricing}
+          />
+        )}
+
         {data && !loading && data.totals.events > 0 && (
           <>
             {/* headline cards */}
@@ -184,36 +264,15 @@ export default function UsageRoute() {
                   {t("usage.byDay")}
                 </h2>
                 <div className="h-48 rounded-lg border border-border-subtle bg-surface-secondary p-3">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={chartData} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
-                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--color-border-subtle)" />
-                      <XAxis
-                        dataKey="day"
-                        tickFormatter={fmtDay}
-                        tick={{ fontSize: 10, fill: "var(--color-foreground-tertiary)" }}
-                        tickLine={false}
-                        axisLine={{ stroke: "var(--color-border-subtle)" }}
-                        minTickGap={16}
-                      />
-                      <YAxis
-                        tickFormatter={(v: number) => fmtTokens(v)}
-                        tick={{ fontSize: 10, fill: "var(--color-foreground-tertiary)" }}
-                        tickLine={false}
-                        axisLine={false}
-                        width={44}
-                      />
-                      <Tooltip
-                        cursor={{ fill: "var(--color-foreground-tertiary)", opacity: 0.08 }}
-                        content={<DayTooltip />}
-                      />
-                      <Bar
-                        dataKey="tokens"
-                        fill="var(--color-accent-primary)"
-                        radius={[3, 3, 0, 0]}
-                        maxBarSize={48}
-                      />
-                    </BarChart>
-                  </ResponsiveContainer>
+                  <Suspense
+                    fallback={
+                      <div className="flex h-full items-center justify-center font-caption text-xs text-foreground-tertiary">
+                        {t("common.loading")}
+                      </div>
+                    }
+                  >
+                    <UsageTrendChart data={chartData} />
+                  </Suspense>
                 </div>
               </section>
             )}
@@ -225,14 +284,17 @@ export default function UsageRoute() {
               </h2>
               <UsageTable
                 cols={[t("usage.model"), t("usage.input"), t("usage.output"), t("usage.cacheRead"), t("usage.ctxPeak"), t("usage.totalCost")]}
-                rows={data.by_model.map((m) => [
-                  m.model ?? "—",
-                  fmtTokens(m.input_tokens),
-                  fmtTokens(m.output_tokens),
-                  fmtTokens(m.cache_read_tokens),
-                  fmtCtxPeak(m.context_peak, m.context_window),
-                  m.priced ? fmtCost(m.cost_usd) : t("usage.tokensOnly"),
-                ])}
+                rows={data.by_model.map((m, i) => ({
+                  key: `${m.model ?? "unknown"}-${i}`,
+                  cells: [
+                    m.model ?? "—",
+                    fmtTokens(m.input_tokens),
+                    fmtTokens(m.output_tokens),
+                    fmtTokens(m.cache_read_tokens),
+                    fmtCtxPeak(m.context_peak, m.context_window),
+                    m.priced ? fmtCost(m.cost_usd) : t("usage.tokensOnly"),
+                  ],
+                }))}
               />
             </section>
 
@@ -243,22 +305,260 @@ export default function UsageRoute() {
               </h2>
               <UsageTable
                 cols={[t("usage.agent"), t("usage.input"), t("usage.output"), t("usage.events")]}
-                rows={data.by_agent.map((a) => [
-                  a.agent_id.slice(0, 12),
-                  fmtTokens(a.input_tokens),
-                  fmtTokens(a.output_tokens),
-                  String(a.events),
-                ])}
+                rows={data.by_agent.map((a) => ({
+                  key: a.agent_id,
+                  cells: [
+                    <AgentUsageCell
+                      key="agent"
+                      row={a}
+                      workspaceSlug={
+                        a.workspace_id
+                          ? workspaceById.get(a.workspace_id)?.slug ?? null
+                          : null
+                      }
+                    />,
+                    fmtTokens(a.input_tokens),
+                    fmtTokens(a.output_tokens),
+                    String(a.events),
+                  ],
+                }))}
               />
             </section>
           </>
         )}
       </div>
+      <ConfirmActionDialog action={confirm} onOpenChange={(open) => !open && setConfirm(null)} />
     </div>
   );
 }
 
-function UsageTable({ cols, rows }: { cols: string[]; rows: string[][] }) {
+type UsageTableRow = { key: string; cells: ReactNode[] };
+
+function PricingEditor({
+  pricing,
+  rules,
+  dirty,
+  saving,
+  error,
+  onChange,
+  onSave,
+  onReset,
+}: {
+  pricing: UsagePricingResponse;
+  rules: UsagePricingRule[];
+  dirty: boolean;
+  saving: boolean;
+  error: string | null;
+  onChange: (rules: UsagePricingRule[]) => void;
+  onSave: () => void;
+  onReset: () => void;
+}) {
+  const { t } = useTranslation();
+  const updateRate = (
+    index: number,
+    key: keyof UsagePricingRule["rates_usd_per_mtok"],
+    raw: string,
+  ) => {
+    const value = Number(raw);
+    onChange(
+      rules.map((rule, i) =>
+        i === index
+          ? {
+              ...rule,
+              rates_usd_per_mtok: {
+                ...rule.rates_usd_per_mtok,
+                [key]: Number.isFinite(value) ? value : 0,
+              },
+            }
+          : rule,
+      ),
+    );
+  };
+
+  const updateWindow = (index: number, raw: string) => {
+    const value = raw.trim() === "" ? null : Number(raw);
+    onChange(
+      rules.map((rule, i) =>
+        i === index
+          ? {
+              ...rule,
+              context_window:
+                value == null || !Number.isFinite(value) ? null : Math.max(0, Math.round(value)),
+            }
+          : rule,
+      ),
+    );
+  };
+  const rateLabel = (
+    rule: UsagePricingRule,
+    key: keyof UsagePricingRule["rates_usd_per_mtok"],
+  ) => {
+    const labels: Record<keyof UsagePricingRule["rates_usd_per_mtok"], string> = {
+      input: t("usage.input"),
+      output: t("usage.output"),
+      cache_read: t("usage.cacheRead"),
+      cache_write: t("usage.cacheWrite"),
+    };
+    return `${rule.label} ${labels[key]} (${pricing.unit})`;
+  };
+  const contextLabel = (rule: UsagePricingRule) => `${rule.label} ${t("usage.ctx")}`;
+
+  return (
+    <section className="flex flex-col gap-2 rounded-lg border border-border-subtle bg-surface-secondary p-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h2 className="font-caption text-xs uppercase tracking-wide text-foreground-tertiary">
+            {t("usage.pricingTitle")}
+          </h2>
+          <p className="mt-1 font-caption text-[11px] text-foreground-tertiary">
+            {t("usage.pricingMeta", {
+              unit: pricing.unit,
+              source:
+                pricing.source === "user"
+                  ? t("usage.pricingUser")
+                  : t("usage.pricingDefault"),
+              path: pricing.path,
+            })}
+          </p>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <button
+            type="button"
+            onClick={onReset}
+            disabled={saving}
+            className="inline-flex items-center gap-1.5 rounded border border-border-subtle px-2 py-1 font-caption text-xs text-foreground-secondary hover:bg-surface-tertiary disabled:opacity-50"
+          >
+            <RotateCcw className="size-3.5" />
+            {t("usage.pricingReset")}
+          </button>
+          <button
+            type="button"
+            onClick={onSave}
+            disabled={saving || !dirty}
+            className="inline-flex items-center gap-1.5 rounded border border-border-subtle bg-surface-primary px-2 py-1 font-caption text-xs text-foreground-primary hover:bg-surface-tertiary disabled:opacity-50"
+          >
+            <Save className="size-3.5" />
+            {saving ? t("common.saving", "保存中…") : t("common.save", "保存")}
+          </button>
+        </div>
+      </div>
+      {error && (
+        <div className="rounded border border-border-subtle bg-surface-tertiary px-3 py-2 font-caption text-xs text-status-danger">
+          {error}
+        </div>
+      )}
+      <div className="overflow-x-auto">
+        <table className="min-w-[760px] w-full border-collapse font-mono text-[12px]">
+          <thead>
+            <tr className="border-b border-border-subtle text-foreground-tertiary">
+              <th className="px-2 py-2 text-left font-caption text-[11px] uppercase">
+                {t("usage.pricingRule")}
+              </th>
+              <th className="px-2 py-2 text-left font-caption text-[11px] uppercase">
+                {t("usage.pricingMatchers")}
+              </th>
+              <th className="px-2 py-2 text-right font-caption text-[11px] uppercase">
+                {t("usage.input")}
+              </th>
+              <th className="px-2 py-2 text-right font-caption text-[11px] uppercase">
+                {t("usage.output")}
+              </th>
+              <th className="px-2 py-2 text-right font-caption text-[11px] uppercase">
+                {t("usage.cacheRead")}
+              </th>
+              <th className="px-2 py-2 text-right font-caption text-[11px] uppercase">
+                {t("usage.cacheWrite")}
+              </th>
+              <th className="px-2 py-2 text-right font-caption text-[11px] uppercase">
+                {t("usage.ctx")}
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {rules.map((rule, index) => (
+              <tr key={rule.id} className="border-b border-border-subtle last:border-0">
+                <td className="px-2 py-2 align-top">
+                  <div className="flex min-w-0 flex-col">
+                    <span className="truncate text-foreground-primary">{rule.label}</span>
+                    <span className="truncate text-[10px] text-foreground-tertiary">
+                      {rule.provider}
+                    </span>
+                  </div>
+                </td>
+                <td className="max-w-[220px] px-2 py-2 align-top text-[11px] text-foreground-tertiary">
+                  {rule.matchers.join(", ")}
+                </td>
+                {(["input", "output", "cache_read", "cache_write"] as const).map((key) => (
+                  <td key={key} className="px-2 py-2 align-top">
+                    <input
+                      name={`pricing-${rule.id}-${key}`}
+                      aria-label={rateLabel(rule, key)}
+                      title={rateLabel(rule, key)}
+                      type="number"
+                      min="0"
+                      step="0.001"
+                      value={fmtRate(rule.rates_usd_per_mtok[key])}
+                      onChange={(e) => updateRate(index, key, e.target.value)}
+                      className="h-8 w-20 rounded border border-border-subtle bg-surface-primary px-2 text-right text-foreground-primary"
+                    />
+                  </td>
+                ))}
+                <td className="px-2 py-2 align-top">
+                  <input
+                    name={`pricing-${rule.id}-context-window`}
+                    aria-label={contextLabel(rule)}
+                    title={contextLabel(rule)}
+                    type="number"
+                    min="0"
+                    step="1000"
+                    value={rule.context_window ?? ""}
+                    onChange={(e) => updateWindow(index, e.target.value)}
+                    className="h-8 w-24 rounded border border-border-subtle bg-surface-primary px-2 text-right text-foreground-primary"
+                  />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+function AgentUsageCell({
+  row,
+  workspaceSlug,
+}: {
+  row: UsageAgentRow;
+  workspaceSlug: string | null;
+}) {
+  const label = row.role || row.agent_id.slice(0, 12);
+  const body = (
+    <span className="flex min-w-0 flex-col">
+      <span className="truncate font-mono text-foreground-primary">{label}</span>
+      <span className="truncate font-mono text-[10px] text-foreground-tertiary">
+        {row.agent_id.slice(0, 12)}
+      </span>
+    </span>
+  );
+  if (!workspaceSlug) return body;
+  return (
+    <Link
+      to={`/chat/${workspaceSlug}?agent=${encodeURIComponent(row.agent_id)}`}
+      className="inline-flex min-w-0 max-w-full hover:underline"
+    >
+      {body}
+    </Link>
+  );
+}
+
+function UsageTable({
+  cols,
+  rows,
+}: {
+  cols: string[];
+  rows: UsageTableRow[];
+}) {
   return (
     <div className="overflow-hidden rounded-lg border border-border-subtle">
       <table className="w-full border-collapse font-mono text-[12px]">
@@ -278,9 +578,9 @@ function UsageTable({ cols, rows }: { cols: string[]; rows: string[][] }) {
           </tr>
         </thead>
         <tbody>
-          {rows.map((r, ri) => (
-            <tr key={ri} className="border-t border-border-subtle">
-              {r.map((cell, ci) => (
+          {rows.map((r) => (
+            <tr key={r.key} className="border-t border-border-subtle">
+              {r.cells.map((cell, ci) => (
                 <td
                   key={ci}
                   className={cn(

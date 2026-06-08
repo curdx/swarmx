@@ -407,7 +407,11 @@ impl TailState {
                 );
                 emit_activity(swarm, agent_id, "running", label, seq, None, at);
             }
-            ParsedTool::End { tool_id, ok, result } => {
+            ParsedTool::End {
+                tool_id,
+                ok,
+                result,
+            } => {
                 // A result for a tool we never saw start (we attached
                 // mid-session) is ignored — no running event to pair with.
                 if let Some(p) = self.pending.remove(&tool_id) {
@@ -508,7 +512,9 @@ fn parse_claude(v: &Value) -> Vec<ParsedTool> {
                         .get("is_error")
                         .and_then(|b| b.as_bool())
                         .unwrap_or(false);
-                    let result = claude_result_text(block).as_deref().and_then(result_summary);
+                    let result = claude_result_text(block)
+                        .as_deref()
+                        .and_then(result_summary);
                     out.push(ParsedTool::End {
                         tool_id: id.to_string(),
                         ok: !is_err,
@@ -560,7 +566,10 @@ fn parse_codex(v: &Value) -> Vec<ParsedTool> {
                     .get("output")
                     .and_then(|o| match o {
                         Value::String(s) => Some(s.clone()),
-                        other => other.get("content").and_then(|c| c.as_str()).map(str::to_string),
+                        other => other
+                            .get("content")
+                            .and_then(|c| c.as_str())
+                            .map(str::to_string),
                     })
                     .as_deref()
                     .and_then(result_summary);
@@ -609,7 +618,10 @@ fn parse_usage(flavor: Flavor, v: &Value) -> Option<UsageDelta> {
                 return None;
             }
             Some(UsageDelta {
-                model: msg.get("model").and_then(|m| m.as_str()).map(str::to_string),
+                model: msg
+                    .get("model")
+                    .and_then(|m| m.as_str())
+                    .map(str::to_string),
                 input,
                 output,
                 cache_read,
@@ -634,7 +646,10 @@ fn parse_usage(flavor: Flavor, v: &Value) -> Option<UsageDelta> {
                 return None;
             }
             Some(UsageDelta {
-                model: info.get("model").and_then(|m| m.as_str()).map(str::to_string),
+                model: info
+                    .get("model")
+                    .and_then(|m| m.as_str())
+                    .map(str::to_string),
                 input,
                 output,
                 cache_read,
@@ -725,7 +740,11 @@ fn claude_result_text(block: &Value) -> Option<String> {
 /// `12 lines: On branch main`. Generic — claude/codex don't expose exit codes
 /// reliably here — but a line count + first-line snippet beats a bare `ok`.
 fn result_summary(text: &str) -> Option<String> {
-    let nonempty: Vec<&str> = text.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+    let nonempty: Vec<&str> = text
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
     let first = *nonempty.first()?;
     let snippet = shorten(&collapse_ws(first));
     if nonempty.len() > 1 {
@@ -772,7 +791,11 @@ mod tests {
         let ok_line = r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_1","content":[{"type":"text","text":"done"}],"is_error":false}]}}"#;
         let v: Value = serde_json::from_str(ok_line).unwrap();
         match one(&parse_claude(&v)) {
-            ParsedTool::End { tool_id, ok, result } => {
+            ParsedTool::End {
+                tool_id,
+                ok,
+                result,
+            } => {
                 assert_eq!(tool_id, "toolu_1");
                 assert!(ok);
                 assert_eq!(result.as_deref(), Some("done"));
@@ -810,7 +833,10 @@ mod tests {
             r#"{"type":"summary"}"#,
         ] {
             let v: Value = serde_json::from_str(line).unwrap();
-            assert!(parse_claude(&v).is_empty(), "line should yield nothing: {line}");
+            assert!(
+                parse_claude(&v).is_empty(),
+                "line should yield nothing: {line}"
+            );
         }
     }
 
@@ -831,7 +857,11 @@ mod tests {
         let out = r#"{"type":"response_item","payload":{"type":"function_call_output","call_id":"call_1","output":"on branch main"}}"#;
         let v: Value = serde_json::from_str(out).unwrap();
         match one(&parse_codex(&v)) {
-            ParsedTool::End { tool_id, ok, result } => {
+            ParsedTool::End {
+                tool_id,
+                ok,
+                result,
+            } => {
                 assert_eq!(tool_id, "call_1");
                 assert!(ok);
                 assert_eq!(result.as_deref(), Some("on branch main"));
@@ -848,7 +878,10 @@ mod tests {
             r#"{"type":"response_item","payload":{"type":"message","role":"assistant"}}"#,
         ] {
             let v: Value = serde_json::from_str(line).unwrap();
-            assert!(parse_codex(&v).is_empty(), "line should yield nothing: {line}");
+            assert!(
+                parse_codex(&v).is_empty(),
+                "line should yield nothing: {line}"
+            );
         }
     }
 
@@ -897,7 +930,7 @@ mod tests {
         let label = summarize("Bash", &v);
         assert!(label.starts_with("Bash "));
         assert!(label.chars().count() <= "Bash ".len() + 49); // 48 + ellipsis
-        // no embedded newlines/double spaces
+                                                              // no embedded newlines/double spaces
         let v = serde_json::json!({ "command": "git\n  status" });
         assert_eq!(summarize("Bash", &v), "Bash git status");
     }
@@ -930,9 +963,18 @@ mod tests {
     #[test]
     fn non_usage_lines_yield_none() {
         for (flavor, line) in [
-            (Flavor::Claude, r#"{"type":"user","message":{"content":[]}}"#),
-            (Flavor::Claude, r#"{"type":"assistant","message":{"usage":{"input_tokens":0,"output_tokens":0}}}"#),
-            (Flavor::Codex, r#"{"type":"response_item","payload":{"type":"function_call"}}"#),
+            (
+                Flavor::Claude,
+                r#"{"type":"user","message":{"content":[]}}"#,
+            ),
+            (
+                Flavor::Claude,
+                r#"{"type":"assistant","message":{"usage":{"input_tokens":0,"output_tokens":0}}}"#,
+            ),
+            (
+                Flavor::Codex,
+                r#"{"type":"response_item","payload":{"type":"function_call"}}"#,
+            ),
         ] {
             let v: Value = serde_json::from_str(line).unwrap();
             assert!(parse_usage(flavor, &v).is_none(), "should be None: {line}");

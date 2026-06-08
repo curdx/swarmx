@@ -12,6 +12,7 @@
  */
 
 import { useEffect, useState } from "react";
+import { useLocation } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import {
   ChevronLeft,
@@ -81,6 +82,7 @@ if (typeof window !== "undefined") {
 
 export function OnboardingTour() {
   const { t } = useTranslation();
+  const location = useLocation();
   const [open, setOpen] = useState(false);
   const [step, setStep] = useState(0);
 
@@ -88,9 +90,10 @@ export function OnboardingTour() {
   // 再被 modal 盖一层，否则连背景都没渲染就弹 modal 体验突兀。
   useEffect(() => {
     if (hasSeen()) return;
+    if (new URLSearchParams(location.search).has("agent")) return;
     const tm = window.setTimeout(() => setOpen(true), 400);
     return () => window.clearTimeout(tm);
-  }, []);
+  }, [location.search]);
 
   const finish = () => {
     markSeen();
@@ -198,4 +201,3 @@ export function OnboardingTour() {
     </Dialog>
   );
 }
-

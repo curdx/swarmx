@@ -56,10 +56,7 @@ pub async fn list_recordings(
 /// `application/x-asciicast` (de facto for asciicast files); clients that
 /// don't know it can treat the body as JSON-lines since each line is valid
 /// JSON.
-pub async fn get_recording(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-) -> Response {
+pub async fn get_recording(State(state): State<AppState>, Path(id): Path<String>) -> Response {
     let row = match state.store.get_recording(id.clone()).await {
         Ok(Some(r)) => r,
         Ok(None) => {

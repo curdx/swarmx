@@ -68,6 +68,28 @@ pub enum Transport {
     Acp,
 }
 
+/// Which account / quota surface a CLI plugin consumes by default. This is a
+/// guardrail, not a billing meter: flockmux still cannot see subscription spend
+/// from PTY CLIs. The value exists so a future structured transport cannot
+/// silently move a user from their interactive subscription into SDK/API
+/// credits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum BillingSurface {
+    /// Unknown or unmanaged surface. Safe default for third-party plugins that
+    /// have not declared their billing behavior yet.
+    #[default]
+    Unknown,
+    /// Interactive subscription login, e.g. launching `claude` in a PTY.
+    InteractiveSubscription,
+    /// CLI account surface, e.g. Codex CLI using the user's logged-in CLI state.
+    CliAccount,
+    /// Non-interactive agent SDK / print-mode credit bucket.
+    AgentSdkCredits,
+    /// Direct provider API key billing.
+    ApiKey,
+}
+
 /// Kind of a [`ReadyStep`]. `ready_plan` is a **sequential** golutra-style DSL:
 /// the host advances through the steps in declared order as PTY output arrives.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -140,6 +162,19 @@ pub struct CliPlugin {
     /// is "HOME".
     #[serde(default = "default_home_env")]
     pub home_env: String,
+    /// Billing/quota surface this plugin is expected to use by default.
+    #[serde(default)]
+    pub billing_surface: BillingSurface,
+    /// If true, spawning this plugin requires an explicit opt-in env var when
+    /// its billing surface is not the normal interactive/CLI-account path.
+    #[serde(default)]
+    pub requires_explicit_billing_opt_in: bool,
+    /// Env var prefixes to strip from the child process even if the provider
+    /// allowlist would otherwise forward them. Claude blocks `ANTHROPIC_` by
+    /// default so an ambient API key cannot switch it away from subscription
+    /// billing.
+    #[serde(default)]
+    pub blocked_env_prefixes: Vec<String>,
     /// If true, the host patches the CLI's per-workspace trust state before
     /// spawn so the CLI doesn't prompt "Do you trust this folder?" — fine
     /// for flockmux because workspaces always live under `~/.flockmux/`
@@ -249,10 +284,20 @@ pub struct CliPlugin {
     /// [`Transport`].
     #[serde(default)]
     pub transport: Transport,
+    /// Optional argv tail for a future structured JSON-RPC session driver.
+    /// Codex declares `["app-server"]`; Claude intentionally leaves this empty
+    /// so a manifest edit cannot route it through SDK/ACP adapter billing by
+    /// accident. This is metadata until `spawn.rs` grows the opt-in driver.
+    #[serde(default)]
+    pub structured_args: Vec<String>,
 }
 
-fn default_home_env() -> String { "HOME".into() }
-fn default_stop_hook_timeout() -> i64 { 10_000 }
+fn default_home_env() -> String {
+    "HOME".into()
+}
+fn default_stop_hook_timeout() -> i64 {
+    10_000
+}
 
 #[derive(Debug, Clone, Default)]
 pub struct PluginRegistry {
@@ -364,6 +409,20 @@ impl PluginRegistry {
     }
 }
 
+/// Candidate argv for a future structured JSON-RPC driver. This is deliberately
+/// separate from `default_args`: it is metadata for an opt-in driver and never
+/// changes the PTY spawn path by itself.
+#[cfg(test)]
+pub fn structured_command(plugin: &CliPlugin) -> Option<Vec<String>> {
+    if plugin.structured_args.is_empty() {
+        return None;
+    }
+    let mut argv = Vec::with_capacity(1 + plugin.structured_args.len());
+    argv.push(plugin.binary.clone());
+    argv.extend(plugin.structured_args.iter().cloned());
+    Some(argv)
+}
+
 /// Locate the `cli-plugins/` directory: first the path from env
 /// `FLOCKMUX_CLI_PLUGINS_DIR`, otherwise `<workspace>/cli-plugins` relative
 /// to the binary's manifest dir (during dev) or CWD.
@@ -433,23 +492,71 @@ mod tests {
 
         // Stop-hook timeout is externalized to the manifest in each CLI's
         // native unit (claude = ms, codex = s), not a Rust constant.
-        assert_eq!(claude.stop_hook_timeout, 10_000, "claude stop-hook timeout in ms");
-        assert_eq!(codex.stop_hook_timeout, 10, "codex stop-hook timeout in seconds");
+        assert_eq!(
+            claude.stop_hook_timeout, 10_000,
+            "claude stop-hook timeout in ms"
+        );
+        assert_eq!(
+            codex.stop_hook_timeout, 10,
+            "codex stop-hook timeout in seconds"
+        );
 
         // Frontend keystroke-settle delay is data-driven from the manifest
         // (surfaced via CliPluginInfo), not a startsWith('codex-') branch.
         assert_eq!(claude.input_settle_ms, 0, "claude needs no settle delay");
-        assert_eq!(codex.input_settle_ms, 300, "codex needs a ~300ms settle delay");
+        assert_eq!(
+            codex.input_settle_ms, 300,
+            "codex needs a ~300ms settle delay"
+        );
 
         // L5c: both ship the model-overlay template so a spawn-time model is
         // passed via the manifest, not a hardcoded Rust flag.
-        assert_eq!(claude.model_args, vec!["--model", "{model}"], "claude model_args");
-        assert_eq!(codex.model_args, vec!["--model", "{model}"], "codex model_args");
+        assert_eq!(
+            claude.model_args,
+            vec!["--model", "{model}"],
+            "claude model_args"
+        );
+        assert_eq!(
+            codex.model_args,
+            vec!["--model", "{model}"],
+            "codex model_args"
+        );
+
+        // Billing guardrails: Claude remains on interactive subscription PTY,
+        // with ambient ANTHROPIC_* API credentials blocked so it cannot
+        // silently switch to API billing.
+        assert_eq!(
+            claude.billing_surface,
+            BillingSurface::InteractiveSubscription,
+            "claude must stay on interactive subscription billing by default",
+        );
+        assert!(
+            claude
+                .blocked_env_prefixes
+                .iter()
+                .any(|p| p == "ANTHROPIC_"),
+            "claude must block ambient ANTHROPIC_* env by default",
+        );
+        assert_eq!(codex.billing_surface, BillingSurface::CliAccount);
 
         // L4: both default to the PTY transport (the only wired one); neither
         // opts into the not-yet-wired ACP path.
         assert_eq!(claude.transport, Transport::Pty, "claude defaults to pty");
         assert_eq!(codex.transport, Transport::Pty, "codex defaults to pty");
+        assert!(
+            claude.structured_args.is_empty(),
+            "claude must not declare structured args by default",
+        );
+        assert_eq!(
+            codex.structured_args,
+            vec!["app-server"],
+            "codex declares the app-server pilot entrypoint",
+        );
+        assert_eq!(
+            structured_command(&codex),
+            Some(vec!["codex".into(), "app-server".into()]),
+        );
+        assert_eq!(structured_command(&claude), None);
     }
 
     /// A new field with a kebab-case typo must FAIL parse (→ warn-skip at load),
@@ -522,10 +629,8 @@ binary="x"
         // A malformed user file must not nuke the rest.
         std::fs::write(user.path().join("broken.toml"), "id = \nnot valid toml").unwrap();
 
-        let reg = PluginRegistry::load_layered(&[
-            base.path().to_path_buf(),
-            user.path().to_path_buf(),
-        ]);
+        let reg =
+            PluginRegistry::load_layered(&[base.path().to_path_buf(), user.path().to_path_buf()]);
 
         // claude came from the user layer (override won).
         let claude = reg.get("claude").expect("claude present");
@@ -555,6 +660,9 @@ binary="x"
         assert_eq!(reg.list().len(), 1, "absent override layer is a no-op");
 
         let empty = PluginRegistry::load_layered(&[missing]);
-        assert!(empty.list().is_empty(), "all-absent layers → empty, not error");
+        assert!(
+            empty.list().is_empty(),
+            "all-absent layers → empty, not error"
+        );
     }
 }

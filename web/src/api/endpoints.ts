@@ -60,6 +60,21 @@ export const apiRoutes = {
   usage: {
     summary: (workspaceId?: string) =>
       endpoint("usage.summary", "GET", `/api/usage${queryString({ workspace_id: workspaceId })}`),
+    pricing: () => endpoint("usage.pricing", "GET", "/api/usage/pricing"),
+    updatePricing: () => endpoint("usage.updatePricing", "PUT", "/api/usage/pricing"),
+    resetPricing: () => endpoint("usage.resetPricing", "DELETE", "/api/usage/pricing"),
+  },
+  goals: {
+    list: (workspaceId?: string, threadId?: string | null) =>
+      endpoint("goals.list", "GET", `/api/goals${queryString({
+        workspace_id: workspaceId,
+        thread_id: threadId === null ? "null" : threadId,
+      })}`),
+    create: () => endpoint("goals.create", "POST", "/api/goals"),
+    updateStatus: (id: string) => endpoint("goals.updateStatus", "PATCH", `/api/goals/${encodeURIComponent(id)}/status`),
+    evidence: (id: string, limit?: number) =>
+      endpoint("goals.evidence", "GET", `/api/goals/${encodeURIComponent(id)}/evidence${queryString({ limit })}`),
+    addEvidence: (id: string) => endpoint("goals.addEvidence", "POST", `/api/goals/${encodeURIComponent(id)}/evidence`),
   },
   tasks: {
     list: (workspaceId?: string) =>

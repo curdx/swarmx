@@ -14,6 +14,12 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/plugins", get(super::rest::list_plugins))
         .route("/api/usage", get(super::usage::usage_summary))
+        .route(
+            "/api/usage/pricing",
+            get(super::usage::usage_pricing_get)
+                .put(super::usage::usage_pricing_put)
+                .delete(super::usage::usage_pricing_reset),
+        )
         .route("/api/tasks", get(super::tasks::list_tasks))
         .route("/api/tasks/:id/status", post(super::tasks::set_task_status))
         .route("/api/files/list", get(super::files::list_dir))
@@ -117,6 +123,18 @@ pub fn router() -> Router<AppState> {
         )
         .route("/api/spells", get(super::rest::list_spells))
         .route("/api/spell/run", post(super::rest::run_spell))
+        .route(
+            "/api/goals",
+            get(super::goals::list_goals).post(super::goals::create_goal),
+        )
+        .route(
+            "/api/goals/:id/status",
+            patch(super::goals::update_goal_status),
+        )
+        .route(
+            "/api/goals/:id/evidence",
+            get(super::goals::list_goal_evidence).post(super::goals::add_goal_evidence),
+        )
         .route("/api/prompt/optimize", post(super::rest::optimize_prompt))
         .route(
             "/api/blackboard/compact",

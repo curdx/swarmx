@@ -85,8 +85,17 @@ export function WorkspaceToolbar({
     activeThread.state === "ready";
 
   return (
-    <nav className="flex h-10 shrink-0 items-center gap-1 border-b border-border-subtle px-3">
-      {tabs.map((tab) => {
+    <div className="shrink-0 border-b border-border-subtle">
+      <div className="flex min-h-8 items-center gap-2 border-b border-border-subtle/70 px-3 py-1.5 lg:hidden">
+        <span className="min-w-0 flex-1 truncate font-heading text-xs font-semibold text-foreground-primary">
+          {workspace.name}
+        </span>
+        <span className="max-w-[45%] truncate rounded bg-surface-tertiary px-1.5 py-0.5 font-mono text-[10px] text-foreground-tertiary">
+          {activeThread?.name || activeThread?.slug || threadSlug}
+        </span>
+      </div>
+      <nav className="flex h-10 items-center gap-1 px-3">
+        {tabs.map((tab) => {
         const Icon = tab.icon;
         return (
           <NavLink
@@ -112,12 +121,12 @@ export function WorkspaceToolbar({
             <span className="hidden whitespace-nowrap lg:inline">{t(tab.labelKey)}</span>
           </NavLink>
         );
-      })}
+        })}
 
-      <span className="flex-1" />
+        <span className="flex-1" />
 
       {/* 合并到主线 — 只在「非 main + 已隔离 worktree 方向」出现。 */}
-      {canMerge && activeThread && (
+        {canMerge && activeThread && (
         <>
           <button
             type="button"
@@ -139,10 +148,10 @@ export function WorkspaceToolbar({
             onCleanup={onCleanupThread}
           />
         </>
-      )}
+        )}
 
-      {/* workspace actions — 全部 shrink-0 + 小尺寸，跟 tab 行高保持一致 */}
-      {agentCount > 0 && (
+        {/* workspace actions — 全部 shrink-0 + 小尺寸，跟 tab 行高保持一致 */}
+        {agentCount > 0 && (
         <Tooltip>
           <TooltipTrigger asChild>
             <span
@@ -160,9 +169,9 @@ export function WorkspaceToolbar({
             {t("chat.memberCount", { count: agentCount })}
           </TooltipContent>
         </Tooltip>
-      )}
+        )}
 
-      {totalUnread > 0 && (
+        {totalUnread > 0 && (
         <button
           type="button"
           onClick={onJumpUnread}
@@ -173,8 +182,9 @@ export function WorkspaceToolbar({
             {t("chat.unread", { count: totalUnread })}
           </Badge>
         </button>
-      )}
-    </nav>
+        )}
+      </nav>
+    </div>
   );
 }
 

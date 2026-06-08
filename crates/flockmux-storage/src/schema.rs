@@ -18,18 +18,16 @@ const MIGRATION_0007: &str = include_str!("../migrations/0007_workspace_root_par
 const MIGRATION_0008: &str = include_str!("../migrations/0008_blackboard_path_id.sql");
 const MIGRATION_0009: &str = include_str!("../migrations/0009_threads.sql");
 const MIGRATION_0010: &str = include_str!("../migrations/0010_message_thread_id.sql");
-const MIGRATION_0011: &str =
-    include_str!("../migrations/0011_worker_role_typed_handoff.sql");
+const MIGRATION_0011: &str = include_str!("../migrations/0011_worker_role_typed_handoff.sql");
 const MIGRATION_0012: &str = include_str!("../migrations/0012_message_meta.sql");
-const MIGRATION_0013: &str =
-    include_str!("../migrations/0013_agent_last_activity.sql");
-const MIGRATION_0014: &str =
-    include_str!("../migrations/0014_thread_model_tier.sql");
-const MIGRATION_0015: &str =
-    include_str!("../migrations/0015_thread_reasoning_effort.sql");
+const MIGRATION_0013: &str = include_str!("../migrations/0013_agent_last_activity.sql");
+const MIGRATION_0014: &str = include_str!("../migrations/0014_thread_model_tier.sql");
+const MIGRATION_0015: &str = include_str!("../migrations/0015_thread_reasoning_effort.sql");
 const MIGRATION_0016: &str = include_str!("../migrations/0016_agent_usage.sql");
 const MIGRATION_0017: &str = include_str!("../migrations/0017_worker_task_status.sql");
 const MIGRATION_0018: &str = include_str!("../migrations/0018_cron_jobs.sql");
+const MIGRATION_0019: &str = include_str!("../migrations/0019_goals.sql");
+const MIGRATION_0020: &str = include_str!("../migrations/0020_goal_evidence.sql");
 
 pub(crate) fn run_migrations(conn: &mut Connection) -> Result<()> {
     let current = current_version(conn).unwrap_or(0);
@@ -88,6 +86,12 @@ pub(crate) fn run_migrations(conn: &mut Connection) -> Result<()> {
     }
     if current < 18 {
         apply(conn, 18, MIGRATION_0018).context("apply migration 0018")?;
+    }
+    if current < 19 {
+        apply(conn, 19, MIGRATION_0019).context("apply migration 0019")?;
+    }
+    if current < 20 {
+        apply(conn, 20, MIGRATION_0020).context("apply migration 0020")?;
     }
     Ok(())
 }

@@ -22,7 +22,7 @@
  * project.summary.<slug> 已存在」→ 改走 auto-dispatch 而非普通 sendMessage。
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   Check,
@@ -113,6 +113,12 @@ interface DirEntry {
   parent: number;
 }
 
+type PathValidationState =
+  | { state: "idle" }
+  | { state: "checking" }
+  | { state: "ok" }
+  | { state: "error"; message: string };
+
 /** Last path segment, for compact display in the parent-project dropdown. */
 function baseName(p: string): string {
   return p.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || p;
@@ -132,6 +138,7 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
   const [spells, setSpells] = useState<SpellInfo[]>([]);
   const [scan, setScan] = useState<ScanState | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [pathChecks, setPathChecks] = useState<Record<number, PathValidationState>>({});
 
   // useSwarmFeed 必须无条件调用 — 但只在 scan 进行中才处理事件。
   // ref 让 onEvent 闭包永远拿到最新的 scan 引用，不重开 WS。
@@ -196,8 +203,71 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
     [dirs],
   );
   const mainPath = (dirs[0]?.path ?? "").trim();
-  const canSubmit = name.trim().length > 0 && mainPath.length > 0 && !scan;
+  const invalidPath = cleanDirs.some((d) => pathChecks[d.id]?.state === "error");
+  const checkingPath = cleanDirs.some((d) => pathChecks[d.id]?.state === "checking");
+  const canSubmit =
+    name.trim().length > 0 && mainPath.length > 0 && !scan && !invalidPath && !checkingPath;
   const hasInitSpell = spells.some((s) => s.name === INIT_SPELL);
+
+  const validatePath = useCallback(
+    async (path: string): Promise<PathValidationState> => {
+      const p = path.trim();
+      if (!p) return { state: "idle" };
+      if (!/^(\/|[A-Za-z]:[\\/])/.test(p)) {
+        return {
+          state: "error",
+          message: t(
+            "wizard.errAbsolutePath",
+            "Please enter an absolute path (starting with /), e.g. /Users/you/code/project",
+          ),
+        };
+      }
+      try {
+        await api.filesList(p, undefined, true);
+        return { state: "ok" };
+      } catch (e) {
+        const raw = e instanceof ApiError ? e.detail : (e as Error).message;
+        return {
+          state: "error",
+          message: /directory does not exist|not found|no such/i.test(raw)
+            ? t(
+                "wizard.errDirMissing",
+                "That directory doesn't exist — check the path is correct and points to an existing absolute path.",
+              )
+            : raw,
+        };
+      }
+    },
+    [t],
+  );
+
+  useEffect(() => {
+    if (!open || scan) return;
+    const timers = cleanDirs.map((d) =>
+      window.setTimeout(() => {
+        setPathChecks((prev) => ({ ...prev, [d.id]: { state: "checking" } }));
+        validatePath(d.path).then((res) => {
+          setPathChecks((prev) => {
+            const current = dirs.find((x) => x.id === d.id)?.path.trim() ?? "";
+            if (current !== d.path) return prev;
+            return { ...prev, [d.id]: res };
+          });
+        });
+      }, 350),
+    );
+    setPathChecks((prev) => {
+      const keep = new Set(cleanDirs.map((d) => d.id));
+      const next: Record<number, PathValidationState> = {};
+      for (const d of dirs) {
+        if (!d.path.trim()) next[d.id] = { state: "idle" };
+        else if (keep.has(d.id) && prev[d.id]) next[d.id] = prev[d.id];
+      }
+      return next;
+    });
+    return () => {
+      for (const timer of timers) window.clearTimeout(timer);
+    };
+  }, [cleanDirs, dirs, open, scan, validatePath]);
 
   const submit = async () => {
     if (!canSubmit) return;
@@ -212,6 +282,16 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
           "Please enter an absolute path (starting with /), e.g. /Users/you/code/project",
         ),
       );
+      return;
+    }
+    const checked = await Promise.all(
+      cleanDirs.map(async (d) => [d.id, await validatePath(d.path)] as const),
+    );
+    const nextChecks = Object.fromEntries(checked) as Record<number, PathValidationState>;
+    setPathChecks(nextChecks);
+    const firstInvalid = checked.find(([, res]) => res.state === "error");
+    if (firstInvalid && firstInvalid[1].state === "error") {
+      setError(firstInvalid[1].message);
       return;
     }
     const startedAt = Date.now();
@@ -346,7 +426,7 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
             startedAt={scan.startedAt}
           />
         ) : (
-          <div className="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto p-6">
+          <div className="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto p-6 pb-24">
             {error && (
               <div className="rounded-md border border-state-danger/40 bg-status-danger-soft px-3 py-2 text-xs text-state-danger">
                 {error}
@@ -363,6 +443,7 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
                   </Label>
                   <Input
                     id="wizard-name"
+                    name="workspace-name"
                     autoFocus
                     value={name}
                     onChange={(e) => setName(e.target.value)}
@@ -412,6 +493,7 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
                 {dirs.map((d, i) => {
                   const isPrimary = i === 0;
                   const isProject = d.role === "project";
+                  const pathCheck = pathChecks[d.id] ?? { state: "idle" as const };
                   // Projects this row's source mount can hang under: the
                   // primary (value 0) + every other peer-project row.
                   const parentOptions = dirs.filter(
@@ -448,6 +530,7 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
                       </span>
                       <div className="flex min-w-0 flex-1 flex-col gap-1.5">
                         <Input
+                          name={`workspace-root-${d.id}-path`}
                           value={d.path}
                           onChange={(e) =>
                             setDirs((prev) =>
@@ -465,10 +548,26 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
                           }
                           className="h-8 border-none bg-transparent px-0 font-mono text-sm shadow-none focus-visible:ring-0"
                         />
+                        {pathCheck.state === "checking" && (
+                          <span className="font-caption text-[10px] text-foreground-tertiary">
+                            {t("wizard.pathChecking", "正在检查目录…")}
+                          </span>
+                        )}
+                        {pathCheck.state === "ok" && (
+                          <span className="font-caption text-[10px] text-status-success">
+                            {t("wizard.pathOk", "目录可访问")}
+                          </span>
+                        )}
+                        {pathCheck.state === "error" && (
+                          <span className="font-caption text-[10px] text-state-danger">
+                            {pathCheck.message}
+                          </span>
+                        )}
                         {/* role + (for a source mount) parent-project picker */}
                         {!isPrimary && (
                           <div className="flex flex-wrap items-center gap-2">
                             <select
+                              name={`workspace-root-${d.id}-role`}
                               value={d.role}
                               onChange={(e) =>
                                 setDirs((prev) =>
@@ -496,6 +595,7 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
                                   {t("chat.mountUnder")}
                                 </span>
                                 <select
+                                  name={`workspace-root-${d.id}-parent`}
                                   value={String(d.parent)}
                                   onChange={(e) =>
                                     setDirs((prev) =>
@@ -553,6 +653,11 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
                             ? t("wizard.pickFolder")
                             : t("wizard.pickFolderUnavailable")
                         }
+                        aria-label={
+                          IS_TAURI
+                            ? t("wizard.pickFolder")
+                            : t("wizard.pickFolderUnavailable")
+                        }
                         className="mt-0.5 h-8 shrink-0 gap-1.5 px-2.5 text-xs"
                       >
                         <FolderOpen className="size-3.5" />
@@ -566,6 +671,7 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
                         }
                         disabled={isPrimary}
                         title={t("wizard.removeDir")}
+                        aria-label={t("wizard.removeDir")}
                         className="mt-0.5 size-7 text-foreground-tertiary"
                       >
                         <Trash2 className="size-3.5" />
@@ -606,7 +712,7 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
             会把 footer 顶出 modal 边界 16px，配合 overflow-hidden 把
             border-t / rounded-b 都裁掉，看上去 footer 像"飘"在外面没
             分隔线。用普通 div + 我们自己的 border-t / bg / padding 即可。 */}
-        <div className="flex flex-row items-center gap-3 border-t border-border-subtle bg-surface-elevated px-6 py-4">
+        <div className="flex shrink-0 flex-row items-center gap-3 border-t border-border-subtle bg-surface-elevated px-6 py-4">
           <span className="font-caption text-[11px] text-foreground-tertiary">
             {scan ? t("wizard.scanningFootHint") : t("wizard.defaultInfo")}
           </span>

@@ -2,8 +2,8 @@
 //! `TempDir` so they parallelise safely.
 
 use flockmux_storage::{
-    ListMessagesOpts, MessageRecord, NewAgent, NewBlackboardOp, NewMessage, NewRecording, NewThread,
-    NewWorker, NewWorkspace, Store,
+    ListMessagesOpts, MessageRecord, NewAgent, NewBlackboardOp, NewGoal, NewGoalEvidence,
+    NewMessage, NewRecording, NewThread, NewWorker, NewWorkspace, Store,
 };
 use tempfile::TempDir;
 
@@ -16,6 +16,140 @@ async fn fresh_store() -> (TempDir, Store) {
 
 fn ts(base: i64) -> i64 {
     1_700_000_000_000 + base
+}
+
+// ── goals ─────────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn goals_roundtrip_and_status_update() {
+    let (_dir, store) = fresh_store().await;
+    let ws = store
+        .create_workspace(
+            NewWorkspace {
+                name: "proj".into(),
+                cwd: "/tmp/proj".into(),
+                accent: None,
+            },
+            ts(0),
+        )
+        .await
+        .unwrap();
+    let thread = store
+        .create_thread(
+            NewThread {
+                workspace_id: ws.id.clone(),
+                slug: "main".into(),
+                name: Some("main".into()),
+                isolation: "shared".into(),
+                branch: None,
+                cwd: ws.cwd.clone(),
+                state: "ready".into(),
+            },
+            ts(1),
+        )
+        .await
+        .unwrap();
+
+    store
+        .upsert_goal(NewGoal {
+            id: "g-main".into(),
+            workspace_id: ws.id.clone(),
+            thread_id: None,
+            objective: "Ship billing guardrails".into(),
+            success_criteria: "[\"Claude stays interactive\"]".into(),
+            status: "active".into(),
+            budget_tokens: Some(10_000),
+            created_at: ts(2),
+            updated_at: ts(2),
+            completed_at: None,
+        })
+        .await
+        .unwrap();
+    store
+        .upsert_goal(NewGoal {
+            id: "g-thread".into(),
+            workspace_id: ws.id.clone(),
+            thread_id: Some(thread.id.clone()),
+            objective: "Wire goals API".into(),
+            success_criteria: "[]".into(),
+            status: "active".into(),
+            budget_tokens: None,
+            created_at: ts(3),
+            updated_at: ts(3),
+            completed_at: None,
+        })
+        .await
+        .unwrap();
+
+    let all = store.list_goals(Some(ws.id.clone()), None).await.unwrap();
+    assert_eq!(all.len(), 2);
+    assert_eq!(all[0].id, "g-thread", "newest goal first");
+
+    let main = store
+        .list_goals(Some(ws.id.clone()), Some(None))
+        .await
+        .unwrap();
+    assert_eq!(main.len(), 1);
+    assert_eq!(main[0].id, "g-main");
+
+    let scoped = store
+        .list_goals(Some(ws.id.clone()), Some(Some(thread.id.clone())))
+        .await
+        .unwrap();
+    assert_eq!(scoped.len(), 1);
+    assert_eq!(scoped[0].id, "g-thread");
+
+    let changed = store
+        .update_goal_status("g-thread".into(), "complete".into(), ts(4), Some(ts(4)))
+        .await
+        .unwrap();
+    assert!(changed);
+    let scoped = store
+        .list_goals(Some(ws.id), Some(Some(thread.id)))
+        .await
+        .unwrap();
+    assert_eq!(scoped[0].status, "complete");
+    assert_eq!(scoped[0].completed_at, Some(ts(4)));
+
+    let missing = store
+        .update_goal_status("missing".into(), "blocked".into(), ts(5), None)
+        .await
+        .unwrap();
+    assert!(!missing);
+
+    store
+        .add_goal_evidence(NewGoalEvidence {
+            id: "ev-1".into(),
+            goal_id: "g-thread".into(),
+            kind: "test".into(),
+            summary: "cargo test passed".into(),
+            source_agent_id: Some("agent-1".into()),
+            blackboard_path: Some("ws/main/test.done".into()),
+            command: Some("cargo test".into()),
+            created_at: ts(6),
+        })
+        .await
+        .unwrap();
+    store
+        .add_goal_evidence(NewGoalEvidence {
+            id: "ev-2".into(),
+            goal_id: "g-thread".into(),
+            kind: "note".into(),
+            summary: "review complete".into(),
+            source_agent_id: None,
+            blackboard_path: None,
+            command: None,
+            created_at: ts(7),
+        })
+        .await
+        .unwrap();
+    let evidence = store
+        .list_goal_evidence("g-thread".into(), 10)
+        .await
+        .unwrap();
+    assert_eq!(evidence.len(), 2);
+    assert_eq!(evidence[0].id, "ev-2", "newest evidence first");
+    assert_eq!(evidence[1].command.as_deref(), Some("cargo test"));
 }
 
 // ── agents ────────────────────────────────────────────────────────────────
@@ -39,7 +173,8 @@ async fn agent_spawn_then_list() {
             spawned_at: ts(0),
             workspace_id: None,
             spell_run_id: None,
-            thread_id: None,        })
+            thread_id: None,
+        })
         .await
         .unwrap();
     let agents = store.list_agents().await.unwrap();
@@ -63,18 +198,13 @@ async fn agent_lifecycle_updates_idempotent() {
             spawned_at: ts(0),
             workspace_id: None,
             spell_run_id: None,
-            thread_id: None,        })
+            thread_id: None,
+        })
         .await
         .unwrap();
-    store
-        .record_shim_ready("a-2".into(), ts(10))
-        .await
-        .unwrap();
+    store.record_shim_ready("a-2".into(), ts(10)).await.unwrap();
     // Second call must be a no-op (idempotent — first non-NULL wins).
-    store
-        .record_shim_ready("a-2".into(), ts(99))
-        .await
-        .unwrap();
+    store.record_shim_ready("a-2".into(), ts(99)).await.unwrap();
     store
         .record_shim_exit("a-2".into(), 0, ts(20))
         .await
@@ -109,19 +239,32 @@ async fn touch_agent_activity_advances_monotonically() {
     assert_eq!(a.last_activity_at, None);
 
     // First tool event sets it.
-    store.touch_agent_activity("a-3".into(), ts(10)).await.unwrap();
+    store
+        .touch_agent_activity("a-3".into(), ts(10))
+        .await
+        .unwrap();
     let a = store.list_agents().await.unwrap().pop().unwrap();
     assert_eq!(a.last_activity_at, Some(ts(10)));
 
     // Forward progress advances it.
-    store.touch_agent_activity("a-3".into(), ts(25)).await.unwrap();
+    store
+        .touch_agent_activity("a-3".into(), ts(25))
+        .await
+        .unwrap();
     let a = store.list_agents().await.unwrap().pop().unwrap();
     assert_eq!(a.last_activity_at, Some(ts(25)));
 
     // A stale/out-of-order poll must NOT rewind the high-water mark.
-    store.touch_agent_activity("a-3".into(), ts(15)).await.unwrap();
+    store
+        .touch_agent_activity("a-3".into(), ts(15))
+        .await
+        .unwrap();
     let a = store.list_agents().await.unwrap().pop().unwrap();
-    assert_eq!(a.last_activity_at, Some(ts(25)), "monotonic — never rewinds");
+    assert_eq!(
+        a.last_activity_at,
+        Some(ts(25)),
+        "monotonic — never rewinds"
+    );
 }
 
 // ── messages ─────────────────────────────────────────────────────────────
@@ -137,7 +280,8 @@ async fn message_insert_list_filter() {
             body: "hello b".into(),
             sent_at: ts(1),
             in_reply_to: None,
-            meta: None,        })
+            meta: None,
+        })
         .await
         .unwrap();
     let _m2 = store
@@ -148,7 +292,8 @@ async fn message_insert_list_filter() {
             body: "hi a".into(),
             sent_at: ts(2),
             in_reply_to: None,
-            meta: None,        })
+            meta: None,
+        })
         .await
         .unwrap();
 
@@ -177,7 +322,8 @@ async fn message_search_fts5() {
             body: "schedule a meeting tomorrow about the planner".into(),
             sent_at: ts(1),
             in_reply_to: None,
-            meta: None,        })
+            meta: None,
+        })
         .await
         .unwrap();
     store
@@ -188,7 +334,8 @@ async fn message_search_fts5() {
             body: "just a chatty hello, nothing planned".into(),
             sent_at: ts(2),
             in_reply_to: None,
-            meta: None,        })
+            meta: None,
+        })
         .await
         .unwrap();
 
@@ -212,7 +359,8 @@ async fn mark_delivered_only_undelivered() {
             body: "one".into(),
             sent_at: ts(1),
             in_reply_to: None,
-            meta: None,        })
+            meta: None,
+        })
         .await
         .unwrap();
     let m2 = store
@@ -223,14 +371,12 @@ async fn mark_delivered_only_undelivered() {
             body: "two".into(),
             sent_at: ts(2),
             in_reply_to: None,
-            meta: None,        })
+            meta: None,
+        })
         .await
         .unwrap();
 
-    store
-        .mark_delivered(vec![m1.id], ts(10))
-        .await
-        .unwrap();
+    store.mark_delivered(vec![m1.id], ts(10)).await.unwrap();
 
     let pending = store
         .list_messages(ListMessagesOpts {
@@ -256,7 +402,8 @@ async fn mark_read_sets_timestamp_and_returns_ids() {
             body: "one".into(),
             sent_at: ts(1),
             in_reply_to: None,
-            meta: None,        })
+            meta: None,
+        })
         .await
         .unwrap();
     let m2 = store
@@ -267,7 +414,8 @@ async fn mark_read_sets_timestamp_and_returns_ids() {
             body: "two".into(),
             sent_at: ts(2),
             in_reply_to: None,
-            meta: None,        })
+            meta: None,
+        })
         .await
         .unwrap();
 
@@ -307,7 +455,8 @@ async fn mark_read_refuses_cross_agent() {
             body: "for b only".into(),
             sent_at: ts(1),
             in_reply_to: None,
-            meta: None,        })
+            meta: None,
+        })
         .await
         .unwrap();
 
@@ -342,7 +491,8 @@ async fn count_unread_excludes_read() {
             body: "one".into(),
             sent_at: ts(1),
             in_reply_to: None,
-            meta: None,        })
+            meta: None,
+        })
         .await
         .unwrap();
     let _m2 = store
@@ -353,7 +503,8 @@ async fn count_unread_excludes_read() {
             body: "two".into(),
             sent_at: ts(2),
             in_reply_to: None,
-            meta: None,        })
+            meta: None,
+        })
         .await
         .unwrap();
     // Unrelated recipient — must not count.
@@ -365,7 +516,8 @@ async fn count_unread_excludes_read() {
             body: "for c".into(),
             sent_at: ts(3),
             in_reply_to: None,
-            meta: None,        })
+            meta: None,
+        })
         .await
         .unwrap();
 
@@ -386,39 +538,55 @@ async fn consume_wakes_atomically_returns_wake_ids_and_marks_read() {
     // touch this agent, (d) mark read in the same transaction as the
     // SELECT, and (e) be idempotent (second call returns []).
     let (_dir, store) = fresh_store().await;
-    let wake1 = store.insert_message(NewMessage {
-        from_agent: "system".into(),
-        to_agent: "critic".into(),
-        kind: "wake".into(),
-        body: "blackboard `frontend.done` updated".into(),
-        sent_at: ts(1),
-        in_reply_to: None,
-        meta: None,    }).await.unwrap();
-    let _note = store.insert_message(NewMessage {
-        from_agent: "frontend".into(),
-        to_agent: "critic".into(),
-        kind: "note".into(),
-        body: "fyi".into(),
-        sent_at: ts(2),
-        in_reply_to: None,
-        meta: None,    }).await.unwrap();
-    let wake2 = store.insert_message(NewMessage {
-        from_agent: "system".into(),
-        to_agent: "critic".into(),
-        kind: "wake".into(),
-        body: "blackboard `backend.done` updated".into(),
-        sent_at: ts(3),
-        in_reply_to: None,
-        meta: None,    }).await.unwrap();
+    let wake1 = store
+        .insert_message(NewMessage {
+            from_agent: "system".into(),
+            to_agent: "critic".into(),
+            kind: "wake".into(),
+            body: "blackboard `frontend.done` updated".into(),
+            sent_at: ts(1),
+            in_reply_to: None,
+            meta: None,
+        })
+        .await
+        .unwrap();
+    let _note = store
+        .insert_message(NewMessage {
+            from_agent: "frontend".into(),
+            to_agent: "critic".into(),
+            kind: "note".into(),
+            body: "fyi".into(),
+            sent_at: ts(2),
+            in_reply_to: None,
+            meta: None,
+        })
+        .await
+        .unwrap();
+    let wake2 = store
+        .insert_message(NewMessage {
+            from_agent: "system".into(),
+            to_agent: "critic".into(),
+            kind: "wake".into(),
+            body: "blackboard `backend.done` updated".into(),
+            sent_at: ts(3),
+            in_reply_to: None,
+            meta: None,
+        })
+        .await
+        .unwrap();
     // Different agent — must not be touched.
-    let other_wake = store.insert_message(NewMessage {
-        from_agent: "system".into(),
-        to_agent: "test".into(),
-        kind: "wake".into(),
-        body: "for test".into(),
-        sent_at: ts(4),
-        in_reply_to: None,
-        meta: None,    }).await.unwrap();
+    let other_wake = store
+        .insert_message(NewMessage {
+            from_agent: "system".into(),
+            to_agent: "test".into(),
+            kind: "wake".into(),
+            body: "for test".into(),
+            sent_at: ts(4),
+            in_reply_to: None,
+            meta: None,
+        })
+        .await
+        .unwrap();
 
     let ids = store.consume_wakes("critic".into(), ts(100)).await.unwrap();
     assert_eq!(ids.len(), 2);
@@ -448,7 +616,8 @@ async fn insert_and_list_round_trip_in_reply_to() {
             body: "first ping".into(),
             sent_at: ts(1),
             in_reply_to: None,
-            meta: None,        })
+            meta: None,
+        })
         .await
         .unwrap();
     let reply = store
@@ -459,7 +628,8 @@ async fn insert_and_list_round_trip_in_reply_to() {
             body: "pong".into(),
             sent_at: ts(2),
             in_reply_to: Some(parent.id),
-            meta: None,        })
+            meta: None,
+        })
         .await
         .unwrap();
     assert_eq!(reply.in_reply_to, Some(parent.id));
@@ -558,10 +728,7 @@ async fn blackboard_search_fts5() {
         .await
         .unwrap();
 
-    let hits = store
-        .search_blackboard("envelopes".into())
-        .await
-        .unwrap();
+    let hits = store.search_blackboard("envelopes".into()).await.unwrap();
     assert_eq!(hits.len(), 1);
     assert_eq!(hits[0].path, "spec.md");
 }
@@ -646,7 +813,8 @@ async fn store_survives_reopen() {
                 spawned_at: ts(0),
                 workspace_id: None,
                 spell_run_id: None,
-                thread_id: None,            })
+                thread_id: None,
+            })
             .await
             .unwrap();
     }
@@ -670,7 +838,8 @@ async fn mark_orphan_agents_killed_only_alive_rows() {
             spawned_at: ts(0),
             workspace_id: None,
             spell_run_id: None,
-            thread_id: None,        })
+            thread_id: None,
+        })
         .await
         .unwrap();
     store
@@ -682,7 +851,8 @@ async fn mark_orphan_agents_killed_only_alive_rows() {
             spawned_at: ts(0),
             workspace_id: None,
             spell_run_id: None,
-            thread_id: None,        })
+            thread_id: None,
+        })
         .await
         .unwrap();
     store
@@ -771,80 +941,194 @@ async fn prune_keeps_every_load_bearing_row() {
 
     // ── blackboard ──────────────────────────────────────────────────────
     // path "p": two old superseded rows + one recent latest → 2 deletable.
-    store.insert_blackboard_op(bb("p", "p-v0", ts(0))).await.unwrap();
-    store.insert_blackboard_op(bb("p", "p-v1", ts(100))).await.unwrap();
-    store.insert_blackboard_op(bb("p", "p-v2", ts(2000))).await.unwrap();
+    store
+        .insert_blackboard_op(bb("p", "p-v0", ts(0)))
+        .await
+        .unwrap();
+    store
+        .insert_blackboard_op(bb("p", "p-v1", ts(100)))
+        .await
+        .unwrap();
+    store
+        .insert_blackboard_op(bb("p", "p-v2", ts(2000)))
+        .await
+        .unwrap();
     // path "q": single OLD row — it's the latest for q, must be KEPT despite age.
-    store.insert_blackboard_op(bb("q", "q-v0", ts(0))).await.unwrap();
+    store
+        .insert_blackboard_op(bb("q", "q-v0", ts(0)))
+        .await
+        .unwrap();
     // path "r": old superseded + old latest → only the superseded one deletable.
-    store.insert_blackboard_op(bb("r", "r-v0", ts(0))).await.unwrap();
-    store.insert_blackboard_op(bb("r", "r-v1", ts(50))).await.unwrap();
+    store
+        .insert_blackboard_op(bb("r", "r-v0", ts(0)))
+        .await
+        .unwrap();
+    store
+        .insert_blackboard_op(bb("r", "r-v1", ts(50)))
+        .await
+        .unwrap();
 
     // ── messages ────────────────────────────────────────────────────────
     let id = |m: MessageRecord| m.id;
     // m1: old normal note, delivered+read → deletable.
-    let m1 = id(store.insert_message(NewMessage {
-        from_agent: "x".into(), to_agent: "a".into(), kind: "note".into(),
-        body: "old read".into(), sent_at: ts(0), in_reply_to: None, meta: None,    }).await.unwrap());
+    let m1 = id(store
+        .insert_message(NewMessage {
+            from_agent: "x".into(),
+            to_agent: "a".into(),
+            kind: "note".into(),
+            body: "old read".into(),
+            sent_at: ts(0),
+            in_reply_to: None,
+            meta: None,
+        })
+        .await
+        .unwrap());
     store.mark_delivered(vec![m1], ts(1)).await.unwrap();
     store.mark_read(vec![m1], "a".into(), ts(2)).await.unwrap();
     // m2: old normal note, NOT delivered/read → KEPT (conservative).
-    store.insert_message(NewMessage {
-        from_agent: "x".into(), to_agent: "a".into(), kind: "note".into(),
-        body: "old unread".into(), sent_at: ts(0), in_reply_to: None, meta: None,    }).await.unwrap();
+    store
+        .insert_message(NewMessage {
+            from_agent: "x".into(),
+            to_agent: "a".into(),
+            kind: "note".into(),
+            body: "old unread".into(),
+            sent_at: ts(0),
+            in_reply_to: None,
+            meta: None,
+        })
+        .await
+        .unwrap();
     // m3: old wake, UN-consumed (different agent so consume below misses it) → KEPT.
-    store.insert_message(NewMessage {
-        from_agent: "x".into(), to_agent: "keep".into(), kind: "wake".into(),
-        body: "pending wake".into(), sent_at: ts(0), in_reply_to: None, meta: None,    }).await.unwrap();
+    store
+        .insert_message(NewMessage {
+            from_agent: "x".into(),
+            to_agent: "keep".into(),
+            kind: "wake".into(),
+            body: "pending wake".into(),
+            sent_at: ts(0),
+            in_reply_to: None,
+            meta: None,
+        })
+        .await
+        .unwrap();
     // m4: old wake, consumed → deletable.
-    store.insert_message(NewMessage {
-        from_agent: "x".into(), to_agent: "cons".into(), kind: "wake".into(),
-        body: "spent wake".into(), sent_at: ts(0), in_reply_to: None, meta: None,    }).await.unwrap();
+    store
+        .insert_message(NewMessage {
+            from_agent: "x".into(),
+            to_agent: "cons".into(),
+            kind: "wake".into(),
+            body: "spent wake".into(),
+            sent_at: ts(0),
+            in_reply_to: None,
+            meta: None,
+        })
+        .await
+        .unwrap();
     let consumed = store.consume_wakes("cons".into(), ts(3)).await.unwrap();
     assert_eq!(consumed.len(), 1, "only the 'cons' wake is consumed");
     // m5: recent normal note, delivered+read → KEPT (newer than cutoff).
-    let m5 = id(store.insert_message(NewMessage {
-        from_agent: "x".into(), to_agent: "a".into(), kind: "note".into(),
-        body: "recent".into(), sent_at: ts(2000), in_reply_to: None, meta: None,    }).await.unwrap());
+    let m5 = id(store
+        .insert_message(NewMessage {
+            from_agent: "x".into(),
+            to_agent: "a".into(),
+            kind: "note".into(),
+            body: "recent".into(),
+            sent_at: ts(2000),
+            in_reply_to: None,
+            meta: None,
+        })
+        .await
+        .unwrap());
     store.mark_delivered(vec![m5], ts(2001)).await.unwrap();
-    store.mark_read(vec![m5], "a".into(), ts(2002)).await.unwrap();
+    store
+        .mark_read(vec![m5], "a".into(), ts(2002))
+        .await
+        .unwrap();
     // m6 parent + m7 child: both old, delivered+read. m6 is referenced by m7
     // → m6 KEPT this pass (FK-safe), m7 deletable.
-    let m6 = id(store.insert_message(NewMessage {
-        from_agent: "x".into(), to_agent: "a".into(), kind: "note".into(),
-        body: "parent".into(), sent_at: ts(0), in_reply_to: None, meta: None,    }).await.unwrap());
+    let m6 = id(store
+        .insert_message(NewMessage {
+            from_agent: "x".into(),
+            to_agent: "a".into(),
+            kind: "note".into(),
+            body: "parent".into(),
+            sent_at: ts(0),
+            in_reply_to: None,
+            meta: None,
+        })
+        .await
+        .unwrap());
     store.mark_delivered(vec![m6], ts(1)).await.unwrap();
     store.mark_read(vec![m6], "a".into(), ts(2)).await.unwrap();
-    let m7 = id(store.insert_message(NewMessage {
-        from_agent: "x".into(), to_agent: "a".into(), kind: "note".into(),
-        body: "child".into(), sent_at: ts(0), in_reply_to: Some(m6), meta: None,    }).await.unwrap());
+    let m7 = id(store
+        .insert_message(NewMessage {
+            from_agent: "x".into(),
+            to_agent: "a".into(),
+            kind: "note".into(),
+            body: "child".into(),
+            sent_at: ts(0),
+            in_reply_to: Some(m6),
+            meta: None,
+        })
+        .await
+        .unwrap());
     store.mark_delivered(vec![m7], ts(1)).await.unwrap();
     store.mark_read(vec![m7], "a".into(), ts(2)).await.unwrap();
 
     // ── recordings ──────────────────────────────────────────────────────
     let cast = dir.path().join("rec1.cast");
     std::fs::write(&cast, b"cast bytes").unwrap();
-    store.record_recording_start(NewRecording {
-        id: "rec1".into(), agent_id: "a".into(), path: cast.to_string_lossy().into(),
-        started_at: ts(0), cols: 80, rows: 24,
-    }).await.unwrap();
-    store.record_recording_finalize("rec1".into(), ts(10), 10, 1).await.unwrap();
+    store
+        .record_recording_start(NewRecording {
+            id: "rec1".into(),
+            agent_id: "a".into(),
+            path: cast.to_string_lossy().into(),
+            started_at: ts(0),
+            cols: 80,
+            rows: 24,
+        })
+        .await
+        .unwrap();
+    store
+        .record_recording_finalize("rec1".into(), ts(10), 10, 1)
+        .await
+        .unwrap();
     // rec2: old but LIVE (not finalized) → KEPT.
-    store.record_recording_start(NewRecording {
-        id: "rec2".into(), agent_id: "a".into(), path: "/tmp/rec2.cast".into(),
-        started_at: ts(0), cols: 80, rows: 24,
-    }).await.unwrap();
+    store
+        .record_recording_start(NewRecording {
+            id: "rec2".into(),
+            agent_id: "a".into(),
+            path: "/tmp/rec2.cast".into(),
+            started_at: ts(0),
+            cols: 80,
+            rows: 24,
+        })
+        .await
+        .unwrap();
     // rec3: recent + finalized → KEPT.
-    store.record_recording_start(NewRecording {
-        id: "rec3".into(), agent_id: "a".into(), path: "/tmp/rec3.cast".into(),
-        started_at: ts(2000), cols: 80, rows: 24,
-    }).await.unwrap();
-    store.record_recording_finalize("rec3".into(), ts(2010), 10, 1).await.unwrap();
+    store
+        .record_recording_start(NewRecording {
+            id: "rec3".into(),
+            agent_id: "a".into(),
+            path: "/tmp/rec3.cast".into(),
+            started_at: ts(2000),
+            cols: 80,
+            rows: 24,
+        })
+        .await
+        .unwrap();
+    store
+        .record_recording_finalize("rec3".into(), ts(2010), 10, 1)
+        .await
+        .unwrap();
 
     // ── prune ───────────────────────────────────────────────────────────
     let stats = store.prune_expired(cutoff).await.unwrap();
     assert_eq!(stats.blackboard_ops, 3, "p:2 + r:1 superseded-old rows");
-    assert_eq!(stats.messages, 3, "m1 (read) + m4 (consumed wake) + m7 (child)");
+    assert_eq!(
+        stats.messages, 3,
+        "m1 (read) + m4 (consumed wake) + m7 (child)"
+    );
     assert_eq!(stats.recordings, 1, "rec1 old+finalized");
     assert_eq!(stats.recording_files_removed, 1, "rec1.cast unlinked");
 
@@ -864,18 +1148,31 @@ async fn prune_keeps_every_load_bearing_row() {
     assert!(store.get_recording("rec3".into()).await.unwrap().is_some());
 
     // messages: kept = m2 (unread), m3 (pending wake), m5 (recent), m6 (parent).
-    let kept_a = store.list_messages(ListMessagesOpts {
-        to_agent: Some("a".into()), limit: 100, ..Default::default()
-    }).await.unwrap();
+    let kept_a = store
+        .list_messages(ListMessagesOpts {
+            to_agent: Some("a".into()),
+            limit: 100,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
     let bodies: Vec<&str> = kept_a.iter().map(|m| m.body.as_str()).collect();
     assert!(bodies.contains(&"old unread"));
     assert!(bodies.contains(&"recent"));
     assert!(bodies.contains(&"parent"));
-    assert!(!bodies.contains(&"old read"), "delivered+read old note pruned");
+    assert!(
+        !bodies.contains(&"old read"),
+        "delivered+read old note pruned"
+    );
     assert!(!bodies.contains(&"child"), "child pruned");
-    let pending = store.list_messages(ListMessagesOpts {
-        to_agent: Some("keep".into()), limit: 100, ..Default::default()
-    }).await.unwrap();
+    let pending = store
+        .list_messages(ListMessagesOpts {
+            to_agent: Some("keep".into()),
+            limit: 100,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
     assert_eq!(pending.len(), 1, "un-consumed wake must survive");
 
     // Second pass: m6 is now unreferenced (m7 gone) → ages out. Demonstrates
@@ -1002,7 +1299,10 @@ async fn threads_crud_roundtrip() {
     );
 
     // soft-delete frees the slug + drops it from the alive list.
-    store.soft_delete_thread(main.id.clone(), ts(5)).await.unwrap();
+    store
+        .soft_delete_thread(main.id.clone(), ts(5))
+        .await
+        .unwrap();
     let after = store.list_threads(ws.id.clone()).await.unwrap();
     assert_eq!(after.len(), 1, "main soft-deleted; only dark remains");
     assert_eq!(after[0].id, dark.id);
@@ -1049,7 +1349,8 @@ async fn reassign_unread_moves_only_the_user_request() {
             body: "build me a login page".into(),
             sent_at: ts(1),
             in_reply_to: None,
-            meta: None,        })
+            meta: None,
+        })
         .await
         .unwrap();
     // An already-READ user message → stays put (it's been answered).
@@ -1061,7 +1362,8 @@ async fn reassign_unread_moves_only_the_user_request() {
             body: "earlier, already handled".into(),
             sent_at: ts(2),
             in_reply_to: None,
-            meta: None,        })
+            meta: None,
+        })
         .await
         .unwrap();
     store
@@ -1077,7 +1379,8 @@ async fn reassign_unread_moves_only_the_user_request() {
             body: "backend.done".into(),
             sent_at: ts(4),
             in_reply_to: None,
-            meta: None,        })
+            meta: None,
+        })
         .await
         .unwrap();
     // A different direction's orchestrator (not in the killed set) → stays put.
@@ -1089,7 +1392,8 @@ async fn reassign_unread_moves_only_the_user_request() {
             body: "unrelated direction".into(),
             sent_at: ts(5),
             in_reply_to: None,
-            meta: None,        })
+            meta: None,
+        })
         .await
         .unwrap();
 
@@ -1151,7 +1455,8 @@ async fn already_read_request_is_recovered_by_latest_user_message() {
             body: "add a dark mode toggle".into(),
             sent_at: ts(1),
             in_reply_to: None,
-            meta: None,        })
+            meta: None,
+        })
         .await
         .unwrap();
     store
@@ -1186,13 +1491,13 @@ async fn already_read_request_is_recovered_by_latest_user_message() {
 async fn delete_blackboard_prefix_drops_only_the_direction_subtree() {
     let (_dir, store) = fresh_store().await;
     for p in [
-        "ws/dark_mode",             // the bare dir key      → deleted
-        "ws/dark_mode/ledger.md",   // under it              → deleted
-        "ws/dark_mode/sub/notes.md",// deeper under it       → deleted
-        "ws/dark_mode-old/x.md",    // shares prefix, not under → survives
-        "ws/darkXmode/leak.md",     // `_`-as-LIKE-wildcard footgun → survives
-        "ws/light/ledger.md",       // sibling direction     → survives
-        "ws2/dark_mode/ledger.md",  // different workspace    → survives
+        "ws/dark_mode",              // the bare dir key      → deleted
+        "ws/dark_mode/ledger.md",    // under it              → deleted
+        "ws/dark_mode/sub/notes.md", // deeper under it       → deleted
+        "ws/dark_mode-old/x.md",     // shares prefix, not under → survives
+        "ws/darkXmode/leak.md",      // `_`-as-LIKE-wildcard footgun → survives
+        "ws/light/ledger.md",        // sibling direction     → survives
+        "ws2/dark_mode/ledger.md",   // different workspace    → survives
     ] {
         store
             .insert_blackboard_op(NewBlackboardOp {
@@ -1270,10 +1575,7 @@ async fn worker_roundtrip_persists_p0_typed_fields() {
         .await
         .unwrap();
 
-    let map = store
-        .list_workers_by_ids(vec!["w-1".into()])
-        .await
-        .unwrap();
+    let map = store.list_workers_by_ids(vec!["w-1".into()]).await.unwrap();
     let w = map.get("w-1").expect("worker row present");
     assert_eq!(w.role_slug, "frontend");
     assert_eq!(w.handoff_signal, "ws1/main/frontend.done");

@@ -47,6 +47,10 @@ import type {
 } from "../../../api/types";
 import { useSwarmFeed } from "../../../hooks/useSwarmFeed";
 import { useWorkspaceContext } from "../Shell";
+import {
+  ConfirmActionDialog,
+  type ConfirmActionState,
+} from "@/components/ConfirmActionDialog";
 import { agentInThread, directionBase } from "@/lib/thread";
 import { cn } from "@/lib/cn";
 import {
@@ -408,6 +412,7 @@ export default function DagView() {
     () => liveAgents.filter((a) => a.paused).length,
     [liveAgents],
   );
+  const [confirm, setConfirm] = useState<ConfirmActionState | null>(null);
 
   // workspace-level "pause all live agents". Fire-and-forget — refresh()
   // will pick up the new paused state via the swarm feed (paused agents
@@ -467,6 +472,81 @@ export default function DagView() {
       setBusy(false);
     }
   }, [busy, refresh, selected]);
+
+  const requestInterruptAll = useCallback(() => {
+    setConfirm({
+      title: t("dag.confirm.interruptAll.title", {
+        count: liveAgents.length,
+        defaultValue: "暂停所有 agent？",
+      }),
+      description: t(
+        "dag.confirm.interruptAll.desc",
+        "会向当前工作空间所有运行中的 agent 发送中断，并停止它们的自动唤醒，直到你恢复。",
+      ),
+      confirmLabel: t("dag.interruptAll"),
+      variant: "destructive",
+      onConfirm: onInterruptAll,
+    });
+  }, [liveAgents.length, onInterruptAll, t]);
+
+  const requestResumeAll = useCallback(() => {
+    setConfirm({
+      title: t("dag.confirm.resumeAll.title", {
+        count: pausedCount,
+        defaultValue: "恢复所有暂停 agent？",
+      }),
+      description: t(
+        "dag.confirm.resumeAll.desc",
+        "会逐个恢复当前工作空间内暂停的 agent，并让它们继续处理当前工作。",
+      ),
+      confirmLabel: t("dag.resumeAll"),
+      onConfirm: onResumeAll,
+    });
+  }, [onResumeAll, pausedCount, t]);
+
+  const requestWakeSelected = useCallback(() => {
+    if (!selected) return;
+    setConfirm({
+      title: t("agent.confirm.wake.title", {
+        role: selected.role,
+        defaultValue: "唤醒 agent？",
+      }),
+      description: t(
+        "agent.confirm.wake.desc",
+        "会向该 agent 投递一条手动唤醒消息，推动它继续读取 mailbox / blackboard。仅在它确实卡住或需要人工催促时使用。",
+      ),
+      confirmLabel: t("agent.wake"),
+      onConfirm: () => api.wakeAgent(selected.agent_id).catch(() => {}),
+    });
+  }, [selected, t]);
+
+  const requestTogglePauseSelected = useCallback(() => {
+    if (!selected) return;
+    const paused = !!selected.paused;
+    setConfirm({
+      title: paused
+        ? t("agent.confirm.resume.title", {
+            role: selected.role,
+            defaultValue: "恢复 agent？",
+          })
+        : t("agent.confirm.pause.title", {
+            role: selected.role,
+            defaultValue: "暂停 agent？",
+          }),
+      description: paused
+        ? t(
+            "agent.confirm.resume.desc",
+            "会恢复该 agent 的自动唤醒，并投递一次手动唤醒让它继续处理当前工作。",
+          )
+        : t(
+            "agent.confirm.pause.desc",
+            "会发送 Ctrl-C 中断当前 turn，并让自动唤醒跳过该 agent，直到你恢复它。",
+          ),
+      confirmLabel: paused ? t("agent.resume") : t("agent.pause"),
+      variant: paused ? "default" : "destructive",
+      onConfirm: onTogglePauseSelected,
+    });
+  }, [onTogglePauseSelected, selected, t]);
 
   return (
     <div className="flex min-h-0 flex-1">
@@ -595,7 +675,7 @@ export default function DagView() {
             )}
             <button
               type="button"
-              onClick={onInterruptAll}
+              onClick={requestInterruptAll}
               disabled={busy || liveAgents.length === pausedCount}
               className={cn(
                 "flex h-8 items-center gap-1.5 rounded-md border border-border-subtle bg-surface-elevated px-2.5 text-xs text-foreground-secondary shadow-sm transition-colors",
@@ -609,7 +689,7 @@ export default function DagView() {
             </button>
             <button
               type="button"
-              onClick={onResumeAll}
+              onClick={requestResumeAll}
               disabled={busy || pausedCount === 0}
               className={cn(
                 "flex h-8 items-center gap-1.5 rounded-md border border-border-subtle bg-surface-elevated px-2.5 text-xs text-foreground-secondary shadow-sm transition-colors",
@@ -718,14 +798,14 @@ export default function DagView() {
               </Link>
               <div className="flex gap-2">
                 <button
-                  onClick={() => api.wakeAgent(selected.agent_id).catch(() => {})}
+                  onClick={requestWakeSelected}
                   className="flex h-9 flex-1 items-center justify-center gap-1.5 rounded-md border border-border-subtle bg-surface-elevated text-xs text-foreground-secondary hover:bg-surface-tertiary"
                 >
                   <Zap className="size-3.5" />
                   {t("agent.wake")}
                 </button>
                 <button
-                  onClick={onTogglePauseSelected}
+                  onClick={requestTogglePauseSelected}
                   disabled={busy}
                   className={cn(
                     "flex h-9 flex-1 items-center justify-center gap-1.5 rounded-md border border-border-subtle bg-surface-elevated text-xs text-foreground-secondary hover:bg-surface-tertiary",
@@ -750,6 +830,12 @@ export default function DagView() {
           </>
         )}
       </aside>
+      <ConfirmActionDialog
+        action={confirm}
+        onOpenChange={(next) => {
+          if (!next) setConfirm(null);
+        }}
+      />
     </div>
   );
 }

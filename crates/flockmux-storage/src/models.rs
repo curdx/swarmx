@@ -345,6 +345,9 @@ pub struct UsageByDay {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UsageByAgent {
     pub agent_id: String,
+    pub role: Option<String>,
+    pub workspace_id: Option<String>,
+    pub thread_id: Option<String>,
     pub input_tokens: i64,
     pub output_tokens: i64,
     pub cache_read_tokens: i64,
@@ -363,6 +366,65 @@ pub struct CronJobRecord {
     pub enabled: bool,
     pub created_at: i64,
     pub last_run_at: Option<i64>,
+}
+
+/// A first-class goal attached to a workspace and optionally one direction
+/// (`thread_id = NULL` means the workspace's main/default direction).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GoalRecord {
+    pub id: String,
+    pub workspace_id: String,
+    pub thread_id: Option<String>,
+    pub objective: String,
+    /// JSON array of strings, kept as text so the storage layer stays schema-
+    /// light while the API can still present structured criteria.
+    pub success_criteria: String,
+    pub status: String,
+    pub budget_tokens: Option<i64>,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub completed_at: Option<i64>,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewGoal {
+    pub id: String,
+    pub workspace_id: String,
+    pub thread_id: Option<String>,
+    pub objective: String,
+    pub success_criteria: String,
+    pub status: String,
+    pub budget_tokens: Option<i64>,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub completed_at: Option<i64>,
+}
+
+/// One observed fact attached to a goal. This is intentionally broad enough to
+/// cover human notes, blackboard artifacts, verification commands, and future
+/// automated checks while keeping the goal table itself small.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GoalEvidenceRecord {
+    pub id: String,
+    pub goal_id: String,
+    pub kind: String,
+    pub summary: String,
+    pub source_agent_id: Option<String>,
+    pub blackboard_path: Option<String>,
+    pub command: Option<String>,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewGoalEvidence {
+    pub id: String,
+    pub goal_id: String,
+    pub kind: String,
+    pub summary: String,
+    pub source_agent_id: Option<String>,
+    pub blackboard_path: Option<String>,
+    pub command: Option<String>,
+    pub created_at: i64,
 }
 
 /// A worker viewed as a Kanban task: its identity + the raw lifecycle signals

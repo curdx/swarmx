@@ -173,10 +173,7 @@ pub struct ResolvedAgent {
 /// Returns an error if `role_ref` is set but the registry doesn't know
 /// it — better to fail loudly at spell-launch than to spawn an agent
 /// with an empty prompt and let the user wonder why nothing happened.
-pub fn resolve_agent(
-    agent: &SpellAgentManifest,
-    roles: &RoleRegistry,
-) -> Result<ResolvedAgent> {
+pub fn resolve_agent(agent: &SpellAgentManifest, roles: &RoleRegistry) -> Result<ResolvedAgent> {
     let role_template: Option<&Role> = match agent.role_ref.as_deref() {
         Some(id) => {
             let r = roles.get(id).ok_or_else(|| {
@@ -196,7 +193,11 @@ pub fn resolve_agent(
     let cli = match (&agent.cli, role_template) {
         (Some(c), _) if !c.is_empty() => c.clone(),
         (_, Some(rt)) => rt.manifest.default_cli.clone(),
-        _ => return Err(anyhow!("agent `{role}` has no cli and no role_ref to default from")),
+        _ => {
+            return Err(anyhow!(
+                "agent `{role}` has no cli and no role_ref to default from"
+            ))
+        }
     };
 
     let body = if !agent.system_prompt.is_empty() {
@@ -277,8 +278,8 @@ impl SpellRegistry {
         if !dir.exists() {
             return Ok(Self { spells });
         }
-        let read = std::fs::read_dir(dir)
-            .with_context(|| format!("read_dir({})", dir.display()))?;
+        let read =
+            std::fs::read_dir(dir).with_context(|| format!("read_dir({})", dir.display()))?;
         for entry in read {
             let entry = entry?;
             let path = entry.path();
@@ -347,8 +348,8 @@ pub fn default_spells_dir() -> PathBuf {
 fn parse_spell(content: &str, source_path: &Path) -> Result<Spell> {
     let (front_matter, body) = split_front_matter(content)
         .ok_or_else(|| anyhow!("no `+++` front-matter delimiters found"))?;
-    let manifest: SpellManifest = toml::from_str(front_matter)
-        .with_context(|| "parse front-matter as TOML")?;
+    let manifest: SpellManifest =
+        toml::from_str(front_matter).with_context(|| "parse front-matter as TOML")?;
     validate_manifest(&manifest)?;
     Ok(Spell {
         manifest,
@@ -416,9 +417,7 @@ fn validate_manifest(m: &SpellManifest) -> Result<()> {
         // one of these we have no name for the agent and no key for the
         // `{<role>_id}` substitution.
         if a.effective_role().is_none() {
-            return Err(anyhow!(
-                "every [[agents]] needs a `role` or a `role_ref`"
-            ));
+            return Err(anyhow!("every [[agents]] needs a `role` or a `role_ref`"));
         }
         // If there's no role_ref, the spell must inline cli + a non-
         // empty system_prompt — nothing can fall back from. With a
@@ -522,12 +521,19 @@ apply this patch:\n\
 the real body\n";
         let (fm, body) = split_front_matter(src).unwrap();
         // The whole triple-quoted value (incl. the +++ diff line) stays in fm.
-        assert!(fm.contains("+++ b/foo"), "diff line must remain inside front matter");
+        assert!(
+            fm.contains("+++ b/foo"),
+            "diff line must remain inside front matter"
+        );
         assert!(fm.contains("system_prompt"));
         assert_eq!(body, "the real body\n");
         // And it actually parses as TOML now (the real regression).
         let parsed: toml::Value = toml::from_str(fm).expect("fm parses as TOML");
-        assert!(parsed.get("system_prompt").and_then(|v| v.as_str()).unwrap().contains("+++ b/foo"));
+        assert!(parsed
+            .get("system_prompt")
+            .and_then(|v| v.as_str())
+            .unwrap()
+            .contains("+++ b/foo"));
     }
 
     #[test]
@@ -601,10 +607,7 @@ name = "broken"
 role = "writer"
 +++"#;
         let err = parse_spell(src, Path::new("/tmp/x.md")).unwrap_err();
-        assert!(
-            format!("{err:#}").contains("no `cli`"),
-            "got: {err:#}"
-        );
+        assert!(format!("{err:#}").contains("no `cli`"), "got: {err:#}");
     }
 
     #[test]
@@ -820,10 +823,16 @@ cli = "claude"
             system_prompt_prefix: "[GATE] wait for X.".to_string(),
         };
         let resolved = resolve_agent(&agent, &roles).unwrap();
-        assert!(resolved.system_prompt.starts_with("[GATE] wait for X."),
-            "prefix must come first: {}", resolved.system_prompt);
-        assert!(resolved.system_prompt.contains("YOU ARE WORKER"),
-            "role body must still be present: {}", resolved.system_prompt);
+        assert!(
+            resolved.system_prompt.starts_with("[GATE] wait for X."),
+            "prefix must come first: {}",
+            resolved.system_prompt
+        );
+        assert!(
+            resolved.system_prompt.contains("YOU ARE WORKER"),
+            "role body must still be present: {}",
+            resolved.system_prompt
+        );
         // And they're separated by a blank line so they render as
         // distinct paragraphs in the bootstrap prompt.
         assert!(resolved.system_prompt.contains("\n\nYOU ARE WORKER"));
@@ -847,8 +856,10 @@ cli = "claude"
             system_prompt_prefix: String::new(),
         };
         let resolved = resolve_agent(&agent, &roles).unwrap();
-        assert_eq!(resolved.system_prompt, "BODY",
-            "empty prefix should NOT add separator chars");
+        assert_eq!(
+            resolved.system_prompt, "BODY",
+            "empty prefix should NOT add separator chars"
+        );
     }
 
     #[test]
@@ -864,7 +875,10 @@ cli = "codex"
 +++
 "#;
         let err = parse_spell(src, Path::new("/tmp/x.md")).unwrap_err();
-        assert!(format!("{err:#}").contains("duplicate role"), "got: {err:#}");
+        assert!(
+            format!("{err:#}").contains("duplicate role"),
+            "got: {err:#}"
+        );
     }
 
     #[test]

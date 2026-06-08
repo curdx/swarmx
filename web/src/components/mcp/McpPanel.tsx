@@ -61,6 +61,13 @@ export function McpManager() {
     cli: Cli;
     name: string;
   } | null>(null);
+  const [confirmOn, setConfirmOn] = useState<{
+    id: string;
+    cli: Cli;
+    name: string;
+    needsKey: boolean;
+    keyKnown: boolean;
+  } | null>(null);
   // 本次会话填过的 key —— 让"刚填完、立刻启用另一个 CLI"也不必再问(后端落盘后
   // 其实也能 recover，这只是更快的本地路径)。
   const sessionKeys = useRef<Record<string, string>>({});
@@ -105,6 +112,24 @@ export function McpManager() {
   const disable = (id: string, cli: Cli) =>
     runOp({ id, cli }, () => api.mcpUninstall(id, cli));
 
+  const enableFlow = (
+    id: string,
+    cli: Cli,
+    name: string,
+    needsKey: boolean,
+    keyKnown: boolean,
+  ) => {
+    if (!needsKey) {
+      enable(id, cli);
+    } else if (keyKnown) {
+      // 复用已存 key：传 session key；没有就让后端从已配处 recover。
+      enable(id, cli, sessionKeys.current[id]);
+    } else {
+      // 两边都没配过 → 弹一次框收 key。
+      setKeyDialog({ id, name, cli });
+    }
+  };
+
   /** 改密钥：写进所有已启用该 server 的 CLI(同步、保持一致)。 */
   const syncKey = (id: string, key: string) =>
     runOp({ id }, async () => {
@@ -147,6 +172,15 @@ export function McpManager() {
       {/* 服务器 */}
       <section className="flex flex-col gap-2.5">
         <SectionLabel text={t("mcp.serversTitle", "服务器")} />
+        <p className="flex items-start gap-1.5 rounded-md border border-status-warning/40 bg-status-warning-soft px-3 py-2 font-caption text-[11px] leading-relaxed text-foreground-secondary">
+          <TriangleAlert className="mt-0.5 size-3.5 shrink-0 text-status-warning" />
+          <span>
+            {t(
+              "mcp.userScopeWarning",
+              "这里的开关会写入用户级 claude / codex 配置，并对所有工作区和正在运行的 agent 生效。启用或关闭前请确认当前项目可信。",
+            )}
+          </span>
+        </p>
         <div className="flex flex-col gap-3">
           {SERVERS.map((srv) => {
             const meta = MCP_CATALOG.find((s) => s.id === srv.id);
@@ -159,14 +193,14 @@ export function McpManager() {
             const onToggle = (cli: Cli, on: boolean) => {
               if (!on) {
                 setConfirmOff({ id: srv.id, cli, name: meta?.name ?? srv.id });
-              } else if (!srv.needsKey) {
-                enable(srv.id, cli);
-              } else if (keyKnown) {
-                // 复用已存 key：传 session key；没有就让后端从已配处 recover。
-                enable(srv.id, cli, sessionKeys.current[srv.id]);
               } else {
-                // 两边都没配过 → 弹一次框收 key。
-                setKeyDialog({ id: srv.id, name: meta?.name ?? srv.id, cli });
+                setConfirmOn({
+                  id: srv.id,
+                  cli,
+                  name: meta?.name ?? srv.id,
+                  needsKey: srv.needsKey,
+                  keyKnown,
+                });
               }
             };
 
@@ -298,6 +332,42 @@ export function McpManager() {
           else syncKey(id, key);
         }}
       />
+
+      {/* 开启确认 — 同样会改用户级真实配置，不能误触即生效。 */}
+      <Dialog
+        open={confirmOn !== null}
+        onOpenChange={(o) => !o && setConfirmOn(null)}
+      >
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>
+              {t("mcp.enableTitle", "启用这个 MCP？")}
+              {confirmOn ? ` — ${confirmOn.name}` : ""}
+            </DialogTitle>
+            <DialogDescription>
+              {t(
+                "mcp.enableDesc",
+                "会写入该 CLI 的用户级配置，对所有工作区的 agent 生效。请只在信任当前本机项目与该 MCP server 时启用。",
+              )}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirmOn(null)}>
+              {t("common.cancel", "取消")}
+            </Button>
+            <Button
+              onClick={() => {
+                if (!confirmOn) return;
+                const { id, cli, name, needsKey, keyKnown } = confirmOn;
+                setConfirmOn(null);
+                enableFlow(id, cli, name, needsKey, keyKnown);
+              }}
+            >
+              {t("mcp.enableConfirm", "启用")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* 关闭确认 — 改的是用户真实配置 + 即时影响在跑 agent (FAULT-026) */}
       <Dialog
@@ -458,6 +528,7 @@ function ApiKeyDialog({
           <Label htmlFor="mcp-api-key">API Key</Label>
           <Input
             id="mcp-api-key"
+            name="mcp-api-key"
             value={key}
             autoFocus
             type="password"

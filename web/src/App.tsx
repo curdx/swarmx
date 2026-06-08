@@ -12,7 +12,8 @@
  * Fullscreen / outside-shell routes:
  *   /chat/:wsId/replays/:recId         ReplayPlayer (dark, chromeless,
  *                                        Esc returns to /chat/:wsId/replays)
- *   /debug                             DebugRoute (legacy M2 dashboard)
+ *   /debug                             DebugRoute (legacy M2 dashboard,
+ *                                        dev-gated)
  *
  * Why nested: /chat/:wsId/{dag,replays,context} all share the same
  * workspace chrome (sidebar + channel header + tab bar + swarm
@@ -27,6 +28,7 @@ import { AppShell } from "./layouts/AppShell";
 import ChatHome from "./routes/chat/Home";
 import WorkspaceShell from "./routes/workspace/Shell";
 import ChatView from "./routes/workspace/views/Chat";
+import { DEBUG_ENABLED } from "@/lib/debug";
 
 // Route-level code-splitting (R2-006): the heavy, not-initial views — DAG
 // (dagre + @xyflow/react), Replays / player (asciinema-player), settings,
@@ -43,10 +45,11 @@ const NotificationsRoute = lazy(() => import("./routes/notifications"));
 const McpRoute = lazy(() => import("./routes/mcp"));
 const UsageRoute = lazy(() => import("./routes/usage"));
 const TasksRoute = lazy(() => import("./routes/tasks"));
+const GoalsRoute = lazy(() => import("./routes/goals"));
 const FilesRoute = lazy(() => import("./routes/files"));
 const TerminalRoute = lazy(() => import("./routes/terminal"));
 const CronRoute = lazy(() => import("./routes/cron"));
-const DebugRoute = lazy(() => import("./routes/debug"));
+const DebugRoute = DEBUG_ENABLED ? lazy(() => import("./routes/debug")) : null;
 
 /** Suspense wrapper for a lazily-loaded route element. Keeps the surrounding
  *  chrome (shell / sidebar / tab bar) mounted while the view's chunk loads. */
@@ -85,7 +88,9 @@ function workspaceViewRoutes() {
 
 export default function App() {
   return (
-    <BrowserRouter>
+    <BrowserRouter
+      future={{ v7_relativeSplatPath: true, v7_startTransition: true }}
+    >
       <Routes>
         <Route element={<AppShell />}>
           <Route index element={<Navigate to="/chat" replace />} />
@@ -100,6 +105,7 @@ export default function App() {
           <Route path="/mcp" element={lazyView(<McpRoute />)} />
           <Route path="/usage" element={lazyView(<UsageRoute />)} />
           <Route path="/tasks" element={lazyView(<TasksRoute />)} />
+          <Route path="/goals" element={lazyView(<GoalsRoute />)} />
           <Route path="/files" element={lazyView(<FilesRoute />)} />
           <Route path="/terminal" element={lazyView(<TerminalRoute />)} />
           <Route path="/cron" element={lazyView(<CronRoute />)} />
@@ -107,7 +113,12 @@ export default function App() {
           <Route path="/settings" element={lazyView(<SettingsRoute />)} />
           <Route path="/settings/:section" element={lazyView(<SettingsRoute />)} />
         </Route>
-        <Route path="/debug" element={lazyView(<DebugRoute />)} />
+        <Route
+          path="/debug"
+          element={
+            DebugRoute ? lazyView(<DebugRoute />) : <Navigate to="/chat" replace />
+          }
+        />
         {/* Fullscreen surfaces escape AppShell. New canonical path puts the
             player under its workspace so Esc / breadcrumbs land back on
             the right Replays tab. */}

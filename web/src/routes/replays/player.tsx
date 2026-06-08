@@ -144,7 +144,6 @@ export default function ReplayPlayer() {
               : t("player.notFoundHint", { id })
           }
           primaryAction={{ label: t("player.backToLibrary"), href: backTo }}
-          secondaryAction={{ label: t("player.goDebug"), href: "/debug" }}
         />
       </div>
     );

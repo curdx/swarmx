@@ -23,7 +23,7 @@
  * （chat/Home）无需改动。
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import {
   Outlet,
   useLocation,
@@ -42,8 +42,6 @@ import type {
   ThreadInfo,
 } from "../../api/types";
 import { setActiveWorkspaceId } from "../../lib/activeWorkspace";
-import { AgentDrawer } from "../../components/agent/AgentDrawer";
-import { CreateWizard } from "../../components/workspace/CreateWizard";
 import { ErrorBoundary } from "../../components/ErrorBoundary";
 import { Welcome } from "../../components/Welcome";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -51,6 +49,17 @@ import type { WorkspaceSummary } from "./types";
 import { WorkspaceList } from "./WorkspaceSidebar";
 import { WorkspaceToolbar, ViewTransition, buildTabs } from "./WorkspaceToolbar";
 import { useWorkspaceShellData } from "./useWorkspaceShellData";
+
+const AgentDrawer = lazy(() =>
+  import("@/components/agent/AgentDrawer").then((m) => ({
+    default: m.AgentDrawer,
+  })),
+);
+const CreateWizard = lazy(() =>
+  import("@/components/workspace/CreateWizard").then((m) => ({
+    default: m.CreateWizard,
+  })),
+);
 
 // Re-exported so existing import sites keep working unchanged (chat/Home.tsx
 // imports `WorkspaceList` + `WorkspaceSummary` from here; the child views below
@@ -342,7 +351,14 @@ export default function WorkspaceShell() {
             onDelete={onDeleteWorkspace}
             onRootsChanged={refreshWorkspaces}
           />
-          {workspaces.length === 0 ? (
+          {!wsLoaded ? (
+            <section className="flex min-w-0 flex-1 flex-col items-center justify-center gap-3 bg-surface-primary text-foreground-tertiary">
+              <FolderOpen className="size-10 opacity-40" />
+              <p className="font-caption text-sm">
+                {t("common.loading")}
+              </p>
+            </section>
+          ) : workspaces.length === 0 ? (
             // 完全空：展示 Welcome 屏，跟 /chat 主入口体验一致。
             <Welcome onCreateWorkspace={() => setWizardOpen(true)} />
           ) : (
@@ -355,19 +371,23 @@ export default function WorkspaceShell() {
               </p>
             </section>
           )}
-          <CreateWizard
-            open={wizardOpen}
-            onClose={() => setWizardOpen(false)}
-            onCreated={(ws) => {
-              refreshAgents();
-              // Await the workspace refetch BEFORE navigating — otherwise the
-              // new slug isn't in `workspaces` yet and the not-found redirect
-              // effect bounces us straight back to the previous workspace.
-              void refreshWorkspaces().then(() => {
-                if (ws) navigate(`/chat/${ws.slug}`);
-              });
-            }}
-          />
+          {wizardOpen && (
+            <Suspense fallback={null}>
+              <CreateWizard
+                open={wizardOpen}
+                onClose={() => setWizardOpen(false)}
+                onCreated={(ws) => {
+                  refreshAgents();
+                  // Await the workspace refetch BEFORE navigating — otherwise the
+                  // new slug isn't in `workspaces` yet and the not-found redirect
+                  // effect bounces us straight back to the previous workspace.
+                  void refreshWorkspaces().then(() => {
+                    if (ws) navigate(`/chat/${ws.slug}`);
+                  });
+                }}
+              />
+            </Suspense>
+          )}
         </div>
       </TooltipProvider>
     );
@@ -426,25 +446,31 @@ export default function WorkspaceShell() {
         </section>
 
         {drawerAgentId && (
-          <AgentDrawer
-            agentId={drawerAgentId}
-            activities={agentActivityById[drawerAgentId] ?? []}
-            onClose={closeAgent}
-          />
+          <Suspense fallback={null}>
+            <AgentDrawer
+              agentId={drawerAgentId}
+              activities={agentActivityById[drawerAgentId] ?? []}
+              onClose={closeAgent}
+            />
+          </Suspense>
         )}
-        <CreateWizard
-          open={wizardOpen}
-          onClose={() => setWizardOpen(false)}
-          onCreated={(ws) => {
-            refreshAgents();
-            // Await the workspace refetch BEFORE navigating — otherwise the
-            // new slug isn't in `workspaces` yet and the not-found redirect
-            // effect bounces us straight back to the previous workspace.
-            void refreshWorkspaces().then(() => {
-              if (ws) navigate(`/chat/${ws.slug}`);
-            });
-          }}
-        />
+        {wizardOpen && (
+          <Suspense fallback={null}>
+            <CreateWizard
+              open={wizardOpen}
+              onClose={() => setWizardOpen(false)}
+              onCreated={(ws) => {
+                refreshAgents();
+                // Await the workspace refetch BEFORE navigating — otherwise the
+                // new slug isn't in `workspaces` yet and the not-found redirect
+                // effect bounces us straight back to the previous workspace.
+                void refreshWorkspaces().then(() => {
+                  if (ws) navigate(`/chat/${ws.slug}`);
+                });
+              }}
+            />
+          </Suspense>
+        )}
       </div>
     </TooltipProvider>
   );

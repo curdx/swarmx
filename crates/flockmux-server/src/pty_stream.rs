@@ -309,7 +309,7 @@ mod tests {
     async fn wait_changed_returns_immediately_if_already_ahead() {
         let s = PtyStream::new();
         s.append(Bytes::from_static(b"x")); // head=1
-        // Caller at 0 is behind head=1; should return immediately.
+                                            // Caller at 0 is behind head=1; should return immediately.
         tokio::time::timeout(std::time::Duration::from_millis(50), s.wait_changed(0))
             .await
             .expect("wait_changed should not block when already ahead");

@@ -372,4 +372,3 @@ async fn apply_control(
         }
     }
 }
-
