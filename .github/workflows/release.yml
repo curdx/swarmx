@@ -24,11 +24,14 @@ jobs:
           - label: macOS arm64
             os: macos-latest
             target: aarch64-apple-darwin
-            args: --target aarch64-apple-darwin
+            # The .app bundle is the stable CI artifact. Tauri's DMG step runs
+            # Finder/hdiutil decoration scripts that can fail on hosted macOS
+            # runners even after the application bundle has built correctly.
+            args: --target aarch64-apple-darwin --bundles app
           - label: macOS x64
             os: macos-13
             target: x86_64-apple-darwin
-            args: --target x86_64-apple-darwin
+            args: --target x86_64-apple-darwin --bundles app
           - label: Linux x64
             os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
