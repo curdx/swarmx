@@ -23,6 +23,8 @@ use std::time::Duration;
 /// can take a couple seconds; init/commit are fast. 30s is generous headroom
 /// while still bounding a pathological hang.
 const GIT_TIMEOUT: Duration = Duration::from_secs(30);
+const FLOCKMUX_GIT_USER_NAME: &str = "user.name=flockmux";
+const FLOCKMUX_GIT_USER_EMAIL: &str = "user.email=flockmux@localhost";
 
 /// Output of a finished git command we care about.
 struct GitOut {
@@ -57,6 +59,16 @@ fn git(cwd: &Path, args: &[&str]) -> Result<GitOut> {
         Ok(Err(e)) => Err(anyhow!("git spawn failed: {e}")),
         Err(_) => Err(anyhow!("git command timed out after {GIT_TIMEOUT:?}")),
     }
+}
+
+/// Run a git command with a local, throwaway identity. Use this for commands
+/// that may create a commit (`commit`, non-fast-forward `merge`) so clean CI
+/// runners and fresh user machines do not need global git config.
+fn git_with_flockmux_identity(cwd: &Path, args: &[&str]) -> Result<GitOut> {
+    let mut git_args = Vec::with_capacity(args.len() + 4);
+    git_args.extend_from_slice(&["-c", FLOCKMUX_GIT_USER_NAME, "-c", FLOCKMUX_GIT_USER_EMAIL]);
+    git_args.extend_from_slice(args);
+    git(cwd, &git_args)
 }
 
 /// Is `dir` inside a git work tree? Used to decide whether a direction can get
@@ -131,13 +143,9 @@ pub fn git_init_with_commit(dir: &Path) -> Result<()> {
     // 4) commit. Supply an inline identity so the commit doesn't fail on a box
     //    with no `git config --global user.email`. `--allow-empty` covers a
     //    brand-new empty project dir.
-    let commit = git(
+    let commit = git_with_flockmux_identity(
         dir,
         &[
-            "-c",
-            "user.name=flockmux",
-            "-c",
-            "user.email=flockmux@localhost",
             "commit",
             "--allow-empty",
             "-m",
@@ -447,7 +455,7 @@ pub fn merge_into_base(repo_cwd: &Path, base: &str, from: &str) -> MergeOutcome 
     // Count the direction's changed files BEFORE merging — afterwards `from` is
     // an ancestor of `base` and the three-dot diff would be empty.
     let changed = diff_summary(repo_cwd, base, from).len();
-    let out = match git(repo_cwd, &["merge", "--no-edit", from]) {
+    let out = match git_with_flockmux_identity(repo_cwd, &["merge", "--no-edit", from]) {
         Ok(o) => o,
         Err(e) => return MergeOutcome::Error { msg: e.to_string() },
     };
