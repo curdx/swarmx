@@ -13,6 +13,9 @@ concurrency:
 permissions:
   contents: write
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   build-tauri:
     name: Tauri ${{ matrix.label }}
@@ -29,7 +32,7 @@ jobs:
             # runners even after the application bundle has built correctly.
             args: --target aarch64-apple-darwin --bundles app
           - label: macOS x64
-            os: macos-13
+            os: macos-15-intel
             target: x86_64-apple-darwin
             args: --target x86_64-apple-darwin --bundles app
           - label: Linux x64
