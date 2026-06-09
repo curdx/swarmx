@@ -27,14 +27,11 @@ jobs:
           - label: macOS arm64
             os: macos-latest
             target: aarch64-apple-darwin
-            # The .app bundle is the stable CI artifact. Tauri's DMG step runs
-            # Finder/hdiutil decoration scripts that can fail on hosted macOS
-            # runners even after the application bundle has built correctly.
-            args: --target aarch64-apple-darwin --bundles app
+            args: --target aarch64-apple-darwin --bundles dmg
           - label: macOS x64
             os: macos-15-intel
             target: x86_64-apple-darwin
-            args: --target x86_64-apple-darwin --bundles app
+            args: --target x86_64-apple-darwin --bundles dmg
           - label: Linux x64
             os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
@@ -87,6 +84,66 @@ jobs:
         run: src-tauri/scripts/build-sidecar.sh release ${{ matrix.target }}
         working-directory: web
 
+      - name: Import Apple signing certificate
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          certificate_path="$RUNNER_TEMP/developer-id-application.p12"
+          certificate_base64_path="$RUNNER_TEMP/developer-id-application.p12.base64"
+          keychain_path="$RUNNER_TEMP/flockmux-signing.keychain-db"
+
+          printf '%s' "$APPLE_CERTIFICATE" > "$certificate_base64_path"
+          openssl base64 -d -A -in "$certificate_base64_path" -out "$certificate_path"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$keychain_path"
+          security set-keychain-settings -lut 21600 "$keychain_path"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$keychain_path"
+          security import "$certificate_path" \
+            -k "$keychain_path" \
+            -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign \
+            -T /usr/bin/security
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s \
+            -k "$KEYCHAIN_PASSWORD" \
+            "$keychain_path"
+          security default-keychain -s "$keychain_path"
+          security find-identity -v -p codesigning "$keychain_path"
+
+          {
+            echo "APPLE_SIGNING_IDENTITY=$APPLE_SIGNING_IDENTITY"
+            echo "APPLE_TEAM_ID=$APPLE_TEAM_ID"
+          } >> "$GITHUB_ENV"
+
+      - name: Configure Apple notarization credentials
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_PRIVATE: ${{ secrets.APPLE_API_KEY_PRIVATE }}
+        run: |
+          set -euo pipefail
+
+          api_key_path="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY}.p8"
+          printf '%s' "$APPLE_API_KEY_PRIVATE" > "$api_key_path"
+          chmod 600 "$api_key_path"
+
+          {
+            echo "APPLE_API_ISSUER=$APPLE_API_ISSUER"
+            echo "APPLE_API_KEY=$APPLE_API_KEY"
+            echo "APPLE_API_KEY_PATH=$api_key_path"
+          } >> "$GITHUB_ENV"
+
       - name: Build desktop bundle
         uses: tauri-apps/tauri-action@v0
         env:
@@ -103,9 +160,11 @@ jobs:
           target="${{ matrix.target }}"
           output_dir="$GITHUB_WORKSPACE/release-assets/$target"
           mkdir -p "$output_dir"
+          copied_bundle_file=0
 
           while IFS= read -r asset; do
             cp "$asset" "$output_dir/$target-$(basename "$asset")"
+            copied_bundle_file=1
           done < <(
             find web/src-tauri/target -path '*/bundle/*' -type f \
               \( -name '*.AppImage' \
@@ -117,7 +176,7 @@ jobs:
               | sort
           )
 
-          if [[ "$RUNNER_OS" == "macOS" ]]; then
+          if [[ "$RUNNER_OS" == "macOS" && "$copied_bundle_file" -eq 0 ]]; then
             while IFS= read -r app; do
               (
                 cd "$(dirname "$app")"
@@ -219,8 +278,8 @@ jobs:
             fi
           }
 
-          mac_arm_cell="$(asset_cell 'aarch64-apple-darwin-*.app.zip')"
-          mac_intel_cell="$(asset_cell 'x86_64-apple-darwin-*.app.zip')"
+          mac_arm_cell="$(asset_cell 'aarch64-apple-darwin-*.dmg')"
+          mac_intel_cell="$(asset_cell 'x86_64-apple-darwin-*.dmg')"
           windows_setup_cell="$(asset_cell 'x86_64-pc-windows-msvc-*-setup.exe')"
           windows_msi_cell="$(asset_cell 'x86_64-pc-windows-msvc-*.msi')"
           linux_appimage_cell="$(asset_cell 'x86_64-unknown-linux-gnu-*.AppImage')"
@@ -247,8 +306,8 @@ jobs:
 
           | 系统 | 推荐文件 | 说明 |
           | --- | --- | --- |
-          | macOS Apple Silicon | $mac_arm_cell | M1/M2/M3/M4 等 ARM Mac。下载后解压，再打开 \`flockmux.app\`。 |
-          | macOS Intel | $mac_intel_cell | Intel 芯片 Mac。下载后解压，再打开 \`flockmux.app\`。 |
+          | macOS Apple Silicon | $mac_arm_cell | M1/M2/M3/M4 等 ARM Mac。下载 DMG 后拖到 Applications。 |
+          | macOS Intel | $mac_intel_cell | Intel 芯片 Mac。下载 DMG 后拖到 Applications。 |
           | Windows x64 | $windows_setup_cell | 普通用户优先下载这个安装包。 |
           | Windows x64 / 企业部署 | $windows_msi_cell | 适合需要 MSI 的安装、分发或脚本部署场景。 |
           | Linux 通用 | $linux_appimage_cell | 不想安装系统包时优先用这个。 |
@@ -257,7 +316,7 @@ jobs:
 
           ## 安装提醒
 
-          - macOS 当前发布的是 \`.app.zip\`，不是 \`.dmg\`。未签名版本可能需要右键选择 Open；正式签名和公证后再恢复 DMG。
+          - macOS DMG 使用 Developer ID Application 证书签名，并提交 Apple notarization 公证。
           - Windows 建议优先使用 \`setup.exe\`，需要批量安装或软件分发时再用 \`.msi\`。
           - Linux 如果不想改系统包，优先用 \`.AppImage\`；服务器或桌面发行版集成安装再用 \`.deb\` / \`.rpm\`。
           - 请只从本仓库 GitHub Releases 下载，避免拿到过期或被篡改的包。
