@@ -167,26 +167,130 @@ jobs:
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             release_tag="$GITHUB_REF_NAME"
             release_title="flockmux $GITHUB_REF_NAME"
-            release_notes="Automated desktop builds for $GITHUB_REF_NAME."
+            release_channel="正式版本 $GITHUB_REF_NAME"
+            stability_note="这是固定版本，适合日常使用和问题复现。"
             release_flags=(--latest)
+
+            previous_tag="$(git tag --sort=-v:refname | grep '^v' | grep -vx "$release_tag" | head -n 1 || true)"
+            if [[ -n "$previous_tag" ]]; then
+              recent_changes="$(git log --pretty=format:'- %s (`%h`)' "$previous_tag..$GITHUB_SHA")"
+              compare_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/compare/$previous_tag...$release_tag"
+            else
+              recent_changes="$(git log --pretty=format:'- %s (`%h`)' -10 "$GITHUB_SHA")"
+              compare_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/commits/$release_tag"
+            fi
           else
             release_tag="nightly"
             release_title="flockmux nightly"
-            release_notes="$(printf 'Automated desktop builds from main.\n\nCommit: %s' "$GITHUB_SHA")"
+            release_channel="nightly 预览版"
+            stability_note="这是 main 分支的滚动构建，会被每次成功打包覆盖；需要稳定版本时请使用 v* 正式 Release。"
             release_flags=(--prerelease --latest=false)
+            recent_changes="$(git log --pretty=format:'- %s (`%h`)' -10 "$GITHUB_SHA")"
+            compare_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/commits/main"
             git tag -f "$release_tag" "$GITHUB_SHA"
             git push -f origin "refs/tags/$release_tag"
           fi
 
+          mapfile -t release_assets < <(find release-artifacts -type f | sort)
+          release_asset_names=()
+          for asset in "${release_assets[@]}"; do
+            release_asset_names+=("$(basename "$asset")")
+          done
+
+          asset_for_pattern() {
+            local pattern="$1"
+            local name
+            for name in "${release_asset_names[@]}"; do
+              if [[ "$name" == $pattern ]]; then
+                printf '%s' "$name"
+                return 0
+              fi
+            done
+            printf 'not built in this run'
+          }
+
+          asset_cell() {
+            local name
+            name="$(asset_for_pattern "$1")"
+            if [[ "$name" == "not built in this run" ]]; then
+              printf '_not built in this run_'
+            else
+              printf '%s%s%s' '`' "$name" '`'
+            fi
+          }
+
+          mac_arm_cell="$(asset_cell 'aarch64-apple-darwin-*.app.zip')"
+          mac_intel_cell="$(asset_cell 'x86_64-apple-darwin-*.app.zip')"
+          windows_setup_cell="$(asset_cell 'x86_64-pc-windows-msvc-*-setup.exe')"
+          windows_msi_cell="$(asset_cell 'x86_64-pc-windows-msvc-*.msi')"
+          linux_appimage_cell="$(asset_cell 'x86_64-unknown-linux-gnu-*.AppImage')"
+          linux_deb_cell="$(asset_cell 'x86_64-unknown-linux-gnu-*.deb')"
+          linux_rpm_cell="$(asset_cell 'x86_64-unknown-linux-gnu-*.rpm')"
+
+          short_sha="${GITHUB_SHA::7}"
+          build_time="$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          commit_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/commit/$GITHUB_SHA"
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+
+          if [[ -z "$recent_changes" ]]; then
+            recent_changes="- No commit summary available."
+          fi
+
+          cat > release-notes.md <<EOF_NOTES
+          ## 版本说明
+
+          这是 flockmux 桌面端的 **$release_channel**，由 GitHub Actions 从源码自动打包。
+
+          $stability_note
+
+          ## 下载哪个文件
+
+          | 系统 | 推荐文件 | 说明 |
+          | --- | --- | --- |
+          | macOS Apple Silicon | $mac_arm_cell | M1/M2/M3/M4 等 ARM Mac。下载后解压，再打开 \`flockmux.app\`。 |
+          | macOS Intel | $mac_intel_cell | Intel 芯片 Mac。下载后解压，再打开 \`flockmux.app\`。 |
+          | Windows x64 | $windows_setup_cell | 普通用户优先下载这个安装包。 |
+          | Windows x64 / 企业部署 | $windows_msi_cell | 适合需要 MSI 的安装、分发或脚本部署场景。 |
+          | Linux 通用 | $linux_appimage_cell | 不想安装系统包时优先用这个。 |
+          | Ubuntu / Debian | $linux_deb_cell | 适合 Debian 系发行版。 |
+          | Fedora / RHEL / openSUSE | $linux_rpm_cell | 适合 RPM 系发行版。 |
+
+          ## 安装提醒
+
+          - macOS 当前发布的是 \`.app.zip\`，不是 \`.dmg\`。未签名版本可能需要右键选择 Open；正式签名和公证后再恢复 DMG。
+          - Windows 建议优先使用 \`setup.exe\`，需要批量安装或软件分发时再用 \`.msi\`。
+          - Linux 如果不想改系统包，优先用 \`.AppImage\`；服务器或桌面发行版集成安装再用 \`.deb\` / \`.rpm\`。
+          - 请只从本仓库 GitHub Releases 下载，避免拿到过期或被篡改的包。
+
+          ## 构建来源
+
+          - Release tag: \`$release_tag\`
+          - Source commit: [$short_sha]($commit_url)
+          - Workflow run: [$GITHUB_RUN_ID]($run_url)
+          - Build time: \`$build_time\`
+          - Changes link: $compare_url
+
+          ## 最近提交
+
+          $recent_changes
+
+          ## 本次附件
+
+          EOF_NOTES
+
+          for name in "${release_asset_names[@]}"; do
+            printf -- '- `%s`\n' "$name" >> release-notes.md
+          done
+
           if gh release view "$release_tag" >/dev/null 2>&1; then
             gh release edit "$release_tag" \
               --title "$release_title" \
-              --notes "$release_notes" \
+              --notes-file release-notes.md \
               "${release_flags[@]}"
           else
             gh release create "$release_tag" \
               --title "$release_title" \
-              --notes "$release_notes" \
+              --notes-file release-notes.md \
               "${release_flags[@]}"
           fi
 
@@ -194,5 +298,4 @@ jobs:
             gh release delete-asset "$release_tag" "$existing_asset" --yes
           done < <(gh release view "$release_tag" --json assets --jq '.assets[].name')
 
-          mapfile -t release_assets < <(find release-artifacts -type f | sort)
           gh release upload "$release_tag" "${release_assets[@]}" --clobber
