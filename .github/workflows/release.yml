@@ -88,7 +88,6 @@ jobs:
         working-directory: web
 
       - name: Build desktop bundle
-        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -96,24 +95,100 @@ jobs:
           projectPath: web
           args: ${{ matrix.args }}
 
-      - name: Build desktop bundle and attach to release
-        if: ${{ startsWith(github.ref, 'refs/tags/v') }}
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          projectPath: web
-          args: ${{ matrix.args }}
-          tagName: ${{ github.ref_name }}
-          releaseName: "flockmux ${{ github.ref_name }}"
-          releaseBody: "Automated desktop builds for ${{ github.ref_name }}."
-          releaseDraft: true
-          prerelease: false
+      - name: Prepare release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          target="${{ matrix.target }}"
+          output_dir="$GITHUB_WORKSPACE/release-assets/$target"
+          mkdir -p "$output_dir"
+
+          while IFS= read -r asset; do
+            cp "$asset" "$output_dir/$target-$(basename "$asset")"
+          done < <(
+            find web/src-tauri/target -type f \
+              \( -name '*.AppImage' \
+              -o -name '*.deb' \
+              -o -name '*.rpm' \
+              -o -name '*.msi' \
+              -o -name '*.exe' \
+              -o -name '*.dmg' \) \
+              | sort
+          )
+
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
+            while IFS= read -r app; do
+              (
+                cd "$(dirname "$app")"
+                zip -qry "$output_dir/$target-$(basename "$app").zip" "$(basename "$app")"
+              )
+            done < <(find web/src-tauri/target -type d -name '*.app' | sort)
+          fi
+
+          find "$output_dir" -type f | sort
+          test -n "$(find "$output_dir" -type f -print -quit)"
 
       - name: Upload desktop artifacts
         uses: actions/upload-artifact@v5
         with:
           name: flockmux-${{ matrix.target }}
           path: |
-            web/src-tauri/target/**/bundle/**/*
+            release-assets/${{ matrix.target }}/*
           if-no-files-found: error
+
+  publish-release:
+    name: Publish GitHub release assets
+    runs-on: ubuntu-latest
+    needs: build-tauri
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v5
+        with:
+          path: release-artifacts
+
+      - name: List release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          find release-artifacts -type f | sort
+          test -n "$(find release-artifacts -type f -print -quit)"
+
+      - name: Publish release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            release_tag="$GITHUB_REF_NAME"
+            release_title="flockmux $GITHUB_REF_NAME"
+            release_notes="Automated desktop builds for $GITHUB_REF_NAME."
+            release_flags=(--latest)
+          else
+            release_tag="nightly"
+            release_title="flockmux nightly"
+            release_notes="$(printf 'Automated desktop builds from main.\n\nCommit: %s' "$GITHUB_SHA")"
+            release_flags=(--prerelease --latest=false)
+            git tag -f "$release_tag" "$GITHUB_SHA"
+            git push -f origin "refs/tags/$release_tag"
+          fi
+
+          if gh release view "$release_tag" >/dev/null 2>&1; then
+            gh release edit "$release_tag" \
+              --title "$release_title" \
+              --notes "$release_notes" \
+              "${release_flags[@]}"
+          else
+            gh release create "$release_tag" \
+              --title "$release_title" \
+              --notes "$release_notes" \
+              "${release_flags[@]}"
+          fi
+
+          mapfile -t release_assets < <(find release-artifacts -type f | sort)
+          gh release upload "$release_tag" "${release_assets[@]}" --clobber
