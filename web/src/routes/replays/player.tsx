@@ -33,6 +33,7 @@ const IS_TAURI =
   (window.location.protocol === "tauri:" ||
     window.location.hostname === "tauri.localhost" ||
     "__TAURI_INTERNALS__" in window);
+const TAURI_DRAG_REGION = IS_TAURI ? { "data-tauri-drag-region": "" } : {};
 
 function formatTime(ms: number): string {
   return new Date(ms).toLocaleString();
@@ -156,6 +157,7 @@ export default function ReplayPlayer() {
       {/* Header — Pencil kq4c9 */}
       <header
         className="flex h-14 shrink-0 items-center gap-4 border-b border-[#1F1F1F] bg-[#141414] px-6"
+        {...TAURI_DRAG_REGION}
         style={IS_TAURI ? { paddingLeft: 88 } : undefined}
       >
         <button
@@ -166,7 +168,7 @@ export default function ReplayPlayer() {
           <ArrowLeft className="size-4" />
           {t("player.back")}
         </button>
-        <div className="flex min-w-0 flex-col">
+        <div className="flex min-w-0 flex-col" {...TAURI_DRAG_REGION}>
           <div className="flex items-center gap-2">
             <AgentChip
               agentId={recording.agent_id}
@@ -174,7 +176,10 @@ export default function ReplayPlayer() {
               size="sm"
               tone="inverse"
             />
-            <span className="truncate font-caption text-xs text-foreground-inverse">
+            <span
+              className="truncate font-caption text-xs text-foreground-inverse"
+              {...TAURI_DRAG_REGION}
+            >
               {formatShortTime(recording.started_at)}
               {recording.duration_ms != null && (
                 <> · {formatDuration(recording.duration_ms)}</>
@@ -183,12 +188,13 @@ export default function ReplayPlayer() {
           </div>
           <span
             className="truncate font-mono text-[10px] text-foreground-inverse-secondary"
+            {...TAURI_DRAG_REGION}
             title={`${recording.id} · ${formatTime(recording.started_at)}`}
           >
             {recording.cols}×{recording.rows} · {recording.id}
           </span>
         </div>
-        <span className="flex-1" />
+        <span className="flex-1 self-stretch" {...TAURI_DRAG_REGION} />
         {live && (
           <span className="rounded-full bg-status-running-soft px-3 py-1 text-[11px] text-status-running">
             {t("player.recording")}

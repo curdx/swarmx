@@ -26,6 +26,7 @@ const IS_TAURI =
   (window.location.protocol === "tauri:" ||
     window.location.hostname === "tauri.localhost" ||
     "__TAURI_INTERNALS__" in window);
+const TAURI_DRAG_REGION = IS_TAURI ? { "data-tauri-drag-region": "" } : {};
 import type { CliPluginInfo, SpawnAgentResponse, SwarmEvent } from "../api/types";
 import { XtermPane } from "../components/XtermPane";
 import { SwarmPanel } from "../components/SwarmPanel";
@@ -210,6 +211,7 @@ export default function DebugRoute() {
       }}
     >
       <header
+        {...TAURI_DRAG_REGION}
         style={{
           background: "#111827",
           borderBottom: "1px solid #374151",
@@ -227,14 +229,16 @@ export default function DebugRoute() {
             flexWrap: "wrap",
           }}
         >
-          <strong style={{ fontSize: 14 }}>flockmux M2 (debug)</strong>
-          <span style={{ color: "#64748b", fontSize: 12 }}>
+          <strong style={{ fontSize: 14 }} {...TAURI_DRAG_REGION}>
+            flockmux M2 (debug)
+          </strong>
+          <span style={{ color: "#64748b", fontSize: 12 }} {...TAURI_DRAG_REGION}>
             本地单用户 · 仅回环
           </span>
-          <span style={{ color: "#64748b", fontSize: 12 }}>
+          <span style={{ color: "#64748b", fontSize: 12 }} {...TAURI_DRAG_REGION}>
             {agents.length} 个 agent · 显示 {visibleAgents.length}
           </span>
-          <div style={{ flex: 1 }} />
+          <div style={{ flex: 1, alignSelf: "stretch" }} {...TAURI_DRAG_REGION} />
           {pluginsError && (
             <span style={{ color: "#ef4444", fontSize: 12 }}>
               插件加载失败：{pluginsError}

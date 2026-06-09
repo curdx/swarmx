@@ -41,12 +41,15 @@ import {
 
 // Tauri uses titleBarStyle:"Overlay" so the OS draws real traffic lights
 // in the window's top-left ~(0,0)→(78,28) region. The header reserves a
-// matching left padding so the brand logo doesn't collide with them.
+// matching left padding so the brand logo doesn't collide with them. Tauri
+// only starts a window drag when the clicked element itself has this attribute,
+// so buttons/links remain normal as long as we add it only to inert chrome.
 const IS_TAURI =
   typeof window !== "undefined" &&
   (window.location.protocol === "tauri:" ||
     window.location.hostname === "tauri.localhost" ||
     "__TAURI_INTERNALS__" in window);
+const TAURI_DRAG_REGION = IS_TAURI ? { "data-tauri-drag-region": "" } : {};
 
 export function AppShell() {
   const { t } = useTranslation();
@@ -78,6 +81,7 @@ export function AppShell() {
       <div className="flex h-full flex-col bg-surface-primary text-foreground-primary">
         <header
           className="flex h-11 shrink-0 items-center gap-3 border-b border-border-subtle bg-surface-secondary px-3"
+          {...TAURI_DRAG_REGION}
           // Tauri OS lights live in the top-left ~78px strip; pad past them.
           style={IS_TAURI ? { paddingLeft: 88 } : undefined}
         >
@@ -95,7 +99,7 @@ export function AppShell() {
             </span>
           </Link>
 
-          <span className="flex-1" />
+          <span className="flex-1 self-stretch" {...TAURI_DRAG_REGION} />
 
           {/* ⌘K trigger — 用 Search icon + 旁边小 kbd hint，跟 🔔 / ⚙
               统一成 icon button 风格。之前用纯 kbd + border 像"输入框
