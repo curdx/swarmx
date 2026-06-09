@@ -232,11 +232,17 @@ pub fn spawn_agent(
     } else {
         env.insert("LANG".into(), "en_US.UTF-8".into());
     }
-    // PATH: keep the parent's so the inner CLI can resolve its own subcommands
-    // (e.g. `claude doctor` may exec `node`).
-    if let Ok(path) = std::env::var("PATH") {
-        env.insert("PATH".into(), path);
-    }
+    // PATH: preserve the parent's path and append desktop install locations.
+    // Finder-launched macOS apps get a short launchd PATH, while node/npm/npx
+    // and the CLIs commonly live under Homebrew, Volta, asdf, cargo, or
+    // ~/.local/bin. The allowlist keeps this deterministic without importing a
+    // user's whole shell environment.
+    env.insert(
+        "PATH".into(),
+        crate::runtime_path::augmented_path()
+            .to_string_lossy()
+            .into_owned(),
+    );
     // Non-secret runtime essentials the CLI may need to reach the network /
     // render unicode. Forwarded only if present. Locale (LC_*), temp dir,
     // HTTP(S) proxy, and TLS CA bundles cover corporate / proxied setups

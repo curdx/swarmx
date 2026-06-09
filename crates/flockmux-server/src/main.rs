@@ -22,6 +22,7 @@ mod pty_stream;
 mod registry;
 mod roles;
 mod routes;
+mod runtime_path;
 mod spawn;
 mod spells;
 mod tokens;

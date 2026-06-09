@@ -21,8 +21,30 @@ use tokio::process::Command;
 
 // ── 运行时探测 ──────────────────────────────────────────────────────
 
-async fn probe_version(bin: &str, arg: &str) -> Option<String> {
-    let out = Command::new(bin).arg(arg).output().await.ok()?;
+#[derive(Clone, Debug)]
+struct VersionProbe {
+    version: String,
+    path: Option<String>,
+}
+
+fn resolved_program(bin: &str) -> (PathBuf, Option<String>) {
+    match crate::runtime_path::resolve_executable(bin) {
+        Some(path) => {
+            let display = path.to_string_lossy().into_owned();
+            (path, Some(display))
+        }
+        None => (PathBuf::from(bin), None),
+    }
+}
+
+async fn probe_version(bin: &str, arg: &str) -> Option<VersionProbe> {
+    let (program, path) = resolved_program(bin);
+    let out = Command::new(&program)
+        .arg(arg)
+        .env("PATH", crate::runtime_path::augmented_path())
+        .output()
+        .await
+        .ok()?;
     if !out.status.success() {
         return None;
     }
@@ -35,13 +57,13 @@ async fn probe_version(bin: &str, arg: &str) -> Option<String> {
         .map(str::to_string)
         .unwrap_or(s);
     if !s.is_empty() {
-        return Some(s);
+        return Some(VersionProbe { version: s, path });
     }
     let e = String::from_utf8_lossy(&out.stderr).trim().to_string();
     if e.is_empty() {
         None
     } else {
-        Some(e)
+        Some(VersionProbe { version: e, path })
     }
 }
 
@@ -72,14 +94,29 @@ pub async fn mcp_env(State(_s): State<AppState>) -> impl IntoResponse {
     // (e.g. v14) is the case that used to show a green ✓ while the servers below
     // all say "needs Node LTS" — that's the check lying. Surface it.
     let node_adequate = node
-        .as_deref()
+        .as_ref()
+        .map(|p| p.version.as_str())
         .and_then(node_major)
         .map(|m| m >= NODE_MIN_MAJOR)
         .unwrap_or(false);
     Json(json!({
-        "node": { "present": node.is_some(), "version": node, "adequate": node_adequate, "minMajor": NODE_MIN_MAJOR },
-        "npm":  { "present": npm.is_some(),  "version": npm },
-        "uv":   { "present": uv.is_some(),   "version": uv },
+        "node": {
+            "present": node.is_some(),
+            "version": node.as_ref().map(|p| p.version.as_str()),
+            "path": node.as_ref().and_then(|p| p.path.as_deref()),
+            "adequate": node_adequate,
+            "minMajor": NODE_MIN_MAJOR,
+        },
+        "npm":  {
+            "present": npm.is_some(),
+            "version": npm.as_ref().map(|p| p.version.as_str()),
+            "path": npm.as_ref().and_then(|p| p.path.as_deref()),
+        },
+        "uv":   {
+            "present": uv.is_some(),
+            "version": uv.as_ref().map(|p| p.version.as_str()),
+            "path": uv.as_ref().and_then(|p| p.path.as_deref()),
+        },
     }))
 }
 
@@ -283,20 +320,29 @@ async fn run<S: AsRef<std::ffi::OsStr>>(
     bin: &str,
     args: &[S],
 ) -> Result<String, (StatusCode, String)> {
-    let out = Command::new(bin).args(args).output().await.map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("{bin} 启动失败: {e}（是否已安装并在 PATH 中？）"),
-        )
-    })?;
+    let (program, resolved_path) = resolved_program(bin);
+    let out = Command::new(&program)
+        .args(args)
+        .env("PATH", crate::runtime_path::augmented_path())
+        .output()
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!(
+                "{bin} 启动失败: {e}（已搜索 PATH、Homebrew、用户工具目录；请确认已安装并登录）"
+            ),
+            )
+        })?;
     if out.status.success() {
         Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
     } else {
         let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        let label = resolved_path.as_deref().unwrap_or(bin);
         Err((
             StatusCode::BAD_GATEWAY,
             if err.is_empty() {
-                format!("{bin} 退出码非零")
+                format!("{label} 退出码非零")
             } else {
                 err
             },
@@ -322,6 +368,9 @@ pub async fn mcp_install(
         )
             .into_response();
     };
+    let svc_command = crate::runtime_path::resolve_executable(k.command)
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|| k.command.to_string());
     // server 命令的 args，需要 key 时把 `--api-key <key>` 追加在末尾。
     let mut svc_args: Vec<String> = k.args.iter().map(|s| s.to_string()).collect();
     if let Some(flag) = k.api_key_flag {
@@ -352,7 +401,7 @@ pub async fn mcp_install(
                 "--scope".into(),
                 "user".into(),
                 "--".into(),
-                k.command.into(),
+                svc_command.clone(),
             ],
         ),
         "codex" => (
@@ -362,7 +411,7 @@ pub async fn mcp_install(
                 "add".into(),
                 req.name.clone(),
                 "--".into(),
-                k.command.into(),
+                svc_command,
             ],
         ),
         _ => return (StatusCode::BAD_REQUEST, Json(json!({"error": "未知 CLI"}))).into_response(),
