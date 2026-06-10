@@ -1,15 +1,15 @@
 //! REST endpoints. Loopback-only; no auth (per user decision — local single-user).
 
-use crate::plugins::CliPlugin;
-use crate::registry::LifecycleEvent;
-use crate::spawn::{spawn_agent, WorkspaceLayout};
-use crate::spells;
 use crate::AppState;
+use crate::plugins::{CliPlugin, PluginRegistry};
+use crate::registry::LifecycleEvent;
+use crate::spawn::{WorkspaceLayout, spawn_agent};
+use crate::spells;
 use axum::{
+    Json,
     extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
-    Json,
 };
 use flockmux_protocol::rest::{
     AgentInfo, CliInstallHint, CliPluginInfo, RunSpellAgent, RunSpellRequest, RunSpellResponse,
@@ -217,7 +217,7 @@ async fn cli_plugin_info(p: &CliPlugin) -> CliPluginInfo {
 
 async fn probe_cli_version(binary: &FsPath) -> Option<String> {
     use tokio::process::Command;
-    use tokio::time::{timeout, Duration};
+    use tokio::time::{Duration, timeout};
 
     let output = Command::new(binary)
         .arg("--version")
@@ -288,6 +288,86 @@ fn missing_cli_install_message(plugin: &CliPlugin) -> String {
         msg.push_str(&hint.docs_url);
     }
     msg
+}
+
+fn missing_all_cli_install_message(requested: &CliPlugin, registry: &PluginRegistry) -> String {
+    let mut msg = missing_cli_install_message(requested);
+    let mut alternatives: Vec<String> = registry
+        .list()
+        .into_iter()
+        .filter(|p| p.id != requested.id)
+        .filter_map(|p| {
+            install_hint_for(p).map(|hint| {
+                let command = hint
+                    .commands
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| format!("Install {}", p.display_name));
+                format!("{}: {}", p.display_name, command)
+            })
+        })
+        .collect();
+    alternatives.sort();
+    if !alternatives.is_empty() {
+        msg.push_str("\n\nOther supported AI engines you can install:\n");
+        for alt in alternatives {
+            msg.push_str("- ");
+            msg.push_str(&alt);
+            msg.push('\n');
+        }
+    }
+    msg
+}
+
+fn cli_plugin_installed(plugin: &CliPlugin) -> bool {
+    crate::runtime_path::resolve_executable(&plugin.binary).is_some()
+}
+
+fn fallback_candidate_order(plugin: &CliPlugin) -> (u8, &str) {
+    // Codex is the safest automatic fallback because it stays on the CLI-account
+    // surface and is the first structured-transport pilot in this project.
+    let preferred = if plugin.id == "codex" { 0 } else { 1 };
+    (preferred, plugin.id.as_str())
+}
+
+fn select_spawn_plugin_with<'a>(
+    registry: &'a PluginRegistry,
+    requested_cli: &str,
+    is_installed: &impl Fn(&CliPlugin) -> bool,
+) -> Result<(&'a CliPlugin, Option<&'a CliPlugin>), (StatusCode, String)> {
+    let requested = registry.get(requested_cli).ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            format!("unknown cli plugin: {requested_cli}"),
+        )
+    })?;
+    if is_installed(requested) {
+        return Ok((requested, None));
+    }
+
+    let mut fallbacks: Vec<&CliPlugin> = registry
+        .list()
+        .into_iter()
+        .filter(|p| p.id != requested.id)
+        .filter(|p| !p.requires_explicit_billing_opt_in)
+        .filter(|p| is_installed(p))
+        .collect();
+    fallbacks.sort_by_key(|p| fallback_candidate_order(p));
+    if let Some(plugin) = fallbacks.into_iter().next() {
+        return Ok((plugin, Some(requested)));
+    }
+
+    Err((
+        StatusCode::BAD_REQUEST,
+        missing_all_cli_install_message(requested, registry),
+    ))
+}
+
+fn select_spawn_plugin<'a>(
+    registry: &'a PluginRegistry,
+    requested_cli: &str,
+) -> Result<(&'a CliPlugin, Option<&'a CliPlugin>), (StatusCode, String)> {
+    select_spawn_plugin_with(registry, requested_cli, &cli_plugin_installed)
 }
 
 /// `POST /api/agent/:id/mcp-ready` — called by the agent's own `flockmux-mcp`
@@ -477,17 +557,18 @@ pub(crate) async fn spawn_with_bookkeeping(
         ));
     }
 
-    let plugin: CliPlugin = state
-        .plugins
-        .get(cli)
-        .cloned()
-        .ok_or_else(|| (StatusCode::NOT_FOUND, format!("unknown cli plugin: {cli}")))?;
-    if crate::runtime_path::resolve_executable(&plugin.binary).is_none() {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            missing_cli_install_message(&plugin),
-        ));
+    let (selected_plugin, fallback_from) = select_spawn_plugin(&state.plugins, cli)?;
+    if let Some(requested) = fallback_from {
+        tracing::warn!(
+            requested_cli = %requested.id,
+            requested_binary = %requested.binary,
+            fallback_cli = %selected_plugin.id,
+            fallback_binary = %selected_plugin.binary,
+            "requested CLI binary unavailable; falling back to installed provider"
+        );
     }
+    let plugin: CliPlugin = selected_plugin.clone();
+    let actual_cli = plugin.id.as_str();
 
     // F1: resolve the requested abstract tier into the concrete model for THIS
     // cli, using the per-CLI model config. claude keeps its alias ("sonnet" →
@@ -496,9 +577,13 @@ pub(crate) async fn spawn_with_bookkeeping(
     // model id passes through verbatim. This is the single chokepoint for all
     // three spawn paths (/api/agent, /api/worker, run_spell).
     let model = {
-        let resolved = state.models.read().await.resolve(cli, model.as_deref());
+        let resolved = state
+            .models
+            .read()
+            .await
+            .resolve(actual_cli, model.as_deref());
         if resolved != model {
-            tracing::info!(cli = %cli, from = ?model, to = ?resolved, "model tier resolved per-CLI");
+            tracing::info!(cli = %actual_cli, from = ?model, to = ?resolved, "model tier resolved per-CLI");
         }
         resolved
     };
@@ -509,7 +594,7 @@ pub(crate) async fn spawn_with_bookkeeping(
     // chokepoint so every spawn path inherits the global default.
     let reasoning = match reasoning {
         Some(r) => Some(r),
-        None => state.models.read().await.effort_for(cli),
+        None => state.models.read().await.effort_for(actual_cli),
     };
 
     let spawned_at = now_ms();
@@ -1267,7 +1352,7 @@ pub async fn spawn_worker(
                 return Err((
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(json!({"error": format!("thread cwd lookup failed: {e}")})),
-                ))
+                ));
             }
         },
         None => (ws.cwd.clone(), "main".to_string(), None, None),
@@ -1639,7 +1724,7 @@ pub async fn resume(
             return (
                 StatusCode::NOT_FOUND,
                 Json(json!({"error": format!("agent {agent_id} not found")})),
-            )
+            );
         }
     };
     slot.lock()
@@ -1680,7 +1765,7 @@ pub async fn interrupt_all(
             return (
                 StatusCode::BAD_REQUEST,
                 Json(json!({"error": "missing required query param 'workspace_id'"})),
-            )
+            );
         }
     };
 
@@ -2366,14 +2451,14 @@ pub async fn compact_blackboard(
                 StatusCode::NOT_FOUND,
                 Json(json!({ "error": "no such blackboard path" })),
             )
-                .into_response()
+                .into_response();
         }
         Err(e) => {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({ "error": e.to_string() })),
             )
-                .into_response()
+                .into_response();
         }
     };
     let before_tokens = crate::tokens::estimate(&content);
@@ -2404,7 +2489,7 @@ pub async fn compact_blackboard(
                 StatusCode::SERVICE_UNAVAILABLE,
                 Json(json!({ "error": "压缩需要 claude CLI，但未找到 claude 插件" })),
             )
-                .into_response()
+                .into_response();
         }
     };
     let model = { state.models.read().await.resolve(&plugin_id, Some("haiku")) };
@@ -2428,7 +2513,7 @@ pub async fn compact_blackboard(
                 StatusCode::BAD_GATEWAY,
                 Json(json!({ "error": format!("无法启动 claude：{e}（请确认已安装并登录）") })),
             )
-                .into_response()
+                .into_response();
         }
     };
     let out =
@@ -2441,14 +2526,14 @@ pub async fn compact_blackboard(
                     StatusCode::BAD_GATEWAY,
                     Json(json!({ "error": format!("claude 执行失败：{e}") })),
                 )
-                    .into_response()
+                    .into_response();
             }
             Err(_) => {
                 return (
                     StatusCode::GATEWAY_TIMEOUT,
                     Json(json!({ "error": "压缩超时（claude 无响应）" })),
                 )
-                    .into_response()
+                    .into_response();
             }
         };
     if !out.status.success() {
@@ -2935,5 +3020,55 @@ mod p0_tests {
         assert!(msg.contains("Claude Code CLI binary `claude`"));
         assert!(msg.contains("curl -fsSL https://claude.ai/install.sh | bash"));
         assert!(msg.contains("https://code.claude.com/docs/en/setup"));
+    }
+
+    fn test_registry() -> PluginRegistry {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("claude.toml"),
+            "id='claude'\ndisplay_name='Claude Code'\nbinary='claude'\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("codex.toml"),
+            "id='codex'\ndisplay_name='Codex CLI'\nbinary='codex'\n",
+        )
+        .unwrap();
+        PluginRegistry::load_dir(dir.path()).unwrap()
+    }
+
+    #[test]
+    fn select_spawn_plugin_keeps_requested_when_available() {
+        let registry = test_registry();
+        let (selected, fallback_from) =
+            select_spawn_plugin_with(&registry, "claude", &|p| p.id == "claude").unwrap();
+        assert_eq!(selected.id, "claude");
+        assert!(fallback_from.is_none());
+    }
+
+    #[test]
+    fn select_spawn_plugin_falls_back_to_installed_codex() {
+        let registry = test_registry();
+        let (selected, fallback_from) =
+            select_spawn_plugin_with(&registry, "claude", &|p| p.id == "codex").unwrap();
+        assert_eq!(selected.id, "codex");
+        assert_eq!(fallback_from.map(|p| p.id.as_str()), Some("claude"));
+    }
+
+    #[test]
+    fn select_spawn_plugin_reports_install_hints_when_none_available() {
+        let registry = test_registry();
+        let err = select_spawn_plugin_with(&registry, "claude", &|_| false).unwrap_err();
+        assert_eq!(err.0, StatusCode::BAD_REQUEST);
+        assert!(err.1.contains("Claude Code CLI binary `claude`"));
+        assert!(
+            err.1
+                .contains("curl -fsSL https://claude.ai/install.sh | bash")
+        );
+        assert!(err.1.contains("Other supported AI engines"));
+        assert!(
+            err.1
+                .contains("Codex CLI: curl -fsSL https://chatgpt.com/codex/install.sh | sh")
+        );
     }
 }
