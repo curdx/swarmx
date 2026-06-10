@@ -70,6 +70,10 @@ import { ModelPicker } from "@/components/ModelPicker";
 import { extractImagePaths, fileUrl, baseName } from "@/lib/imagePaths";
 import { roleColorClass as roleColor } from "@/lib/agent";
 import { activityVerb } from "@/lib/activityVerb";
+import {
+  EmptyState,
+  type EmptyStateCliReadiness,
+} from "@/components/chat/EmptyState";
 import { getClientPlatformInfo } from "@/lib/platform";
 
 const ChatMarkdown = lazy(() =>
@@ -142,6 +146,10 @@ interface Props {
    *  lying with a typing bubble for 60s (P0-3, treats 诊断2 等待期撒谎 root).
    *  It also feeds the pending bubble's honest two-signal activity line. */
   agentLiveStateById?: Record<string, AgentLiveState>;
+  /** CLI engine readiness — renders the helpful empty-room state (P0-8) with
+   *  starter prompts + an honest engine pre-check. Omitted by the legacy /debug
+   *  panel ⇒ an empty room falls back to plain "暂无消息". */
+  cliReadiness?: EmptyStateCliReadiness;
   /** Rendered in place of the plain "暂无消息" text when the room has no
    *  messages — the parent passes an honest startup checklist or failure card
    *  here when the orchestrator is starting / wedged, so an empty room is never
@@ -270,6 +278,7 @@ export function MessagesPanel({
   modelBusy = false,
   agentActivityById,
   agentLiveStateById,
+  cliReadiness,
   emptyStateOverride,
 }: Props) {
   const aliveForInference = allAliveAgents ?? activeMembers;
@@ -1276,11 +1285,23 @@ export function MessagesPanel({
       {/* ── bubble list ──────────────────────────────────────────────── */}
       <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
         {rows.length === 0 &&
-          (emptyStateOverride ?? (
-            <p className="mt-10 text-center font-caption text-xs text-foreground-tertiary">
-              {t("messages.empty")}
-            </p>
-          ))}
+          (emptyStateOverride ??
+            (cliReadiness ? (
+              <EmptyState
+                cliReadiness={cliReadiness}
+                onPickStarter={(text) => {
+                  setBody(text);
+                  requestAnimationFrame(() => {
+                    autoGrow(composerRef.current);
+                    composerRef.current?.focus();
+                  });
+                }}
+              />
+            ) : (
+              <p className="mt-10 text-center font-caption text-xs text-foreground-tertiary">
+                {t("messages.empty")}
+              </p>
+            )))}
         <div className="mx-auto flex w-full max-w-[1040px] flex-col gap-0.5">
           {rows.map(({ msg: m, showHeader, showDividerBefore }) => {
             const isUser = m.from_agent === USER_SENDER;

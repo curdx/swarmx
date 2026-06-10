@@ -925,6 +925,7 @@ export default function ChatView() {
           modelBusy={modelBusy}
           agentActivityById={agentActivityById}
           agentLiveStateById={agentStateById}
+          cliReadiness={cliReadiness}
           emptyStateOverride={
             orchestratorFailure ? (
               <OrchestratorFailureCard

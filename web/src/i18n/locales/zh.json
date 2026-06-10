@@ -364,6 +364,22 @@
       "titleTimeout": "队长启动后没有响应",
       "titleEscalated": "多次重试仍未成功，需要你处理"
     },
+    "emptyState": {
+      "greetingTitle": "把要做的事交给队长",
+      "greetingBody": "说出你想做的事，发送后队长会上线，拆成计划、派给成员推进，并在这里向你汇报。",
+      "starterHint": "试试这样开始：",
+      "starter": {
+        "refactor": "重构这个函数，抽出可复用逻辑",
+        "test": "给这段代码补上失败用例的测试",
+        "bug": "帮我查这个 bug 的根因"
+      },
+      "precheckTitle": "AI 引擎",
+      "precheckLoading": "正在检查引擎…",
+      "engineLoggedIn": "{{name}} 已就绪",
+      "engineMissing": "{{name}} 未安装",
+      "noEngineBody": "需要先装好并登录至少一个 AI 引擎，队长才能上岗。",
+      "setupEngine": "去安装 AI 引擎"
+    },
     "workspaces": "工作空间",
     "newWorkspace": "新建工作空间",
     "noActiveAgents": "暂无活跃 agent · 去",
