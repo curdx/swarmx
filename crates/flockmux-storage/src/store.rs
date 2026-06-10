@@ -314,6 +314,123 @@ impl Store {
         .context("spawn_blocking record_shim_exit")?
     }
 
+    /// Persist an "alive but can't work" failure reason (auth/quota banner from
+    /// the HealthScanner, or the first-response watchdog firing). Read back by
+    /// `list_agents` into `AgentInfo.last_error` so the UI can re-render an
+    /// honest failure card on a cold load — the live `AgentState::Error` WS
+    /// event is lossy with no resume. Last-write-wins (a later failure
+    /// overwrites an earlier one); a successful re-spawn is a new agent row, so
+    /// we never need to clear this.
+    pub async fn record_agent_error(
+        &self,
+        id: String,
+        reason: String,
+        kind: &str,
+        at_ms: i64,
+    ) -> Result<()> {
+        let pool = self.pool.clone();
+        let kind = kind.to_string();
+        tokio::task::spawn_blocking(move || {
+            with_busy_retry(&pool, |conn| -> rusqlite::Result<()> {
+                conn.execute(
+                    "UPDATE agents SET last_error = ?2, last_error_kind = ?3, last_error_at = ?4 \
+                 WHERE id = ?1",
+                    params![id, reason, kind, at_ms],
+                )?;
+                Ok(())
+            })
+        })
+        .await
+        .context("spawn_blocking record_agent_error")?
+    }
+
+    /// Clear a previously-recorded `last_error` once an agent recovers in place
+    /// — e.g. the user ran `/login` in the failed agent's own terminal and it
+    /// resumed working, or the first-response watchdog false-fired on a slow
+    /// first turn and the agent then produced real activity. Without this the
+    /// Error latch is one-way: the failure card, red member dot, and red status
+    /// strip would persist forever even though the agent is actively working
+    /// (the transcript tailer detects the recovery and calls this).
+    pub async fn clear_agent_error(&self, id: String) -> Result<()> {
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || {
+            with_busy_retry(&pool, |conn| -> rusqlite::Result<()> {
+                conn.execute(
+                    "UPDATE agents SET last_error = NULL, last_error_kind = NULL, \
+                     last_error_at = NULL WHERE id = ?1",
+                    params![id],
+                )?;
+                Ok(())
+            })
+        })
+        .await
+        .context("spawn_blocking clear_agent_error")?
+    }
+
+    /// True when the agent's PROCESS is gone — killed, or its shim recorded an
+    /// exit. Lets the transcript tailer tell a terminal `AgentState::Error`
+    /// (non-zero shim exit, including kills) from a SOFT error (HealthScanner /
+    /// first-response watchdog flipped the agent to Error while its process is
+    /// still alive). The watcher persists `shim_exit_at` BEFORE publishing the
+    /// exit-driven Error, so by the time the tailer sees that event this read is
+    /// already true — no race. A soft error leaves both columns NULL, so the
+    /// tailer keeps tailing and can observe the agent's recovery.
+    pub async fn agent_process_dead(&self, id: String) -> Result<bool> {
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || {
+            with_busy_retry(&pool, |conn| -> rusqlite::Result<bool> {
+                conn.query_row(
+                    "SELECT (killed_at IS NOT NULL OR shim_exit_at IS NOT NULL) \
+                     FROM agents WHERE id = ?1",
+                    params![id],
+                    |row| row.get::<_, i64>(0).map(|b| b != 0),
+                )
+                // No row ⇒ treat as gone (nothing left to tail).
+                .or_else(|e| match e {
+                    rusqlite::Error::QueryReturnedNoRows => Ok(true),
+                    other => Err(other),
+                })
+            })
+        })
+        .await
+        .context("spawn_blocking agent_process_dead")?
+    }
+
+    /// First-response watchdog probe: true when the agent is still live (not
+    /// killed, no shim exit, no already-recorded error) yet has produced NO
+    /// observable sign of life — no persisted message of its own, no tool-level
+    /// activity, and no token usage. That combination, a generous window after
+    /// ShimReady, means it's wedged (an auth prompt we didn't needle, a hung
+    /// hook, an MCP that never settled). Token usage is the decisive liveness
+    /// signal that keeps a legitimately-slow first turn (an orchestrator reading
+    /// the repo before greeting) from being misflagged: tokens accrue the moment
+    /// it talks to the model, even with zero messages. Crucially this covers the
+    /// orchestrator, which the transcript tailer doesn't watch — the exact gap
+    /// that let "暂无消息" sit forever behind a fake green dot. One query.
+    pub async fn agent_silent_since_ready(&self, id: String) -> Result<bool> {
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || {
+            with_busy_retry(&pool, |conn| -> rusqlite::Result<bool> {
+                conn.query_row(
+                    "SELECT (a.killed_at IS NULL AND a.shim_exit_at IS NULL \
+                          AND a.last_error IS NULL AND a.last_activity_at IS NULL \
+                          AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.from_agent = a.id) \
+                          AND NOT EXISTS (SELECT 1 FROM agent_usage u WHERE u.agent_id = a.id)) \
+                     FROM agents a WHERE a.id = ?1",
+                    params![id],
+                    |row| row.get::<_, i64>(0).map(|b| b != 0),
+                )
+                // No such agent row (already torn down) ⇒ nothing to flag.
+                .or_else(|e| match e {
+                    rusqlite::Error::QueryReturnedNoRows => Ok(false),
+                    other => Err(other),
+                })
+            })
+        })
+        .await
+        .context("spawn_blocking agent_silent_since_ready")?
+    }
+
     /// Persist the agent's most recent tool-level activity time, called by the
     /// transcript tailer. Monotonic — only ever moves forward — so an
     /// out-of-order or stale poll can't rewind a fresher timestamp. Cheap UPDATE
@@ -894,7 +1011,8 @@ impl Store {
                 let mut stmt = conn.prepare(
                     "SELECT id, cli, role, workspace, spawned_at, killed_at, \
                         shim_ready_at, shim_exit_at, shim_exit_code, \
-                        workspace_id, spell_run_id, thread_id, last_activity_at \
+                        workspace_id, spell_run_id, thread_id, last_activity_at, \
+                        last_error, last_error_kind, last_error_at \
                  FROM agents \
                  ORDER BY spawned_at ASC",
                 )?;
@@ -913,6 +1031,9 @@ impl Store {
                         spell_run_id: row.get(10)?,
                         thread_id: row.get(11)?,
                         last_activity_at: row.get(12)?,
+                        last_error: row.get(13)?,
+                        last_error_kind: row.get(14)?,
+                        last_error_at: row.get(15)?,
                     })
                 })?;
                 rows.collect::<rusqlite::Result<Vec<_>>>()

@@ -103,23 +103,59 @@ async fn run(
     // High-water mark we've already persisted, so an idle tick (no new events)
     // doesn't fire a redundant UPDATE.
     let mut persisted: Option<i64> = None;
+    // Set when this agent was flipped to `Error` while its process is still
+    // alive — a SOFT error from the HealthScanner ("Not logged in") or the
+    // first-response watchdog, NOT a process exit. We keep tailing through it
+    // so that if the agent recovers (user runs /login in its terminal, or a
+    // slow first turn finally produces output) we can clear the error latch.
+    let mut soft_errored = false;
 
     loop {
         tokio::select! {
             _ = tick.tick() => {
                 st.poll(&path, &swarm, agent_id).await;
-                persist_activity(&store, agent_id, st.last_emit_at, &mut persisted).await;
+                let advanced =
+                    persist_activity(&store, agent_id, st.last_emit_at, &mut persisted).await;
                 persist_usage(&store, agent_id, &mut st.pending_usage).await;
+                // Recovery: a soft-errored agent that just produced real
+                // activity is back to work — clear the persisted error and
+                // publish a non-error state so the failure card / red dot /
+                // red status strip all drop. Without this the Error latch is
+                // one-way and a recovered agent shows dead forever.
+                if soft_errored && advanced {
+                    soft_errored = false;
+                    if let Err(e) = store.clear_agent_error(agent_id.to_string()).await {
+                        tracing::debug!(agent = %agent_id, ?e, "transcript: clear_agent_error failed");
+                    }
+                    tracing::info!(agent = %agent_id, "transcript: agent recovered after soft error; clearing error latch");
+                    swarm.publish_event(SwarmEvent::AgentState {
+                        agent_id: agent_id.to_string(),
+                        state: AgentState::Idle,
+                    });
+                }
             }
             ev = rx.recv() => {
                 match ev {
                     Ok(SwarmEvent::AgentState { agent_id: a, state })
                         if a == agent_id && matches!(state, AgentState::Exited | AgentState::Error) =>
                     {
-                        st.poll(&path, &swarm, agent_id).await; // final flush
-                        persist_activity(&store, agent_id, st.last_emit_at, &mut persisted).await;
-                        persist_usage(&store, agent_id, &mut st.pending_usage).await;
-                        break;
+                        // `Error` is overloaded: a non-zero shim exit (process
+                        // dead, including kills) AND a soft auth/watchdog error
+                        // (process alive) both publish it. Only stop tailing
+                        // when the PROCESS is actually gone — otherwise a soft
+                        // error would kill the tailer and freeze the agent's
+                        // activity forever, turning a false alarm into an
+                        // unrecoverable fake death. `Exited` is always terminal.
+                        let dead = matches!(state, AgentState::Exited)
+                            || store.agent_process_dead(agent_id.to_string()).await.unwrap_or(true);
+                        if dead {
+                            st.poll(&path, &swarm, agent_id).await; // final flush
+                            persist_activity(&store, agent_id, st.last_emit_at, &mut persisted).await;
+                            persist_usage(&store, agent_id, &mut st.pending_usage).await;
+                            break;
+                        }
+                        // Soft error: keep tailing so we can detect recovery.
+                        soft_errored = true;
                     }
                     Ok(_) => {}
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
@@ -134,21 +170,25 @@ async fn run(
 /// Persist `last_emit_at` to the agent row if it advanced past what we've
 /// already written. Mutating `persisted` through `&mut` keeps the high-water
 /// mark across poll ticks without a dead-store warning at the break path.
+/// Returns `true` when it actually advanced (new activity this tick) — the
+/// recovery path uses that to detect a soft-errored agent coming back to life.
 async fn persist_activity(
     store: &flockmux_storage::Store,
     agent_id: &str,
     last_emit_at: Option<i64>,
     persisted: &mut Option<i64>,
-) {
+) -> bool {
     if last_emit_at <= *persisted {
-        return;
+        return false;
     }
     if let Some(at) = last_emit_at {
         if let Err(e) = store.touch_agent_activity(agent_id.to_string(), at).await {
             tracing::debug!(agent = %agent_id, ?e, "transcript: touch_agent_activity failed");
         }
         *persisted = last_emit_at;
+        return true;
     }
+    false
 }
 
 /// Drain buffered token-usage events into the `agent_usage` table. Best-effort:

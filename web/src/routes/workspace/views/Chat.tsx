@@ -16,6 +16,7 @@ import { Link } from "react-router-dom";
 import { api } from "../../../api/http";
 import type { AgentInfo, CliPluginInfo } from "../../../api/types";
 import { MessagesPanel } from "../../../components/MessagesPanel";
+import { OrchestratorFailureCard } from "../../../components/workspace/OrchestratorFailureCard";
 import { OnboardingTour } from "../../../components/OnboardingTour";
 import {
   TaskActivity,
@@ -211,6 +212,7 @@ function WorkspaceStatusStrip({
   cliReadiness,
   reviving,
   onRevive,
+  hasError = false,
 }: {
   workspaceName: string;
   directionName: string;
@@ -220,9 +222,15 @@ function WorkspaceStatusStrip({
   cliReadiness: CliReadiness;
   reviving: boolean;
   onRevive: () => void;
+  /** True when the direction's orchestrator is in an error state (auth/quota/
+   *  watchdog). Keeps the strip's liveness dot honest — without it the strip
+   *  would still say "1 个 AI 在线" directly above the failure card. */
+  hasError?: boolean;
 }) {
   const { t } = useTranslation();
-  const hasMembers = memberCount > 0;
+  // A member that exists but can't work is NOT "online". `hasError` overrides
+  // the raw member count so the strip never contradicts the failure card.
+  const hasMembers = memberCount > 0 && !hasError;
   const noCliReady =
     !cliReadiness.loading &&
     cliReadiness.installed.length === 0 &&
@@ -255,12 +263,18 @@ function WorkspaceStatusStrip({
                 <span
                   className={cn(
                     "size-1.5 rounded-full",
-                    hasMembers ? "bg-status-running" : "bg-state-warning",
+                    hasError
+                      ? "bg-status-danger"
+                      : hasMembers
+                        ? "bg-status-running"
+                        : "bg-state-warning",
                   )}
                 />
-                {hasMembers
-                  ? t("chat.workspaceStripOnline", { count: memberCount })
-                  : t("chat.workspaceStripIdle")}
+                {hasError
+                  ? t("chat.workspaceStripFailed", "AI 启动失败")
+                  : hasMembers
+                    ? t("chat.workspaceStripOnline", { count: memberCount })
+                    : t("chat.workspaceStripIdle")}
               </span>
               <span className="inline-flex items-center gap-1">
                 <FolderOpen className="size-3" />
@@ -272,14 +286,19 @@ function WorkspaceStatusStrip({
                   <span className="truncate font-mono">{cwdBranch}</span>
                 </span>
               )}
-              {!cliReadiness.loading && cliReadiness.installed.length > 0 && (
-                <span className="inline-flex min-w-0 items-center gap-1">
-                  <PlugZap className="size-3 shrink-0" />
-                  <span className="truncate">
-                    {t("chat.workspaceStripCliReady", { names: cliNames })}
+              {/* "AI 引擎就绪" only means the binary is installed — it must NOT
+                  sit next to a failure card claiming the engine is fine. Hide
+                  it on error; the card carries the real status. */}
+              {!hasError &&
+                !cliReadiness.loading &&
+                cliReadiness.installed.length > 0 && (
+                  <span className="inline-flex min-w-0 items-center gap-1">
+                    <PlugZap className="size-3 shrink-0" />
+                    <span className="truncate">
+                      {t("chat.workspaceStripCliReady", { names: cliNames })}
+                    </span>
                   </span>
-                </span>
-              )}
+                )}
             </div>
           </div>
         </div>
@@ -417,6 +436,85 @@ export default function ChatView() {
       setReviving(false);
     }
   }, [reviving, workspace.path, workspace.workspaceId, refreshAgents]);
+
+  // ── Orchestrator failure (honesty fix) ───────────────────────────────
+  // The backend now flips the orchestrator to AgentState::Error when its CLI
+  // can't work (HealthScanner caught "Not logged in", or the first-response
+  // watchdog fired) and persists the reason to last_error. Surface that in the
+  // MAIN chat view — not just the ≥1536px member rail — so an empty room is
+  // never silently sitting behind a fake green dot.
+  const orchestratorFailure = useMemo(() => {
+    const orch = activeMembers.find(
+      (m) => m.role === "orchestrator" && m.killed_at == null,
+    );
+    if (!orch) return null;
+    const live = agentStateById[orch.agent_id];
+    // Prefer the live error label (instant, from the AgentActivity event); fall
+    // back to the persisted last_error so the card survives a page reload.
+    const liveErr =
+      live?.state === "error" && live.activity?.phase === "error"
+        ? live.activity.label
+        : null;
+    const reason = liveErr ?? orch.last_error ?? null;
+    // Recovery guard: a liveness signal newer than the recorded error means the
+    // orchestrator came back to work (user ran /login in its terminal, or a slow
+    // first turn finally produced output). The backend tailer clears last_error
+    // + publishes a non-error state, but this covers the window before that
+    // lands and a lossy-WS drop of the clear — otherwise the failure card would
+    // outlive the recovery the card's own "打开终端登录" button caused. Can't
+    // false-clear: only fires when there's activity strictly newer than the error.
+    const errAt = orch.last_error_at ?? null;
+    const freshSignalAt = Math.max(
+      orch.last_activity_at ?? 0,
+      live?.activity?.at ?? 0,
+    );
+    const recoveredSinceError = errAt != null && freshSignalAt > errAt;
+    const isError =
+      (live?.state === "error" || orch.last_error != null) &&
+      !recoveredSinceError;
+    if (!isError || !reason) return null;
+    const kind =
+      orch.last_error_kind ??
+      (/(未登录|not logged in|\/login)/i.test(reason) ? "auth" : null);
+    const loginCommand =
+      cliReadiness.installed.find((p) => p.id === orch.cli)?.install
+        ?.login_command ?? null;
+    return { agentId: orch.agent_id, reason, kind, loginCommand };
+  }, [activeMembers, agentStateById, cliReadiness]);
+
+  const [retrying, setRetrying] = useState(false);
+  const retryOrchestrator = useCallback(async () => {
+    if (retrying) return;
+    setRetrying(true);
+    try {
+      // Kill the wedged/errored orchestrator(s) in this direction, then re-run
+      // init to spawn a fresh one (mirrors the model-switch restart path).
+      const orchs = activeMembers.filter(
+        (m) => m.role === "orchestrator" && m.killed_at == null,
+      );
+      await Promise.allSettled(orchs.map((o) => api.killAgent(o.agent_id)));
+      await api.runSpell({
+        name: "init",
+        task: "",
+        workspace_dir: workspace.path,
+        workspace_id: workspace.workspaceId,
+        thread_id: activeThread?.id,
+      });
+      refreshAgents();
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn("retry orchestrator failed", e);
+    } finally {
+      setRetrying(false);
+    }
+  }, [
+    retrying,
+    activeMembers,
+    workspace.path,
+    workspace.workspaceId,
+    activeThread?.id,
+    refreshAgents,
+  ]);
 
   const requestWakeAgent = useCallback(
     (agent: AgentInfo) => {
@@ -742,6 +840,7 @@ export default function ChatView() {
           cliReadiness={cliReadiness}
           reviving={reviving}
           onRevive={reviveOrchestrator}
+          hasError={orchestratorFailure != null}
         />
         <MessagesPanel
           liveMessage={liveMessage}
@@ -760,6 +859,18 @@ export default function ChatView() {
           onSetModel={setDirectionModel}
           modelBusy={modelBusy}
           agentActivityById={agentActivityById}
+          emptyStateOverride={
+            orchestratorFailure ? (
+              <OrchestratorFailureCard
+                reason={orchestratorFailure.reason}
+                kind={orchestratorFailure.kind}
+                loginCommand={orchestratorFailure.loginCommand}
+                onOpenTerminal={() => openAgent(orchestratorFailure.agentId)}
+                onRetry={retryOrchestrator}
+                retrying={retrying}
+              />
+            ) : undefined
+          }
           taskActivityBelow={
             <TaskActivity tasks={tasks} onDismiss={dismissTask} />
           }

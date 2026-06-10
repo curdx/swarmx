@@ -150,6 +150,40 @@ fn default_answer_window_ms() -> u64 {
     30_000
 }
 
+/// A PTY-output signature that means the spawned CLI *cannot actually do work*
+/// even though its process is alive — the canonical example is claude printing
+/// `Not logged in · Run /login` when no OAuth credential is present, or a
+/// rate-limit / quota banner.
+///
+/// Unlike [`ReadyStep`] (a one-shot ordered cursor for auto-answering startup
+/// dialogs), health needles are scanned **continuously and all at once**: the
+/// pump's `HealthScanner` watches every needle on every chunk and latches on
+/// the first match, raising `LifecycleEvent::HealthFail`. That lets the UI
+/// replace the fake "online" green dot + "暂无消息" with an honest, actionable
+/// failure card within seconds.
+///
+/// Data-driven (declared per CLI in `cli-plugins/<id>.toml`) so a new CLI adds
+/// its own auth/quota banners with zero Rust changes:
+/// ```toml
+/// [[health_needles]]
+/// needle = "Not logged in"   # literal substring, stitched across PTY chunks
+/// reason = "Claude Code 未登录"
+/// kind   = "auth"             # auth | rate_limit | fatal (steers remedy buttons)
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HealthNeedle {
+    /// Literal substring matched in PTY output (raw bytes, stitched across
+    /// chunk boundaries — same matching as `ready_plan` needles).
+    pub needle: String,
+    /// Short human-facing reason surfaced in the failure card.
+    pub reason: String,
+    /// Coarse class steering which remedy buttons the UI offers:
+    /// `auth` → 打开终端登录, `rate_limit` → 稍后重试, `fatal` → 换引擎.
+    /// Open string; unknown kinds fall back to the generic remedy set.
+    #[serde(default)]
+    pub kind: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CliPlugin {
     pub id: String,
@@ -220,6 +254,14 @@ pub struct CliPlugin {
     /// `spawn::ReadyPlanRunner`. Empty for CLIs with no blocking dialogs.
     #[serde(default)]
     pub ready_plan: Vec<ReadyStep>,
+
+    /// PTY-output signatures that mean "alive but can't work" (not logged in,
+    /// rate limited, invalid key). Scanned **continuously** by the pump's
+    /// `HealthScanner` (not the one-shot `ready_plan` cursor); the first match
+    /// raises `LifecycleEvent::HealthFail` → `AgentState::Error`. Empty = no
+    /// health probing for this CLI. See [`HealthNeedle`].
+    #[serde(default)]
+    pub health_needles: Vec<HealthNeedle>,
 
     /// Which trust-config format to write when `auto_trust_workspace` is set.
     /// Dispatch is keyed on this, NOT on `plugin.id` (see `TrustFormat`).

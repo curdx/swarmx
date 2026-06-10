@@ -250,6 +250,11 @@ async fn handle_socket(
                         Ok(LifecycleEvent::ShimExit(code)) => {
                             let _ = send_ctrl(&mut sender, &ServerControl::ShimExit { code }).await;
                         }
+                        Ok(LifecycleEvent::HealthFail { .. }) => {
+                            // Auth/quota health failures surface via the swarm
+                            // event stream (AgentState::Error), not the PTY
+                            // control channel — nothing to relay to the terminal.
+                        }
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
                             // We missed a lifecycle event. The shim_ready /
                             // shim_exit snapshot in Hello covered initial

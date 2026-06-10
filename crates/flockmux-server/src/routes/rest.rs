@@ -24,6 +24,14 @@ use std::collections::HashMap;
 use std::path::{Path as FsPath, PathBuf};
 use uuid::Uuid;
 
+/// First-response watchdog window: how long after `ShimReady` an agent may
+/// produce zero observable sign of life (no message, no tool activity, no
+/// token usage) before we declare it wedged and flip it to `AgentState::Error`.
+/// The design's honesty bar — the orchestrator's `init` greet normally lands
+/// well inside this, so the window is generous enough to avoid false alarms on
+/// a slow first turn while still surfacing a never-started agent fast.
+const FIRST_RESPONSE_WATCHDOG_MS: u64 = 90_000;
+
 fn now_ms() -> i64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
@@ -685,6 +693,63 @@ pub(crate) async fn spawn_with_bookkeeping(
                             agent_id: agent_for_task.clone(),
                             state: AgentState::Ready,
                         });
+                        // First-response watchdog. A "ready" shim only means the
+                        // PTY came up — NOT that the agent can do work. If it
+                        // produces no message, no tool activity and no token
+                        // usage within the window, it's wedged (an auth prompt
+                        // we didn't needle, a hung hook, an MCP that never
+                        // settled) — flip it to Error so the UI shows an honest
+                        // failure card instead of a green dot + "暂无消息". This
+                        // is the only liveness check that covers the orchestrator
+                        // (the transcript tailer doesn't watch it). Detached so
+                        // it never blocks the lifecycle loop.
+                        let store_wd = store.clone();
+                        let swarm_wd = swarm.clone();
+                        let agent_wd = agent_for_task.clone();
+                        tokio::spawn(async move {
+                            tokio::time::sleep(std::time::Duration::from_millis(
+                                FIRST_RESPONSE_WATCHDOG_MS,
+                            ))
+                            .await;
+                            match store_wd.agent_silent_since_ready(agent_wd.clone()).await {
+                                Ok(true) => {
+                                    let reason =
+                                        "启动后无响应（可能未登录或卡住）".to_string();
+                                    let at = now_ms();
+                                    if let Err(e) = store_wd
+                                        .record_agent_error(
+                                            agent_wd.clone(),
+                                            reason.clone(),
+                                            "watchdog",
+                                            at,
+                                        )
+                                        .await
+                                    {
+                                        tracing::warn!(?e, agent = %agent_wd, "watchdog record_agent_error failed");
+                                    }
+                                    tracing::warn!(agent = %agent_wd, "first-response watchdog fired: no message/activity/usage after ready");
+                                    swarm_wd.publish_event(SwarmEvent::AgentState {
+                                        agent_id: agent_wd.clone(),
+                                        state: AgentState::Error,
+                                    });
+                                    swarm_wd.publish_event(SwarmEvent::AgentActivity {
+                                        agent_id: agent_wd.clone(),
+                                        kind: "system".to_string(),
+                                        label: reason,
+                                        phase: "error".to_string(),
+                                        seq: 0,
+                                        duration_ms: None,
+                                        at,
+                                    });
+                                }
+                                // Healthy (spoke / used tokens) or already
+                                // handled (killed / errored) — nothing to do.
+                                Ok(false) => {}
+                                Err(e) => {
+                                    tracing::warn!(?e, agent = %agent_wd, "watchdog probe failed")
+                                }
+                            }
+                        });
                     }
                     Ok(LifecycleEvent::ShimExit(code)) => {
                         let at = now_ms();
@@ -706,6 +771,35 @@ pub(crate) async fn spawn_with_bookkeeping(
                         swarm.publish_event(SwarmEvent::AgentState {
                             agent_id: agent_for_task.clone(),
                             state: next,
+                        });
+                    }
+                    Ok(LifecycleEvent::HealthFail { reason, kind }) => {
+                        // The CLI is alive but told us (via a PTY banner the
+                        // pump's HealthScanner matched) that it can't actually
+                        // work — not logged in / rate limited / invalid key.
+                        // Flip to Error (red, sorted to top) and ride the
+                        // human-facing detail on a system AgentActivity so the
+                        // UI can render an honest, actionable failure card in
+                        // place of the fake "online" dot + "暂无消息".
+                        let at = now_ms();
+                        if let Err(e) = store
+                            .record_agent_error(agent_for_task.clone(), reason.clone(), &kind, at)
+                            .await
+                        {
+                            tracing::warn!(?e, agent = %agent_for_task, "record_agent_error failed");
+                        }
+                        swarm.publish_event(SwarmEvent::AgentState {
+                            agent_id: agent_for_task.clone(),
+                            state: AgentState::Error,
+                        });
+                        swarm.publish_event(SwarmEvent::AgentActivity {
+                            agent_id: agent_for_task.clone(),
+                            kind: "system".to_string(),
+                            label: reason,
+                            phase: "error".to_string(),
+                            seq: 0,
+                            duration_ms: None,
+                            at,
                         });
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
@@ -839,6 +933,9 @@ pub async fn list_agents(State(state): State<AppState>) -> impl IntoResponse {
                 // Backfilled from the SQLite row in the union below (the live
                 // registry slot doesn't carry it).
                 last_activity_at: None,
+                last_error: None,
+                last_error_kind: None,
+                last_error_at: None,
             },
         );
     }
@@ -858,6 +955,9 @@ pub async fn list_agents(State(state): State<AppState>) -> impl IntoResponse {
                     info.spell_run_id = row.spell_run_id;
                     info.thread_id = row.thread_id;
                     info.last_activity_at = row.last_activity_at;
+                    info.last_error = row.last_error;
+                    info.last_error_kind = row.last_error_kind;
+                    info.last_error_at = row.last_error_at;
                     items.push(info);
                 } else {
                     // Historical row: depends_on is empty (subscription
@@ -882,6 +982,9 @@ pub async fn list_agents(State(state): State<AppState>) -> impl IntoResponse {
                         parent_agent_id: None,
                         paused: false,
                         last_activity_at: row.last_activity_at,
+                        last_error: row.last_error,
+                        last_error_kind: row.last_error_kind,
+                        last_error_at: row.last_error_at,
                     });
                 }
             }
@@ -1097,6 +1200,10 @@ pub(crate) fn spawn_bootstrap_inject(
                         Ok(LifecycleEvent::ShimExit(code)) => {
                             return Err(format!("agent exited before ShimReady (code={code})"));
                         }
+                        // Auth/quota failure is reported independently (the
+                        // lifecycle subscriber publishes Error); keep waiting for
+                        // ShimReady so injection still follows the normal path.
+                        Ok(LifecycleEvent::HealthFail { .. }) => continue,
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
                         Err(tokio::sync::broadcast::error::RecvError::Closed) => {
                             return Err("lifecycle channel closed".into());

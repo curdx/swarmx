@@ -283,9 +283,17 @@ export function resolveMemberVisual(
     return { dotClass: "bg-state-wake", label: labels.starting, typing: false, isError: false };
   }
 
+  // 恢复守卫:一个比"记录的错误时刻"更新的生命信号,说明 agent 在软错误
+  // (终端内 /login、慢首响)后已恢复干活。后端 tailer 会清 last_error 并 publish
+  // 非 error 状态,这里只兜住"恢复活动已到、后端清除事件尚未到/被 lossy WS 丢掉"
+  // 的窗口。绝不会造成假绿:仅当存在严格新于 last_error_at 的活动时才放行。
+  const errAt = agent.last_error_at ?? null;
+  const freshSignalAt = Math.max(agent.last_activity_at ?? 0, live?.activity?.at ?? 0);
+  const recoveredSinceError = errAt != null && freshSignalAt > errAt;
+
   // 2) 真实 swarm state(若已收到事件)。
   const st = live?.state;
-  if (st === "error") {
+  if (st === "error" && !recoveredSinceError) {
     return { dotClass: "bg-status-danger", label: labels.error, typing: false, isError: true };
   }
   if (st === "waiting_dep") {
@@ -328,6 +336,15 @@ export function resolveMemberVisual(
     if (age >= NO_RESPONSE_MS) return stalled(labels.noResponse);
     // 中间地带:安静但还不到报警,给中性绿点(不撒谎说在干活)。
     return { dotClass: "bg-state-success", label: "", typing: false, isError: false };
+  }
+
+  // 3d) 冷加载诚实层:live error 事件在刷新后丢失(WS 无 resume),但持久化的
+  //     last_error(未登录/限流/看门狗)说明这个 agent 起来了却干不了活。走到
+  //     这里 = 没有更新的 live 活动信号,所以照 last_error 判红,和主视图失败卡
+  //     同步(否则刷新后成员点会假装变绿)。recoveredSinceError 守住"已恢复但
+  //     last_error 还没被后端清掉"的窗口(否则恢复后 idle>60s 的 agent 会误显红)。
+  if (agent.last_error && !recoveredSinceError) {
+    return { dotClass: "bg-status-danger", label: labels.error, typing: false, isError: true };
   }
 
   // 4) 回退:消息流语义推导(orchestrator + 已说过话的 worker;state 缺失也走这里)。

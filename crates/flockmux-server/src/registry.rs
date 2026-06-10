@@ -62,10 +62,21 @@ pub struct AgentSlot {
     pub mcp_ready: tokio::sync::watch::Sender<bool>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub enum LifecycleEvent {
     ShimReady,
     ShimExit(i32),
+    /// The CLI is alive but printed a banner meaning it *cannot actually do
+    /// work* — the canonical case is claude's "Not logged in · Run /login"
+    /// when no OAuth credential is present, or a rate-limit/quota notice. The
+    /// PTY pump's `HealthScanner` raises this on the first match so the
+    /// lifecycle subscriber can flip the agent to `AgentState::Error` and ride
+    /// the human-facing detail on a system `AgentActivity` — replacing the fake
+    /// "online" green dot + "暂无消息" with an honest, actionable failure card.
+    ///
+    /// Carries a `String` payload, so this enum is `Clone` (not `Copy`); the
+    /// broadcast channel only requires `Clone`.
+    HealthFail { reason: String, kind: String },
 }
 
 #[derive(Default, Clone)]

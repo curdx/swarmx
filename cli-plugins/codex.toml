@@ -87,3 +87,16 @@ max = "xhigh"      # codex has no "max" → coerce abstract max to its xhigh cei
 kind = "answer_dialog"
 needle = "Hooks need review"
 response = "2\r"
+
+# Health needles — "alive but can't work" PTY signatures (see claude.toml). No
+# entries yet: codex's not-logged-in / quota banners haven't been captured in a
+# verified flockmux recording, and we don't ship guessed substrings that might
+# never match (a wrong needle stays silent — exactly the failure we're fixing).
+# Until a real recording confirms the exact text, codex's auth/quota failures
+# are still surfaced honestly by the first-response watchdog (90s with no
+# message / tool activity / token usage → AgentState::Error). Add verified
+# entries here to upgrade that to an instant, specific failure card:
+# [[health_needles]]
+# needle = "<verified substring>"
+# reason = "Codex 未登录，请在终端运行 codex login"
+# kind = "auth"
