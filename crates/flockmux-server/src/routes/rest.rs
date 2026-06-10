@@ -1799,6 +1799,16 @@ async fn interrupt_one_inner(state: &AppState, agent_id: &str) -> Result<(), Str
     if let Err(e) = input_tx.send(bytes::Bytes::from_static(b"\x03")).await {
         tracing::warn!(?e, agent = %agent_id, "interrupt Ctrl-C send failed (PTY may be dead); paused flag still set");
     }
+    // P1: publish an honest stop signal. Without this, interrupting an agent
+    // left every surface showing a stale "responding" indicator until the
+    // 60s message-inference timeout — the agent's own tailer won't emit another
+    // state on its own once cancelled. Idle is the truthful resting state after
+    // a cancelled turn (resume re-wakes it). The clicking client also clears
+    // optimistically; this covers the member rail, workers, and other clients.
+    state.swarm.publish_event(SwarmEvent::AgentState {
+        agent_id: agent_id.to_string(),
+        state: AgentState::Idle,
+    });
     Ok(())
 }
 

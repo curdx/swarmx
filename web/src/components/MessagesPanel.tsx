@@ -355,6 +355,17 @@ export function MessagesPanel({
   const [stopMenuOpen, setStopMenuOpen] = useState(false);
   const [interruptingId, setInterruptingId] = useState<string | null>(null);
   const [queuedHint, setQueuedHint] = useState(false);
+  // P1: when the user interrupts an agent, optimistically clear its
+  // "responding" indicator NOW (keyed by interrupt time) instead of waiting for
+  // the backend Idle event to round-trip — agentId → interrupt timestamp. A
+  // pending turn whose trigger predates the interrupt is treated as cancelled; a
+  // NEW message (later sent_at) is unaffected, so it re-shows naturally.
+  const [interruptedAgents, setInterruptedAgents] = useState<
+    Record<string, number>
+  >({});
+  const markInterrupted = useCallback((agentId: string) => {
+    setInterruptedAgents((m) => ({ ...m, [agentId]: Date.now() }));
+  }, []);
 
   const listRef = useRef<HTMLDivElement>(null);
   const rowRefs = useRef<Map<number, HTMLDivElement | null>>(new Map());
@@ -746,6 +757,10 @@ export function MessagesPanel({
       const sentAt = lastSent.get(agentId) ?? 0;
       if (trigger.sent_at <= sentAt) continue;
       if (now - trigger.sent_at > PENDING_TIMEOUT_MS) continue;
+      // P1: a turn the user interrupted (interrupt time ≥ this trigger) is
+      // cancelled — don't keep faking "responding". A newer message reopens it.
+      const interruptedAt = interruptedAgents[agentId];
+      if (interruptedAt != null && interruptedAt >= trigger.sent_at) continue;
       out.push({ agentId, trigger });
     }
     // Stable order: earliest-triggered first, so older waiters appear above.
@@ -753,7 +768,7 @@ export function MessagesPanel({
     return out;
     // tick is purposeful — re-evaluates the "now - sent_at" cutoff over time.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [items, aliveForInference, agentLiveStateById, tick]);
+  }, [items, aliveForInference, agentLiveStateById, interruptedAgents, tick]);
 
   // Auto-scroll to bottom on new items / live message / new pending bubble.
   useLayoutEffect(() => {
@@ -796,22 +811,27 @@ export function MessagesPanel({
     });
   }, [activeMembers, agentLiveStateById, pendingResponders]);
 
-  const stopMember = useCallback(async (agentId: string) => {
-    setInterruptingId(agentId);
-    try {
-      await api.interruptAgent(agentId);
-    } catch {
-      /* best-effort — interrupt is idempotent; UI doesn't block on it */
-    } finally {
-      setInterruptingId(null);
-    }
-  }, []);
+  const stopMember = useCallback(
+    async (agentId: string) => {
+      setInterruptingId(agentId);
+      markInterrupted(agentId); // optimistic clear, before the round-trip
+      try {
+        await api.interruptAgent(agentId);
+      } catch {
+        /* best-effort — interrupt is idempotent; UI doesn't block on it */
+      } finally {
+        setInterruptingId(null);
+      }
+    },
+    [markInterrupted],
+  );
 
   const stopAllRunning = useCallback(async () => {
     const ids = runningMembers.map((m) => m.agent_id);
+    ids.forEach(markInterrupted);
     setStopMenuOpen(false);
     await Promise.allSettled(ids.map((id) => api.interruptAgent(id)));
-  }, [runningMembers]);
+  }, [runningMembers, markInterrupted]);
 
   // @mention: a leading/inline `@<role|id-prefix>` token routes the message to
   // THAT live worker instead of the default orchestrator (the token stays
@@ -1123,6 +1143,7 @@ export function MessagesPanel({
   // from Enter which just queues). Only fires when the captain is actually
   // running, so it never surprise-kills an idle turn.
   const interruptThenSend = async (agentId: string) => {
+    markInterrupted(agentId); // optimistic clear of the cancelled turn
     try {
       await api.interruptAgent(agentId);
     } catch {
