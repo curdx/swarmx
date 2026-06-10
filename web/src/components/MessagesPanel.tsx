@@ -43,11 +43,19 @@ import {
   Search,
   Send,
   Sparkles,
+  Square,
+  TriangleAlert,
   Undo2,
   X,
 } from "lucide-react";
 import { api } from "../api/http";
-import type { AgentActivity, AgentInfo, MessageRecord, ThoughtTraceStep } from "../api/types";
+import type {
+  AgentActivity,
+  AgentInfo,
+  AgentLiveState,
+  MessageRecord,
+  ThoughtTraceStep,
+} from "../api/types";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -61,6 +69,7 @@ import { ImageAttachments } from "@/components/ImageAttachments";
 import { ModelPicker } from "@/components/ModelPicker";
 import { extractImagePaths, fileUrl, baseName } from "@/lib/imagePaths";
 import { roleColorClass as roleColor } from "@/lib/agent";
+import { activityVerb } from "@/lib/activityVerb";
 import { getClientPlatformInfo } from "@/lib/platform";
 
 const ChatMarkdown = lazy(() =>
@@ -127,6 +136,12 @@ interface Props {
   /** Per-agent activity stream from `/ws/swarm`, used to patch late tool events
    *  into an already-rendered reply trace without a manual refresh. */
   agentActivityById?: Record<string, AgentActivity[]>;
+  /** Per-agent live state (state + latest activity) keyed by agent_id, from
+   *  `/ws/swarm`. The pending "X 正在响应" placeholder binds to this so a member
+   *  whose real state has gone error/exited is dropped immediately instead of
+   *  lying with a typing bubble for 60s (P0-3, treats 诊断2 等待期撒谎 root).
+   *  It also feeds the pending bubble's honest two-signal activity line. */
+  agentLiveStateById?: Record<string, AgentLiveState>;
   /** Rendered in place of the plain "暂无消息" text when the room has no
    *  messages — the parent passes an honest startup checklist or failure card
    *  here when the orchestrator is starting / wedged, so an empty room is never
@@ -143,6 +158,12 @@ const GROUP_GAP_MS = 5 * 60_000; // 5 minutes — same heuristic as Telegram
  *  the indicator is more misleading than helpful. */
 const PENDING_TIMEOUT_MS = 60_000;
 const MAX_REASONING_SUMMARY_MS = 30 * 60_000;
+/** A member whose latest tool event hasn't advanced in this long has gone
+ *  quiet. The pending bubble degrades to a gray "已 Ns 无活动" and stops the
+ *  typing dots — honest about being idle rather than faking motion. This is the
+ *  soft文案级 threshold (45s); the hard red/amber stall verdict in
+ *  `resolveMemberVisual` keeps its own 300s window (see spec §2.8 ⚖裁决). */
+const HEARTBEAT_STALE_MS = 45_000;
 
 /** Resolve a role label for a from_agent id.
  *
@@ -248,6 +269,7 @@ export function MessagesPanel({
   onSetModel,
   modelBusy = false,
   agentActivityById,
+  agentLiveStateById,
   emptyStateOverride,
 }: Props) {
   const aliveForInference = allAliveAgents ?? activeMembers;
@@ -314,6 +336,10 @@ export function MessagesPanel({
   const [uploadingImage, setUploadingImage] = useState(false);
   const [marking, setMarking] = useState<number | null>(null);
   const [bySenderOpen, setBySenderOpen] = useState(false);
+  // P0-9 可操控：在跑成员的「打断」菜单 + 排队提示。
+  const [stopMenuOpen, setStopMenuOpen] = useState(false);
+  const [interruptingId, setInterruptingId] = useState<string | null>(null);
+  const [queuedHint, setQueuedHint] = useState(false);
 
   const listRef = useRef<HTMLDivElement>(null);
   const rowRefs = useRef<Map<number, HTMLDivElement | null>>(new Map());
@@ -672,7 +698,16 @@ export function MessagesPanel({
   const pendingResponders = useMemo(() => {
     const aliveIds = new Set(
       aliveForInference
-        .filter((m) => m.shim_exit == null && m.killed_at == null)
+        .filter((m) => {
+          if (m.shim_exit != null || m.killed_at != null) return false;
+          // P0-3: bind to the REAL swarm state. A member whose live state has
+          // gone error/exited is not "responding" — drop it immediately so the
+          // typing placeholder vanishes (≤1 render, agentLiveStateById is a
+          // dep below) instead of lying for the full 60s window. Fixes 诊断2.
+          const st = agentLiveStateById?.[m.agent_id]?.state;
+          if (st === "error" || st === "exited") return false;
+          return true;
+        })
         .map((m) => m.agent_id),
     );
     if (aliveIds.size === 0) return [];
@@ -703,7 +738,7 @@ export function MessagesPanel({
     return out;
     // tick is purposeful — re-evaluates the "now - sent_at" cutoff over time.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [items, aliveForInference, tick]);
+  }, [items, aliveForInference, agentLiveStateById, tick]);
 
   // Auto-scroll to bottom on new items / live message / new pending bubble.
   useLayoutEffect(() => {
@@ -724,6 +759,44 @@ export function MessagesPanel({
       activeMembers[0]
     );
   }, [activeMembers]);
+
+  // ── P0-9 可操控：在跑成员 + 打断 ────────────────────────────────────────
+  // 「在跑」= ① 真实 swarm state 在 thinking/spawning 或有 running 工具活动
+  //         (worker 走这条,被 tail 上报真实态);
+  //         ② 正在响应 (pendingResponders 同一信号驱动「正在响应」气泡)——
+  //         orchestrator 不被 tail、不上报 thinking,但它 mid-turn 时这里能算出,
+  //         否则用户最常见的「队长独自干活」场景反而停不了。
+  // 二者都基于已展示给用户的事实,菜单只在确有成员在跑时出现,不挂幽灵停止键。
+  const runningMembers = useMemo(() => {
+    const pendingIds = new Set(pendingResponders.map((p) => p.agentId));
+    return activeMembers.filter((m) => {
+      if (m.killed_at != null || m.shim_exit != null) return false;
+      const live = agentLiveStateById?.[m.agent_id];
+      return (
+        live?.state === "thinking" ||
+        live?.state === "spawning" ||
+        live?.activity?.phase === "running" ||
+        pendingIds.has(m.agent_id)
+      );
+    });
+  }, [activeMembers, agentLiveStateById, pendingResponders]);
+
+  const stopMember = useCallback(async (agentId: string) => {
+    setInterruptingId(agentId);
+    try {
+      await api.interruptAgent(agentId);
+    } catch {
+      /* best-effort — interrupt is idempotent; UI doesn't block on it */
+    } finally {
+      setInterruptingId(null);
+    }
+  }, []);
+
+  const stopAllRunning = useCallback(async () => {
+    const ids = runningMembers.map((m) => m.agent_id);
+    setStopMenuOpen(false);
+    await Promise.allSettled(ids.map((id) => api.interruptAgent(id)));
+  }, [runningMembers]);
 
   // @mention: a leading/inline `@<role|id-prefix>` token routes the message to
   // THAT live worker instead of the default orchestrator (the token stays
@@ -765,6 +838,15 @@ export function MessagesPanel({
     if (!trimmed) return;
     // @mention wins over the default orchestrator recipient.
     const recipient = explicitRecipient ?? defaultRecipient;
+    // P0-9: if the captain is mid-turn, this message queues to its mailbox and
+    // is read when the turn ends — surface that honestly with a transient chip
+    // instead of letting it look like it vanished. The captain isn't tailed so
+    // it never reports state="thinking"; fall back to the same mid-response
+    // signal that drives the "正在响应" bubble (pendingResponders).
+    const recipientBusy =
+      recipient != null &&
+      (agentLiveStateById?.[recipient.agent_id]?.state === "thinking" ||
+        pendingResponders.some((p) => p.agentId === recipient.agent_id));
     // No live recipient (workspace's orchestrator has exited). If the parent
     // wired `onSend`, route the message through it — it spawns the orchestrator
     // and delivers — so the user just types instead of first clicking 唤醒.
@@ -806,6 +888,10 @@ export function MessagesPanel({
       api.wakeAgent(recipient.agent_id).catch(() => {
         /* swallow */
       });
+      if (recipientBusy) {
+        setQueuedHint(true);
+        window.setTimeout(() => setQueuedHint(false), 4000);
+      }
       try { window.localStorage.removeItem(draftKey); } catch { /* ignore */ }
       setBody("");
       setInReplyTo(null);
@@ -1404,6 +1490,7 @@ export function MessagesPanel({
               })}
               replyHint={t("messages.responding", { id: trigger.id })}
               trigger={trigger}
+              live={agentLiveStateById?.[agentId]}
             />
           ))}
           {/* 之前这里有"<agent> 等你回话"的 ghost line — 删了。
@@ -1542,6 +1629,74 @@ export function MessagesPanel({
             right keeps the Enter-to-send hint. */}
         <div className="flex items-center justify-between gap-2">
           <div className="flex min-w-0 items-center gap-2">
+            {/* P0-9 可操控：打断在跑成员（仅在确有成员在跑时出现）。 */}
+            {runningMembers.length > 0 && (
+              <Popover open={stopMenuOpen} onOpenChange={setStopMenuOpen}>
+                <PopoverTrigger asChild>
+                  <button
+                    type="button"
+                    className="inline-flex shrink-0 items-center gap-1 rounded-full border border-border-subtle bg-surface-elevated px-2 py-0.5 font-caption text-[10px] text-foreground-secondary transition-colors hover:bg-surface-tertiary hover:text-state-danger"
+                    title={t("messages.stopMenuLabel", "打断在跑的成员")}
+                  >
+                    <Square className="size-2.5" />
+                    {t("messages.stopMenuShort", "打断")}
+                    <span className="tabular-nums text-foreground-tertiary">
+                      {runningMembers.length}
+                    </span>
+                  </button>
+                </PopoverTrigger>
+                <PopoverContent align="start" sideOffset={6} className="w-56 p-2">
+                  <p className="mb-1.5 font-caption text-[10px] uppercase tracking-wider text-foreground-tertiary">
+                    {t("messages.stopMenuHeading", "在跑成员")}
+                  </p>
+                  <ul className="flex flex-col gap-1">
+                    {runningMembers.map((m) => (
+                      <li
+                        key={m.agent_id}
+                        className="flex items-center gap-2 rounded px-1.5 py-1 text-[11px]"
+                      >
+                        <span
+                          className={cn("size-2 shrink-0 rounded-full", roleColor(m.role))}
+                        />
+                        <span className="min-w-0 flex-1 truncate text-foreground-primary">
+                          {m.role}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => stopMember(m.agent_id)}
+                          disabled={interruptingId === m.agent_id}
+                          className="inline-flex shrink-0 items-center gap-1 rounded-full border border-border-subtle px-2 py-0.5 text-[10px] text-state-danger transition-colors hover:bg-status-danger-soft disabled:opacity-50"
+                        >
+                          {interruptingId === m.agent_id ? (
+                            <Loader2 className="size-2.5 animate-spin" />
+                          ) : (
+                            <Square className="size-2.5" />
+                          )}
+                          {t("messages.stopMember", "停")}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                  {runningMembers.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={stopAllRunning}
+                      className="mt-1.5 w-full rounded-md border border-border-subtle px-2 py-1 text-center font-caption text-[11px] text-state-danger transition-colors hover:bg-status-danger-soft"
+                    >
+                      {t("messages.stopAll", "全部打断（{{count}}）", {
+                        count: runningMembers.length,
+                      })}
+                    </button>
+                  )}
+                </PopoverContent>
+              </Popover>
+            )}
+            {queuedHint && (
+              <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-surface-tertiary px-2 py-0.5 font-caption text-[10px] text-foreground-secondary">
+                <Clock3 className="size-3" />
+                {t("messages.queuedToCaptain", "已排队 · 队长接手后送达")}
+              </span>
+            )}
             {preOptimize !== null && (
               <button
                 type="button"
@@ -1667,16 +1822,30 @@ function ReasoningDisclosure({
   );
 }
 
+/** "X 正在响应…" placeholder shown while a member has received a message but
+ *  hasn't replied yet. Honesty rewrite (P0-2): instead of synthesizing a
+ *  plausible "理解了… / 派给… / 执行中" reasoning trace (a lie when no real
+ *  thought_trace exists), it binds to the member's REAL latest tool event:
+ *    - a persisted `thought_trace` → show its real steps (never invented)
+ *    - a running tool → two-signal line "正在 <白话动词> · <elapsed>", the
+ *      elapsed counter ticking up = proof of life (verb via activityVerb,
+ *      jargon-stripped)
+ *    - quiet >45s → degrade to a gray "已 Ns 无活动" and STOP the dots
+ *    - nothing yet → bare typing dots, no invented steps
+ *  Death (state=error/exited) is handled upstream in `pendingResponders`,
+ *  which drops the member so this never renders for a dead agent. */
 function PendingBubble({
   role,
   label,
   replyHint,
   trigger,
+  live,
 }: {
   role: string;
   label: string;
   replyHint: string;
   trigger: MessageRecord;
+  live?: AgentLiveState;
 }) {
   const { t } = useTranslation();
   const [now, setNow] = useState(Date.now());
@@ -1684,28 +1853,30 @@ function PendingBubble({
     const id = window.setInterval(() => setNow(Date.now()), 500);
     return () => window.clearInterval(id);
   }, []);
+
+  // Only show a reasoning summary when the agent actually emitted one — no
+  // synthesized steps.
   const trace = trigger.thought_trace;
-  const elapsed = Math.max(0, now - (trace?.started_at ?? trigger.sent_at));
-  const summary: ReasoningSummary =
+  const realSummary: ReasoningSummary | null =
     trace && trace.summary.length > 0
       ? {
-          durationMs: elapsed,
+          durationMs: Math.max(0, now - (trace.started_at ?? trigger.sent_at)),
           steps: trace.summary.map((step) => step.label).filter(Boolean),
         }
-      : {
-          durationMs: elapsed,
-          steps: [
-            t("messages.reasoning.stepUnderstood", {
-              msg: snippet(trigger.body),
-            }),
-            role === "orchestrator"
-              ? t("messages.reasoning.stepOrchestrator")
-              : t("messages.reasoning.stepWorker", { role }),
-            elapsed > 12_000
-              ? t("messages.reasoning.stepExecuting")
-              : t("messages.reasoning.stepPlanning"),
-          ],
-        };
+      : null;
+
+  // Real latest tool event drives the two-signal line.
+  const act = live?.activity;
+  const verb = act ? activityVerb(act.label, act.kind) : null;
+  const sinceActivityMs = act ? Math.max(0, now - act.at) : 0;
+  const stale =
+    act != null && act.phase === "running" && sinceActivityMs >= HEARTBEAT_STALE_MS;
+  const activityElapsedMs = act
+    ? act.phase === "running"
+      ? sinceActivityMs
+      : act.duration_ms ?? 0
+    : 0;
+
   return (
     <div className="mt-3 flex gap-3">
       <div className="flex w-8 shrink-0 justify-center">
@@ -1727,15 +1898,54 @@ function PendingBubble({
           </span>
         </span>
         <div className="w-[min(82vw,520px)] rounded-2xl rounded-bl-sm border border-border-subtle bg-surface-secondary px-2.5 py-2 shadow-sm">
-          <ReasoningDisclosure summary={summary} status="active" />
-          <span
-            className="flex items-center gap-1 px-1"
-            title={replyHint}
-          >
-            <PendingDot delayMs={0} />
-            <PendingDot delayMs={150} />
-            <PendingDot delayMs={300} />
-          </span>
+          {realSummary && (
+            <ReasoningDisclosure summary={realSummary} status="active" />
+          )}
+          {verb && !stale ? (
+            <div
+              className="flex items-center gap-2 px-1"
+              role="status"
+              aria-live="polite"
+              title={replyHint}
+            >
+              <span className="inline-flex items-center gap-0.5">
+                <PendingDot delayMs={0} />
+                <PendingDot delayMs={150} />
+                <PendingDot delayMs={300} />
+              </span>
+              <span className="min-w-0 flex-1 truncate font-body text-[12px] text-foreground-secondary">
+                {t(verb.key, { ...verb.params, defaultValue: verb.fallback })}
+              </span>
+              <span className="shrink-0 font-mono text-[10px] tabular-nums text-foreground-tertiary">
+                {formatElapsed(activityElapsedMs)}
+              </span>
+            </div>
+          ) : stale ? (
+            <div
+              className="flex items-center gap-1.5 px-1 font-caption text-[11px] text-state-warning"
+              role="status"
+              aria-live="polite"
+            >
+              <TriangleAlert className="size-3 shrink-0" />
+              <span className="truncate">
+                {t("chat.live.memberStalled", {
+                  secs: Math.floor(sinceActivityMs / 1000),
+                  defaultValue: `已 ${Math.floor(sinceActivityMs / 1000)}s 无活动`,
+                })}
+              </span>
+            </div>
+          ) : (
+            <span
+              className="flex items-center gap-1 px-1"
+              role="status"
+              aria-live="polite"
+              title={replyHint}
+            >
+              <PendingDot delayMs={0} />
+              <PendingDot delayMs={150} />
+              <PendingDot delayMs={300} />
+            </span>
+          )}
         </div>
       </div>
     </div>

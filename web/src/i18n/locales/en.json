@@ -327,6 +327,43 @@
     }
   },
   "chat": {
+    "verb": {
+      "edit": "Editing {{file}}",
+      "editGeneric": "Editing a file",
+      "read": "Reading {{file}}",
+      "readGeneric": "Reading a file",
+      "test": "Running tests",
+      "install": "Installing deps",
+      "build": "Building",
+      "git": "git {{sub}}",
+      "run": "Running {{cmd}}",
+      "search": "Searching code",
+      "web": "Searching the web",
+      "task": "Delegating a subtask",
+      "todo": "Updating the plan",
+      "advance": "Working",
+      "generic": "Working"
+    },
+    "live": {
+      "memberStalled": "Idle for {{secs}}s"
+    },
+    "bootstrap": {
+      "cardTitle": "Captain is coming online…",
+      "badge": "Starting",
+      "stepIsolateDone": "Isolated to its own branch",
+      "stepEngine": "Starting the captain engine…",
+      "stepEngineNamed": "Starting the {{name}} captain engine…",
+      "stepFirstResponse": "Waiting for the captain's first response",
+      "slowHint": "Taking longer than usual, hang tight…"
+    },
+    "orchestratorFailure": {
+      "title": "The captain can't start yet",
+      "titleAuth": "The captain can't start yet",
+      "titleRate": "The captain is rate-limited",
+      "titleCrash": "The captain exited unexpectedly",
+      "titleTimeout": "The captain started but didn't respond",
+      "titleEscalated": "Still failing after retries — needs you"
+    },
     "workspaces": "Workspaces",
     "newWorkspace": "New workspace",
     "noActiveAgents": "No active agents · go to",
@@ -688,6 +725,12 @@
     "composerPlaceholderInit": "Say something to the AI…",
     "responding": "replying to #{{id}}",
     "respondingTo": "{{role}} is typing",
+    "stopMenuLabel": "Interrupt running members",
+    "stopMenuShort": "Interrupt",
+    "stopMenuHeading": "Running members",
+    "stopMember": "Stop",
+    "stopAll": "Stop all ({{count}})",
+    "queuedToCaptain": "Queued · delivered when the captain is free",
     "reasoning": {
       "thinking": "Thinking",
       "summary": "Reasoning summary",

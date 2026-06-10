@@ -327,6 +327,43 @@
     }
   },
   "chat": {
+    "verb": {
+      "edit": "写 {{file}}",
+      "editGeneric": "改文件",
+      "read": "读 {{file}}",
+      "readGeneric": "读文件",
+      "test": "跑测试",
+      "install": "装依赖",
+      "build": "构建",
+      "git": "执行 git {{sub}}",
+      "run": "运行 {{cmd}}",
+      "search": "查代码",
+      "web": "查资料",
+      "task": "派子任务",
+      "todo": "更新计划",
+      "advance": "推进中",
+      "generic": "处理中"
+    },
+    "live": {
+      "memberStalled": "已 {{secs}}s 无活动"
+    },
+    "bootstrap": {
+      "cardTitle": "队长正在上岗…",
+      "badge": "启动中",
+      "stepIsolateDone": "已隔离到独立分支",
+      "stepEngine": "正在启动队长引擎…",
+      "stepEngineNamed": "正在启动 {{name}} 队长引擎…",
+      "stepFirstResponse": "等待队长第一次响应",
+      "slowHint": "响应较慢，再等等…"
+    },
+    "orchestratorFailure": {
+      "title": "队长还不能开始工作",
+      "titleAuth": "队长还没法开始",
+      "titleRate": "队长暂时被限流",
+      "titleCrash": "队长意外退出",
+      "titleTimeout": "队长启动后没有响应",
+      "titleEscalated": "多次重试仍未成功，需要你处理"
+    },
     "workspaces": "工作空间",
     "newWorkspace": "新建工作空间",
     "noActiveAgents": "暂无活跃 agent · 去",
@@ -688,6 +725,12 @@
     "composerPlaceholderInit": "向 AI 描述你的需求…",
     "responding": "回复 #{{id}} 中",
     "respondingTo": "{{role}} 在回复",
+    "stopMenuLabel": "打断在跑的成员",
+    "stopMenuShort": "打断",
+    "stopMenuHeading": "在跑成员",
+    "stopMember": "停",
+    "stopAll": "全部打断（{{count}}）",
+    "queuedToCaptain": "已排队 · 队长接手后送达",
     "reasoning": {
       "thinking": "思考中",
       "summary": "思考摘要",

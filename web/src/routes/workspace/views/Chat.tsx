@@ -17,6 +17,7 @@ import { api } from "../../../api/http";
 import type { AgentInfo, CliPluginInfo } from "../../../api/types";
 import { MessagesPanel } from "../../../components/MessagesPanel";
 import { OrchestratorFailureCard } from "../../../components/workspace/OrchestratorFailureCard";
+import { BootstrapChecklistCard } from "../../../components/chat/BootstrapChecklistCard";
 import { OnboardingTour } from "../../../components/OnboardingTour";
 import {
   TaskActivity,
@@ -482,6 +483,37 @@ export default function ChatView() {
     return { agentId: orch.agent_id, reason, kind, loginCommand };
   }, [activeMembers, agentStateById, cliReadiness]);
 
+  // ── Orchestrator bootstrap (honest startup checklist) ─────────────────
+  // P0-5/P0-6: an orchestrator that exists but hasn't produced its first
+  // response yet (PTY launching / engine booting) shows an honest startup
+  // checklist instead of a bare "暂无消息" or a fake green dot. Suppressed once
+  // it's in a failure state (the failure card takes over in place). The
+  // empty-room gate is the emptyStateOverride slot itself (only rendered when
+  // there are no messages), so reaching here means no first response landed.
+  // The 90s first-response watchdog is the backstop: if nothing arrives it
+  // flips the orchestrator to Error and the failure card replaces this — we do
+  // NOT self-time it.
+  const bootstrapState = useMemo(() => {
+    if (orchestratorFailure) return null;
+    const orch = activeMembers.find(
+      (m) =>
+        m.role === "orchestrator" &&
+        m.killed_at == null &&
+        m.shim_exit == null,
+    );
+    if (!orch) return null;
+    const engineName =
+      cliReadiness.installed.find((p) => p.id === orch.cli)?.display_name ??
+      orch.cli ??
+      null;
+    return {
+      shimReady: !!orch.shim_ready,
+      spawnedAt: orch.spawned_at ?? null,
+      branchLabel: workspace.cwdBranch ?? null,
+      engineName,
+    };
+  }, [orchestratorFailure, activeMembers, cliReadiness, workspace.cwdBranch]);
+
   const [retrying, setRetrying] = useState(false);
   const retryOrchestrator = useCallback(async () => {
     if (retrying) return;
@@ -859,6 +891,7 @@ export default function ChatView() {
           onSetModel={setDirectionModel}
           modelBusy={modelBusy}
           agentActivityById={agentActivityById}
+          agentLiveStateById={agentStateById}
           emptyStateOverride={
             orchestratorFailure ? (
               <OrchestratorFailureCard
@@ -868,6 +901,13 @@ export default function ChatView() {
                 onOpenTerminal={() => openAgent(orchestratorFailure.agentId)}
                 onRetry={retryOrchestrator}
                 retrying={retrying}
+              />
+            ) : bootstrapState ? (
+              <BootstrapChecklistCard
+                branchLabel={bootstrapState.branchLabel}
+                engineName={bootstrapState.engineName}
+                shimReady={bootstrapState.shimReady}
+                spawnedAt={bootstrapState.spawnedAt}
               />
             ) : undefined
           }

@@ -57,6 +57,32 @@ export function OrchestratorFailureCard({
   // never-logged-in CLI) — the login terminal is the right fix either way.
   const isAuth =
     kind === "auth" || /未登录|not logged in|\/login/i.test(reason);
+  // Kind-specific honest title (P0-7). Order: escalated (retry exhausted) >
+  // auth (login is the fix even when the watchdog surfaced it) > rate-limit >
+  // crash > timeout > generic. The reason text below is shown in full,
+  // never truncated — this card is the single source of truth for the failure.
+  const isRate =
+    kind === "rate_limit" || /限流|rate.?limit|429|quota|too many requests/i.test(reason);
+  const isCrash =
+    kind === "crash" ||
+    kind === "fatal" ||
+    /退出码|exit code|crash|panic|abort|segfault/i.test(reason);
+  const isTimeout =
+    kind === "watchdog" ||
+    kind === "timeout" ||
+    /看门狗|watchdog|timed? ?out|无响应|no response/i.test(reason);
+  const title =
+    kind === "escalated"
+      ? t("chat.orchestratorFailure.titleEscalated", "多次重试仍未成功，需要你处理")
+      : isAuth
+        ? t("chat.orchestratorFailure.titleAuth", "队长还没法开始")
+        : isRate
+          ? t("chat.orchestratorFailure.titleRate", "队长暂时被限流")
+          : isCrash
+            ? t("chat.orchestratorFailure.titleCrash", "队长意外退出")
+            : isTimeout
+              ? t("chat.orchestratorFailure.titleTimeout", "队长启动后没有响应")
+              : t("chat.orchestratorFailure.title", "队长还不能开始工作");
 
   const copy = async () => {
     if (!loginCommand) return;
@@ -75,7 +101,7 @@ export function OrchestratorFailureCard({
         <TriangleAlert className="mt-0.5 size-4 shrink-0 text-status-danger" />
         <div className="flex flex-col gap-0.5">
           <p className="font-heading text-sm font-semibold text-foreground">
-            {t("chat.orchestratorFailure.title", "AI 还不能开始工作")}
+            {title}
           </p>
           <p className="font-caption text-xs leading-5 text-foreground-secondary">
             {reason}
