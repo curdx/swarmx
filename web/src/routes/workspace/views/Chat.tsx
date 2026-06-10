@@ -18,6 +18,7 @@ import type { AgentInfo, CliPluginInfo } from "../../../api/types";
 import { MessagesPanel } from "../../../components/MessagesPanel";
 import { OrchestratorFailureCard } from "../../../components/workspace/OrchestratorFailureCard";
 import { BootstrapChecklistCard } from "../../../components/chat/BootstrapChecklistCard";
+import { PulseRail } from "../../../components/workspace/PulseRail";
 import { OnboardingTour } from "../../../components/OnboardingTour";
 import {
   TaskActivity,
@@ -958,6 +959,19 @@ export default function ChatView() {
       {/* Members is auxiliary — hide below xl so the chat keeps a usable width
           on half-screen / narrow windows instead of overflowing off-screen
           (R2-004). Agent status is also visible in the DAG + agent drawer. */}
+      {/* P0-12: collapsed pulse rail for the 1280–1535px range, where the full
+          members panel (≥1536px below) doesn't render — so member health is no
+          longer invisible on a laptop. Click a dot → opens that member's drawer
+          (focus). Pure breakpoint visibility, additive to the full panel. */}
+      <aside className="hidden w-14 shrink-0 flex-col border-l border-border-subtle bg-surface-secondary xl:flex 2xl:hidden">
+        <PulseRail
+          members={activeMembers}
+          agentStateById={agentStateById}
+          recentMessages={recentMessages}
+          unreadByFrom={activeWorkspaceUnread}
+          onOpenAgent={openAgent}
+        />
+      </aside>
       <aside className="hidden w-[320px] shrink-0 flex-col border-l border-border-subtle bg-surface-secondary 2xl:flex">
         <div className="flex h-12 shrink-0 items-center gap-2 border-b border-border-subtle px-4">
           <Users className="size-4 text-foreground-tertiary" />
