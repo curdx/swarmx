@@ -32,7 +32,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { Radio, Users, Zap } from "lucide-react";
+import { Boxes, FolderOpen, GitBranch, Radio, Users, Zap } from "lucide-react";
 import { cn } from "@/lib/cn";
 import {
   roleColorClass as roleColor,
@@ -185,6 +185,88 @@ const TASK_READY_DISMISS_MS = 4_000;
 // spawning 事件归属到最近 user 消息的窗口。超过这个时长的 spawn 视为
 // 独立事件，不归到用户上一条消息。
 const TASK_ATTACH_WINDOW_MS = 15_000;
+
+function WorkspaceStatusStrip({
+  workspaceName,
+  directionName,
+  memberCount,
+  sourceCount,
+  cwdBranch,
+  reviving,
+  onRevive,
+}: {
+  workspaceName: string;
+  directionName: string;
+  memberCount: number;
+  sourceCount: number;
+  cwdBranch: string | null;
+  reviving: boolean;
+  onRevive: () => void;
+}) {
+  const { t } = useTranslation();
+  const hasMembers = memberCount > 0;
+  return (
+    <div className="shrink-0 border-b border-border-subtle bg-surface-primary px-3 py-2">
+      <div className="mx-auto flex w-full max-w-[1040px] flex-col gap-2 rounded-lg border border-border-subtle bg-surface-elevated px-3 py-2 shadow-sm sm:flex-row sm:items-center">
+        <div className="flex min-w-0 flex-1 items-center gap-2">
+          <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-accent-primary-soft text-accent-primary">
+            <Boxes className="size-4" />
+          </span>
+          <div className="min-w-0">
+            <div className="flex min-w-0 items-center gap-1.5">
+              <span className="truncate font-heading text-sm font-semibold text-foreground-primary">
+                {workspaceName}
+              </span>
+              <span className="text-foreground-tertiary">/</span>
+              <span className="truncate font-caption text-xs text-foreground-secondary">
+                {directionName}
+              </span>
+            </div>
+            <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 font-caption text-[11px] text-foreground-tertiary">
+              <span className="inline-flex items-center gap-1">
+                <span
+                  className={cn(
+                    "size-1.5 rounded-full",
+                    hasMembers ? "bg-status-running" : "bg-state-warning",
+                  )}
+                />
+                {hasMembers
+                  ? t("chat.workspaceStripOnline", { count: memberCount })
+                  : t("chat.workspaceStripIdle")}
+              </span>
+              <span className="inline-flex items-center gap-1">
+                <FolderOpen className="size-3" />
+                {t("chat.workspaceStripSources", { count: sourceCount })}
+              </span>
+              {cwdBranch && (
+                <span className="inline-flex min-w-0 items-center gap-1">
+                  <GitBranch className="size-3 shrink-0" />
+                  <span className="truncate font-mono">{cwdBranch}</span>
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+        {!hasMembers && (
+          <div className="flex flex-col gap-2 sm:max-w-[360px] sm:flex-row sm:items-center">
+            <p className="font-caption text-[11px] leading-5 text-foreground-tertiary">
+              {t("chat.workspaceStripReviveHint")}
+            </p>
+            <Button
+              size="sm"
+              onClick={onRevive}
+              disabled={reviving}
+              className="h-8 shrink-0 gap-1.5"
+            >
+              <Zap className="size-3.5" />
+              {reviving ? t("chat.reviving") : t("chat.reviveOrchestrator")}
+            </Button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
 export default function ChatView() {
   const { t } = useTranslation();
@@ -541,6 +623,13 @@ export default function ChatView() {
     });
   }, [allAliveAgents]);
 
+  const directionName =
+    activeThread?.slug === "main"
+      ? t("chat.mainDirection")
+      : activeThread?.name?.trim() ||
+        activeThread?.slug ||
+        t("chat.directionUnnamed");
+
   return (
     <div className="flex min-h-0 flex-1">
       {/* 4 步 onboarding tour — 第一次进 chat 时弹，跳过/走完 mark seen
@@ -549,6 +638,15 @@ export default function ChatView() {
        *  义；只有真的进了某个 workspace 的 chat 才相关。 */}
       <OnboardingTour />
       <section className="flex min-w-0 flex-1 flex-col">
+        <WorkspaceStatusStrip
+          workspaceName={workspace.name}
+          directionName={directionName}
+          memberCount={activeMembers.length}
+          sourceCount={workspace.roots.length + 1}
+          cwdBranch={workspace.cwdBranch}
+          reviving={reviving}
+          onRevive={reviveOrchestrator}
+        />
         <MessagesPanel
           liveMessage={liveMessage}
           liveRead={liveRead}
