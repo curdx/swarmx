@@ -168,6 +168,78 @@ function WorkspaceHealthLine({ ws }: { ws: WorkspaceSummary }) {
   );
 }
 
+function WorkspaceRowActions({
+  workspace,
+  mobile,
+  onManageRoots,
+  onDelete,
+}: {
+  workspace: WorkspaceSummary;
+  mobile: boolean;
+  onManageRoots?: () => void;
+  onDelete?: () => void;
+}) {
+  const { t } = useTranslation();
+  if (!onManageRoots && !onDelete) return null;
+  return (
+    <div
+      className={cn(
+        "absolute right-1 top-1/2 flex -translate-y-1/2 items-center gap-0.5",
+        mobile
+          ? "opacity-100"
+          : "opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100",
+      )}
+    >
+      {onManageRoots && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                onManageRoots();
+              }}
+              className="size-8 text-foreground-tertiary hover:text-foreground-primary focus-visible:opacity-100"
+              aria-label={t("chat.manageRoots", { name: workspace.name })}
+            >
+              <FolderPlus className="size-3.5" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="right">
+            {t("chat.manageRootsTooltip")}
+          </TooltipContent>
+        </Tooltip>
+      )}
+      {onDelete && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                onDelete();
+              }}
+              className="size-8 text-foreground-tertiary hover:text-state-danger focus-visible:opacity-100"
+              aria-label={t("chat.deleteWorkspace", { name: workspace.name })}
+            >
+              <Trash2 className="size-3.5" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="right">
+            {t("chat.deleteWorkspaceTooltip")}
+          </TooltipContent>
+        </Tooltip>
+      )}
+    </div>
+  );
+}
+
 // ── Workspace root tree (logical, parent_id based) ─────────────────────
 
 interface RootNode {
@@ -472,6 +544,7 @@ export function WorkspaceList({
           const active = ws.id === activeId;
           const hasRoots = ws.roots.length > 0;
           const expanded = hasRoots && !collapsed.has(ws.id);
+          const sourcesSectionVisible = active && (!hasRoots || expanded);
           return (
             <div key={ws.id} className="flex flex-col">
               {/* ── primary project row ─────────────────────────────── */}
@@ -512,7 +585,8 @@ export function WorkspaceList({
                   onClick={() => onAfterNavigate?.()}
                   title={ws.path}
                   className={cn(
-                    "flex min-h-9 flex-1 items-center gap-2 py-1.5 pr-20 text-left",
+                    "flex min-h-9 flex-1 items-center gap-2 py-1.5 text-left",
+                    onRootsChanged || onDelete ? "pr-20" : "pr-2",
                     active
                       ? "text-foreground-primary"
                       : "text-foreground-secondary",
@@ -558,56 +632,16 @@ export function WorkspaceList({
                     {ws.members.length}
                   </span>
                 </NavLink>
-                {/* Hover-only 管理挂载源码按钮（事后增删依赖/工具源码根）。 */}
-                {onRootsChanged && (
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        onClick={(e) => {
-                          e.preventDefault();
-                          e.stopPropagation();
-                          setManageRoots(ws);
-                        }}
-                        className="absolute right-10 top-1/2 size-8 -translate-y-1/2 text-foreground-tertiary opacity-0 transition-opacity group-hover:opacity-100 hover:text-foreground-primary"
-                        aria-label={t("chat.manageRoots", { name: ws.name })}
-                      >
-                        <FolderPlus className="size-3.5" />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent side="right">
-                      {t("chat.manageRootsTooltip")}
-                    </TooltipContent>
-                  </Tooltip>
-                )}
-                {/* Hover-only 删除按钮。软删除：workspace 卡片消失，但 PTY /
-                 *  agent 保留（用户可能仍在用某个 pane）。第一次点带 confirm，
-                 *  防误删。 */}
-                {onDelete && (
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        onClick={(e) => {
-                          e.preventDefault();
-                          e.stopPropagation();
-                          setPendingDelete(ws);
-                        }}
-                        className="absolute right-1 top-1/2 size-8 -translate-y-1/2 text-foreground-tertiary opacity-0 transition-opacity group-hover:opacity-100 hover:text-state-danger"
-                        aria-label={t("chat.deleteWorkspace", { name: ws.name })}
-                      >
-                        <Trash2 className="size-3.5" />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent side="right">
-                      {t("chat.deleteWorkspaceTooltip")}
-                    </TooltipContent>
-                  </Tooltip>
-                )}
+                <WorkspaceRowActions
+                  workspace={ws}
+                  mobile={mobile}
+                  onManageRoots={
+                    onRootsChanged && !sourcesSectionVisible
+                      ? () => setManageRoots(ws)
+                      : undefined
+                  }
+                  onDelete={onDelete ? () => setPendingDelete(ws) : undefined}
+                />
               </div>
 
               {active && (
