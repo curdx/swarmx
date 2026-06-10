@@ -25,10 +25,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
+  ChevronDown,
+  ChevronRight,
   Check,
   Folder,
   FolderOpen,
   FolderPlus,
+  Layers3,
   Loader2,
   Plus,
   Trash2,
@@ -141,6 +144,7 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
   const [dirs, setDirs] = useState<DirEntry[]>([
     { id: 0, path: "", role: "main", parent: 0 },
   ]);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const nextRowId = useRef(1);
   const [spells, setSpells] = useState<SpellInfo[]>([]);
   const [scan, setScan] = useState<ScanState | null>(null);
@@ -163,6 +167,7 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
     // reset 用户输入，让下次打开是空的
     setName("");
     setDirs([{ id: 0, path: "", role: "main", parent: 0 }]);
+    setAdvancedOpen(false);
     nextRowId.current = 1;
     setError(null);
   };
@@ -212,6 +217,7 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
   const mainPath = (dirs[0]?.path ?? "").trim();
   const invalidPath = cleanDirs.some((d) => pathChecks[d.id]?.state === "error");
   const checkingPath = cleanDirs.some((d) => pathChecks[d.id]?.state === "checking");
+  const attachedCount = dirs.filter((d) => d.id !== 0 && d.path.trim()).length;
   const canSubmit =
     name.trim().length > 0 && mainPath.length > 0 && !scan && !invalidPath && !checkingPath;
   const hasInitSpell = spells.some((s) => s.name === INIT_SPELL);
@@ -402,7 +408,7 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
     >
       <DialogContent
         showCloseButton={!scan}
-        className="flex max-h-[90vh] w-[680px] max-w-[680px] flex-col gap-0 overflow-hidden p-0 sm:max-w-[680px]"
+        className="flex max-h-[90vh] w-[calc(100vw-24px)] max-w-[680px] flex-col gap-0 overflow-hidden p-0 sm:max-w-[680px]"
         // 禁掉 backdrop / outside click 关闭 — 用户填了一半路径，不小心点空白
         // 全部清空体验巨差。ESC + ✕ + 取消 三个显式入口仍然能关。
         onInteractOutside={(e) => e.preventDefault()}
@@ -433,7 +439,7 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
             startedAt={scan.startedAt}
           />
         ) : (
-          <div className="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto p-6 pb-24">
+          <div className="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto p-4 pb-24 sm:p-6">
             {error && (
               <div className="rounded-md border border-state-danger/40 bg-status-danger-soft px-3 py-2 text-xs text-state-danger">
                 {error}
@@ -443,7 +449,7 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
             {/* Step 1: name + accent */}
             <section className="flex flex-col gap-3">
               <StepHeader n={1} label={t("wizard.step1")} />
-              <div className="flex items-center gap-3">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
                 <div className="flex min-w-0 flex-1 flex-col gap-1">
                   <Label htmlFor="wizard-name" className="sr-only">
                     {t("wizard.step1")}
@@ -460,7 +466,7 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
                 </div>
                 {/* 5 个标识色 — 之前裸着 5 个圆，新手不知道是干啥的。加
                  *  小 label 说明用途（多 workspace 时一眼区分谁是谁）。 */}
-                <div className="flex flex-col items-end gap-1">
+                <div className="flex flex-col items-start gap-1 sm:items-end">
                   <span className="font-caption text-[10px] text-foreground-tertiary">
                     {t("wizard.accentLabel")}
                   </span>
@@ -497,7 +503,7 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
                 hint={t("wizard.step2Hint")}
               />
               <div className="flex flex-col gap-2">
-                {dirs.map((d, i) => {
+                {(advancedOpen ? dirs : dirs.slice(0, 1)).map((d, i) => {
                   const isPrimary = i === 0;
                   const isProject = d.role === "project";
                   const pathCheck = pathChecks[d.id] ?? { state: "idle" as const };
@@ -509,14 +515,14 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
                   return (
                     <div
                       key={d.id}
-                      className="flex items-start gap-3 rounded-lg border border-border-subtle bg-surface-elevated px-3.5 py-3 shadow-sm"
+                      className="flex flex-col gap-3 rounded-lg border border-border-subtle bg-surface-elevated px-3.5 py-3 shadow-sm sm:flex-row sm:items-start"
                     >
                       {/* Icon (not a number) tells the kinds apart: primary =
                        *  accent open folder, peer project = violet open folder,
                        *  source mount = grey folder. */}
                       <span
                         className={cn(
-                          "mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-md",
+                          "flex size-9 shrink-0 items-center justify-center rounded-md sm:mt-0.5",
                           isPrimary
                             ? "bg-accent-primary text-foreground-on-accent"
                             : isProject
@@ -680,7 +686,7 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
                             ? t("wizard.pickFolder")
                             : t("wizard.pickFolderUnavailable")
                         }
-                        className="mt-0.5 h-8 shrink-0 gap-1.5 px-2.5 text-xs"
+                        className="h-8 shrink-0 gap-1.5 px-2.5 text-xs sm:mt-0.5"
                       >
                         <FolderOpen className="size-3.5" />
                         {t("wizard.pickFolderShort")}
@@ -694,34 +700,66 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
                         disabled={isPrimary}
                         title={t("wizard.removeDir")}
                         aria-label={t("wizard.removeDir")}
-                        className="mt-0.5 size-7 text-foreground-tertiary"
+                        className="size-7 text-foreground-tertiary sm:mt-0.5"
                       >
                         <Trash2 className="size-3.5" />
                       </Button>
                     </div>
                   );
                 })}
-                <Button
+                <button
                   type="button"
-                  variant="outline"
-                  onClick={() =>
-                    setDirs((prev) => [
-                      ...prev,
-                      {
-                        id: nextRowId.current++,
-                        path: "",
-                        role: "dependency",
-                        parent: 0,
-                      },
-                    ])
-                  }
-                  className="h-auto justify-center gap-2 rounded-lg border-[1.5px] border-dashed border-border-strong bg-transparent py-3 text-xs text-foreground-secondary hover:bg-surface-tertiary"
+                  onClick={() => setAdvancedOpen((x) => !x)}
+                  className="flex items-center gap-3 rounded-lg border border-border-subtle bg-surface-primary px-3.5 py-3 text-left transition-colors hover:bg-surface-tertiary"
+                  aria-expanded={advancedOpen}
                 >
-                  <span className="flex size-7 items-center justify-center rounded-md bg-accent-primary-soft text-accent-primary-deep">
-                    <Plus className="size-4" />
+                  <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-surface-tertiary text-foreground-secondary">
+                    <Layers3 className="size-4" />
                   </span>
-                  {t("wizard.addDir")}
-                </Button>
+                  <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                    <span className="flex items-center gap-2 font-heading text-xs font-semibold text-foreground-primary">
+                      {t("wizard.advancedTitle")}
+                      {attachedCount > 0 && (
+                        <span className="rounded-full bg-accent-primary-soft px-1.5 py-0.5 font-caption text-[10px] text-accent-primary-deep">
+                          {t("wizard.attachedCount", { count: attachedCount })}
+                        </span>
+                      )}
+                    </span>
+                    <span className="font-caption text-[11px] leading-relaxed text-foreground-tertiary">
+                      {advancedOpen
+                        ? t("wizard.advancedOpenHint")
+                        : t("wizard.advancedClosedHint")}
+                    </span>
+                  </span>
+                  {advancedOpen ? (
+                    <ChevronDown className="size-4 shrink-0 text-foreground-tertiary" />
+                  ) : (
+                    <ChevronRight className="size-4 shrink-0 text-foreground-tertiary" />
+                  )}
+                </button>
+                {advancedOpen && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() =>
+                      setDirs((prev) => [
+                        ...prev,
+                        {
+                          id: nextRowId.current++,
+                          path: "",
+                          role: "dependency",
+                          parent: 0,
+                        },
+                      ])
+                    }
+                    className="h-auto justify-center gap-2 rounded-lg border-[1.5px] border-dashed border-border-strong bg-transparent py-3 text-xs text-foreground-secondary hover:bg-surface-tertiary"
+                  >
+                    <span className="flex size-7 items-center justify-center rounded-md bg-accent-primary-soft text-accent-primary-deep">
+                      <Plus className="size-4" />
+                    </span>
+                    {t("wizard.addDir")}
+                  </Button>
+                )}
               </div>
             </section>
           </div>
@@ -734,11 +772,11 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
             会把 footer 顶出 modal 边界 16px，配合 overflow-hidden 把
             border-t / rounded-b 都裁掉，看上去 footer 像"飘"在外面没
             分隔线。用普通 div + 我们自己的 border-t / bg / padding 即可。 */}
-        <div className="flex shrink-0 flex-row items-center gap-3 border-t border-border-subtle bg-surface-elevated px-6 py-4">
+        <div className="flex shrink-0 flex-col gap-3 border-t border-border-subtle bg-surface-elevated px-4 py-4 sm:flex-row sm:items-center sm:px-6">
           <span className="font-caption text-[11px] text-foreground-tertiary">
             {scan ? t("wizard.scanningFootHint") : t("wizard.defaultInfo")}
           </span>
-          <span className="flex-1" />
+          <span className="hidden flex-1 sm:block" />
           {scan ? (
             <Button variant="outline" onClick={() => finishScan.current()}>
               {t("wizard.enterAnyway")}

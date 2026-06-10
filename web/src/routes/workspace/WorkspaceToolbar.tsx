@@ -81,6 +81,12 @@ export function WorkspaceToolbar({
   // to merge.
   const [mergeOpen, setMergeOpen] = useState(false);
   const activeThread = workspace.threads.find((th) => th.slug === threadSlug);
+  const activeThreadLabel =
+    activeThread?.slug === "main"
+      ? t("chat.mainDirection")
+      : activeThread?.name?.trim() ||
+        activeThread?.slug ||
+        t("chat.directionUnnamed");
   const canMerge =
     !!activeThread &&
     activeThread.slug !== "main" &&
@@ -104,7 +110,7 @@ export function WorkspaceToolbar({
             {workspace.name}
           </div>
           <div className="truncate font-caption text-[10px] text-foreground-tertiary">
-            {activeThread?.name || activeThread?.slug || threadSlug}
+            {activeThreadLabel}
           </div>
         </div>
         {totalUnread > 0 && (
