@@ -1932,3 +1932,129 @@ async fn worker_roundtrip_defaults_empty_typed_fields() {
     assert_eq!(w.produces_json, "[]");
     assert_eq!(w.consumes_json, "[]");
 }
+
+// ── agent health / error latch (honesty layer) ──────────────────────────────
+
+fn spawn_agent_row(id: &str) -> NewAgent {
+    NewAgent {
+        id: id.into(),
+        cli: "claude".into(),
+        role: "orchestrator".into(),
+        workspace: "/tmp/h".into(),
+        spawned_at: ts(0),
+        workspace_id: None,
+        spell_run_id: None,
+        thread_id: None,
+    }
+}
+
+#[tokio::test]
+async fn agent_error_records_then_clears() {
+    let (_dir, store) = fresh_store().await;
+    store.record_agent_spawn(spawn_agent_row("h-1")).await.unwrap();
+
+    // Healthy on spawn.
+    let a = store.list_agents().await.unwrap().pop().unwrap();
+    assert!(a.last_error.is_none());
+
+    // HealthScanner / watchdog records a soft error.
+    store
+        .record_agent_error("h-1".into(), "Claude Code 未登录".into(), "auth", ts(5))
+        .await
+        .unwrap();
+    let a = store.list_agents().await.unwrap().pop().unwrap();
+    assert_eq!(a.last_error.as_deref(), Some("Claude Code 未登录"));
+    assert_eq!(a.last_error_kind.as_deref(), Some("auth"));
+    assert_eq!(a.last_error_at, Some(ts(5)));
+
+    // Recovery (e.g. /login in the terminal) clears the latch.
+    store.clear_agent_error("h-1".into()).await.unwrap();
+    let a = store.list_agents().await.unwrap().pop().unwrap();
+    assert!(a.last_error.is_none(), "last_error cleared");
+    assert!(a.last_error_kind.is_none());
+    assert!(a.last_error_at.is_none());
+}
+
+#[tokio::test]
+async fn agent_process_dead_distinguishes_soft_error_from_termination() {
+    let (_dir, store) = fresh_store().await;
+    store.record_agent_spawn(spawn_agent_row("h-2")).await.unwrap();
+    store.record_shim_ready("h-2".into(), ts(1)).await.unwrap();
+
+    // Alive (a soft error leaves killed_at/shim_exit_at NULL) → not dead, so the
+    // tailer must keep tailing to observe recovery.
+    store
+        .record_agent_error("h-2".into(), "未登录".into(), "auth", ts(2))
+        .await
+        .unwrap();
+    assert!(
+        !store.agent_process_dead("h-2".into()).await.unwrap(),
+        "soft error must NOT read as process death"
+    );
+
+    // A real shim exit (process gone) → dead, tailer should stop.
+    store.record_shim_exit("h-2".into(), 1, ts(3)).await.unwrap();
+    assert!(store.agent_process_dead("h-2".into()).await.unwrap());
+
+    // A kill is also terminal even without a shim exit row.
+    store.record_agent_spawn(spawn_agent_row("h-3")).await.unwrap();
+    assert!(!store.agent_process_dead("h-3".into()).await.unwrap());
+    store.record_agent_kill("h-3".into(), ts(4)).await.unwrap();
+    assert!(store.agent_process_dead("h-3".into()).await.unwrap());
+
+    // Unknown id → treated as gone (nothing to tail).
+    assert!(store.agent_process_dead("nope".into()).await.unwrap());
+}
+
+#[tokio::test]
+async fn agent_silent_since_ready_reflects_signs_of_life() {
+    let (_dir, store) = fresh_store().await;
+    store.record_agent_spawn(spawn_agent_row("h-4")).await.unwrap();
+
+    // Fresh, no message / activity / usage / error → silent (watchdog fires).
+    assert!(store.agent_silent_since_ready("h-4".into()).await.unwrap());
+
+    // A message FROM the agent is a sign of life → not silent.
+    store
+        .insert_message(NewMessage {
+            from_agent: "h-4".into(),
+            to_agent: "user".into(),
+            kind: "note".into(),
+            body: "hi".into(),
+            sent_at: ts(10),
+            in_reply_to: None,
+            meta: None,
+        })
+        .await
+        .unwrap();
+    assert!(!store.agent_silent_since_ready("h-4".into()).await.unwrap());
+
+    // An already-errored agent is never re-flagged by the watchdog.
+    store.record_agent_spawn(spawn_agent_row("h-5")).await.unwrap();
+    store
+        .record_agent_error("h-5".into(), "未登录".into(), "auth", ts(11))
+        .await
+        .unwrap();
+    assert!(!store.agent_silent_since_ready("h-5".into()).await.unwrap());
+
+    // Tool activity (no message) also counts as alive.
+    store.record_agent_spawn(spawn_agent_row("h-6")).await.unwrap();
+    assert!(store.agent_silent_since_ready("h-6".into()).await.unwrap());
+    store.touch_agent_activity("h-6".into(), ts(12)).await.unwrap();
+    assert!(!store.agent_silent_since_ready("h-6".into()).await.unwrap());
+
+    // Token usage alone — no message, no tool activity — is the DECISIVE
+    // liveness signal (see store.rs doc): a slow-first-turn orchestrator that's
+    // talking to the model but hasn't spoken yet must NOT be watchdog-killed.
+    // Guards the agent_usage NOT EXISTS branch against silent column/join drift.
+    store.record_agent_spawn(spawn_agent_row("h-7")).await.unwrap();
+    assert!(store.agent_silent_since_ready("h-7".into()).await.unwrap());
+    store
+        .insert_agent_usage("h-7".into(), Some("claude".into()), 100, 50, 0, 0, ts(13))
+        .await
+        .unwrap();
+    assert!(
+        !store.agent_silent_since_ready("h-7".into()).await.unwrap(),
+        "token usage alone must read as alive"
+    );
+}

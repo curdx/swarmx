@@ -121,6 +121,17 @@ export interface AgentInfo {
    *  tell "wedged" from "idle" even on a cold load, before the live
    *  AgentActivity WS stream has caught up. */
   last_activity_at?: number | null;
+  /** Last "alive but can't work" reason — auth/quota banner caught by the
+   *  server's HealthScanner, or the first-response watchdog firing (server
+   *  migration 0022). Null for healthy agents. Lets the UI re-render an honest
+   *  failure card on a cold load, since the live AgentState::Error WS event is
+   *  lossy with no resume. */
+  last_error?: string | null;
+  /** Coarse class of `last_error` (auth | rate_limit | fatal | watchdog)
+   *  steering which remedy buttons the failure card offers. Null when healthy. */
+  last_error_kind?: string | null;
+  /** Unix-ms the `last_error` was recorded. Null when healthy. */
+  last_error_at?: number | null;
 }
 
 // ── M3 swarm DTOs ────────────────────────────────────────────────────────

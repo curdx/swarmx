@@ -127,6 +127,11 @@ interface Props {
   /** Per-agent activity stream from `/ws/swarm`, used to patch late tool events
    *  into an already-rendered reply trace without a manual refresh. */
   agentActivityById?: Record<string, AgentActivity[]>;
+  /** Rendered in place of the plain "暂无消息" text when the room has no
+   *  messages — the parent passes an honest startup checklist or failure card
+   *  here when the orchestrator is starting / wedged, so an empty room is never
+   *  silent about WHY it's empty. Omitted ⇒ the default empty-state text. */
+  emptyStateOverride?: React.ReactNode;
 }
 
 const KIND_DEFAULT = "note";
@@ -243,6 +248,7 @@ export function MessagesPanel({
   onSetModel,
   modelBusy = false,
   agentActivityById,
+  emptyStateOverride,
 }: Props) {
   const aliveForInference = allAliveAgents ?? activeMembers;
   const { t } = useTranslation();
@@ -1141,11 +1147,12 @@ export function MessagesPanel({
 
       {/* ── bubble list ──────────────────────────────────────────────── */}
       <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
-        {rows.length === 0 && (
-          <p className="mt-10 text-center font-caption text-xs text-foreground-tertiary">
-            {t("messages.empty")}
-          </p>
-        )}
+        {rows.length === 0 &&
+          (emptyStateOverride ?? (
+            <p className="mt-10 text-center font-caption text-xs text-foreground-tertiary">
+              {t("messages.empty")}
+            </p>
+          ))}
         <div className="mx-auto flex w-full max-w-[1040px] flex-col gap-0.5">
           {rows.map(({ msg: m, showHeader, showDividerBefore }) => {
             const isUser = m.from_agent === USER_SENDER;

@@ -160,6 +160,20 @@ pub struct AgentInfo {
     /// `AgentActivity` WS stream isn't available yet.
     #[serde(default)]
     pub last_activity_at: Option<i64>,
+    /// Last "alive but can't work" reason (auth/quota banner or first-response
+    /// watchdog), persisted via migration 0022. `None` for healthy agents.
+    /// Lets the UI re-render an honest failure card on a cold load — the live
+    /// `AgentState::Error` WS event is lossy with no resume, so every health
+    /// fact needs a REST snapshot.
+    #[serde(default)]
+    pub last_error: Option<String>,
+    /// Coarse class of `last_error` (auth | rate_limit | fatal) steering which
+    /// remedy buttons the failure card offers. `None` when no error.
+    #[serde(default)]
+    pub last_error_kind: Option<String>,
+    /// Unix-ms the `last_error` was recorded. `None` when no error.
+    #[serde(default)]
+    pub last_error_at: Option<i64>,
 }
 
 /// One tool-level activity row, served by `GET /api/agent/:id/activity`. Same

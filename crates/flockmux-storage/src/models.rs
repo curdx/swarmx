@@ -49,6 +49,19 @@ pub struct AgentRecord {
     /// a tool event. The UI uses it to tell "wedged" from "idle" after a reload.
     #[serde(default)]
     pub last_activity_at: Option<i64>,
+    /// Last "alive but can't work" reason (auth/quota/watchdog), persisted by
+    /// the HealthScanner + first-response watchdog (migration 0022). `None` for
+    /// healthy agents. The UI re-renders an honest failure card from this on a
+    /// cold load, since the live AgentState::Error WS event is lossy.
+    #[serde(default)]
+    pub last_error: Option<String>,
+    /// Coarse class of `last_error` (auth | rate_limit | fatal) steering which
+    /// remedy buttons the failure card offers. `None` when no error.
+    #[serde(default)]
+    pub last_error_kind: Option<String>,
+    /// Unix-ms the `last_error` was recorded. `None` when no error.
+    #[serde(default)]
+    pub last_error_at: Option<i64>,
 }
 
 /// A "direction" inside a workspace — its own orchestrator + worker subtree +

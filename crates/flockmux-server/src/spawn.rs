@@ -249,6 +249,18 @@ pub fn spawn_agent(
     // (e.g. routing codex through a relay) that would otherwise break once we
     // stopped inheriting the full env.
     for key in [
+        // USER (and its POSIX twin LOGNAME) are required for macOS Keychain
+        // access: Claude Code stores its OAuth token in the login keychain, and
+        // the Security framework resolves the user's keychain via $USER. Without
+        // it the spawned claude reads an empty credential set and prints
+        // "Not logged in · Run /login" — even though the same binary run from a
+        // normal shell is authenticated. Verified by bisection: `env -i HOME=…
+        // PATH=… USER=$USER claude -p` succeeds; dropping USER fails (LOGNAME
+        // alone does NOT substitute). Non-secret identity vars, so forwarding
+        // them is consistent with the allowlist's "what a CLI legitimately
+        // needs" intent.
+        "USER",
+        "LOGNAME",
         "LC_ALL",
         "LC_CTYPE",
         "TMPDIR",
@@ -378,6 +390,12 @@ pub fn spawn_agent(
         let agent_id_for_log = agent_id.clone();
         let recorder = recorder.clone();
         let mut ready_plan = ready_plan;
+        // Continuous "alive but can't work" scanner (auth/quota banners) that
+        // raises LifecycleEvent::HealthFail on first match. Built out here (not
+        // inside the task) so it can read the borrowed `plugin`; the resolved
+        // needles are owned and move into the pump alongside ready_plan.
+        let mut health_scanner =
+            HealthScanner::from_needles(&plugin.health_needles, lifecycle_tx.clone(), &agent_id);
         tokio::spawn(async move {
             let mut output_rx = output_rx;
             let mut osc_buf: Vec<u8> = Vec::new();
@@ -385,6 +403,9 @@ pub fn spawn_agent(
                 scan_osc(&mut osc_buf, &chunk, &lifecycle, &lifecycle_tx);
                 if let Some(rp) = ready_plan.as_mut() {
                     rp.scan(&chunk);
+                }
+                if let Some(hs) = health_scanner.as_mut() {
+                    hs.scan(&chunk);
                 }
                 if let Some(rec) = &recorder {
                     rec.write_chunk(chunk.clone());
@@ -505,6 +526,112 @@ fn scan_osc(
 
 fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack.windows(needle.len()).position(|w| w == needle)
+}
+
+/// Continuous scanner for "alive but can't work" PTY banners (not logged in,
+/// rate limited, invalid key), declared per CLI as [`crate::plugins::HealthNeedle`].
+///
+/// Unlike [`ReadyPlanRunner`] — an ordered, single-shot cursor that auto-answers
+/// startup dialogs — every needle here is live at once and the whole scanner
+/// **latches after the first match**: the banner repaints every frame, but one
+/// `HealthFail` is enough to flip the UI to an honest failure card, so we never
+/// spam the lifecycle channel. Needle matching reuses the same stitched-buffer
+/// substring search as the ready plan, so a match split across two PTY chunks
+/// (e.g. "Not logged" + " in") is still found.
+struct HealthScanner {
+    /// (needle bytes, human reason, coarse kind) resolved from the manifest.
+    needles: Vec<(Vec<u8>, String, String)>,
+    /// Sliding window over PTY output, bounded by `MAX_BUFFER`.
+    buf: Vec<u8>,
+    /// Latched true after the first match (or once the startup window closes)
+    /// so we report a failure exactly once and then stop scanning.
+    fired: bool,
+    /// Hard deadline after which we stop scanning entirely. Auth/quota banners
+    /// ("Not logged in · Run /login") are a STARTUP phenomenon — claude prints
+    /// them within the first second or two of launch. Past this window the same
+    /// substring in the PTY stream is almost certainly the model's own content
+    /// (writing auth code, quoting a 401 body, cat-ing a file, or discussing
+    /// login), NOT a real failure. Without the window, a working agent that
+    /// merely MENTIONS "Not logged in" would be flipped to a false failure. The
+    /// recovery path (tailer clears the error on the next real activity) is the
+    /// safety net for anything that still slips through inside the window.
+    deadline: Instant,
+    /// The agent's lifecycle broadcast — the same channel ShimReady/ShimExit
+    /// ride, so the existing subscriber in `spawn_with_bookkeeping` picks the
+    /// HealthFail up and publishes AgentState::Error without new plumbing.
+    tx: tokio::sync::broadcast::Sender<LifecycleEvent>,
+    /// Agent id for log lines only.
+    agent_id: String,
+}
+
+impl HealthScanner {
+    const MAX_BUFFER: usize = 8 * 1024;
+    /// Startup window during which auth/quota banners are trusted as real. A
+    /// genuine failure repaints its banner every frame, so it's caught within
+    /// the first second; this just bounds the false-positive surface.
+    const SCAN_WINDOW: Duration = Duration::from_secs(45);
+
+    /// Build from a plugin's `health_needles`. Returns `None` when there are no
+    /// usable needles, so the pump skips health scanning entirely (the common
+    /// case for CLIs that declare none).
+    fn from_needles(
+        needles: &[crate::plugins::HealthNeedle],
+        tx: tokio::sync::broadcast::Sender<LifecycleEvent>,
+        agent_id: &str,
+    ) -> Option<Self> {
+        let needles: Vec<(Vec<u8>, String, String)> = needles
+            .iter()
+            .filter(|n| !n.needle.is_empty())
+            .map(|n| (n.needle.clone().into_bytes(), n.reason.clone(), n.kind.clone()))
+            .collect();
+        if needles.is_empty() {
+            return None;
+        }
+        Some(Self {
+            needles,
+            buf: Vec::with_capacity(2048),
+            fired: false,
+            deadline: Instant::now() + Self::SCAN_WINDOW,
+            tx,
+            agent_id: agent_id.to_string(),
+        })
+    }
+
+    fn scan(&mut self, chunk: &[u8]) {
+        if self.fired {
+            return;
+        }
+        // Past the startup window, stop scanning: any "Not logged in" now is
+        // almost certainly the model's own output, not a credential banner.
+        if Instant::now() > self.deadline {
+            self.fired = true;
+            self.buf = Vec::new();
+            return;
+        }
+        self.buf.extend_from_slice(chunk);
+        if self.buf.len() > Self::MAX_BUFFER {
+            let keep_from = self.buf.len() - 1024;
+            self.buf.drain(..keep_from);
+        }
+        for (needle, reason, kind) in &self.needles {
+            if find(&self.buf, needle).is_some() {
+                self.fired = true;
+                tracing::warn!(
+                    agent = %self.agent_id, reason = %reason, kind = %kind,
+                    "health: CLI reported it cannot work (auth/quota); raising Error",
+                );
+                // Subscriber may not exist yet under pathological timing; a
+                // dropped send just means no Error event, which is no worse
+                // than the pre-existing silent failure. Don't block the pump.
+                let _ = self.tx.send(LifecycleEvent::HealthFail {
+                    reason: reason.clone(),
+                    kind: kind.clone(),
+                });
+                self.buf.clear();
+                return;
+            }
+        }
+    }
 }
 
 fn ensure_workspace(root: &Path, agent_id: &str) -> Result<PathBuf> {
@@ -1056,6 +1183,7 @@ mod billing_policy_tests {
             auto_inject_mcp: false,
             auto_inject_stop_hook: false,
             ready_plan: Vec::<ReadyStep>::new(),
+            health_needles: Vec::new(),
             trust_format: TrustFormat::None,
             mcp_format: McpFormat::None,
             stop_hook_format: StopHookFormat::None,
