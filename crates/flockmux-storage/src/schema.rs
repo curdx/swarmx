@@ -30,6 +30,7 @@ const MIGRATION_0019: &str = include_str!("../migrations/0019_goals.sql");
 const MIGRATION_0020: &str = include_str!("../migrations/0020_goal_evidence.sql");
 const MIGRATION_0021: &str = include_str!("../migrations/0021_thought_traces.sql");
 const MIGRATION_0022: &str = include_str!("../migrations/0022_agent_last_error.sql");
+const MIGRATION_0023: &str = include_str!("../migrations/0023_agent_activities.sql");
 
 pub(crate) fn run_migrations(conn: &mut Connection) -> Result<()> {
     let current = current_version(conn).unwrap_or(0);
@@ -100,6 +101,9 @@ pub(crate) fn run_migrations(conn: &mut Connection) -> Result<()> {
     }
     if current < 22 {
         apply(conn, 22, MIGRATION_0022).context("apply migration 0022")?;
+    }
+    if current < 23 {
+        apply(conn, 23, MIGRATION_0023).context("apply migration 0023")?;
     }
     Ok(())
 }
