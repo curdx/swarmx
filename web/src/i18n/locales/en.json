@@ -364,6 +364,22 @@
       "titleTimeout": "The captain started but didn't respond",
       "titleEscalated": "Still failing after retries — needs you"
     },
+    "emptyState": {
+      "greetingTitle": "Hand a task to the captain",
+      "greetingBody": "Say what you want done. On send, the captain comes online, breaks it into a plan, delegates to members, and reports back here.",
+      "starterHint": "Try starting with:",
+      "starter": {
+        "refactor": "Refactor this function, extract the reusable logic",
+        "test": "Add failing-case tests for this code",
+        "bug": "Help me find the root cause of this bug"
+      },
+      "precheckTitle": "AI engine",
+      "precheckLoading": "Checking engines…",
+      "engineLoggedIn": "{{name}} ready",
+      "engineMissing": "{{name}} not installed",
+      "noEngineBody": "Install and log in to at least one AI engine before the captain can start.",
+      "setupEngine": "Install an AI engine"
+    },
     "workspaces": "Workspaces",
     "newWorkspace": "New workspace",
     "noActiveAgents": "No active agents · go to",
