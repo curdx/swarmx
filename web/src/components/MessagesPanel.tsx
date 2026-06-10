@@ -334,6 +334,12 @@ export function MessagesPanel({
   // Pasted/dropped clipboard images upload to /api/attachment; their saved path
   // is appended to the draft (agents read images by path).
   const [uploadingImage, setUploadingImage] = useState(false);
+  // P0-11 附件失败回滚：上传失败的图不写进 body(避免发出一个并不存在的路径),
+  // 而是单独挂红框「未上传·重试」缩略图,并禁用发送直到重试成功或主动移除。
+  const [failedAttachments, setFailedAttachments] = useState<
+    { id: string; name: string; file: File }[]
+  >([]);
+  const attachIdRef = useRef(0);
   const [marking, setMarking] = useState<number | null>(null);
   const [bySenderOpen, setBySenderOpen] = useState(false);
   // P0-9 可操控：在跑成员的「打断」菜单 + 排队提示。
@@ -836,6 +842,9 @@ export function MessagesPanel({
   const send = async () => {
     const trimmed = body.trim();
     if (!trimmed) return;
+    // P0-11: never fire while an attachment failed to upload (Enter bypasses the
+    // disabled send button, so guard here too).
+    if (failedAttachments.length > 0) return;
     // @mention wins over the default orchestrator recipient.
     const recipient = explicitRecipient ?? defaultRecipient;
     // P0-9: if the captain is mid-turn, this message queues to its mailbox and
@@ -952,8 +961,19 @@ export function MessagesPanel({
     requestAnimationFrame(() => autoGrow(composerRef.current));
   };
 
+  // Upload one image; throws on failure so the caller can decide whether to
+  // append the path (success) or surface a retry (failure).
+  const uploadOneImage = async (f: File): Promise<void> => {
+    const guessExt = (f.type.split("/")[1] || "png").replace("jpeg", "jpg");
+    const { path } = await api.uploadAttachment(f, f.name || `pasted.${guessExt}`);
+    appendPath(path);
+  };
+
   // Paste/drop a clipboard image → upload → append its saved path to the draft.
   // (Pasting a path string is just normal text; this handles raw bitmaps.)
+  // P0-11: each file is uploaded independently. A failure no longer aborts the
+  // batch or writes a phantom path — it parks the file as a retryable failed
+  // attachment that blocks send until resolved.
   const handleImageFiles = async (files: File[]) => {
     const imgs = files.filter((f) => f.type.startsWith("image/"));
     if (imgs.length === 0) return false;
@@ -961,17 +981,35 @@ export function MessagesPanel({
     setError(null);
     try {
       for (const f of imgs) {
-        const guessExt = (f.type.split("/")[1] || "png").replace("jpeg", "jpg");
-        const { path } = await api.uploadAttachment(f, f.name || `pasted.${guessExt}`);
-        appendPath(path);
+        try {
+          await uploadOneImage(f);
+        } catch {
+          setFailedAttachments((prev) => [
+            ...prev,
+            { id: String(++attachIdRef.current), name: f.name || "image", file: f },
+          ]);
+        }
       }
       composerRef.current?.focus();
-    } catch (e) {
-      setError((e as Error).message);
     } finally {
       setUploadingImage(false);
     }
     return true;
+  };
+
+  const retryAttachment = async (id: string) => {
+    const item = failedAttachments.find((a) => a.id === id);
+    if (!item) return;
+    try {
+      await uploadOneImage(item.file);
+      setFailedAttachments((prev) => prev.filter((a) => a.id !== id));
+    } catch {
+      /* still failing — keep the red thumb so the user can retry again */
+    }
+  };
+
+  const dismissFailedAttachment = (id: string) => {
+    setFailedAttachments((prev) => prev.filter((a) => a.id !== id));
   };
 
   const onComposerPaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
@@ -1092,7 +1130,11 @@ export function MessagesPanel({
   // `onSend` (which spawns one on send) — so an exited orchestrator no longer
   // dead-ends the input behind a manual 唤醒 click.
   const canCompose = !!defaultRecipient || !!onSend;
-  const sendDisabled = sending || !body.trim() || !canCompose;
+  // P0-11: a failed attachment blocks send so the user can't accidentally fire
+  // a message that references an image which never uploaded.
+  const hasFailedAttachment = failedAttachments.length > 0;
+  const sendDisabled =
+    sending || !body.trim() || !canCompose || hasFailedAttachment;
   // Image paths currently in the draft → small removable thumbnails above the
   // input, so the user sees the screenshot they referenced/pasted.
   const composerImages = useMemo(() => extractImagePaths(body), [body]);
@@ -1521,7 +1563,9 @@ export function MessagesPanel({
             </button>
           </div>
         )}
-        {(composerImages.length > 0 || uploadingImage) && (
+        {(composerImages.length > 0 ||
+          uploadingImage ||
+          failedAttachments.length > 0) && (
           <div className="flex flex-wrap items-center gap-2">
             {composerImages.map((p) => (
               <ComposerThumb
@@ -1536,6 +1580,35 @@ export function MessagesPanel({
                 <Loader2 className="size-4 animate-spin text-foreground-tertiary" />
               </span>
             )}
+            {/* P0-11: failed uploads — red thumb, retry, dismiss. Path never
+                entered the draft, so it can't be sent by accident. */}
+            {failedAttachments.map((a) => (
+              <div key={a.id} className="group/att relative">
+                <button
+                  type="button"
+                  onClick={() => retryAttachment(a.id)}
+                  title={t("messages.attachFailedAria", {
+                    name: a.name,
+                    defaultValue: "{{name}} 上传失败，点击重试",
+                  })}
+                  className="flex h-16 w-16 flex-col items-center justify-center gap-1 rounded-md border border-status-danger/50 bg-status-danger-soft p-1 text-center transition-colors hover:bg-status-danger/15"
+                >
+                  <TriangleAlert className="size-4 shrink-0 text-status-danger" />
+                  <span className="font-caption text-[9px] leading-tight text-status-danger">
+                    {t("messages.attachRetry", "未上传 · 重试")}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => dismissFailedAttachment(a.id)}
+                  aria-label={t("messages.removeImage")}
+                  title={t("messages.removeImage")}
+                  className="absolute -right-1.5 -top-1.5 inline-flex size-5 items-center justify-center rounded-full border border-border-subtle bg-surface-elevated text-foreground-secondary shadow-sm transition hover:text-state-danger"
+                >
+                  <X className="size-3" />
+                </button>
+              </div>
+            ))}
           </div>
         )}
         {/* @mention autocomplete — appears while typing `@<token>` at the end

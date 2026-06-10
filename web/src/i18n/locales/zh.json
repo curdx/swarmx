@@ -731,6 +731,11 @@
     "stopMember": "停",
     "stopAll": "全部打断（{{count}}）",
     "queuedToCaptain": "已排队 · 队长接手后送达",
+    "attachRetry": "未上传 · 重试",
+    "attachFailedAria": "{{name}} 上传失败，点击重试",
+    "modelConfirmTitle": "换模型会重启队长",
+    "modelConfirmBody": "当前在跑的回复会被打断，队长会用新模型重新开始。",
+    "modelConfirmYes": "确认切换",
     "reasoning": {
       "thinking": "思考中",
       "summary": "思考摘要",
