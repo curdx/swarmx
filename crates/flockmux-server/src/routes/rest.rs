@@ -12,9 +12,9 @@ use axum::{
     response::IntoResponse,
 };
 use flockmux_protocol::rest::{
-    AgentInfo, CliInstallHint, CliPluginInfo, RunSpellAgent, RunSpellRequest, RunSpellResponse,
-    SpawnAgentRequest, SpawnAgentResponse, SpawnWorkerRequest, SpawnWorkerResponse, SpellAgentInfo,
-    SpellInfo,
+    AgentActivityRecord, AgentInfo, CliInstallHint, CliPluginInfo, RunSpellAgent, RunSpellRequest,
+    RunSpellResponse, SpawnAgentRequest, SpawnAgentResponse, SpawnWorkerRequest, SpawnWorkerResponse,
+    SpellAgentInfo, SpellInfo,
 };
 use flockmux_protocol::ws_swarm::{AgentState, SwarmEvent};
 use flockmux_recorder::{Recorder, RecorderConfig};
@@ -1132,7 +1132,37 @@ pub async fn agent_activity(
     State(state): State<AppState>,
     Path(agent_id): Path<String>,
 ) -> impl IntoResponse {
-    Json(state.swarm.recent_activity(&agent_id))
+    // P1: the persisted table (survives cold load / reconnect / restart) is the
+    // base; overlay the live in-memory ring, which is fresher for an agent
+    // acting right now and may hold a step not yet flushed. Merge by seq (ring
+    // wins), oldest-first — the BTreeMap keeps seq order, the same space the
+    // live WS uses so the UI merges them seamlessly.
+    let persisted = state
+        .swarm
+        .store()
+        .recent_agent_activities(&agent_id, 200)
+        .await
+        .unwrap_or_default();
+    let mut by_seq: std::collections::BTreeMap<u32, AgentActivityRecord> =
+        std::collections::BTreeMap::new();
+    for row in persisted {
+        by_seq.insert(
+            row.seq,
+            AgentActivityRecord {
+                agent_id: row.agent_id,
+                kind: row.kind,
+                label: row.label,
+                phase: row.phase,
+                seq: row.seq,
+                duration_ms: row.duration_ms,
+                at: row.at,
+            },
+        );
+    }
+    for rec in state.swarm.recent_activity(&agent_id) {
+        by_seq.insert(rec.seq, rec);
+    }
+    Json(by_seq.into_values().collect::<Vec<_>>())
 }
 
 // ────────────────────────────────────────────────────────────────────────

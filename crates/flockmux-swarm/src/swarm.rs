@@ -262,6 +262,30 @@ impl Swarm {
             q.push_back(rec.clone());
         }
         drop(q);
+        // P1: persist this step so `GET /api/agent/:id/activity` survives a cold
+        // load / reconnect / restart (the ring is per-server-session). Upsert by
+        // (agent_id, seq) mirrors the ring's collapse-by-seq. Fire-and-forget,
+        // like the thought-trace persist below.
+        {
+            let store = self.store.clone();
+            let aid = agent_id.to_string();
+            let (seq, kind, label, phase, duration_ms, at) = (
+                rec.seq,
+                rec.kind.clone(),
+                rec.label.clone(),
+                rec.phase.clone(),
+                rec.duration_ms,
+                rec.at,
+            );
+            tokio::spawn(async move {
+                if let Err(err) = store
+                    .insert_agent_activity(aid, seq, kind, label, phase, duration_ms, at)
+                    .await
+                {
+                    tracing::warn!(?err, "persist agent activity failed");
+                }
+            });
+        }
         if let Some(event) = trace_event {
             let store = self.store.clone();
             let agent_id = agent_id.to_string();

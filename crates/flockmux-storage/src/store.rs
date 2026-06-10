@@ -4,7 +4,8 @@
 
 use crate::connection::Customizer;
 use crate::models::{
-    AgentRecord, BlackboardOpRecord, GoalEvidenceRecord, GoalRecord, ListMessagesOpts,
+    AgentActivityRow, AgentRecord, BlackboardOpRecord, GoalEvidenceRecord, GoalRecord,
+    ListMessagesOpts,
     MessageRecord, NewAgent, NewBlackboardOp, NewGoal, NewGoalEvidence, NewMessage, NewRecording,
     NewSpellRun, NewThoughtTrace, NewThoughtTraceEvent, NewThread, NewWorker, NewWorkspace,
     NewWorkspaceRoot, RecordingRecord, SpellRunRecord, ThoughtTraceRecord, ThreadRecord,
@@ -449,6 +450,77 @@ impl Store {
         })
         .await
         .context("spawn_blocking touch_agent_activity")?
+    }
+
+    /// Upsert one tool-level activity step (P1: persist the in-memory ring so
+    /// `GET /api/agent/:id/activity` survives a cold load / reconnect / restart).
+    /// Keyed by (agent_id, seq): a `running` row is replaced in place by its
+    /// later ok/error, matching the ring's collapse-by-seq.
+    pub async fn insert_agent_activity(
+        &self,
+        agent_id: String,
+        seq: u32,
+        kind: String,
+        label: String,
+        phase: String,
+        duration_ms: Option<u32>,
+        at: i64,
+    ) -> Result<()> {
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || {
+            with_busy_retry(&pool, |conn| -> rusqlite::Result<()> {
+                conn.execute(
+                    "INSERT INTO agent_activities \
+                       (agent_id, seq, kind, label, phase, duration_ms, at) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) \
+                     ON CONFLICT(agent_id, seq) DO UPDATE SET \
+                       kind = excluded.kind, label = excluded.label, \
+                       phase = excluded.phase, duration_ms = excluded.duration_ms, \
+                       at = excluded.at",
+                    params![agent_id, seq, kind, label, phase, duration_ms, at],
+                )?;
+                Ok(())
+            })
+        })
+        .await
+        .context("spawn_blocking insert_agent_activity")?
+    }
+
+    /// Persisted activity for `agent_id` — the last `limit` steps. Order is not
+    /// guaranteed meaningful (the server merges by seq); callers that want
+    /// oldest-first should sort. Empty for agents that never acted.
+    pub async fn recent_agent_activities(
+        &self,
+        agent_id: &str,
+        limit: i64,
+    ) -> Result<Vec<AgentActivityRow>> {
+        let pool = self.pool.clone();
+        let agent_id = agent_id.to_string();
+        tokio::task::spawn_blocking(move || {
+            with_busy_retry(&pool, |conn| -> rusqlite::Result<Vec<AgentActivityRow>> {
+                let mut stmt = conn.prepare(
+                    "SELECT agent_id, seq, kind, label, phase, duration_ms, at \
+                     FROM agent_activities WHERE agent_id = ?1 \
+                     ORDER BY seq DESC LIMIT ?2",
+                )?;
+                let v = stmt
+                    .query_map(params![agent_id, limit], |row| {
+                        Ok(AgentActivityRow {
+                            agent_id: row.get(0)?,
+                            seq: row.get(1)?,
+                            kind: row.get(2)?,
+                            label: row.get(3)?,
+                            phase: row.get(4)?,
+                            duration_ms: row.get(5)?,
+                            at: row.get(6)?,
+                        })
+                    })?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                Ok(v)
+            })
+        })
+        .await
+        .context("spawn_blocking recent_agent_activities")?
     }
 
     /// Record one token-usage event (claude assistant turn / codex token_count).

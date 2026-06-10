@@ -386,6 +386,21 @@ pub struct RecordingRecord {
     pub last_seq: Option<i64>,
 }
 
+/// One persisted tool-level activity step (an `agent_activities` row). Mirrors
+/// the in-memory ring entry; the server maps it into the protocol
+/// `AgentActivityRecord` it serves over REST. `duration_ms` is None while the
+/// step is still running (later filled in by the upsert on its ok/error event).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentActivityRow {
+    pub agent_id: String,
+    pub seq: u32,
+    pub kind: String,
+    pub label: String,
+    pub phase: String,
+    pub duration_ms: Option<u32>,
+    pub at: i64,
+}
+
 /// Token usage aggregated by model (`agent_usage` GROUP BY model). Cost is NOT
 /// here — the server applies its pricing table at query time.
 #[derive(Debug, Clone, Serialize, Deserialize)]
