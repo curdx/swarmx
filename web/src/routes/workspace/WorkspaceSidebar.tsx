@@ -34,7 +34,6 @@ import type { BranchInfo, ThreadInfo, WorkspaceRoot } from "../../api/types";
 import { splitWorkspacePath } from "../../lib/workspace";
 import { directionBase } from "../../lib/thread";
 import type { WorkspaceSummary } from "./types";
-import { buildTabs } from "./WorkspaceToolbar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -124,6 +123,48 @@ function AheadBehind({
       {a > 0 && <span className="text-state-success">↑{a}</span>}
       {b > 0 && <span className="text-state-warning">↓{b}</span>}
     </span>
+  );
+}
+
+function SidebarSection({
+  label,
+  action,
+  children,
+}: {
+  label: string;
+  action?: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="flex min-h-6 items-center gap-2 px-1">
+        <span className="flex-1 font-caption text-[10px] font-semibold uppercase tracking-[0.12em] text-foreground-tertiary">
+          {label}
+        </span>
+        {action}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function WorkspaceHealthLine({ ws }: { ws: WorkspaceSummary }) {
+  const { t } = useTranslation();
+  const live = ws.members.length;
+  const directions = ws.threads.length || 1;
+  const roots = ws.roots.length;
+  return (
+    <div className="grid grid-cols-3 gap-1 px-1">
+      <span className="rounded bg-surface-primary px-1.5 py-1 text-center font-caption text-[10px] text-foreground-tertiary">
+        {t("chat.workspaceStatAgents", { count: live })}
+      </span>
+      <span className="rounded bg-surface-primary px-1.5 py-1 text-center font-caption text-[10px] text-foreground-tertiary">
+        {t("chat.workspaceStatDirections", { count: directions })}
+      </span>
+      <span className="rounded bg-surface-primary px-1.5 py-1 text-center font-caption text-[10px] text-foreground-tertiary">
+        {t("chat.workspaceStatRoots", { count: roots + 1 })}
+      </span>
+    </div>
   );
 }
 
@@ -569,62 +610,37 @@ export function WorkspaceList({
                 )}
               </div>
 
-              {/* ── logical tree: deps under the primary project + peer
-               *  projects + arbitrary nesting (parent_id based) ────────── */}
-              {expanded && (
-                <div className="ml-[0.9rem] flex flex-col border-l border-border-subtle pl-1.5 pt-0.5">
-                  <RootTree
-                    nodes={buildWorkspaceRootForest(ws)}
-                    collapsed={collapsed}
-                    toggle={toggleCollapsed}
-                  />
-                </div>
-              )}
-
-              {/* ── active workspace view nav: mirror the top tab bar in the
-               *  left rail so route switching stays discoverable where the
-               *  user is already looking (workspace context first, view second). */}
               {active && (
-                <div className="ml-[0.9rem] mt-1.5 flex flex-col gap-1 border-l border-border-subtle pl-1.5 pb-1">
-                  <div className="px-1 font-caption text-[10px] font-semibold uppercase tracking-[0.12em] text-foreground-tertiary">
-                    {t("chat.workspaceViews", "当前工作区")}
-                  </div>
-                  {buildTabs(ws.id, activeThreadSlug ?? "main").map((tab) => {
-                    const Icon = tab.icon;
-                    return (
-                      <NavLink
-                        key={tab.to}
-                        to={tab.to}
-                        end
-                        onClick={() => onAfterNavigate?.()}
-                        className={({ isActive }) =>
-                          cn(
-                            "flex items-center gap-2 rounded-md px-2 py-1.5 text-[12px] transition-colors",
-                            "min-h-8",
-                            isActive
-                              ? "bg-accent-primary-soft text-foreground-primary"
-                              : "text-foreground-secondary hover:bg-surface-tertiary hover:text-foreground-primary",
-                          )
-                        }
-                        title={t(tab.labelKey)}
-                      >
-                        <Icon className="size-3.5 shrink-0" />
-                        <span className="truncate">{t(tab.labelKey)}</span>
-                      </NavLink>
-                    );
-                  })}
-                </div>
-              )}
+                <div className="mt-2 flex flex-col gap-3 rounded-lg border border-border-subtle bg-surface-elevated/60 p-2">
+                  <WorkspaceHealthLine ws={ws} />
 
-              {/* ── directions (threads): the active workspace's parallel
-               *  lines of work. Shown only for the active workspace to keep
-               *  the rail calm; the list itself only when there's >1 (a lone
-               *  "main" row would be noise — you're already in it). The
-               *  "+ new direction" affordance is always offered. ───────── */}
-              {active && (
-                <div className="ml-[0.9rem] mt-0.5 flex flex-col gap-px border-l border-border-subtle pl-1.5">
-                  {ws.threads.length > 1 &&
-                    ws.threads.map((th) => {
+                  <SidebarSection
+                    label={t("chat.workspaceDirections")}
+                    action={
+                      onNewDirection && (
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setNewDirName("");
+                                setNewDirFor(ws);
+                              }}
+                              className="flex size-6 items-center justify-center rounded text-foreground-tertiary hover:bg-surface-tertiary hover:text-foreground-primary"
+                              aria-label={t("chat.newDirection")}
+                            >
+                              <Plus className="size-3.5" />
+                            </button>
+                          </TooltipTrigger>
+                          <TooltipContent side="right">
+                            {t("chat.newDirectionTooltip")}
+                          </TooltipContent>
+                        </Tooltip>
+                      )
+                    }
+                  >
+                    <div className="flex flex-col gap-px">
+                      {ws.threads.map((th) => {
                       const isMain = th.slug === "main";
                       const thActive = (activeThreadSlug ?? "main") === th.slug;
                       const isolated = th.isolation === "worktree";
@@ -639,12 +655,12 @@ export function WorkspaceList({
                       // the orchestrator names it (swarm_name_thread), it's just
                       // an unnamed direction.
                       const label =
-                        th.name?.trim() ||
-                        (isMain
+                        isMain
                           ? t("chat.mainDirection")
-                          : th.slug.startsWith("t-")
-                            ? t("chat.directionUnnamed")
-                            : th.slug);
+                          : th.name?.trim() ||
+                            (th.slug.startsWith("t-")
+                              ? t("chat.directionUnnamed")
+                              : th.slug);
                       return (
                         <div
                           key={th.id}
@@ -679,6 +695,8 @@ export function WorkspaceList({
                               <GitBranch className="size-3 shrink-0 text-accent-purple" />
                             ) : degraded ? (
                               <Unlink className="size-3 shrink-0 text-state-warning" />
+                            ) : isMain ? (
+                              <Home className="size-3 shrink-0 text-accent-primary" />
                             ) : (
                               <Hash className="size-3 shrink-0 text-foreground-tertiary" />
                             )}
@@ -722,26 +740,41 @@ export function WorkspaceList({
                           )}
                         </div>
                       );
-                    })}
-                  {onNewDirection && (
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setNewDirName("");
-                            setNewDirFor(ws);
-                          }}
-                          className="flex min-h-8 items-center gap-1.5 rounded-md py-1 pl-1 pr-2 text-[12px] text-foreground-tertiary hover:bg-surface-tertiary hover:text-foreground-primary"
-                        >
-                          <Plus className="size-3 shrink-0" />
-                          <span>{t("chat.newDirection")}</span>
-                        </button>
-                      </TooltipTrigger>
-                      <TooltipContent side="right">
-                        {t("chat.newDirectionTooltip")}
-                      </TooltipContent>
-                    </Tooltip>
+                      })}
+                    </div>
+                  </SidebarSection>
+
+                  {(!hasRoots || expanded) && (
+                    <SidebarSection
+                      label={t("chat.workspaceSources")}
+                      action={
+                        onRootsChanged && (
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <button
+                                type="button"
+                                onClick={() => setManageRoots(ws)}
+                                className="flex size-6 items-center justify-center rounded text-foreground-tertiary hover:bg-surface-tertiary hover:text-foreground-primary"
+                                aria-label={t("chat.manageRoots", { name: ws.name })}
+                              >
+                                <FolderPlus className="size-3.5" />
+                              </button>
+                            </TooltipTrigger>
+                            <TooltipContent side="right">
+                              {t("chat.manageRootsTooltip")}
+                            </TooltipContent>
+                          </Tooltip>
+                        )
+                      }
+                    >
+                      <div className="flex flex-col border-l border-border-subtle pl-1.5">
+                        <RootTree
+                          nodes={buildWorkspaceRootForest(ws)}
+                          collapsed={collapsed}
+                          toggle={toggleCollapsed}
+                        />
+                      </div>
+                    </SidebarSection>
                   )}
                 </div>
               )}
