@@ -12,20 +12,63 @@
  * This is the seam future P1 cards (delivery, model_changed, …) hang off.
  */
 import { useTranslation } from "react-i18next";
-import { ChevronRight, Split } from "lucide-react";
+import { CircleCheck, ChevronRight, Split } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { roleColorClass as roleColor } from "@/lib/agent";
 import type { MessageRecord } from "../../api/types";
 
 export function SystemCard({
   message,
+  fromRole,
   onOpenAgent,
 }: {
   message: MessageRecord;
+  /** Resolved role of `message.from_agent` — used by the "completion" (delivery)
+   *  card, whose worker isn't named in meta. */
+  fromRole?: string;
   onOpenAgent?: (agentId: string) => void;
 }) {
   const { t } = useTranslation();
   const subtype = message.meta?.subtype;
+
+  // ── delivery card: a worker finished its task (farewell / completion) ──
+  if (subtype === "completion") {
+    const role = fromRole ?? "成员";
+    const agent = message.from_agent;
+    const clickable = onOpenAgent != null;
+    const body = message.body?.trim();
+    return (
+      <div className="flex max-w-[min(82vw,560px)] flex-col gap-1.5 rounded-lg border border-status-success/30 bg-status-success-soft/40 px-3 py-2">
+        <button
+          type="button"
+          disabled={!clickable}
+          onClick={() => clickable && onOpenAgent?.(agent)}
+          title={
+            clickable
+              ? t("chat.dispatch.open", { role, defaultValue: "查看 {{role}}" })
+              : undefined
+          }
+          className={cn(
+            "group flex items-center gap-2 text-left transition-colors",
+            clickable && "hover:opacity-90",
+          )}
+        >
+          <CircleCheck className="size-4 shrink-0 text-status-success" />
+          <span className="min-w-0 flex-1 font-heading text-xs font-medium text-foreground-primary">
+            {t("chat.delivery.title", { role, defaultValue: "{{role}} 交付完成" })}
+          </span>
+          {clickable && (
+            <ChevronRight className="size-3 shrink-0 text-foreground-tertiary transition-colors group-hover:text-status-success" />
+          )}
+        </button>
+        {body && (
+          <p className="whitespace-pre-wrap break-words font-body text-[12px] leading-snug text-foreground-secondary">
+            {body}
+          </p>
+        )}
+      </div>
+    );
+  }
 
   if (subtype === "dispatch") {
     const childRole = message.meta?.child_role ?? "成员";

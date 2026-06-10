@@ -357,16 +357,16 @@ export function MessagesPanel({
   const [interruptingId, setInterruptingId] = useState<string | null>(null);
   const [queuedHint, setQueuedHint] = useState(false);
   // P1: when the user interrupts an agent, optimistically clear its
-  // "responding" indicator NOW (keyed by interrupt time) instead of waiting for
-  // the backend Idle event to round-trip — agentId → interrupt timestamp. A
-  // pending turn whose trigger predates the interrupt is treated as cancelled; a
-  // NEW message (later sent_at) is unaffected, so it re-shows naturally.
-  const [interruptedAgents, setInterruptedAgents] = useState<
+  // "responding" indicator NOW instead of waiting for the backend Idle event to
+  // round-trip. Keyed by the CANCELLED turn's trigger message id (server-
+  // assigned, monotonic) — NOT a client wall-clock. This is clock-skew-proof: a
+  // brand-new message gets a new id so it's never wrongly suppressed, and a
+  // stale entry can never match a future turn. (Comparing client Date.now()
+  // against the server's trigger.sent_at mis-fires under laptop clock drift.)
+  // `markInterrupted` is defined after pendingResponders (it reads it).
+  const [interruptedTriggers, setInterruptedTriggers] = useState<
     Record<string, number>
   >({});
-  const markInterrupted = useCallback((agentId: string) => {
-    setInterruptedAgents((m) => ({ ...m, [agentId]: Date.now() }));
-  }, []);
 
   const listRef = useRef<HTMLDivElement>(null);
   const rowRefs = useRef<Map<number, HTMLDivElement | null>>(new Map());
@@ -758,10 +758,10 @@ export function MessagesPanel({
       const sentAt = lastSent.get(agentId) ?? 0;
       if (trigger.sent_at <= sentAt) continue;
       if (now - trigger.sent_at > PENDING_TIMEOUT_MS) continue;
-      // P1: a turn the user interrupted (interrupt time ≥ this trigger) is
-      // cancelled — don't keep faking "responding". A newer message reopens it.
-      const interruptedAt = interruptedAgents[agentId];
-      if (interruptedAt != null && interruptedAt >= trigger.sent_at) continue;
+      // P1: the exact turn the user interrupted (matched by trigger id) is
+      // cancelled — don't keep faking "responding". A newer message has a new
+      // id, so it reopens naturally; clock-skew can't affect an id match.
+      if (interruptedTriggers[agentId] === trigger.id) continue;
       out.push({ agentId, trigger });
     }
     // Stable order: earliest-triggered first, so older waiters appear above.
@@ -769,7 +769,7 @@ export function MessagesPanel({
     return out;
     // tick is purposeful — re-evaluates the "now - sent_at" cutoff over time.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [items, aliveForInference, agentLiveStateById, interruptedAgents, tick]);
+  }, [items, aliveForInference, agentLiveStateById, interruptedTriggers, tick]);
 
   // Auto-scroll to bottom on new items / live message / new pending bubble.
   useLayoutEffect(() => {
@@ -811,6 +811,19 @@ export function MessagesPanel({
       );
     });
   }, [activeMembers, agentLiveStateById, pendingResponders]);
+
+  // Mark the agent's CURRENT pending turn as cancelled, keyed by that trigger's
+  // server-assigned message id (looked up from pendingResponders at click time).
+  // Clock-free and self-clearing — a later message has a new id, so it re-shows.
+  const markInterrupted = useCallback(
+    (agentId: string) => {
+      const trig = pendingResponders.find((p) => p.agentId === agentId)?.trigger;
+      if (trig) {
+        setInterruptedTriggers((m) => ({ ...m, [agentId]: trig.id }));
+      }
+    },
+    [pendingResponders],
+  );
 
   const stopMember = useCallback(
     async (agentId: string) => {
@@ -1351,10 +1364,15 @@ export function MessagesPanel({
           {rows.map(({ msg: m, showHeader, showDividerBefore }) => {
             const isUser = m.from_agent === USER_SENDER;
             const isSystem = m.from_agent === SYSTEM_SENDER;
+            // A worker's farewell/completion (from=worker, meta.subtype=
+            // "completion") renders as a delivery card via SystemCard, not a
+            // normal bubble — so "X 交付完成" reads as a structured event.
+            const isDelivery = m.meta?.subtype === "completion";
             const role = resolveRole(m.from_agent, roleLookup);
             const isUnread =
               !isUser &&
               !isSystem &&
+              !isDelivery &&
               m.read_at === null &&
               m.to_agent === USER_SENDER;
             const highlighted = highlightId === m.id;
@@ -1369,8 +1387,9 @@ export function MessagesPanel({
                 />
               ) : null;
 
-            // System messages: centered hairline note, no bubble.
-            if (isSystem) {
+            // System events + worker delivery cards: centered structured card,
+            // no bubble. Dispatched by meta.subtype inside SystemCard.
+            if (isSystem || isDelivery) {
               return (
                 <div
                   key={m.id}
@@ -1388,7 +1407,11 @@ export function MessagesPanel({
                     )}
                     title={`#${m.id} · ${m.kind} · ${formatFullStamp(m.sent_at)}`}
                   >
-                    <SystemCard message={m} onOpenAgent={onOpenAgent} />
+                    <SystemCard
+                      message={m}
+                      fromRole={role}
+                      onOpenAgent={onOpenAgent}
+                    />
                   </span>
                 </div>
               );

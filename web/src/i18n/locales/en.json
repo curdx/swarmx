@@ -351,6 +351,9 @@
       "title": "Dispatched to {{role}}",
       "open": "Open {{role}}"
     },
+    "delivery": {
+      "title": "{{role}} delivered"
+    },
     "bootstrap": {
       "cardTitle": "Captain is coming online…",
       "badge": "Starting",
