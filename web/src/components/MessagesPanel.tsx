@@ -1118,6 +1118,19 @@ export function MessagesPanel({
     el.style.height = `${Math.min(el.scrollHeight, 140)}px`;
   };
 
+  // P0-9: ⌘/Ctrl+Enter while the captain is mid-reply = interrupt it, then send
+  // this message as a new instruction (a deliberate course-correction, distinct
+  // from Enter which just queues). Only fires when the captain is actually
+  // running, so it never surprise-kills an idle turn.
+  const interruptThenSend = async (agentId: string) => {
+    try {
+      await api.interruptAgent(agentId);
+    } catch {
+      /* best-effort — still deliver the redirect */
+    }
+    await send();
+  };
+
   const onComposerKey = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     // Desktop chat convention: Enter sends, Shift+Enter inserts newline.
     // On touch-first platforms the soft keyboard already exposes an explicit
@@ -1126,6 +1139,16 @@ export function MessagesPanel({
     if (platform.isMobileLike) return;
     if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault();
+      if (e.metaKey || e.ctrlKey) {
+        const captain = explicitRecipient ?? defaultRecipient;
+        const captainBusy =
+          captain != null &&
+          pendingResponders.some((p) => p.agentId === captain.agent_id);
+        if (captain && captainBusy) {
+          void interruptThenSend(captain.agent_id);
+          return;
+        }
+      }
       send();
     }
   };
