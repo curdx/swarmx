@@ -1713,6 +1713,33 @@ pub async fn spawn_worker(
         tracing::warn!(?e, agent = %out.agent_id, "record_worker failed");
     }
 
+    // P1: surface the delegation IN the conversation so multi-agent work is
+    // legible in the thread (治诊断1「协作流里不可见」) instead of an opaque new
+    // member silently appearing in the roster. A persisted `kind=system` card —
+    // from="system" makes send_message fall back to the recipient's (the
+    // dispatcher's) direction, so it lands in the right thread. Best-effort,
+    // like record_worker above; a failure here doesn't fail the spawn.
+    if let Err(e) = state
+        .swarm
+        .send_message(flockmux_swarm::NewMessage {
+            from_agent: "system".to_string(),
+            to_agent: req.caller_agent_id.clone(),
+            kind: "system".to_string(),
+            body: format!("派出{role_label}"),
+            sent_at: now_ms(),
+            in_reply_to: None,
+            meta: Some(serde_json::json!({
+                "subtype": "dispatch",
+                "child_agent": out.agent_id,
+                "child_role": role_label,
+                "role_slug": role_slug,
+            })),
+        })
+        .await
+    {
+        tracing::warn!(?e, agent = %out.agent_id, "dispatch system card emit failed");
+    }
+
     // Bootstrap inject — shared with run_spell (see spawn_bootstrap_inject).
     // We inject the AUGMENTED prompt (orchestrator's text + the minted handoff
     // block) so the worker is told the exact canonical key to write.
