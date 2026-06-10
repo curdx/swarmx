@@ -1191,7 +1191,10 @@ pub async fn set_thread_model_handler(
                 Json(json!({"error": format!("unknown thread: {thread_id}")})),
             )
         })?;
-    let _ = thread;
+    // Capture the old model state before discarding the row — the model_changed
+    // card below reports the from→to.
+    let old_tier = thread.model_tier.clone();
+    let old_reasoning = thread.reasoning_effort.clone();
     // Normalize empty → None (clear). A concrete tier/model/effort is stored
     // verbatim and resolved per-CLI at spawn time.
     let tier = req
@@ -1217,7 +1220,7 @@ pub async fn set_thread_model_handler(
     }
     state
         .store
-        .set_thread_model_tier(thread_id.clone(), tier)
+        .set_thread_model_tier(thread_id.clone(), tier.clone())
         .await
         .map_err(|e| {
             (
@@ -1227,7 +1230,7 @@ pub async fn set_thread_model_handler(
         })?;
     state
         .store
-        .set_thread_reasoning_effort(thread_id.clone(), reasoning)
+        .set_thread_reasoning_effort(thread_id.clone(), reasoning.clone())
         .await
         .map_err(|e| {
             (
@@ -1235,6 +1238,49 @@ pub async fn set_thread_model_handler(
                 Json(json!({"error": e.to_string()})),
             )
         })?;
+    // P1: surface the model switch in the conversation (入流律). Switching the
+    // model restarts the captain mid-turn; a persisted system card makes that
+    // visible in the thread instead of the captain silently rebooting. Scoped to
+    // this direction's live orchestrator (from="system" → send_message lands it
+    // in that agent's thread). Best-effort; only when the model actually changed.
+    if old_tier != tier || old_reasoning != reasoning {
+        let label = |t: &Option<String>, r: &Option<String>| -> String {
+            let base = t.as_deref().unwrap_or("默认").to_string();
+            match r.as_deref() {
+                Some(eff) => format!("{base}·{eff}"),
+                None => base,
+            }
+        };
+        let from = label(&old_tier, &old_reasoning);
+        let to = label(&tier, &reasoning);
+        if let Ok(agents) = state.store.list_agents().await {
+            if let Some(orch) = agents.into_iter().find(|a| {
+                a.role == "orchestrator"
+                    && a.killed_at.is_none()
+                    && a.thread_id.as_deref() == Some(thread_id.as_str())
+            }) {
+                if let Err(e) = state
+                    .swarm
+                    .send_message(flockmux_swarm::NewMessage {
+                        from_agent: "system".to_string(),
+                        to_agent: orch.id,
+                        kind: "system".to_string(),
+                        body: format!("队长模型已切换 {from} → {to}"),
+                        sent_at: now_ms(),
+                        in_reply_to: None,
+                        meta: Some(serde_json::json!({
+                            "subtype": "model_changed",
+                            "from": from,
+                            "to": to,
+                        })),
+                    })
+                    .await
+                {
+                    tracing::warn!(?e, "model_changed system card emit failed");
+                }
+            }
+        }
+    }
     publish_thread_changed(&state, &workspace_id, &thread_id, "updated");
     let updated = state
         .store

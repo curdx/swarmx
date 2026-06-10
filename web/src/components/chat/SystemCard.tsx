@@ -12,7 +12,7 @@
  * This is the seam future P1 cards (delivery, model_changed, …) hang off.
  */
 import { useTranslation } from "react-i18next";
-import { CircleCheck, ChevronRight, Split } from "lucide-react";
+import { CircleCheck, ChevronRight, Cpu, Split } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { roleColorClass as roleColor } from "@/lib/agent";
 import type { MessageRecord } from "../../api/types";
@@ -67,6 +67,16 @@ export function SystemCard({
           </p>
         )}
       </div>
+    );
+  }
+
+  // ── model switched: the captain restarted on a new model (入流律) ──
+  if (subtype === "model_changed") {
+    return (
+      <span className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-border-subtle bg-surface-secondary px-3 py-1 font-caption text-[11px] text-foreground-secondary">
+        <Cpu className="size-3 shrink-0 text-foreground-tertiary" />
+        <span className="min-w-0 truncate">{message.body}</span>
+      </span>
     );
   }
 
