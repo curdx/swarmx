@@ -12,8 +12,9 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { Link } from "react-router-dom";
 import { api } from "../../../api/http";
-import type { AgentInfo } from "../../../api/types";
+import type { AgentInfo, CliPluginInfo } from "../../../api/types";
 import { MessagesPanel } from "../../../components/MessagesPanel";
 import { OnboardingTour } from "../../../components/OnboardingTour";
 import {
@@ -32,7 +33,16 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { Boxes, FolderOpen, GitBranch, Radio, Users, Zap } from "lucide-react";
+import {
+  Boxes,
+  FolderOpen,
+  GitBranch,
+  PlugZap,
+  Radio,
+  TriangleAlert,
+  Users,
+  Zap,
+} from "lucide-react";
 import { cn } from "@/lib/cn";
 import {
   roleColorClass as roleColor,
@@ -186,12 +196,19 @@ const TASK_READY_DISMISS_MS = 4_000;
 // 独立事件，不归到用户上一条消息。
 const TASK_ATTACH_WINDOW_MS = 15_000;
 
+interface CliReadiness {
+  loading: boolean;
+  installed: CliPluginInfo[];
+  missing: CliPluginInfo[];
+}
+
 function WorkspaceStatusStrip({
   workspaceName,
   directionName,
   memberCount,
   sourceCount,
   cwdBranch,
+  cliReadiness,
   reviving,
   onRevive,
 }: {
@@ -200,11 +217,21 @@ function WorkspaceStatusStrip({
   memberCount: number;
   sourceCount: number;
   cwdBranch: string | null;
+  cliReadiness: CliReadiness;
   reviving: boolean;
   onRevive: () => void;
 }) {
   const { t } = useTranslation();
   const hasMembers = memberCount > 0;
+  const noCliReady =
+    !cliReadiness.loading &&
+    cliReadiness.installed.length === 0 &&
+    cliReadiness.missing.length > 0;
+  const someCliMissing =
+    !cliReadiness.loading &&
+    cliReadiness.installed.length > 0 &&
+    cliReadiness.missing.length > 0;
+  const cliNames = cliReadiness.installed.map((p) => p.display_name).join(" / ");
   return (
     <div className="shrink-0 border-b border-border-subtle bg-surface-primary px-3 py-2">
       <div className="mx-auto flex w-full max-w-[1040px] flex-col gap-2 rounded-lg border border-border-subtle bg-surface-elevated px-3 py-2 shadow-sm sm:flex-row sm:items-center">
@@ -244,13 +271,36 @@ function WorkspaceStatusStrip({
                   <span className="truncate font-mono">{cwdBranch}</span>
                 </span>
               )}
+              {!cliReadiness.loading && cliReadiness.installed.length > 0 && (
+                <span className="inline-flex min-w-0 items-center gap-1">
+                  <PlugZap className="size-3 shrink-0" />
+                  <span className="truncate">
+                    {t("chat.workspaceStripCliReady", { names: cliNames })}
+                  </span>
+                </span>
+              )}
             </div>
           </div>
         </div>
-        {!hasMembers && (
+        {noCliReady ? (
+          <div className="flex flex-col gap-2 sm:max-w-[430px] sm:flex-row sm:items-center">
+            <p className="font-caption text-[11px] leading-5 text-state-warning">
+              <TriangleAlert className="mr-1 inline size-3 align-[-2px]" />
+              {t("chat.workspaceStripCliMissing")}
+            </p>
+            <Button asChild size="sm" variant="outline" className="h-8 shrink-0 gap-1.5">
+              <Link to="/settings/plugins">
+                <PlugZap className="size-3.5" />
+                {t("chat.workspaceStripSetupCli")}
+              </Link>
+            </Button>
+          </div>
+        ) : !hasMembers ? (
           <div className="flex flex-col gap-2 sm:max-w-[360px] sm:flex-row sm:items-center">
             <p className="font-caption text-[11px] leading-5 text-foreground-tertiary">
-              {t("chat.workspaceStripReviveHint")}
+              {someCliMissing
+                ? t("chat.workspaceStripCliPartial")
+                : t("chat.workspaceStripReviveHint")}
             </p>
             <Button
               size="sm"
@@ -262,7 +312,14 @@ function WorkspaceStatusStrip({
               {reviving ? t("chat.reviving") : t("chat.reviveOrchestrator")}
             </Button>
           </div>
-        )}
+        ) : someCliMissing ? (
+          <Button asChild size="sm" variant="outline" className="h-8 shrink-0 gap-1.5">
+            <Link to="/settings/plugins">
+              <PlugZap className="size-3.5" />
+              {t("chat.workspaceStripSetupMissingCli")}
+            </Link>
+          </Button>
+        ) : null}
       </div>
     </div>
   );
@@ -301,6 +358,33 @@ export default function ChatView() {
   // short-circuits, so it just becomes available to chat with again.
   const [reviving, setReviving] = useState(false);
   const [confirm, setConfirm] = useState<ConfirmActionState | null>(null);
+  const [cliReadiness, setCliReadiness] = useState<CliReadiness>({
+    loading: true,
+    installed: [],
+    missing: [],
+  });
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .listPlugins()
+      .then((plugins) => {
+        if (cancelled) return;
+        setCliReadiness({
+          loading: false,
+          installed: plugins.filter((p) => p.installed === true),
+          missing: plugins.filter((p) => p.installed === false),
+        });
+      })
+      .catch(() => {
+        if (!cancelled)
+          setCliReadiness({ loading: false, installed: [], missing: [] });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const reviveOrchestrator = useCallback(async () => {
     if (reviving) return;
     setReviving(true);
@@ -644,6 +728,7 @@ export default function ChatView() {
           memberCount={activeMembers.length}
           sourceCount={workspace.roots.length + 1}
           cwdBranch={workspace.cwdBranch}
+          cliReadiness={cliReadiness}
           reviving={reviving}
           onRevive={reviveOrchestrator}
         />
