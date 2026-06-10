@@ -731,6 +731,11 @@
     "stopMember": "Stop",
     "stopAll": "Stop all ({{count}})",
     "queuedToCaptain": "Queued · delivered when the captain is free",
+    "attachRetry": "Upload failed · retry",
+    "attachFailedAria": "{{name}} failed to upload, click to retry",
+    "modelConfirmTitle": "Switching model restarts the captain",
+    "modelConfirmBody": "The in-flight reply will be interrupted and the captain will restart on the new model.",
+    "modelConfirmYes": "Switch",
     "reasoning": {
       "thinking": "Thinking",
       "summary": "Reasoning summary",

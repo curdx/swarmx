@@ -572,7 +572,7 @@ export default function ChatView() {
   // re-bootstraps from the ledger). Workers spawned afterward inherit the tier
   // at spawn time. Passive otherwise (null tier = follow the global default).
   const [modelBusy, setModelBusy] = useState(false);
-  const setDirectionModel = useCallback(
+  const applyDirectionModel = useCallback(
     async (cfg: { tier?: string | null; reasoning?: string | null }) => {
       if (!activeThread || modelBusy) return;
       setModelBusy(true);
@@ -616,6 +616,39 @@ export default function ChatView() {
       activeMembers,
       refreshAgents,
     ],
+  );
+
+  // P0-10: gate the model switch behind a confirm when a live orchestrator
+  // would actually be restarted + its in-flight reply interrupted. A no-op
+  // re-select or a member-less direction applies silently.
+  const setDirectionModel = useCallback(
+    (cfg: { tier?: string | null; reasoning?: string | null }) => {
+      if (!activeThread || modelBusy) return;
+      const curTier = activeThread.model_tier ?? null;
+      const curReasoning = activeThread.reasoning_effort ?? null;
+      if (cfg.tier !== undefined && (cfg.tier ?? null) === curTier) return;
+      if (cfg.reasoning !== undefined && (cfg.reasoning ?? null) === curReasoning)
+        return;
+      const hasLiveOrch = activeMembers.some(
+        (m) => m.role === "orchestrator" && m.killed_at == null,
+      );
+      if (!hasLiveOrch) {
+        void applyDirectionModel(cfg);
+        return;
+      }
+      setConfirm({
+        title: t("messages.modelConfirmTitle", "换模型会重启队长"),
+        description: t(
+          "messages.modelConfirmBody",
+          "当前在跑的回复会被打断，队长会用新模型重新开始。",
+        ),
+        confirmLabel: t("messages.modelConfirmYes", "确认切换"),
+        onConfirm: () => {
+          void applyDirectionModel(cfg);
+        },
+      });
+    },
+    [activeThread, modelBusy, activeMembers, applyDirectionModel, t],
   );
 
   // 发消息即上线：工作空间没有活的 orchestrator 时，用户直接发消息——自动
@@ -1142,13 +1175,17 @@ export default function ChatView() {
             </ul>
           </div>
         )}
-        <ConfirmActionDialog
-          action={confirm}
-          onOpenChange={(next) => {
-            if (!next) setConfirm(null);
-          }}
-        />
       </aside>
+      {/* Mounted outside the ≥1536px members aside so confirms triggered from
+          the full-width chat — e.g. the P0-10 model-switch confirm — work at
+          any window width (the aside, and its old copy of this dialog, only
+          render at 2xl). */}
+      <ConfirmActionDialog
+        action={confirm}
+        onOpenChange={(next) => {
+          if (!next) setConfirm(null);
+        }}
+      />
     </div>
   );
 }
