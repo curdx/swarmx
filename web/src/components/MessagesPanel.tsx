@@ -74,6 +74,7 @@ import {
   EmptyState,
   type EmptyStateCliReadiness,
 } from "@/components/chat/EmptyState";
+import { SystemCard } from "@/components/chat/SystemCard";
 import { getClientPlatformInfo } from "@/lib/platform";
 
 const ChatMarkdown = lazy(() =>
@@ -1383,12 +1384,11 @@ export function MessagesPanel({
                   {newDivider}
                   <span
                     className={cn(
-                      "selectable rounded-full bg-surface-tertiary px-3 py-0.5 font-caption text-[10px] text-foreground-tertiary",
-                      highlighted && "ring-1 ring-accent-primary",
+                      highlighted && "rounded-lg ring-1 ring-accent-primary",
                     )}
                     title={`#${m.id} · ${m.kind} · ${formatFullStamp(m.sent_at)}`}
                   >
-                    {m.body}
+                    <SystemCard message={m} onOpenAgent={onOpenAgent} />
                   </span>
                 </div>
               );

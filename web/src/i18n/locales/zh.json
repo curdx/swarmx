@@ -347,6 +347,10 @@
     "live": {
       "memberStalled": "已 {{secs}}s 无活动"
     },
+    "dispatch": {
+      "title": "派给 {{role}}",
+      "open": "查看 {{role}}"
+    },
     "bootstrap": {
       "cardTitle": "队长正在上岗…",
       "badge": "启动中",

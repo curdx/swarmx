@@ -347,6 +347,10 @@
     "live": {
       "memberStalled": "Idle for {{secs}}s"
     },
+    "dispatch": {
+      "title": "Dispatched to {{role}}",
+      "open": "Open {{role}}"
+    },
     "bootstrap": {
       "cardTitle": "Captain is coming online…",
       "badge": "Starting",

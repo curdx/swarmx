@@ -149,6 +149,12 @@ export interface MessageMeta {
   key?: string;
   /** For completions: the handoff signal that was delivered. */
   signal?: string;
+  /** For "dispatch": the spawned worker's agent id, so the card can open it. */
+  child_agent?: string;
+  /** For "dispatch": the spawned worker's role label, shown on the card. */
+  child_role?: string;
+  /** For "dispatch": the worker's registry slug (diagnostic). */
+  role_slug?: string;
 }
 
 export interface MessageRecord {
