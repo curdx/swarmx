@@ -17,8 +17,9 @@ mod store;
 pub use models::{
     AgentRecord, BlackboardOpRecord, CronJobRecord, GoalEvidenceRecord, GoalRecord,
     ListMessagesOpts, MessageRecord, NewAgent, NewBlackboardOp, NewGoal, NewGoalEvidence,
-    NewMessage, NewRecording, NewSpellRun, NewThread, NewWorker, NewWorkspace, NewWorkspaceRoot,
-    RecordingRecord, SpellRunRecord, TaskRecord, ThreadRecord, UsageByAgent, UsageByDay,
-    UsageByModel, WorkerRecord, WorkspaceRecord, WorkspaceRootRecord,
+    NewMessage, NewRecording, NewSpellRun, NewThoughtTrace, NewThoughtTraceEvent, NewThread,
+    NewWorker, NewWorkspace, NewWorkspaceRoot, RecordingRecord, SpellRunRecord, TaskRecord,
+    ThoughtTraceRecord, ThoughtTraceStep, ThreadRecord, UsageByAgent, UsageByDay, UsageByModel,
+    WorkerRecord, WorkspaceRecord, WorkspaceRootRecord,
 };
 pub use store::{PruneStats, Store};

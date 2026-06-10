@@ -326,7 +326,9 @@ export default function NotificationsRoute() {
             delivered_at: null,
             read_at: null,
             in_reply_to: ev.in_reply_to ?? null,
+            thread_id: ev.thread_id ?? null,
             meta: ev.meta,
+            thought_trace: ev.thought_trace ?? null,
           };
           const c = classifyMessage(rec, t, roleRef.current);
           next = {
@@ -422,7 +424,7 @@ export default function NotificationsRoute() {
   return (
     <div className="flex h-full flex-col bg-surface-primary">
       {/* Head */}
-      <header className="flex h-14 shrink-0 items-center gap-3 border-b border-border-subtle bg-surface-elevated px-5">
+      <header className="flex shrink-0 flex-wrap items-center gap-3 border-b border-border-subtle bg-surface-elevated px-4 py-3 sm:h-14 sm:flex-nowrap sm:px-5 sm:py-0">
         <span className="flex size-8 items-center justify-center rounded-md bg-accent-primary-soft">
           <Bell className="size-4 text-accent-primary-deep" />
         </span>
@@ -434,8 +436,13 @@ export default function NotificationsRoute() {
             {t("notifications.subtitle", { count: totalUnread })}
           </span>
         </div>
-        <span className="flex-1" />
-        <Button variant="outline" size="sm" onClick={markAllRead}>
+        <span className="hidden flex-1 sm:block" />
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={markAllRead}
+          className="ml-auto h-8 sm:ml-0"
+        >
           {t("notifications.markAllRead")}
         </Button>
         <Button
@@ -450,7 +457,7 @@ export default function NotificationsRoute() {
       </header>
 
       {/* Tab bar */}
-      <div className="flex h-11 shrink-0 items-center gap-1.5 border-b border-border-subtle bg-surface-secondary px-5">
+      <div className="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-border-subtle bg-surface-secondary px-4 py-2 sm:min-h-11 sm:px-5">
         {TABS.map((tabItem) => {
           const Icon = tabItem.icon;
           const active = tabItem.id === tab;
@@ -461,7 +468,7 @@ export default function NotificationsRoute() {
               variant={active ? "default" : "outline"}
               size="sm"
               onClick={() => setTab(tabItem.id)}
-              className="h-7 rounded-full"
+              className="h-8 rounded-full"
             >
               <Icon className="size-3" />
               {t(tabItem.labelKey)}
@@ -556,8 +563,9 @@ export default function NotificationsRoute() {
                       variant="ghost"
                       size="icon"
                       onClick={() => markRead(n.id)}
+                      aria-label={t("notifications.markRead")}
                       title={t("notifications.markRead")}
-                      className="size-6 text-foreground-tertiary hover:text-foreground-primary"
+                      className="size-8 text-foreground-tertiary hover:text-foreground-primary"
                     >
                       <X className="size-3" />
                     </Button>

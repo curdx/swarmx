@@ -85,17 +85,31 @@
     "debug": "Debug"
   },
   "shell": {
-    "cmdkHint": "Press ⌘K to open the command palette",
+    "cmdkHint": "Press {{shortcut}} to open the command palette",
     "collapse": "Collapse",
     "expand": "Expand",
     "appMenu": "App menu",
     "about": "About"
   },
   "welcome": {
+    "eyebrow": "Multi-agent workspace",
     "title": "Get Claude / Codex working as a team on your project",
     "subtitle": "Wire up the AI CLIs you already use into one crew — tell them what you want, they split the work, talk to each other, and ship it.",
+    "panelTitle": "A typical first run",
     "primary": "Create workspace",
     "secondary": "Read the docs",
+    "step1": {
+      "title": "Create a workspace",
+      "body": "Bind a real project directory so the team starts with the right code, files, and boundaries."
+    },
+    "step2": {
+      "title": "Tell the AI the goal",
+      "body": "Describe the feature, bug, or refactor in plain language and let the dispatcher break it down."
+    },
+    "step3": {
+      "title": "Track progress from multiple angles",
+      "body": "Chat, DAG, ledger, and replays stay in sync so you can inspect status, evidence, and terminal work without guessing."
+    },
     "highlight": {
       "chat": {
         "title": "Group chat",
@@ -252,11 +266,22 @@
     },
     "plugins": {
       "title": "CLI plugins",
-      "hint": "Loaded from cli-plugins/*.toml, currently server-managed; custom enable / disable & path override coming soon.",
+      "hint": "Loaded from cli-plugins/*.toml; the server checks whether each real CLI is executable and shows official install commands when missing.",
       "binaryLabel": "binary",
+      "pathLabel": "Path",
+      "versionLabel": "Version",
       "loadError": "Load failed: {{error}}",
       "empty": "No plugins",
-      "managedTag": "managed by server"
+      "managedTag": "managed by server",
+      "installedTag": "Installed",
+      "missingTag": "Missing",
+      "unknownTag": "Pending check",
+      "installTitle": "{{title}}",
+      "copyCommand": "Copy command",
+      "copied": "Copied",
+      "verifyLabel": "Verify:",
+      "loginLabel": "Login:",
+      "docsLink": "Official docs"
     },
     "privacy": {
       "title": "Privacy & Security",
@@ -331,6 +356,9 @@
     "reviveOrchestrator": "Wake the dispatcher",
     "reviving": "Waking…",
     "pmBadge": "Dispatcher",
+    "mobileWorkspaceNav": "Open workspace list",
+    "backToCurrent": "Back to current workspace",
+    "workspaceViews": "Current workspace",
     "deleteWorkspace": "Delete {{name}}",
     "deleteWorkspaceTooltip": "Delete workspace",
     "mainDirection": "main",
@@ -633,12 +661,25 @@
     "replying": "Replying to #{{id}}",
     "cancelReply": "Cancel reply",
     "clearFilter": "Clear filter",
+    "composerLabel": "Chat input",
     "composerPlaceholder": "Say something to the AI…",
     "composerPlaceholderEmpty": "No AI members in this workspace yet…",
     "composerPlaceholderRevive": "Send a message — the AI spins up automatically…",
     "composerPlaceholderInit": "Say something to the AI…",
     "responding": "replying to #{{id}}",
     "respondingTo": "{{role}} is typing",
+    "reasoning": {
+      "thinking": "Thinking",
+      "summary": "Reasoning summary",
+      "stepUnderstood": "Understood this request: \"{{msg}}\"",
+      "stepOrchestrator": "Checked the thread and workspace state, then chose whether to answer directly or dispatch workers",
+      "stepWorker": "{{role}} read the task brief and relevant context",
+      "stepMerged": "Merged results from {{count}} related agent(s): {{roles}}",
+      "stepCheckedThread": "Compared this round with existing progress to avoid duplication or gaps",
+      "stepPlanning": "Planning the execution path and next action",
+      "stepExecuting": "Executing, waiting on tool results, or shaping the reply",
+      "stepAnswered": "Turned the work into the final user-facing reply"
+    },
     "you": "You",
     "broadcast": "Everyone",
     "to": "To",
@@ -647,7 +688,8 @@
     "details": "Details",
     "send": "Send",
     "sending": "Sending…",
-    "sendHint": "Enter to send · Shift+Enter for newline",
+    "sendHintDesktop": "{{enter}} to send · Shift+{{enter}} for newline",
+    "sendHintMobile": "Enter adds a new line · tap Send to send",
     "optimize": "Optimize input",
     "optimizeTooltip": "Let AI rewrite your input to be clearer (keeps technical details, invents nothing)",
     "optimizing": "Optimizing…",
@@ -889,7 +931,7 @@
       "navigate": "navigate",
       "confirm": "confirm",
       "close": "close",
-      "openHint": "⌘K to reopen"
+      "openHint": "{{shortcut}} to reopen"
     }
   }
 }

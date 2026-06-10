@@ -109,7 +109,7 @@ export default function CronRoute() {
                 name="cron-workspace"
                 value={wsId}
                 onChange={(e) => setWsId(e.target.value)}
-                className="rounded border border-border-subtle bg-surface-primary px-2 py-1 text-[13px]"
+                className="min-h-8 rounded border border-border-subtle bg-surface-primary px-2 py-1 text-[13px]"
               >
                 {workspaces.length === 0 && <option value="">—</option>}
                 {workspaces.map((w) => (
@@ -127,7 +127,7 @@ export default function CronRoute() {
                 onChange={(e) => setExpr(e.target.value)}
                 placeholder="0 9 * * 1-5"
                 className={cn(
-                  "rounded border bg-surface-primary px-2 py-1 font-mono text-[13px]",
+                  "min-h-8 rounded border bg-surface-primary px-2 py-1 font-mono text-[13px]",
                   exprPreview && !exprPreview.valid ? "border-status-danger" : "border-border-subtle",
                 )}
               />
@@ -150,7 +150,7 @@ export default function CronRoute() {
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder={t("cron.namePlaceholder")}
-              className="rounded border border-border-subtle bg-surface-primary px-2 py-1 text-[13px]"
+              className="min-h-8 rounded border border-border-subtle bg-surface-primary px-2 py-1 text-[13px]"
             />
           </label>
           <label className="flex flex-col gap-1">
@@ -171,7 +171,7 @@ export default function CronRoute() {
                 creating || !wsId || !expr.trim() || !prompt.trim() || exprPreview?.valid === false
               }
               onClick={create}
-              className="rounded-md bg-accent-primary px-3 py-1.5 text-[13px] text-foreground-on-accent disabled:opacity-50"
+              className="min-h-8 rounded-md bg-accent-primary px-3 py-1.5 text-[13px] text-foreground-on-accent disabled:opacity-50"
             >
               {creating ? t("cron.creating") : t("cron.create")}
             </button>
@@ -205,8 +205,8 @@ export default function CronRoute() {
                   }}
                   title={j.enabled ? t("cron.disable") : t("cron.enable")}
                   className={cn(
-                    "size-2.5 shrink-0 rounded-full",
-                    j.enabled ? "bg-status-success" : "bg-foreground-tertiary",
+                    "size-8 shrink-0 rounded-full border border-transparent p-0 hover:border-border-subtle hover:bg-surface-tertiary after:mx-auto after:block after:size-2.5 after:rounded-full",
+                    j.enabled ? "after:bg-status-success" : "after:bg-foreground-tertiary",
                   )}
                 />
                 <div className="flex min-w-0 flex-1 flex-col">
@@ -233,7 +233,7 @@ export default function CronRoute() {
                     }
                   }}
                   title={runningId === j.id ? t("cron.running") : t("cron.runNow")}
-                  className="shrink-0 rounded p-1 text-foreground-tertiary hover:bg-surface-tertiary hover:text-foreground-primary disabled:opacity-60"
+                  className="flex size-8 shrink-0 items-center justify-center rounded text-foreground-tertiary hover:bg-surface-tertiary hover:text-foreground-primary disabled:opacity-60"
                 >
                   {runningId === j.id ? (
                     <Loader2 className="size-3.5 animate-spin" />
@@ -250,7 +250,7 @@ export default function CronRoute() {
                       load();
                     }}
                     title={t("cron.confirmDelete")}
-                    className="shrink-0 rounded bg-status-danger/10 px-1.5 py-1 font-caption text-[11px] text-status-danger hover:bg-status-danger/20"
+                    className="min-h-8 shrink-0 rounded bg-status-danger/10 px-2 py-1 font-caption text-[11px] text-status-danger hover:bg-status-danger/20"
                   >
                     {t("cron.confirmDelete")}
                   </button>
@@ -259,7 +259,7 @@ export default function CronRoute() {
                     type="button"
                     onClick={() => setConfirmDel(j.id)}
                     title={t("cron.delete")}
-                    className="shrink-0 rounded p-1 text-foreground-tertiary hover:bg-surface-tertiary hover:text-status-danger"
+                    className="flex size-8 shrink-0 items-center justify-center rounded text-foreground-tertiary hover:bg-surface-tertiary hover:text-status-danger"
                   >
                     <Trash2 className="size-3.5" />
                   </button>

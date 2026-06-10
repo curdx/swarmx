@@ -379,12 +379,15 @@ pub async fn inject_with_kick_text(
 /// (caller wanted a fire-and-forget signal, not a delivery guarantee).
 pub async fn deliver_manual_wake(swarm: &Swarm, registry: &Registry, target: &str) -> Result<()> {
     let now = now_ms();
+    let body =
+        "操作员唤醒——请先查收邮箱里的新消息（可能是用户的新指令），再检查共享区，然后继续。\
+         如果读到需要回复用户的消息，必须调用 swarm_send_message(to=\"user\", kind=\"reply\", body=...) \
+         把回复发回 flockmux 聊天；不要只在你自己的 final answer 里结束。";
     let msg = NewMessage {
         from_agent: "system".into(),
         to_agent: target.into(),
         kind: "wake".into(),
-        body: "操作员唤醒——请先查收邮箱里的新消息（可能是用户的新指令），再检查共享区，然后继续"
-            .into(),
+        body: body.into(),
         sent_at: now,
         in_reply_to: None,
         // Operator-initiated wake → keep it visible in the feed (a real
@@ -399,14 +402,7 @@ pub async fn deliver_manual_wake(swarm: &Swarm, registry: &Registry, target: &st
     // Best-effort PTY kick. Use the existing inject_with_kick_text so
     // the M6d-6 quiet-gate protects us from polluting an in-flight
     // turn; `key_for_log` is "manual-wake" so log/grep stays clean.
-    if let Err(err) = inject_with_kick_text(
-        registry,
-        target,
-        "操作员唤醒——请先查收邮箱新消息再检查共享区后继续",
-        "manual-wake",
-    )
-    .await
-    {
+    if let Err(err) = inject_with_kick_text(registry, target, body, "manual-wake").await {
         tracing::debug!(
             ?err,
             target,

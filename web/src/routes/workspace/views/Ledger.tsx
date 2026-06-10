@@ -20,7 +20,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useTranslation } from "react-i18next";
 import { ClipboardList, RefreshCw, Activity, Radio, Sparkles } from "lucide-react";
-import { api, ApiError } from "../../../api/http";
+import { api } from "../../../api/http";
 import type { BlackboardEntry, BlackboardSnapshot, SwarmEvent } from "../../../api/types";
 import { useSwarmFeed } from "../../../hooks/useSwarmFeed";
 import { Button } from "@/components/ui/button";
@@ -96,11 +96,19 @@ export default function LedgerView() {
   }, []);
 
   const loadOne = useCallback(
-    async (key: string, setter: (s: LedgerSnap) => void) => {
+    async (
+      key: string,
+      entries: BlackboardEntry[],
+      setter: (s: LedgerSnap) => void,
+    ) => {
       // Drop the result if we've since unmounted.
       const set = (s: LedgerSnap) => {
         if (mountedRef.current) setter(s);
       };
+      if (!entries.some((e) => e.path === key)) {
+        set({ content: "", at: null, error: null });
+        return;
+      }
       try {
         const snap = (await api.readBlackboard(key)) as BlackboardSnapshot | null;
         if (snap) {
@@ -109,23 +117,15 @@ export default function LedgerView() {
           set({ content: "", at: null, error: null });
         }
       } catch (e) {
-        // A never-written ledger key 404s — that's the normal "empty" state
-        // for a fresh workspace, NOT an error. readBlackboard throws (it goes
-        // through request() which rejects on non-2xx), so we map 404 → empty
-        // here. Anything else (500, network) is a real error worth surfacing.
-        if (e instanceof ApiError && e.status === 404) {
-          set({ content: "", at: null, error: null });
-        } else {
-          set({ content: "", at: null, error: (e as Error).message });
-        }
+        set({ content: "", at: null, error: (e as Error).message });
       }
     },
     [],
   );
 
-  const loadBreadcrumbs = useCallback(async () => {
+  const loadBreadcrumbs = useCallback(async (entries?: BlackboardEntry[]) => {
     try {
-      const all = (await api.listBlackboard()) as BlackboardEntry[];
+      const all = entries ?? ((await api.listBlackboard()) as BlackboardEntry[]);
       const prefix = keyPrefix;
       const suffix = ".progress.md";
       const candidates = all.filter(
@@ -156,11 +156,21 @@ export default function LedgerView() {
 
   const refresh = useCallback(async () => {
     setRefreshing(true);
-    await Promise.all([
-      loadOne(taskKey, setTask),
-      loadOne(progressKey, setProgress),
-      loadBreadcrumbs(),
-    ]);
+    try {
+      const entries = (await api.listBlackboard()) as BlackboardEntry[];
+      await Promise.all([
+        loadOne(taskKey, entries, setTask),
+        loadOne(progressKey, entries, setProgress),
+        loadBreadcrumbs(entries),
+      ]);
+    } catch (e) {
+      if (mountedRef.current) {
+        const msg = (e as Error).message;
+        setTask({ content: "", at: null, error: msg });
+        setProgress({ content: "", at: null, error: msg });
+        setBreadcrumbs([]);
+      }
+    }
     if (mountedRef.current) setRefreshing(false);
   }, [loadOne, taskKey, progressKey, loadBreadcrumbs]);
 

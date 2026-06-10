@@ -29,10 +29,12 @@ import {
   X,
 } from "lucide-react";
 import { api, ApiError } from "../../api/http";
+import { Link } from "react-router-dom";
 import type { BranchInfo, ThreadInfo, WorkspaceRoot } from "../../api/types";
 import { splitWorkspacePath } from "../../lib/workspace";
 import { directionBase } from "../../lib/thread";
 import type { WorkspaceSummary } from "./types";
+import { buildTabs } from "./WorkspaceToolbar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -47,6 +49,13 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { cn } from "@/lib/cn";
 
 /** Tiny coloured tag on an attached source root: blue for a code dependency,
@@ -290,14 +299,19 @@ export function WorkspaceList({
   workspaces,
   activeId,
   activeThreadSlug,
+  isLoading = false,
+  mobile = false,
   onOpenWizard,
   onDelete,
   onRootsChanged,
   onNewDirection,
   onDeleteThread,
+  onAfterNavigate,
 }: {
   workspaces: WorkspaceSummary[];
   activeId: string | null;
+  isLoading?: boolean;
+  mobile?: boolean;
   /** Slug of the active direction in the active workspace (`main` default).
    *  Highlights the current direction row in the active workspace's subtree. */
   activeThreadSlug?: string;
@@ -318,6 +332,8 @@ export function WorkspaceList({
   ) => void;
   /** Delete a direction (server kills its live agents first). */
   onDeleteThread?: (ws: WorkspaceSummary, threadId: string) => void;
+  /** Optional hook for mobile sheets to close after a link navigation. */
+  onAfterNavigate?: () => void;
 }) {
   const { t } = useTranslation();
   // App-native delete confirm — replaces window.confirm() (which looked like
@@ -369,8 +385,12 @@ export function WorkspaceList({
       else next.add(id);
       return next;
     });
+  const containerClass = mobile
+    ? "flex h-full min-h-0 flex-col gap-3 bg-surface-secondary px-2 py-3"
+    : "hidden w-[264px] shrink-0 flex-col gap-3 border-r border-border-subtle bg-surface-secondary px-2 py-3 md:flex";
+
   return (
-    <aside className="hidden w-[264px] shrink-0 flex-col gap-3 border-r border-border-subtle bg-surface-secondary px-2 py-3 md:flex">
+    <aside className={containerClass}>
       <div className="flex items-center justify-between px-2">
         <h2 className="font-heading text-xs font-semibold uppercase tracking-wider text-foreground-tertiary">
           {t("chat.workspaces")}
@@ -383,7 +403,7 @@ export function WorkspaceList({
               size="icon"
               onClick={onOpenWizard}
               aria-label={t("chat.newWorkspace")}
-              className="size-7 text-foreground-tertiary hover:text-foreground-primary"
+              className="size-8 text-foreground-tertiary hover:text-foreground-primary"
             >
               <Plus className="size-4" />
             </Button>
@@ -392,7 +412,14 @@ export function WorkspaceList({
         </Tooltip>
       </div>
       <nav className="flex flex-col gap-0.5 overflow-y-auto">
-        {workspaces.length === 0 && (
+        {isLoading && (
+          <div className="mx-2 rounded-lg border border-border-subtle bg-surface-elevated px-3 py-3">
+            <p className="font-caption text-[11px] leading-relaxed text-foreground-tertiary">
+              {t("common.loading")}
+            </p>
+          </div>
+        )}
+        {!isLoading && workspaces.length === 0 && (
           // sidebar empty 只放一行安静提示，避免跟中间 Welcome 屏的大
           // CTA 撞车。"+ 工作空间" 入口仍在 sidebar 顶部 (heading 旁的
           // 小 + 按钮)，足够新建，不需要再画一个虚线大卡片。
@@ -422,8 +449,8 @@ export function WorkspaceList({
                   <button
                     type="button"
                     onClick={() => toggleCollapsed(ws.id)}
-                    className="flex size-5 shrink-0 items-center justify-center self-start rounded text-foreground-tertiary hover:text-foreground-primary"
-                    style={{ marginTop: "0.4rem" }}
+                    className="flex size-8 shrink-0 items-center justify-center self-start rounded text-foreground-tertiary hover:bg-surface-tertiary hover:text-foreground-primary"
+                    style={{ marginTop: "0.1rem" }}
                     aria-label={expanded ? t("chat.collapse") : t("chat.expand")}
                     aria-expanded={expanded}
                   >
@@ -434,16 +461,17 @@ export function WorkspaceList({
                     )}
                   </button>
                 ) : (
-                  <span className="size-5 shrink-0" aria-hidden />
+                  <span className="size-8 shrink-0" aria-hidden />
                 )}
                 {/* NavLink 而不是 button+navigate — 浏览器中键 / cmd+click
                  *  自然开新 tab，URL 在 hover 时显示在状态栏。
                  *  pr-8 留出 hover 删除按钮的空间。 */}
                 <NavLink
                   to={`/chat/${ws.id}`}
+                  onClick={() => onAfterNavigate?.()}
                   title={ws.path}
                   className={cn(
-                    "flex flex-1 items-center gap-2 py-1.5 pr-8 text-left",
+                    "flex min-h-9 flex-1 items-center gap-2 py-1.5 pr-20 text-left",
                     active
                       ? "text-foreground-primary"
                       : "text-foreground-secondary",
@@ -502,7 +530,7 @@ export function WorkspaceList({
                           e.stopPropagation();
                           setManageRoots(ws);
                         }}
-                        className="absolute right-7 top-1 size-6 text-foreground-tertiary opacity-0 transition-opacity group-hover:opacity-100 hover:text-foreground-primary"
+                        className="absolute right-10 top-1/2 size-8 -translate-y-1/2 text-foreground-tertiary opacity-0 transition-opacity group-hover:opacity-100 hover:text-foreground-primary"
                         aria-label={t("chat.manageRoots", { name: ws.name })}
                       >
                         <FolderPlus className="size-3.5" />
@@ -528,7 +556,7 @@ export function WorkspaceList({
                           e.stopPropagation();
                           setPendingDelete(ws);
                         }}
-                        className="absolute right-1 top-1 size-6 text-foreground-tertiary opacity-0 transition-opacity group-hover:opacity-100 hover:text-state-danger"
+                        className="absolute right-1 top-1/2 size-8 -translate-y-1/2 text-foreground-tertiary opacity-0 transition-opacity group-hover:opacity-100 hover:text-state-danger"
                         aria-label={t("chat.deleteWorkspace", { name: ws.name })}
                       >
                         <Trash2 className="size-3.5" />
@@ -550,6 +578,41 @@ export function WorkspaceList({
                     collapsed={collapsed}
                     toggle={toggleCollapsed}
                   />
+                </div>
+              )}
+
+              {/* ── active workspace view nav: mirror the top tab bar in the
+               *  left rail so route switching stays discoverable where the
+               *  user is already looking (workspace context first, view second). */}
+              {active && (
+                <div className="ml-[0.9rem] mt-1.5 flex flex-col gap-1 border-l border-border-subtle pl-1.5 pb-1">
+                  <div className="px-1 font-caption text-[10px] font-semibold uppercase tracking-[0.12em] text-foreground-tertiary">
+                    {t("chat.workspaceViews", "当前工作区")}
+                  </div>
+                  {buildTabs(ws.id, activeThreadSlug ?? "main").map((tab) => {
+                    const Icon = tab.icon;
+                    return (
+                      <NavLink
+                        key={tab.to}
+                        to={tab.to}
+                        end
+                        onClick={() => onAfterNavigate?.()}
+                        className={({ isActive }) =>
+                          cn(
+                            "flex items-center gap-2 rounded-md px-2 py-1.5 text-[12px] transition-colors",
+                            "min-h-8",
+                            isActive
+                              ? "bg-accent-primary-soft text-foreground-primary"
+                              : "text-foreground-secondary hover:bg-surface-tertiary hover:text-foreground-primary",
+                          )
+                        }
+                        title={t(tab.labelKey)}
+                      >
+                        <Icon className="size-3.5 shrink-0" />
+                        <span className="truncate">{t(tab.labelKey)}</span>
+                      </NavLink>
+                    );
+                  })}
                 </div>
               )}
 
@@ -594,6 +657,7 @@ export function WorkspaceList({
                         >
                           <NavLink
                             to={directionBase(ws.id, th.slug)}
+                            onClick={() => onAfterNavigate?.()}
                             title={
                               isolated && th.cwd
                                 ? th.cwd
@@ -603,6 +667,7 @@ export function WorkspaceList({
                             }
                             className={cn(
                               "flex flex-1 items-center gap-1.5 py-1 pl-1 pr-6 text-[12px]",
+                              "min-h-8",
                               thActive
                                 ? "text-foreground-primary"
                                 : "text-foreground-secondary",
@@ -649,7 +714,7 @@ export function WorkspaceList({
                                 e.stopPropagation();
                                 setPendingDeleteThread({ ws, thread: th });
                               }}
-                              className="absolute right-1 top-1/2 size-5 -translate-y-1/2 text-foreground-tertiary opacity-0 transition-opacity group-hover/dir:opacity-100 hover:text-state-danger"
+                              className="absolute right-1 top-1/2 size-8 -translate-y-1/2 text-foreground-tertiary opacity-0 transition-opacity group-hover/dir:opacity-100 hover:text-state-danger"
                               aria-label={t("chat.deleteDirection", { name: label })}
                             >
                               <X className="size-3" />
@@ -667,7 +732,7 @@ export function WorkspaceList({
                             setNewDirName("");
                             setNewDirFor(ws);
                           }}
-                          className="flex items-center gap-1.5 rounded-md py-1 pl-1 pr-2 text-[12px] text-foreground-tertiary hover:bg-surface-tertiary hover:text-foreground-primary"
+                          className="flex min-h-8 items-center gap-1.5 rounded-md py-1 pl-1 pr-2 text-[12px] text-foreground-tertiary hover:bg-surface-tertiary hover:text-foreground-primary"
                         >
                           <Plus className="size-3 shrink-0" />
                           <span>{t("chat.newDirection")}</span>
@@ -694,6 +759,17 @@ export function WorkspaceList({
             <Plus className="size-4" />
             {t("chat.newWorkspace")}
           </Button>
+        </div>
+      )}
+      {mobile && activeId && (
+        <div className="border-t border-border-subtle px-2 pt-3">
+          <Link
+            to={`/chat/${activeId}`}
+            onClick={() => onAfterNavigate?.()}
+            className="block rounded-md px-3 py-2 text-center font-caption text-xs text-foreground-tertiary hover:bg-surface-tertiary hover:text-foreground-primary"
+          >
+            {t("chat.backToCurrent", "回到当前工作区")}
+          </Link>
         </div>
       )}
 
@@ -1056,7 +1132,7 @@ function ManageRootsDialog({
               size="icon"
               disabled={busy}
               onClick={() => node.root.id && remove(node.root.id)}
-              className="size-6 shrink-0 text-foreground-tertiary hover:text-state-danger"
+              className="size-8 shrink-0 text-foreground-tertiary hover:text-state-danger"
               aria-label={t("common.delete")}
             >
               <X className="size-3.5" />
@@ -1125,31 +1201,41 @@ function ManageRootsDialog({
         {/* add row: type (+ parent project when a source) + path */}
         <div className="flex flex-col gap-2 border-t border-border-subtle pt-3">
           <div className="flex items-center gap-2">
-            <select
+            <Select
               value={role}
-              onChange={(e) => setRole(e.target.value)}
-              className="h-8 shrink-0 rounded-md border border-border-subtle bg-surface-primary px-2 text-xs text-foreground-secondary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent-primary"
+              onValueChange={(next) => setRole(next)}
             >
-              <option value="project">{t("chat.roleProject")}</option>
-              <option value="dependency">{t("wizard.roleDependency")}</option>
-              <option value="tool">{t("wizard.roleTool")}</option>
-            </select>
+              <SelectTrigger className="h-8 w-[132px] shrink-0 text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="project">{t("chat.roleProject")}</SelectItem>
+                <SelectItem value="dependency">
+                  {t("wizard.roleDependency")}
+                </SelectItem>
+                <SelectItem value="tool">{t("wizard.roleTool")}</SelectItem>
+              </SelectContent>
+            </Select>
             {role !== "project" && (
               <>
                 <span className="shrink-0 font-caption text-[11px] text-foreground-tertiary">
                   {t("chat.mountUnder")}
                 </span>
-                <select
+                <Select
                   value={parentId}
-                  onChange={(e) => setParentId(e.target.value)}
-                  className="h-8 min-w-0 flex-1 rounded-md border border-border-subtle bg-surface-primary px-2 text-xs text-foreground-secondary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent-primary"
+                  onValueChange={(next) => setParentId(next)}
                 >
-                  {projectOptions.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name}
-                    </option>
-                  ))}
-                </select>
+                  <SelectTrigger className="h-8 min-w-0 flex-1 text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {projectOptions.map((p) => (
+                      <SelectItem key={p.id} value={p.id}>
+                        {p.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </>
             )}
           </div>

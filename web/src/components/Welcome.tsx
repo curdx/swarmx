@@ -14,7 +14,13 @@
  */
 
 import { useTranslation } from "react-i18next";
-import { ExternalLink, MessageSquare, Sparkles, Workflow } from "lucide-react";
+import {
+  ArrowRight,
+  ExternalLink,
+  MessageSquare,
+  Sparkles,
+  Workflow,
+} from "lucide-react";
 
 interface Props {
   /** 触发新建工作空间 (开 wizard)。父组件持有 wizard open state。 */
@@ -30,56 +36,97 @@ const HIGHLIGHTS = [
 export function Welcome({ onCreateWorkspace }: Props) {
   const { t } = useTranslation();
   return (
-    <section className="flex h-full flex-col items-center justify-center gap-8 px-8 py-12">
-      <div className="flex max-w-xl flex-col items-center gap-4 text-center">
-        <h1 className="font-heading text-3xl font-bold leading-tight text-foreground-primary">
-          {t("welcome.title")}
-        </h1>
-        <p className="font-body text-base leading-relaxed text-foreground-secondary">
-          {t("welcome.subtitle")}
-        </p>
-      </div>
+    <section className="relative flex h-full min-h-0 flex-col overflow-hidden bg-[radial-gradient(circle_at_top,rgba(37,99,235,0.08),transparent_32%),linear-gradient(180deg,transparent,rgba(248,250,252,0.9)_30%,rgba(248,250,252,1))] px-6 py-10 sm:px-10 sm:py-12">
+      <div className="mx-auto flex w-full max-w-5xl flex-1 flex-col justify-center gap-8">
+        <div className="flex flex-col gap-5">
+          <div className="inline-flex w-fit items-center gap-2 rounded-full border border-accent-primary/15 bg-accent-primary/8 px-3 py-1 font-caption text-[11px] font-semibold tracking-wide text-accent-primary">
+            <Sparkles className="size-3.5" />
+            {t("welcome.eyebrow", "多 agent 协作工作台")}
+          </div>
+          <div className="grid gap-8 lg:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)] lg:items-start">
+            <div className="flex min-w-0 flex-col gap-4">
+              <h1 className="max-w-3xl font-heading text-4xl font-bold leading-[1.08] tracking-tight text-foreground-primary sm:text-5xl">
+                {t("welcome.title")}
+              </h1>
+              <p className="max-w-2xl font-body text-[15px] leading-7 text-foreground-secondary sm:text-[17px]">
+                {t("welcome.subtitle")}
+              </p>
+            </div>
+            <div className="grid gap-3 rounded-2xl border border-border-subtle bg-surface-elevated/80 p-4 shadow-[0_18px_45px_rgba(15,23,42,0.06)] backdrop-blur">
+              <div className="flex items-center justify-between gap-3">
+                <span className="font-heading text-sm font-semibold text-foreground-primary">
+                  {t("welcome.panelTitle", "首次进入通常这样开始")}
+                </span>
+                <span className="rounded-full bg-surface-tertiary px-2 py-0.5 font-caption text-[10px] text-foreground-tertiary">
+                  3 steps
+                </span>
+              </div>
+              {["welcome.step1", "welcome.step2", "welcome.step3"].map((key, index) => (
+                <div
+                  key={key}
+                  className="flex items-start gap-3 rounded-xl border border-border-subtle/70 bg-surface-primary/70 px-3 py-3"
+                >
+                  <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-accent-primary text-[11px] font-semibold text-foreground-on-accent">
+                    {index + 1}
+                  </span>
+                  <div className="min-w-0">
+                    <div className="font-heading text-sm font-semibold text-foreground-primary">
+                      {t(`${key}.title`)}
+                    </div>
+                    <div className="mt-0.5 text-[13px] leading-6 text-foreground-secondary">
+                      {t(`${key}.body`)}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
 
-      {/* 三个 highlight chip — 解释 "flockmux 跟单开一个 claude 有什么不一样"，
-       *  比纯一句话 slogan 更具体，比一整段产品文档轻。 */}
-      <div className="flex max-w-2xl flex-wrap items-stretch justify-center gap-3">
+        {/* 三个 highlight chip — 解释 "flockmux 跟单开一个 claude 有什么不一样"，
+         *  比纯一句话 slogan 更具体，比一整段产品文档轻。 */}
+        <div className="grid gap-3 md:grid-cols-3">
         {HIGHLIGHTS.map((h) => {
           const Icon = h.icon;
           return (
             <div
               key={h.key}
-              className="flex max-w-[200px] flex-col items-center gap-1.5 rounded-lg border border-border-subtle bg-surface-elevated px-4 py-3 text-center"
+              className="flex min-h-[132px] flex-col gap-2 rounded-2xl border border-border-subtle bg-surface-elevated/80 px-4 py-4 text-left shadow-[0_14px_30px_rgba(15,23,42,0.04)]"
             >
-              <Icon className="size-5 text-accent-primary" />
-              <span className="font-heading text-xs font-semibold text-foreground-primary">
+              <span className="flex size-10 items-center justify-center rounded-xl bg-accent-primary/10 text-accent-primary">
+                <Icon className="size-5" />
+              </span>
+              <span className="font-heading text-sm font-semibold text-foreground-primary">
                 {t(`${h.key}.title`)}
               </span>
-              <span className="font-caption text-[11px] leading-snug text-foreground-tertiary">
+              <span className="font-body text-[13px] leading-6 text-foreground-secondary">
                 {t(`${h.key}.body`)}
               </span>
             </div>
           );
         })}
-      </div>
+        </div>
 
-      <div className="flex flex-col items-center gap-3">
-        <button
-          type="button"
-          onClick={onCreateWorkspace}
-          className="flex h-10 items-center gap-2 rounded-lg bg-accent-primary px-5 font-heading text-sm font-semibold text-foreground-on-accent shadow-sm transition-all hover:bg-accent-primary-deep hover:shadow-md active:translate-y-px"
-        >
-          <Sparkles className="size-4" />
-          {t("welcome.primary")}
-        </button>
-        <a
-          href="https://github.com/curdx/flockmux-core#readme"
-          target="_blank"
-          rel="noreferrer"
-          className="flex items-center gap-1 font-caption text-[11px] text-foreground-tertiary hover:text-foreground-secondary hover:underline"
-        >
-          {t("welcome.secondary")}
-          <ExternalLink className="size-3" />
-        </a>
+        <div className="flex flex-col items-start gap-3 sm:flex-row sm:items-center">
+          <button
+            type="button"
+            onClick={onCreateWorkspace}
+            className="inline-flex h-11 items-center gap-2 rounded-xl bg-accent-primary px-5 font-heading text-sm font-semibold text-foreground-on-accent shadow-[0_14px_32px_rgba(37,99,235,0.28)] transition-all hover:bg-accent-primary-deep hover:shadow-[0_16px_36px_rgba(29,78,216,0.32)] active:translate-y-px"
+          >
+            <Sparkles className="size-4" />
+            {t("welcome.primary")}
+            <ArrowRight className="size-4" />
+          </button>
+          <a
+            href="https://github.com/curdx/flockmux-core#readme"
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-1.5 font-caption text-[12px] text-foreground-tertiary transition-colors hover:text-foreground-secondary hover:underline"
+          >
+            {t("welcome.secondary")}
+            <ExternalLink className="size-3.5" />
+          </a>
+        </div>
       </div>
     </section>
   );

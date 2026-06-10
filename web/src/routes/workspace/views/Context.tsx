@@ -370,7 +370,7 @@ export default function ContextView() {
           size="icon"
           onClick={refreshList}
           title={t("common.refresh")}
-          className="size-7"
+          className="size-8"
         >
           <RefreshCw className="size-3.5" />
         </Button>

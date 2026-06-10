@@ -6,16 +6,20 @@ use crate::connection::Customizer;
 use crate::models::{
     AgentRecord, BlackboardOpRecord, GoalEvidenceRecord, GoalRecord, ListMessagesOpts,
     MessageRecord, NewAgent, NewBlackboardOp, NewGoal, NewGoalEvidence, NewMessage, NewRecording,
-    NewSpellRun, NewThread, NewWorker, NewWorkspace, NewWorkspaceRoot, RecordingRecord,
-    SpellRunRecord, ThreadRecord, WorkerRecord, WorkspaceRecord, WorkspaceRootRecord,
+    NewSpellRun, NewThoughtTrace, NewThoughtTraceEvent, NewThread, NewWorker, NewWorkspace,
+    NewWorkspaceRoot, RecordingRecord, SpellRunRecord, ThoughtTraceRecord, ThreadRecord,
+    WorkerRecord, WorkspaceRecord, WorkspaceRootRecord,
 };
 use crate::schema;
 use anyhow::{Context, Result};
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
-use rusqlite::{params, Connection, Error as SqliteError, ErrorCode};
+use rusqlite::{params, Connection, Error as SqliteError, ErrorCode, Row};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+
+const MAX_THOUGHT_TRACE_SUMMARY_STEPS: usize = 12;
+const THOUGHT_TRACE_RECENT_DONE_APPEND_WINDOW_MS: i64 = 30_000;
 
 /// True if `e` is a `SQLITE_BUSY` / `SQLITE_LOCKED` failure — the only
 /// errors `with_busy_retry` re-runs on.
@@ -85,6 +89,125 @@ impl PruneStats {
 #[derive(Clone)]
 pub struct Store {
     pool: Arc<Pool<SqliteConnectionManager>>,
+}
+
+fn thought_trace_from_row(
+    row: &Row<'_>,
+    offset: usize,
+) -> rusqlite::Result<Option<ThoughtTraceRecord>> {
+    let id: Option<String> = row.get(offset)?;
+    let Some(id) = id else {
+        return Ok(None);
+    };
+    Ok(Some(ThoughtTraceRecord {
+        id,
+        trigger_message_id: row.get(offset + 1)?,
+        response_message_id: row.get(offset + 2)?,
+        agent_id: row.get(offset + 3)?,
+        workspace_id: row.get(offset + 4)?,
+        thread_id: row.get(offset + 5)?,
+        status: row.get(offset + 6)?,
+        started_at: row.get(offset + 7)?,
+        completed_at: row.get(offset + 8)?,
+        summary_json: row.get(offset + 9)?,
+        updated_at: row.get(offset + 10)?,
+    }))
+}
+
+fn message_with_trace_from_row(row: &Row<'_>) -> rusqlite::Result<MessageRecord> {
+    Ok(MessageRecord {
+        id: row.get(0)?,
+        from_agent: row.get(1)?,
+        to_agent: row.get(2)?,
+        kind: row.get(3)?,
+        body: row.get(4)?,
+        sent_at: row.get(5)?,
+        delivered_at: row.get(6)?,
+        read_at: row.get(7)?,
+        in_reply_to: row.get(8)?,
+        thread_id: row.get(9)?,
+        meta: row
+            .get::<_, Option<String>>(10)?
+            .and_then(|s| serde_json::from_str(&s).ok()),
+        thought_trace: thought_trace_from_row(row, 11)?,
+    })
+}
+
+fn insert_thought_trace_events(
+    conn: &Connection,
+    trace_id: &str,
+    events: &[NewThoughtTraceEvent],
+) -> rusqlite::Result<()> {
+    for ev in events {
+        let meta_txt = ev.meta.as_ref().map(|v| v.to_string());
+        conn.execute(
+            "INSERT INTO thought_trace_events (trace_id, phase, label, source, at, meta) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![trace_id, ev.phase, ev.label, ev.source, ev.at, meta_txt],
+        )?;
+    }
+    Ok(())
+}
+
+fn parse_thought_trace_steps(summary_json: &str) -> Vec<crate::models::ThoughtTraceStep> {
+    serde_json::from_str::<Vec<crate::models::ThoughtTraceStep>>(summary_json).unwrap_or_default()
+}
+
+fn event_to_thought_trace_step(ev: &NewThoughtTraceEvent) -> crate::models::ThoughtTraceStep {
+    crate::models::ThoughtTraceStep {
+        phase: ev.phase.clone(),
+        label: ev.label.clone(),
+        source: ev.source.clone(),
+        at: ev.at,
+    }
+}
+
+fn merge_thought_trace_steps(
+    existing_json: &str,
+    incoming: impl IntoIterator<Item = crate::models::ThoughtTraceStep>,
+) -> String {
+    let mut steps = parse_thought_trace_steps(existing_json);
+    for step in incoming {
+        if step.label.trim().is_empty() {
+            continue;
+        }
+        if steps
+            .iter()
+            .any(|s| s.phase == step.phase && s.source == step.source && s.label == step.label)
+        {
+            continue;
+        }
+        steps.push(step);
+    }
+    if steps.len() > MAX_THOUGHT_TRACE_SUMMARY_STEPS {
+        let keep_from = steps.len() - MAX_THOUGHT_TRACE_SUMMARY_STEPS;
+        steps = steps.split_off(keep_from);
+    }
+    serde_json::to_string(&steps).unwrap_or_else(|_| "[]".into())
+}
+
+fn select_thought_trace(conn: &Connection, id: &str) -> rusqlite::Result<ThoughtTraceRecord> {
+    conn.query_row(
+        "SELECT id, trigger_message_id, response_message_id, agent_id, workspace_id, thread_id, \
+                status, started_at, completed_at, summary_json, updated_at \
+         FROM thought_traces WHERE id = ?1",
+        params![id],
+        |row| {
+            Ok(ThoughtTraceRecord {
+                id: row.get(0)?,
+                trigger_message_id: row.get(1)?,
+                response_message_id: row.get(2)?,
+                agent_id: row.get(3)?,
+                workspace_id: row.get(4)?,
+                thread_id: row.get(5)?,
+                status: row.get(6)?,
+                started_at: row.get(7)?,
+                completed_at: row.get(8)?,
+                summary_json: row.get(9)?,
+                updated_at: row.get(10)?,
+            })
+        },
+    )
 }
 
 impl Store {
@@ -851,6 +974,7 @@ impl Store {
                 in_reply_to: msg.in_reply_to,
                 thread_id: thread_id.clone(),
                 meta: msg.meta.clone(),
+                thought_trace: None,
             })
         }))
         .await
@@ -877,6 +1001,221 @@ impl Store {
         })
         .await
         .context("spawn_blocking agent_thread_id")?
+    }
+
+    /// Workspace an agent belongs to, by agent id. `Ok(None)` for unknown or
+    /// legacy rows. Thought traces use this for later filtering/reporting.
+    pub async fn agent_workspace_id(&self, agent_id: String) -> Result<Option<String>> {
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || {
+            with_busy_retry(&pool, |conn| -> rusqlite::Result<Option<String>> {
+                match conn.query_row(
+                    "SELECT workspace_id FROM agents WHERE id = ?1",
+                    params![agent_id],
+                    |row| row.get::<_, Option<String>>(0),
+                ) {
+                    Ok(workspace_id) => Ok(workspace_id),
+                    Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+                    Err(e) => Err(e),
+                }
+            })
+        })
+        .await
+        .context("spawn_blocking agent_workspace_id")?
+    }
+
+    pub async fn start_thought_trace(
+        &self,
+        rec: NewThoughtTrace,
+        events: Vec<NewThoughtTraceEvent>,
+    ) -> Result<ThoughtTraceRecord> {
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || {
+            with_busy_retry(&pool, |conn| -> rusqlite::Result<ThoughtTraceRecord> {
+                conn.execute(
+                    "INSERT INTO thought_traces \
+                     (id, trigger_message_id, agent_id, workspace_id, thread_id, status, \
+                      started_at, summary_json, updated_at) \
+                     VALUES (lower(hex(randomblob(16))), ?1, ?2, ?3, ?4, 'active', ?5, ?6, ?7)",
+                    params![
+                        rec.trigger_message_id,
+                        rec.agent_id,
+                        rec.workspace_id,
+                        rec.thread_id,
+                        rec.started_at,
+                        rec.summary_json,
+                        rec.started_at,
+                    ],
+                )?;
+                let id: String = conn.query_row(
+                    "SELECT id FROM thought_traces WHERE rowid = last_insert_rowid()",
+                    [],
+                    |row| row.get(0),
+                )?;
+                insert_thought_trace_events(conn, &id, &events)?;
+                select_thought_trace(conn, &id)
+            })
+        })
+        .await
+        .context("spawn_blocking start_thought_trace")?
+    }
+
+    pub async fn complete_latest_thought_trace(
+        &self,
+        agent_id: String,
+        thread_id: Option<String>,
+        response_message_id: i64,
+        completed_at: i64,
+        summary_json: String,
+        events: Vec<NewThoughtTraceEvent>,
+    ) -> Result<Option<ThoughtTraceRecord>> {
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || {
+            with_busy_retry(
+                &pool,
+                |conn| -> rusqlite::Result<Option<ThoughtTraceRecord>> {
+                    let trace_id = match conn.query_row(
+                        "SELECT id FROM thought_traces \
+                     WHERE agent_id = ?1 \
+                       AND status = 'active' \
+                       AND ((thread_id IS NULL AND ?2 IS NULL) OR thread_id = ?2) \
+                     ORDER BY started_at DESC LIMIT 1",
+                        params![agent_id, thread_id],
+                        |row| row.get::<_, String>(0),
+                    ) {
+                        Ok(id) => Some(id),
+                        Err(rusqlite::Error::QueryReturnedNoRows) => match conn.query_row(
+                            "SELECT id FROM thought_traces \
+                         WHERE agent_id = ?1 AND status = 'active' \
+                         ORDER BY started_at DESC LIMIT 1",
+                            params![agent_id],
+                            |row| row.get::<_, String>(0),
+                        ) {
+                            Ok(id) => Some(id),
+                            Err(rusqlite::Error::QueryReturnedNoRows) => None,
+                            Err(e) => return Err(e),
+                        },
+                        Err(e) => return Err(e),
+                    };
+                    let Some(trace_id) = trace_id else {
+                        return Ok(None);
+                    };
+                    let existing_summary: String = conn.query_row(
+                        "SELECT summary_json FROM thought_traces WHERE id = ?1",
+                        params![trace_id],
+                        |row| row.get(0),
+                    )?;
+                    let merged_summary = merge_thought_trace_steps(
+                        &existing_summary,
+                        parse_thought_trace_steps(&summary_json),
+                    );
+                    conn.execute(
+                        "UPDATE thought_traces \
+                     SET response_message_id = ?2, status = 'done', completed_at = ?3, \
+                         summary_json = ?4, updated_at = ?3 \
+                     WHERE id = ?1",
+                        params![trace_id, response_message_id, completed_at, merged_summary],
+                    )?;
+                    insert_thought_trace_events(conn, &trace_id, &events)?;
+                    select_thought_trace(conn, &trace_id).map(Some)
+                },
+            )
+        })
+        .await
+        .context("spawn_blocking complete_latest_thought_trace")?
+    }
+
+    pub async fn append_thought_trace_event(
+        &self,
+        agent_ids: Vec<String>,
+        event: NewThoughtTraceEvent,
+    ) -> Result<Option<ThoughtTraceRecord>> {
+        if agent_ids.is_empty() {
+            return Ok(None);
+        }
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || {
+            with_busy_retry(
+                &pool,
+                |conn| -> rusqlite::Result<Option<ThoughtTraceRecord>> {
+                    let placeholders = std::iter::repeat("?")
+                        .take(agent_ids.len())
+                        .collect::<Vec<_>>()
+                        .join(",");
+                    let sql = format!(
+                        "SELECT id FROM thought_traces \
+                         WHERE status = 'active' AND agent_id IN ({placeholders}) \
+                         ORDER BY started_at DESC LIMIT 1"
+                    );
+                    let binds: Vec<rusqlite::types::Value> =
+                        agent_ids.iter().map(|id| id.clone().into()).collect();
+                    let trace_id = match conn.query_row(
+                        &sql,
+                        rusqlite::params_from_iter(binds.iter()),
+                        |row| row.get::<_, String>(0),
+                    ) {
+                        Ok(id) => Some(id),
+                        Err(rusqlite::Error::QueryReturnedNoRows) => {
+                            let recent_placeholders = (3..agent_ids.len() + 3)
+                                .map(|idx| format!("?{idx}"))
+                                .collect::<Vec<_>>()
+                                .join(",");
+                            let sql = format!(
+                                "SELECT id FROM thought_traces \
+                                 WHERE status = 'done' \
+                                   AND response_message_id IS NOT NULL \
+                                   AND agent_id IN ({recent_placeholders}) \
+                                   AND completed_at IS NOT NULL \
+                                   AND completed_at <= ?1 \
+                                   AND completed_at >= ?2 \
+                                 ORDER BY completed_at DESC LIMIT 1"
+                            );
+                            let mut recent_binds = Vec::with_capacity(agent_ids.len() + 2);
+                            recent_binds
+                                .push(rusqlite::types::Value::from(event.at));
+                            recent_binds.push(rusqlite::types::Value::from(
+                                event.at - THOUGHT_TRACE_RECENT_DONE_APPEND_WINDOW_MS,
+                            ));
+                            recent_binds.extend(
+                                agent_ids.iter().cloned().map(rusqlite::types::Value::from),
+                            );
+                            match conn.query_row(
+                                &sql,
+                                rusqlite::params_from_iter(recent_binds.iter()),
+                                |row| row.get::<_, String>(0),
+                            ) {
+                                Ok(id) => Some(id),
+                                Err(rusqlite::Error::QueryReturnedNoRows) => None,
+                                Err(e) => return Err(e),
+                            }
+                        }
+                        Err(e) => return Err(e),
+                    };
+                    let Some(trace_id) = trace_id else {
+                        return Ok(None);
+                    };
+                    let existing_summary: String = conn.query_row(
+                        "SELECT summary_json FROM thought_traces WHERE id = ?1",
+                        params![trace_id],
+                        |row| row.get(0),
+                    )?;
+                    let merged_summary = merge_thought_trace_steps(
+                        &existing_summary,
+                        [event_to_thought_trace_step(&event)],
+                    );
+                    conn.execute(
+                        "UPDATE thought_traces \
+                         SET summary_json = ?2, updated_at = ?3 \
+                         WHERE id = ?1",
+                        params![trace_id, merged_summary, event.at],
+                    )?;
+                    insert_thought_trace_events(conn, &trace_id, &[event.clone()])?;
+                    select_thought_trace(conn, &trace_id).map(Some)
+                },
+            )
+        })
+        .await
+        .context("spawn_blocking append_thought_trace_event")?
     }
 
     /// Re-address unread `user → <agent>` messages from a set of (now killed)
@@ -963,58 +1302,52 @@ impl Store {
 
     pub async fn list_messages(&self, opts: ListMessagesOpts) -> Result<Vec<MessageRecord>> {
         let pool = self.pool.clone();
-        tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<Vec<MessageRecord>> {
-            // Build WHERE dynamically. We bind via positional params so we
-            // can keep the cap on injection surface tight (always-string
-            // values, never interpolated).
-            let mut wheres: Vec<&str> = Vec::new();
-            let mut bound: Vec<rusqlite::types::Value> = Vec::new();
-            if let Some(to) = &opts.to_agent {
-                wheres.push("to_agent = ?");
-                bound.push(to.clone().into());
-            }
-            if let Some(from) = &opts.from_agent {
-                wheres.push("from_agent = ?");
-                bound.push(from.clone().into());
-            }
-            if opts.only_undelivered {
-                wheres.push("delivered_at IS NULL");
-            }
-            let where_sql = if wheres.is_empty() {
-                String::new()
-            } else {
-                format!("WHERE {}", wheres.join(" AND "))
-            };
-            let limit = if opts.limit <= 0 { 200 } else { opts.limit };
-            bound.push(limit.into());
+        tokio::task::spawn_blocking(move || {
+            with_busy_retry(&pool, |conn| -> rusqlite::Result<Vec<MessageRecord>> {
+                // Build WHERE dynamically. We bind via positional params so we
+                // can keep the cap on injection surface tight (always-string
+                // values, never interpolated).
+                let mut wheres: Vec<&str> = Vec::new();
+                let mut bound: Vec<rusqlite::types::Value> = Vec::new();
+                if let Some(to) = &opts.to_agent {
+                    wheres.push("to_agent = ?");
+                    bound.push(to.clone().into());
+                }
+                if let Some(from) = &opts.from_agent {
+                    wheres.push("from_agent = ?");
+                    bound.push(from.clone().into());
+                }
+                if opts.only_undelivered {
+                    wheres.push("delivered_at IS NULL");
+                }
+                let where_sql = if wheres.is_empty() {
+                    String::new()
+                } else {
+                    format!("WHERE {}", wheres.join(" AND "))
+                };
+                let limit = if opts.limit <= 0 { 200 } else { opts.limit };
+                bound.push(limit.into());
 
-            let sql = format!(
-                "SELECT id, from_agent, to_agent, kind, body, sent_at, delivered_at, read_at, in_reply_to, thread_id, meta \
-                 FROM messages \
+                let sql = format!(
+                "SELECT m.id, m.from_agent, m.to_agent, m.kind, m.body, m.sent_at, m.delivered_at, \
+                        m.read_at, m.in_reply_to, m.thread_id, m.meta, \
+                        tt.id, tt.trigger_message_id, tt.response_message_id, tt.agent_id, \
+                        tt.workspace_id, tt.thread_id, tt.status, tt.started_at, \
+                        tt.completed_at, tt.summary_json, tt.updated_at \
+                 FROM messages m \
+                 LEFT JOIN thought_traces tt ON tt.response_message_id = m.id \
                  {where_sql} \
-                 ORDER BY id DESC \
+                 ORDER BY m.id DESC \
                  LIMIT ?"
             );
-            let mut stmt = conn.prepare(&sql)?;
-            let rows = stmt.query_map(rusqlite::params_from_iter(bound.iter()), |row| {
-                Ok(MessageRecord {
-                    id: row.get(0)?,
-                    from_agent: row.get(1)?,
-                    to_agent: row.get(2)?,
-                    kind: row.get(3)?,
-                    body: row.get(4)?,
-                    sent_at: row.get(5)?,
-                    delivered_at: row.get(6)?,
-                    read_at: row.get(7)?,
-                    in_reply_to: row.get(8)?,
-                    thread_id: row.get(9)?,
-                    meta: row
-                        .get::<_, Option<String>>(10)?
-                        .and_then(|s| serde_json::from_str(&s).ok()),
-                })
-            })?;
-            rows.collect::<rusqlite::Result<Vec<_>>>()
-        }))
+                let mut stmt = conn.prepare(&sql)?;
+                let rows = stmt.query_map(
+                    rusqlite::params_from_iter(bound.iter()),
+                    message_with_trace_from_row,
+                )?;
+                rows.collect::<rusqlite::Result<Vec<_>>>()
+            })
+        })
         .await
         .context("spawn_blocking list_messages")?
     }
@@ -1026,30 +1359,18 @@ impl Store {
                 // Join messages_fts → messages on rowid; order by FTS rank.
                 let mut stmt = conn.prepare(
                     "SELECT m.id, m.from_agent, m.to_agent, m.kind, m.body, m.sent_at, \
-                        m.delivered_at, m.read_at, m.in_reply_to, m.thread_id, m.meta \
+                        m.delivered_at, m.read_at, m.in_reply_to, m.thread_id, m.meta, \
+                        tt.id, tt.trigger_message_id, tt.response_message_id, tt.agent_id, \
+                        tt.workspace_id, tt.thread_id, tt.status, tt.started_at, \
+                        tt.completed_at, tt.summary_json, tt.updated_at \
                  FROM messages_fts \
                  JOIN messages m ON m.id = messages_fts.rowid \
+                 LEFT JOIN thought_traces tt ON tt.response_message_id = m.id \
                  WHERE messages_fts MATCH ?1 \
                  ORDER BY rank \
                  LIMIT 200",
                 )?;
-                let rows = stmt.query_map(params![query], |row| {
-                    Ok(MessageRecord {
-                        id: row.get(0)?,
-                        from_agent: row.get(1)?,
-                        to_agent: row.get(2)?,
-                        kind: row.get(3)?,
-                        body: row.get(4)?,
-                        sent_at: row.get(5)?,
-                        delivered_at: row.get(6)?,
-                        read_at: row.get(7)?,
-                        in_reply_to: row.get(8)?,
-                        thread_id: row.get(9)?,
-                        meta: row
-                            .get::<_, Option<String>>(10)?
-                            .and_then(|s| serde_json::from_str(&s).ok()),
-                    })
-                })?;
+                let rows = stmt.query_map(params![query], message_with_trace_from_row)?;
                 rows.collect::<rusqlite::Result<Vec<_>>>()
             })
         })

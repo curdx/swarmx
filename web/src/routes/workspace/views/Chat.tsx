@@ -200,6 +200,7 @@ export default function ChatView() {
     liveMessage,
     liveRead,
     agentStateById,
+    agentActivityById,
     unreadByFrom: activeWorkspaceUnread,
     jumpUnreadTick,
     openAgent,
@@ -564,6 +565,7 @@ export default function ChatView() {
           reasoningEffort={activeThread?.reasoning_effort ?? null}
           onSetModel={setDirectionModel}
           modelBusy={modelBusy}
+          agentActivityById={agentActivityById}
           taskActivityBelow={
             <TaskActivity tasks={tasks} onDismiss={dismissTask} />
           }
@@ -577,7 +579,7 @@ export default function ChatView() {
       {/* Members is auxiliary — hide below xl so the chat keeps a usable width
           on half-screen / narrow windows instead of overflowing off-screen
           (R2-004). Agent status is also visible in the DAG + agent drawer. */}
-      <aside className="hidden w-[340px] shrink-0 flex-col border-l border-border-subtle bg-surface-secondary xl:flex">
+      <aside className="hidden w-[320px] shrink-0 flex-col border-l border-border-subtle bg-surface-secondary 2xl:flex">
         <div className="flex h-12 shrink-0 items-center gap-2 border-b border-border-subtle px-4">
           <Users className="size-4 text-foreground-tertiary" />
           <h2 className="font-heading text-xs font-semibold uppercase tracking-wider text-foreground-tertiary">
@@ -589,13 +591,13 @@ export default function ChatView() {
         </div>
         <div className="flex-1 overflow-y-auto px-2 py-2">
           {activeMembers.length === 0 && (
-            <div className="flex flex-col items-start gap-2 px-3 py-2">
-              <p className="font-caption text-xs text-foreground-tertiary">
+            <div className="mx-2 mt-2 flex flex-col items-start gap-3 rounded-xl border border-border-subtle bg-surface-elevated px-4 py-4">
+              <p className="font-caption text-xs leading-6 text-foreground-tertiary">
                 {t("chat.noMembers")}
               </p>
               <Button
                 size="sm"
-                variant="outline"
+                variant="default"
                 onClick={reviveOrchestrator}
                 disabled={reviving}
                 className="gap-1.5"
@@ -747,7 +749,7 @@ export default function ChatView() {
                       variant="ghost"
                       size="icon"
                       aria-label={t("chat.wake")}
-                      className="size-7 text-foreground-tertiary hover:text-state-wake"
+                      className="size-8 text-foreground-tertiary hover:text-state-wake"
                       onClick={(e) => {
                         e.stopPropagation();
                         requestWakeAgent(a);

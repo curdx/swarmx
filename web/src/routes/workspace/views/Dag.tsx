@@ -549,8 +549,8 @@ export default function DagView() {
   }, [onTogglePauseSelected, selected, t]);
 
   return (
-    <div className="flex min-h-0 flex-1">
-      <aside className="flex w-[200px] shrink-0 flex-col gap-5 border-r border-border-subtle bg-surface-secondary p-4">
+    <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
+      <aside className="flex max-h-52 shrink-0 flex-col gap-4 overflow-y-auto border-b border-border-subtle bg-surface-secondary p-3 lg:max-h-none lg:w-[200px] lg:gap-5 lg:border-b-0 lg:border-r lg:p-4">
         <section>
           <h3 className="mb-2 font-heading text-[11px] font-semibold uppercase tracking-wider text-foreground-tertiary">
             {t("dag.legend")}
@@ -660,14 +660,14 @@ export default function DagView() {
         </section>
       </aside>
 
-      <div className="relative min-w-0 flex-1">
+      <div className="relative min-h-[420px] min-w-0 flex-1 lg:min-h-0">
         {error && (
           <div className="absolute top-4 left-4 z-10 rounded-md border border-state-danger/40 bg-status-danger-soft px-3 py-2 text-xs text-state-danger">
             {error}
           </div>
         )}
         {liveAgents.length > 0 && (
-          <div className="absolute top-4 right-4 z-10 flex items-center gap-2">
+          <div className="absolute top-3 right-3 z-10 flex max-w-[calc(100%-1.5rem)] flex-wrap items-center justify-end gap-2 lg:top-4 lg:right-4">
             {pausedCount > 0 && (
               <span className="rounded-full bg-surface-elevated px-2 py-0.5 font-caption text-[10px] text-foreground-tertiary">
                 {t("dag.pausedCount", { count: pausedCount })}
@@ -721,7 +721,7 @@ export default function DagView() {
         )}
       </div>
 
-      <aside className="flex w-[300px] shrink-0 flex-col gap-4 border-l border-border-subtle bg-surface-elevated p-5">
+      <aside className="flex max-h-72 shrink-0 flex-col gap-4 overflow-y-auto border-t border-border-subtle bg-surface-elevated p-4 lg:max-h-none lg:w-[300px] lg:border-t-0 lg:border-l lg:p-5">
         {!selected ? (
           <div className="flex h-full flex-col items-center justify-center gap-2 text-center text-foreground-tertiary">
             <Maximize2 className="size-8 opacity-40" />
@@ -748,7 +748,7 @@ export default function DagView() {
               </div>
               <button
                 onClick={() => setSelectedId(null)}
-                className="flex size-7 items-center justify-center rounded-md text-foreground-tertiary hover:bg-surface-tertiary"
+                className="flex size-8 items-center justify-center rounded-md text-foreground-tertiary hover:bg-surface-tertiary"
               >
                 <X className="size-4" />
               </button>

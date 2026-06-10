@@ -184,7 +184,7 @@ export default function UsageRoute() {
   return (
     <div className="h-full overflow-y-auto">
       <div className="mx-auto flex max-w-5xl flex-col gap-6 px-6 py-6">
-        <header className="flex items-start justify-between gap-3">
+        <header className="flex flex-col items-stretch gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div className="flex flex-col gap-1">
             <h1 className="font-display text-lg text-foreground-primary">{t("usage.title")}</h1>
             <p className="font-caption text-xs text-foreground-tertiary">{t("usage.subtitle")}</p>
@@ -192,9 +192,9 @@ export default function UsageRoute() {
               {t("usage.trustHint")}
             </p>
           </div>
-          <div className="flex shrink-0 items-center gap-2">
+          <div className="flex flex-wrap items-center justify-between gap-2 sm:shrink-0 sm:justify-end">
             {updatedAt && (
-              <span className="font-caption text-[11px] text-foreground-tertiary">
+              <span className="font-caption text-[11px] text-foreground-tertiary sm:order-none">
                 {t("usage.updatedAt", { time: new Date(updatedAt).toLocaleTimeString() })}
               </span>
             )}
@@ -203,7 +203,7 @@ export default function UsageRoute() {
               onClick={() => load(false)}
               title={t("common.refresh")}
               aria-label={t("common.refresh")}
-              className="rounded border border-border-subtle p-1 text-foreground-tertiary hover:bg-surface-tertiary hover:text-foreground-secondary"
+              className="inline-flex size-8 items-center justify-center rounded border border-border-subtle text-foreground-tertiary hover:bg-surface-tertiary hover:text-foreground-secondary"
             >
               <RefreshCw className="size-3.5" />
             </button>
@@ -354,6 +354,19 @@ function PricingEditor({
   onReset: () => void;
 }) {
   const { t } = useTranslation();
+  const [compact, setCompact] = useState(() =>
+    typeof window !== "undefined"
+      ? window.matchMedia("(max-width: 767.98px)").matches
+      : false,
+  );
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const mq = window.matchMedia("(max-width: 767.98px)");
+    const onChange = () => setCompact(mq.matches);
+    onChange();
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, []);
   const updateRate = (
     index: number,
     key: keyof UsagePricingRule["rates_usd_per_mtok"],
@@ -421,12 +434,12 @@ function PricingEditor({
             })}
           </p>
         </div>
-        <div className="flex shrink-0 items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
             onClick={onReset}
             disabled={saving}
-            className="inline-flex items-center gap-1.5 rounded border border-border-subtle px-2 py-1 font-caption text-xs text-foreground-secondary hover:bg-surface-tertiary disabled:opacity-50"
+            className="inline-flex min-h-8 items-center gap-1.5 rounded border border-border-subtle px-2 py-1 font-caption text-xs text-foreground-secondary hover:bg-surface-tertiary disabled:opacity-50"
           >
             <RotateCcw className="size-3.5" />
             {t("usage.pricingReset")}
@@ -435,7 +448,7 @@ function PricingEditor({
             type="button"
             onClick={onSave}
             disabled={saving || !dirty}
-            className="inline-flex items-center gap-1.5 rounded border border-border-subtle bg-surface-primary px-2 py-1 font-caption text-xs text-foreground-primary hover:bg-surface-tertiary disabled:opacity-50"
+            className="inline-flex min-h-8 items-center gap-1.5 rounded border border-border-subtle bg-surface-primary px-2 py-1 font-caption text-xs text-foreground-primary hover:bg-surface-tertiary disabled:opacity-50"
           >
             <Save className="size-3.5" />
             {saving ? t("common.saving", "保存中…") : t("common.save", "保存")}
@@ -447,8 +460,61 @@ function PricingEditor({
           {error}
         </div>
       )}
-      <div className="overflow-x-auto">
-        <table className="min-w-[760px] w-full border-collapse font-mono text-[12px]">
+      {compact ? (
+        <div className="grid gap-3">
+          {rules.map((rule, index) => (
+            <div
+              key={rule.id}
+              className="rounded-md border border-border-subtle bg-surface-primary p-3"
+            >
+              <div className="flex min-w-0 flex-col gap-0.5">
+                <span className="truncate font-mono text-[12px] text-foreground-primary">
+                  {rule.label}
+                </span>
+                <span className="truncate font-mono text-[10px] text-foreground-tertiary">
+                  {rule.provider} · {rule.matchers.join(", ")}
+                </span>
+              </div>
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                {(["input", "output", "cache_read", "cache_write"] as const).map((key) => (
+                  <label key={key} className="flex min-w-0 flex-col gap-1">
+                    <span className="font-caption text-[10px] uppercase text-foreground-tertiary">
+                      {rateLabel(rule, key)}
+                    </span>
+                    <input
+                      name={`pricing-${rule.id}-${key}`}
+                      aria-label={rateLabel(rule, key)}
+                      type="number"
+                      min="0"
+                      step="0.001"
+                      value={fmtRate(rule.rates_usd_per_mtok[key])}
+                      onChange={(e) => updateRate(index, key, e.target.value)}
+                      className="h-9 min-w-0 rounded border border-border-subtle bg-surface-secondary px-2 text-right font-mono text-[12px] text-foreground-primary"
+                    />
+                  </label>
+                ))}
+                <label className="col-span-2 flex min-w-0 flex-col gap-1">
+                  <span className="font-caption text-[10px] uppercase text-foreground-tertiary">
+                    {contextLabel(rule)}
+                  </span>
+                  <input
+                    name={`pricing-${rule.id}-context-window`}
+                    aria-label={contextLabel(rule)}
+                    type="number"
+                    min="0"
+                    step="1000"
+                    value={rule.context_window ?? ""}
+                    onChange={(e) => updateWindow(index, e.target.value)}
+                    className="h-9 min-w-0 rounded border border-border-subtle bg-surface-secondary px-2 text-right font-mono text-[12px] text-foreground-primary"
+                  />
+                </label>
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[760px] border-collapse font-mono text-[12px]">
           <thead>
             <tr className="border-b border-border-subtle text-foreground-tertiary">
               <th className="px-2 py-2 text-left font-caption text-[11px] uppercase">
@@ -519,8 +585,9 @@ function PricingEditor({
               </tr>
             ))}
           </tbody>
-        </table>
-      </div>
+          </table>
+        </div>
+      )}
     </section>
   );
 }

@@ -7,7 +7,17 @@
  */
 import { useTranslation } from "react-i18next";
 import type { Workspace } from "@/api/types";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { cn } from "@/lib/cn";
+
+const ALL_WORKSPACES_VALUE = "__all_workspaces__";
+const NO_WORKSPACE_VALUE = "__no_workspace__";
 
 export function WorkspacePicker({
   workspaces,
@@ -23,24 +33,50 @@ export function WorkspacePicker({
   className?: string;
 }) {
   const { t } = useTranslation();
+  const selectValue = allowAll
+    ? value || ALL_WORKSPACES_VALUE
+    : value || NO_WORKSPACE_VALUE;
   return (
-    <select
+    <Select
       name="workspace"
-      aria-label={t("workspace.picker")}
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      className={cn(
-        "rounded border border-border-subtle bg-surface-primary px-2 py-1 text-[13px] text-foreground-primary",
-        className,
-      )}
+      value={selectValue}
+      onValueChange={(next) => {
+        if (allowAll && next === ALL_WORKSPACES_VALUE) {
+          onChange("");
+          return;
+        }
+        if (!allowAll && next === NO_WORKSPACE_VALUE) {
+          onChange("");
+          return;
+        }
+        onChange(next);
+      }}
     >
-      {allowAll && <option value="">{t("common.allWorkspaces")}</option>}
-      {!allowAll && workspaces.length === 0 && <option value="">—</option>}
-      {workspaces.map((w) => (
-        <option key={w.id} value={w.id}>
-          {w.name}
-        </option>
-      ))}
-    </select>
+      <SelectTrigger
+        aria-label={t("workspace.picker")}
+        className={cn("min-w-[160px] text-[13px]", className)}
+      >
+        <SelectValue
+          placeholder={
+            allowAll ? t("common.allWorkspaces") : workspaces.length === 0 ? "—" : ""
+          }
+        />
+      </SelectTrigger>
+      <SelectContent>
+        {allowAll && (
+          <SelectItem value={ALL_WORKSPACES_VALUE}>
+            {t("common.allWorkspaces")}
+          </SelectItem>
+        )}
+        {!allowAll && workspaces.length === 0 && (
+          <SelectItem value={NO_WORKSPACE_VALUE}>—</SelectItem>
+        )}
+        {workspaces.map((w) => (
+          <SelectItem key={w.id} value={w.id}>
+            {w.name}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
   );
 }

@@ -247,6 +247,8 @@ export function useWorkspaceShellData(
             read_at: null,
             in_reply_to: ev.in_reply_to ?? null,
             thread_id: ev.thread_id ?? null,
+            meta: ev.meta ?? null,
+            thought_trace: ev.thought_trace ?? null,
           };
           setLiveMessage(rec);
           idToFromRef.current.set(ev.id, ev.from_agent);

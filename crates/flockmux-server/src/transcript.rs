@@ -31,7 +31,14 @@ use tokio::io::{AsyncReadExt, AsyncSeekExt};
 /// notify dependency + its debounce/rotation edge cases.
 const POLL_INTERVAL: Duration = Duration::from_millis(700);
 /// Give the CLI this long to create its session file before giving up.
-const LOCATE_TIMEOUT: Duration = Duration::from_secs(90);
+///
+/// Codex does not always materialize `sessions/YYYY/MM/DD/rollout-*.jsonl`
+/// immediately at spawn. In real runs we have seen the file appear a few
+/// minutes later, only after the worker has finished startup + its first
+/// substantial turn. A short timeout makes the UI go blind for the whole run:
+/// the worker spends real tokens, but Activity / Usage stay empty forever
+/// because the tailer gave up before the file existed.
+const LOCATE_TIMEOUT: Duration = Duration::from_secs(600);
 const LOCATE_POLL: Duration = Duration::from_millis(500);
 /// Cap a single tail read so one giant tool result can't balloon memory; we
 /// only need the tool name + a short label, not the whole payload.

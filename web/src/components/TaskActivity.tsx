@@ -107,7 +107,7 @@ function TaskRow({
       <button
         type="button"
         onClick={() => onDismiss(task.id)}
-        className="flex size-5 shrink-0 items-center justify-center rounded text-foreground-tertiary hover:bg-surface-tertiary hover:text-foreground-primary"
+        className="flex size-8 shrink-0 items-center justify-center rounded text-foreground-tertiary hover:bg-surface-tertiary hover:text-foreground-primary"
         title={t("task.dismiss")}
       >
         <X className="size-3" />

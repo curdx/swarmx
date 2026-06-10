@@ -170,15 +170,15 @@ export default function ReplaysView() {
       {/* sub-header: search + refresh + tag bar — Shell-level channel
           header already shows the workspace name / path / unread; this
           row is view-internal toolbar only. */}
-      <div className="flex h-11 shrink-0 items-center gap-2 border-b border-border-subtle bg-surface-secondary px-5">
-        <div className="flex h-8 w-60 items-center gap-2 rounded-md bg-surface-primary px-3">
+      <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border-subtle bg-surface-secondary px-4 py-2 md:h-11 md:flex-nowrap md:px-5 md:py-0">
+        <div className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-md bg-surface-primary px-3 md:w-60 md:flex-none">
           <Search className="size-3.5 text-foreground-tertiary" />
           <input
             name="replay-search"
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
             placeholder={t("replays.search")}
-            className="min-w-0 flex-1 bg-transparent text-xs text-foreground-primary placeholder:text-foreground-tertiary focus:outline-none"
+            className="min-h-8 min-w-0 flex-1 bg-transparent text-xs text-foreground-primary placeholder:text-foreground-tertiary focus:outline-none"
           />
         </div>
         <Button
@@ -186,12 +186,12 @@ export default function ReplaysView() {
           size="icon"
           onClick={refresh}
           title={t("common.refresh")}
-          className="size-7"
+          className="size-8 shrink-0"
         >
           <RefreshCw className="size-3.5" />
         </Button>
-        <span className="flex-1" />
-        <div className="flex items-center gap-1">
+        <span className="hidden flex-1 md:block" />
+        <div className="-mx-1 flex w-full items-center gap-1 overflow-x-auto px-1 pb-1 md:mx-0 md:w-auto md:overflow-visible md:px-0 md:pb-0">
           {tags.map((tag) => {
             const active = tag === activeTag;
             return (
@@ -200,14 +200,14 @@ export default function ReplaysView() {
                 variant={active ? "default" : "outline"}
                 size="sm"
                 onClick={() => setActiveTag(tag)}
-                className="h-7 rounded-full"
+                className="h-8 shrink-0 rounded-full"
               >
                 {tag === "all" ? t("replays.tagAll") : tag}
               </Button>
             );
           })}
         </div>
-        <span className="ml-2 font-caption text-xs text-foreground-tertiary">
+        <span className="ml-auto w-full text-right font-caption text-xs text-foreground-tertiary md:ml-2 md:w-auto">
           {t("replays.ratio", {
             shown: filtered.length,
             total: scopedToWorkspace.length,
@@ -283,7 +283,7 @@ export default function ReplaysView() {
                     <span className="flex-1" />
                     <Link
                       to={`/chat/${workspace.id}/replays/${encodeURIComponent(r.id)}`}
-                      className="flex h-7 items-center gap-1 rounded-md bg-accent-primary px-2.5 text-xs text-foreground-on-accent hover:bg-accent-primary-deep"
+                      className="flex h-8 items-center gap-1 rounded-md bg-accent-primary px-2.5 text-xs text-foreground-on-accent hover:bg-accent-primary-deep"
                     >
                       <Play className="size-3" />
                       {t("replays.play")}
@@ -291,7 +291,7 @@ export default function ReplaysView() {
                     <a
                       href={api.recordingCastUrl(r.id)}
                       download={`${r.id}.cast`}
-                      className="flex h-7 items-center gap-1 rounded-md border border-border-subtle bg-surface-elevated px-2.5 text-xs hover:bg-surface-tertiary"
+                      className="flex h-8 items-center gap-1 rounded-md border border-border-subtle bg-surface-elevated px-2.5 text-xs hover:bg-surface-tertiary"
                       title={t("player.downloadCast")}
                     >
                       <Download className="size-3" />

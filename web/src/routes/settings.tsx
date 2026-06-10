@@ -22,8 +22,12 @@ import { api } from "@/api/http";
 import type { CliPluginInfo, ModelConfig, ModelsResponse } from "@/api/types";
 import {
   Bell,
+  Check,
+  CheckCircle2,
   CircleUser,
+  Copy,
   Cpu,
+  ExternalLink,
   Globe,
   Info,
   Keyboard,
@@ -33,17 +37,27 @@ import {
   Plug,
   Settings as SettingsIcon,
   Shield,
+  TriangleAlert,
   Sun,
   SunMoon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   ConfirmActionDialog,
   type ConfirmActionState,
 } from "@/components/ConfirmActionDialog";
 import { cn } from "@/lib/cn";
+import { formatShortcutChord, getClientPlatformInfo } from "@/lib/platform";
 
 const STORAGE_KEY = "flockmux:settings:v1";
 
@@ -101,6 +115,7 @@ export default function SettingsRoute() {
   const { section } = useParams<{ section?: string }>();
   const navigate = useNavigate();
   const [settings, setSettings] = useState<SettingsState>(loadSettings);
+  const platform = getClientPlatformInfo();
 
   const activeId = (SECTIONS.find((s) => s.id === section)?.id ??
     "general") as SectionId;
@@ -151,9 +166,9 @@ export default function SettingsRoute() {
       </header>
 
       {/* Body */}
-      <div className="flex min-h-0 flex-1">
+      <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
         {/* Nav */}
-        <aside className="flex w-[200px] shrink-0 flex-col gap-1 border-r border-border-subtle bg-surface-secondary p-3">
+        <aside className="grid shrink-0 grid-cols-2 gap-1 border-b border-border-subtle bg-surface-secondary p-3 sm:grid-cols-3 lg:flex lg:w-[200px] lg:flex-col lg:border-b-0 lg:border-r">
           {SECTIONS.map((s, i) => {
             const Icon = s.icon;
             const active = s.id === activeId;
@@ -162,7 +177,7 @@ export default function SettingsRoute() {
                 key={s.id}
                 onClick={() => navigate(`/settings/${s.id}`)}
                 className={cn(
-                  "flex items-center gap-2.5 rounded-md px-3 py-2 text-left text-sm",
+                  "flex min-w-0 items-center gap-2.5 rounded-md px-3 py-2 text-left text-sm lg:w-full",
                   active
                     ? "bg-accent-primary-soft text-foreground-primary"
                     : "text-foreground-secondary hover:bg-surface-tertiary",
@@ -178,12 +193,12 @@ export default function SettingsRoute() {
                       : "bg-surface-elevated text-foreground-tertiary",
                   )}
                 >
-                  ⌘{i + 1}
+                  {formatShortcutChord(i + 1, platform)}
                 </kbd>
               </button>
             );
           })}
-          <div className="mt-auto px-3 pt-4 font-caption text-[10px] text-foreground-tertiary">
+          <div className="ml-auto hidden px-3 pt-4 font-caption text-[10px] text-foreground-tertiary lg:mt-auto lg:block">
             <p className="font-mono">flockmux</p>
             <p>v{__APP_VERSION__}</p>
           </div>
@@ -360,6 +375,7 @@ const SHORTCUT_SCOPES: Scope[] = [
 
 function ShortcutsPanel() {
   const { t } = useTranslation();
+  const modKey = getClientPlatformInfo().modifierKeyLabel;
   return (
     <div className="mx-auto flex max-w-2xl flex-col gap-8 p-8">
       <PanelTitle
@@ -369,7 +385,12 @@ function ShortcutsPanel() {
       {SHORTCUT_SCOPES.map((scope) => (
         <Field key={scope.id} label={t(`settings.shortcuts.scope.${scope.id}`)}>
           <div className="overflow-hidden rounded-lg border border-border-subtle">
-            {scope.bindings.map((b, i) => (
+            {scope.bindings.map((b, i) => {
+              const keys =
+                scope.id === "global" && i === 0
+                  ? [modKey, "K"]
+                  : b.keys;
+              return (
               <div
                 key={i}
                 className={cn(
@@ -378,7 +399,7 @@ function ShortcutsPanel() {
                 )}
               >
                 <div className="flex flex-1 items-center gap-1.5">
-                  {b.keys.map((k, j) => (
+                  {keys.map((k, j) => (
                     <kbd
                       key={j}
                       className="rounded border border-border-subtle bg-surface-elevated px-2 py-0.5 font-mono text-[11px] text-foreground-primary shadow-sm"
@@ -391,7 +412,8 @@ function ShortcutsPanel() {
                   {t(b.descKey)}
                 </span>
               </div>
-            ))}
+            );
+            })}
           </div>
         </Field>
       ))}
@@ -481,7 +503,7 @@ function ModelsPanel() {
   };
 
   return (
-    <div className="mx-auto flex max-w-2xl flex-col gap-6 p-8">
+    <div className="mx-auto flex max-w-2xl flex-col gap-6 p-4 sm:p-8">
       <PanelTitle
         title={t("settings.models.title")}
         hint={t("settings.models.hint")}
@@ -501,7 +523,7 @@ function ModelsPanel() {
         data.clis.map((cli) => (
           <div
             key={cli.id}
-            className="flex flex-col gap-4 rounded-lg border border-border-subtle bg-surface-elevated p-5"
+            className="flex flex-col gap-4 rounded-lg border border-border-subtle bg-surface-elevated p-4 sm:p-5"
           >
             <div className="flex items-center gap-2.5">
               <span className="flex size-8 items-center justify-center rounded-md bg-accent-primary-soft text-accent-primary-deep">
@@ -600,17 +622,17 @@ function ModelRow({
 }) {
   const id = React.useId();
   return (
-    <div className="flex items-center gap-3">
+    <div className="flex flex-col items-stretch gap-1.5 sm:flex-row sm:items-center sm:gap-3">
       <Label
         htmlFor={id}
         className={cn(
-          "w-20 shrink-0 text-sm text-foreground-secondary",
+          "shrink-0 text-sm text-foreground-secondary sm:w-20",
           mono && "font-mono",
         )}
       >
         {label}
       </Label>
-      <input
+      <Input
         id={id}
         name={name}
         type="text"
@@ -618,7 +640,7 @@ function ModelRow({
         value={value}
         placeholder={placeholder}
         onChange={(e) => onChange(e.target.value)}
-        className="flex-1 rounded-md border border-border-subtle bg-surface-primary px-3 py-1.5 font-mono text-xs text-foreground-primary outline-none focus:border-accent-primary"
+        className="w-full font-mono text-xs sm:flex-1"
       />
     </div>
   );
@@ -646,28 +668,31 @@ function EffortRow({
   const id = React.useId();
   const LEVELS = ["low", "medium", "high", "xhigh", "max"] as const;
   return (
-    <div className="flex items-start gap-3">
+    <div className="flex flex-col items-stretch gap-1.5 sm:flex-row sm:items-start sm:gap-3">
       <Label
         htmlFor={id}
-        className="mt-1.5 w-20 shrink-0 text-sm text-foreground-secondary"
+        className="shrink-0 text-sm text-foreground-secondary sm:mt-1.5 sm:w-20"
       >
         {label}
       </Label>
       <div className="flex flex-1 flex-col gap-1">
-        <select
-          id={id}
+        <Select
           name={name}
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          className="w-full rounded-md border border-border-subtle bg-surface-primary px-3 py-1.5 text-xs text-foreground-primary outline-none focus:border-accent-primary"
+          value={value || "__default__"}
+          onValueChange={(next) => onChange(next === "__default__" ? "" : next)}
         >
-          <option value="">{t("model.default")}</option>
-          {LEVELS.map((lv) => (
-            <option key={lv} value={lv}>
-              {t(`model.effort.${lv}`)}
-            </option>
-          ))}
-        </select>
+          <SelectTrigger id={id} className="w-full text-xs">
+            <SelectValue placeholder={t("model.default")} />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="__default__">{t("model.default")}</SelectItem>
+            {LEVELS.map((lv) => (
+              <SelectItem key={lv} value={lv}>
+                {t(`model.effort.${lv}`)}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
         {hint && (
           <span className="font-caption text-[10px] text-foreground-tertiary">
             {hint}
@@ -689,6 +714,15 @@ function PluginsPanel() {
   const { t } = useTranslation();
   const [items, setItems] = useState<CliPluginInfo[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [copied, setCopied] = useState<string | null>(null);
+
+  const copyCommand = (key: string, command: string) => {
+    if (!navigator.clipboard) return;
+    navigator.clipboard.writeText(command).then(() => {
+      setCopied(key);
+      window.setTimeout(() => setCopied((current) => (current === key ? null : current)), 1800);
+    });
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -727,30 +761,164 @@ function PluginsPanel() {
         </p>
       )}
       {items && items.length > 0 && (
-        <ul className="flex flex-col gap-2.5">
-          {items.map((p) => (
-            <li
-              key={p.id}
-              className="flex items-center gap-3 rounded-lg border border-border-subtle bg-surface-elevated p-3.5"
-            >
-              <span className="flex size-9 items-center justify-center rounded-md bg-accent-primary-soft text-accent-primary-deep">
-                <Plug className="size-4" />
-              </span>
-              <div className="flex min-w-0 flex-1 flex-col">
-                <span className="font-heading text-sm font-semibold text-foreground-primary">
-                  {p.display_name}
-                </span>
-                <span className="font-caption text-[11px] text-foreground-tertiary">
-                  <span className="font-mono">{p.id}</span> ·{" "}
-                  {t("settings.plugins.binaryLabel")}{" "}
-                  <span className="font-mono">{p.binary}</span>
-                </span>
-              </div>
-              <span className="rounded-full bg-status-success-soft px-2.5 py-0.5 font-caption text-[10px] text-status-success">
-                {t("settings.plugins.managedTag")}
-              </span>
-            </li>
-          ))}
+        <ul className="flex flex-col gap-3">
+          {items.map((p) => {
+            const status =
+              p.installed === true
+                ? "installed"
+                : p.installed === false
+                  ? "missing"
+                  : "unknown";
+            const installed = status === "installed";
+            const missing = status === "missing";
+            return (
+              <li
+                key={p.id}
+                className={cn(
+                  "flex flex-col gap-3 rounded-lg border p-3.5",
+                  missing
+                    ? "border-status-warning/45 bg-status-warning-soft/45"
+                    : "border-border-subtle bg-surface-elevated",
+                )}
+              >
+                <div className="flex items-start gap-3">
+                  <span
+                    className={cn(
+                      "flex size-9 shrink-0 items-center justify-center rounded-md",
+                      installed
+                        ? "bg-accent-primary-soft text-accent-primary-deep"
+                        : missing
+                          ? "bg-status-warning-soft text-status-warning"
+                          : "bg-surface-tertiary text-foreground-tertiary",
+                    )}
+                  >
+                    <Plug className="size-4" />
+                  </span>
+                  <div className="flex min-w-0 flex-1 flex-col gap-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-heading text-sm font-semibold text-foreground-primary">
+                        {p.display_name}
+                      </span>
+                      <span
+                        className={cn(
+                          "inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-caption text-[10px]",
+                          installed
+                            ? "bg-status-success-soft text-status-success"
+                            : missing
+                              ? "bg-status-warning-soft text-status-warning"
+                              : "bg-surface-tertiary text-foreground-tertiary",
+                        )}
+                      >
+                        {installed ? (
+                          <CheckCircle2 className="size-3" />
+                        ) : missing ? (
+                          <TriangleAlert className="size-3" />
+                        ) : (
+                          <Info className="size-3" />
+                        )}
+                        {installed
+                          ? t("settings.plugins.installedTag")
+                          : missing
+                            ? t("settings.plugins.missingTag")
+                            : t("settings.plugins.unknownTag")}
+                      </span>
+                    </div>
+                    <span className="break-all font-caption text-[11px] text-foreground-tertiary">
+                      <span className="font-mono">{p.id}</span> ·{" "}
+                      {t("settings.plugins.binaryLabel")}{" "}
+                      <span className="font-mono">{p.binary}</span>
+                    </span>
+                    {p.resolved_path && (
+                      <span className="break-all font-caption text-[11px] text-foreground-tertiary">
+                        {t("settings.plugins.pathLabel")}{" "}
+                        <span className="font-mono">{p.resolved_path}</span>
+                      </span>
+                    )}
+                    {p.version && (
+                      <span className="break-all font-caption text-[11px] text-foreground-tertiary">
+                        {t("settings.plugins.versionLabel")}{" "}
+                        <span className="font-mono">{p.version}</span>
+                      </span>
+                    )}
+                  </div>
+                </div>
+                {missing && p.install && (
+                  <div className="flex flex-col gap-2 rounded-md border border-status-warning/35 bg-surface-base p-3">
+                    <div className="flex flex-col gap-1">
+                      <span className="font-heading text-xs font-semibold text-foreground-primary">
+                        {t("settings.plugins.installTitle", { title: p.install.title })}
+                      </span>
+                      <span className="font-caption text-[11px] text-foreground-secondary">
+                        {p.install.summary}
+                      </span>
+                    </div>
+                    <div className="flex flex-col gap-1.5">
+                      {p.install.commands.map((command, index) => {
+                        const key = `${p.id}:${index}`;
+                        const isCopied = copied === key;
+                        return (
+                          <div
+                            key={key}
+                            className="flex min-w-0 items-center gap-2 rounded-md border border-border-subtle bg-surface-elevated px-2.5 py-2"
+                          >
+                            <code className="min-w-0 flex-1 break-all font-mono text-[11px] leading-5 text-foreground-primary">
+                              {command}
+                            </code>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              className="size-8 shrink-0"
+                              onClick={() => copyCommand(key, command)}
+                              aria-label={
+                                isCopied
+                                  ? t("settings.plugins.copied")
+                                  : t("settings.plugins.copyCommand")
+                              }
+                              title={
+                                isCopied
+                                  ? t("settings.plugins.copied")
+                                  : t("settings.plugins.copyCommand")
+                              }
+                            >
+                              {isCopied ? (
+                                <Check className="size-3.5" />
+                              ) : (
+                                <Copy className="size-3.5" />
+                              )}
+                            </Button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 font-caption text-[11px] text-foreground-tertiary">
+                      {p.install.verify_command && (
+                        <span>
+                          {t("settings.plugins.verifyLabel")}{" "}
+                          <span className="font-mono">{p.install.verify_command}</span>
+                        </span>
+                      )}
+                      {p.install.login_command && (
+                        <span>
+                          {t("settings.plugins.loginLabel")}{" "}
+                          <span className="font-mono">{p.install.login_command}</span>
+                        </span>
+                      )}
+                      <a
+                        href={p.install.docs_url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center gap-1 text-accent-primary-deep hover:underline"
+                      >
+                        {t("settings.plugins.docsLink")}
+                        <ExternalLink className="size-3" />
+                      </a>
+                    </div>
+                  </div>
+                )}
+              </li>
+            );
+          })}
         </ul>
       )}
     </div>
@@ -1135,22 +1303,31 @@ function ToggleRow({
 }) {
   // 用 React.useId 给 Switch + Label 配对，可访问性 + 点 Label 也能切 Switch。
   const id = React.useId();
+  const labelId = `${id}-label`;
+  const hintId = hint ? `${id}-hint` : undefined;
   return (
     <div className="flex items-center gap-3 rounded-lg border border-border-subtle bg-surface-elevated px-4 py-3">
       <div className="flex min-w-0 flex-1 flex-col">
         <Label
+          id={labelId}
           htmlFor={id}
           className="cursor-pointer font-heading text-sm font-medium text-foreground-primary"
         >
           {label}
         </Label>
         {hint && (
-          <span className="font-caption text-[11px] text-foreground-tertiary">
+          <span id={hintId} className="font-caption text-[11px] text-foreground-tertiary">
             {hint}
           </span>
         )}
       </div>
-      <Switch id={id} checked={value} onCheckedChange={onChange} />
+      <Switch
+        id={id}
+        checked={value}
+        onCheckedChange={onChange}
+        aria-labelledby={labelId}
+        aria-describedby={hintId}
+      />
     </div>
   );
 }

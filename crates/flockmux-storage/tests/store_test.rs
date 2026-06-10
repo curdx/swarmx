@@ -3,7 +3,8 @@
 
 use flockmux_storage::{
     ListMessagesOpts, MessageRecord, NewAgent, NewBlackboardOp, NewGoal, NewGoalEvidence,
-    NewMessage, NewRecording, NewThread, NewWorker, NewWorkspace, Store,
+    NewMessage, NewRecording, NewThoughtTrace, NewThoughtTraceEvent, NewThread, NewWorker,
+    NewWorkspace, Store, ThoughtTraceStep,
 };
 use tempfile::TempDir;
 
@@ -16,6 +17,310 @@ async fn fresh_store() -> (TempDir, Store) {
 
 fn ts(base: i64) -> i64 {
     1_700_000_000_000 + base
+}
+
+// ── thought traces ───────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn thought_trace_roundtrips_on_response_message() {
+    let (_dir, store) = fresh_store().await;
+    let user = store
+        .insert_message_threaded(
+            NewMessage {
+                from_agent: "user".into(),
+                to_agent: "agent-a".into(),
+                kind: "task".into(),
+                body: "build it".into(),
+                sent_at: ts(1),
+                in_reply_to: None,
+                meta: None,
+            },
+            Some("thread-1".into()),
+        )
+        .await
+        .unwrap();
+    let start_steps = vec![ThoughtTraceStep {
+        phase: "understand".into(),
+        label: "理解用户请求".into(),
+        source: "system".into(),
+        at: ts(1),
+    }];
+    let trace = store
+        .start_thought_trace(
+            NewThoughtTrace {
+                trigger_message_id: user.id,
+                agent_id: "agent-a".into(),
+                workspace_id: Some("ws-1".into()),
+                thread_id: Some("thread-1".into()),
+                started_at: ts(1),
+                summary_json: serde_json::to_string(&start_steps).unwrap(),
+            },
+            vec![NewThoughtTraceEvent {
+                phase: "understand".into(),
+                label: "理解用户请求".into(),
+                source: "system".into(),
+                at: ts(1),
+                meta: None,
+            }],
+        )
+        .await
+        .unwrap();
+    assert_eq!(trace.status, "active");
+
+    let reply = store
+        .insert_message_threaded(
+            NewMessage {
+                from_agent: "agent-a".into(),
+                to_agent: "user".into(),
+                kind: "reply".into(),
+                body: "done".into(),
+                sent_at: ts(5),
+                in_reply_to: Some(user.id),
+                meta: None,
+            },
+            Some("thread-1".into()),
+        )
+        .await
+        .unwrap();
+    let done_steps = vec![
+        start_steps[0].clone(),
+        ThoughtTraceStep {
+            phase: "answer".into(),
+            label: "整理结果并回复用户".into(),
+            source: "system".into(),
+            at: ts(5),
+        },
+    ];
+    let completed = store
+        .complete_latest_thought_trace(
+            "agent-a".into(),
+            Some("thread-1".into()),
+            reply.id,
+            ts(5),
+            serde_json::to_string(&done_steps).unwrap(),
+            vec![NewThoughtTraceEvent {
+                phase: "answer".into(),
+                label: "整理结果并回复用户".into(),
+                source: "system".into(),
+                at: ts(5),
+                meta: None,
+            }],
+        )
+        .await
+        .unwrap()
+        .expect("trace completed");
+    assert_eq!(completed.status, "done");
+    assert_eq!(completed.response_message_id, Some(reply.id));
+
+    let rows = store
+        .list_messages(ListMessagesOpts {
+            to_agent: None,
+            from_agent: None,
+            only_undelivered: false,
+            limit: 10,
+        })
+        .await
+        .unwrap();
+    let persisted = rows
+        .into_iter()
+        .find(|m| m.id == reply.id)
+        .and_then(|m| m.thought_trace)
+        .expect("reply has trace");
+    assert_eq!(persisted.id, completed.id);
+    assert_eq!(persisted.completed_at, Some(ts(5)));
+}
+
+#[tokio::test]
+async fn thought_trace_appends_activity_and_preserves_it_on_complete() {
+    let (_dir, store) = fresh_store().await;
+    let user = store
+        .insert_message_threaded(
+            NewMessage {
+                from_agent: "user".into(),
+                to_agent: "orch".into(),
+                kind: "task".into(),
+                body: "ship it".into(),
+                sent_at: ts(1),
+                in_reply_to: None,
+                meta: None,
+            },
+            Some("thread-1".into()),
+        )
+        .await
+        .unwrap();
+    let start_steps = vec![ThoughtTraceStep {
+        phase: "understand".into(),
+        label: "理解用户请求".into(),
+        source: "system".into(),
+        at: ts(1),
+    }];
+    store
+        .start_thought_trace(
+            NewThoughtTrace {
+                trigger_message_id: user.id,
+                agent_id: "orch".into(),
+                workspace_id: Some("ws-1".into()),
+                thread_id: Some("thread-1".into()),
+                started_at: ts(1),
+                summary_json: serde_json::to_string(&start_steps).unwrap(),
+            },
+            vec![],
+        )
+        .await
+        .unwrap();
+    store
+        .append_thought_trace_event(
+            vec!["worker-a".into(), "orch".into()],
+            NewThoughtTraceEvent {
+                phase: "tool_ok".into(),
+                label: "完成工具: Edit src/app.tsx".into(),
+                source: "agent".into(),
+                at: ts(3),
+                meta: None,
+            },
+        )
+        .await
+        .unwrap()
+        .expect("active trace matched parent candidate");
+
+    let reply = store
+        .insert_message_threaded(
+            NewMessage {
+                from_agent: "orch".into(),
+                to_agent: "user".into(),
+                kind: "reply".into(),
+                body: "done".into(),
+                sent_at: ts(5),
+                in_reply_to: Some(user.id),
+                meta: None,
+            },
+            Some("thread-1".into()),
+        )
+        .await
+        .unwrap();
+    let completed = store
+        .complete_latest_thought_trace(
+            "orch".into(),
+            Some("thread-1".into()),
+            reply.id,
+            ts(5),
+            serde_json::to_string(&[ThoughtTraceStep {
+                phase: "answer".into(),
+                label: "整理结果并回复用户".into(),
+                source: "system".into(),
+                at: ts(5),
+            }])
+            .unwrap(),
+            vec![],
+        )
+        .await
+        .unwrap()
+        .expect("completed");
+    let labels = serde_json::from_str::<Vec<ThoughtTraceStep>>(&completed.summary_json)
+        .unwrap()
+        .into_iter()
+        .map(|s| s.label)
+        .collect::<Vec<_>>();
+    assert!(labels.contains(&"理解用户请求".to_string()));
+    assert!(labels.contains(&"完成工具: Edit src/app.tsx".to_string()));
+    assert!(labels.contains(&"整理结果并回复用户".to_string()));
+}
+
+#[tokio::test]
+async fn thought_trace_appends_late_activity_to_recently_completed_trace() {
+    let (_dir, store) = fresh_store().await;
+    let user = store
+        .insert_message_threaded(
+            NewMessage {
+                from_agent: "user".into(),
+                to_agent: "orch".into(),
+                kind: "task".into(),
+                body: "reply please".into(),
+                sent_at: ts(1),
+                in_reply_to: None,
+                meta: None,
+            },
+            Some("thread-1".into()),
+        )
+        .await
+        .unwrap();
+    store
+        .start_thought_trace(
+            NewThoughtTrace {
+                trigger_message_id: user.id,
+                agent_id: "orch".into(),
+                workspace_id: Some("ws-1".into()),
+                thread_id: Some("thread-1".into()),
+                started_at: ts(1),
+                summary_json: serde_json::to_string(&[ThoughtTraceStep {
+                    phase: "understand".into(),
+                    label: "理解用户请求".into(),
+                    source: "system".into(),
+                    at: ts(1),
+                }])
+                .unwrap(),
+            },
+            vec![],
+        )
+        .await
+        .unwrap();
+
+    let reply = store
+        .insert_message_threaded(
+            NewMessage {
+                from_agent: "orch".into(),
+                to_agent: "user".into(),
+                kind: "reply".into(),
+                body: "done".into(),
+                sent_at: ts(5),
+                in_reply_to: Some(user.id),
+                meta: None,
+            },
+            Some("thread-1".into()),
+        )
+        .await
+        .unwrap();
+    store
+        .complete_latest_thought_trace(
+            "orch".into(),
+            Some("thread-1".into()),
+            reply.id,
+            ts(5),
+            serde_json::to_string(&[ThoughtTraceStep {
+                phase: "answer".into(),
+                label: "整理结果并回复用户".into(),
+                source: "system".into(),
+                at: ts(5),
+            }])
+            .unwrap(),
+            vec![],
+        )
+        .await
+        .unwrap()
+        .expect("completed");
+
+    let updated = store
+        .append_thought_trace_event(
+            vec!["orch".into()],
+            NewThoughtTraceEvent {
+                phase: "tool_ok".into(),
+                label: "完成工具: swarm_send_message".into(),
+                source: "agent".into(),
+                at: ts(6),
+                meta: None,
+            },
+        )
+        .await
+        .unwrap()
+        .expect("recent completed trace matched");
+
+    let labels = serde_json::from_str::<Vec<ThoughtTraceStep>>(&updated.summary_json)
+        .unwrap()
+        .into_iter()
+        .map(|s| s.label)
+        .collect::<Vec<_>>();
+    assert!(labels.contains(&"整理结果并回复用户".to_string()));
+    assert!(labels.contains(&"完成工具: swarm_send_message".to_string()));
 }
 
 // ── goals ─────────────────────────────────────────────────────────────────

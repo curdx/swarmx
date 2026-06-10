@@ -61,7 +61,7 @@ export function ModelPicker({
           disabled={busy}
           title={t("model.tooltip")}
           aria-label={t("model.label")}
-          className="flex h-7 items-center gap-1.5 rounded-md px-2 text-xs text-foreground-secondary transition-colors hover:bg-surface-tertiary disabled:opacity-60"
+          className="flex min-h-8 items-center gap-1.5 rounded-md px-2.5 text-xs text-foreground-secondary transition-colors hover:bg-surface-tertiary disabled:opacity-60"
         >
           {busy ? (
             <Loader2 className="size-3.5 animate-spin text-foreground-tertiary" />
@@ -145,7 +145,7 @@ function MenuItem({
       type="button"
       onClick={onClick}
       className={cn(
-        "flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors hover:bg-surface-tertiary",
+        "flex min-h-8 w-full items-start gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors hover:bg-surface-tertiary",
         active && "bg-surface-tertiary",
       )}
     >

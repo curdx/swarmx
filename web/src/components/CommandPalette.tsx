@@ -50,6 +50,7 @@ import {
 import { setTheme, type ThemeMode } from "@/lib/theme";
 import { directionBase } from "@/lib/thread";
 import { DEBUG_ENABLED } from "@/lib/debug";
+import { formatShortcutChord, getClientPlatformInfo } from "@/lib/platform";
 import {
   CommandDialog,
   CommandEmpty,
@@ -112,6 +113,8 @@ const SETTINGS_SECTIONS = [
 
 export function CommandPalette() {
   const { t } = useTranslation();
+  const platform = getClientPlatformInfo();
+  const commandPaletteShortcut = formatShortcutChord("K", platform);
   const [open, setOpen] = useState(false);
   // 进入 open 时把当前 URL 的 wsId 冻结到一个 ref —— 不用 useLocation 是
   // 因为 react-router 的 location 变化会触发 CommandPalette 全量 re-render，
@@ -196,7 +199,9 @@ export function CommandPalette() {
         open={open}
         onOpenChange={setOpen}
         title={t("cmdk.placeholder")}
-        description={t("cmdk.kbd.openHint")}
+        description={t("cmdk.kbd.openHint", {
+          shortcut: commandPaletteShortcut,
+        })}
       >
         <CommandInput placeholder={t("cmdk.placeholder")} />
         <CommandList>
@@ -259,7 +264,9 @@ export function CommandPalette() {
                 >
                   <Icon />
                   <span>{t(v.labelKey)}</span>
-                  <CommandShortcut>{`⌘${i + 1}`}</CommandShortcut>
+                  <CommandShortcut>
+                    {formatShortcutChord(i + 1, platform)}
+                  </CommandShortcut>
                 </CommandItem>
               );
             })}
@@ -359,7 +366,9 @@ export function CommandPalette() {
               >
                 <SettingsIcon />
                 <span>{label}</span>
-                <CommandShortcut>{`⌘${i + 1}`}</CommandShortcut>
+                <CommandShortcut>
+                  {formatShortcutChord(i + 1, platform)}
+                </CommandShortcut>
               </CommandItem>
             );
           })}

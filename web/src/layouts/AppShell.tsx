@@ -32,24 +32,18 @@ import { NotificationPopover } from "@/components/NotificationPopover";
 import { useNotificationBadge } from "@/hooks/useNotificationBadge";
 import { api } from "@/api/http";
 import { primeInputPolicies } from "@/lib/cliInputPolicy";
+import { formatShortcutChord, getClientPlatformInfo } from "@/lib/platform";
+import {
+  isTauriOverlayWindow,
+  TAURI_DRAG_REGION,
+  TAURI_TITLEBAR_LEFT_SAFE_PX,
+} from "@/lib/tauriWindowChrome";
 import {
   Tooltip,
   TooltipContent,
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-
-// Tauri uses titleBarStyle:"Overlay" so the OS draws real traffic lights
-// in the window's top-left ~(0,0)→(78,28) region. The header reserves a
-// matching left padding so the brand logo doesn't collide with them. Tauri
-// only starts a window drag when the clicked element itself has this attribute,
-// so buttons/links remain normal as long as we add it only to inert chrome.
-const IS_TAURI =
-  typeof window !== "undefined" &&
-  (window.location.protocol === "tauri:" ||
-    window.location.hostname === "tauri.localhost" ||
-    "__TAURI_INTERNALS__" in window);
-const TAURI_DRAG_REGION = IS_TAURI ? { "data-tauri-drag-region": "" } : {};
 
 export function AppShell() {
   const { t } = useTranslation();
@@ -73,8 +67,12 @@ export function AppShell() {
       .catch(() => {});
   }, []);
 
-  const isMac =
-    typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
+  const platform = getClientPlatformInfo();
+  const isTauri = isTauriOverlayWindow();
+  const commandPaletteShortcut = formatShortcutChord("K", platform);
+  const commandPaletteHint = t("shell.cmdkHint", {
+    shortcut: commandPaletteShortcut,
+  });
 
   return (
     <TooltipProvider delayDuration={300}>
@@ -82,9 +80,18 @@ export function AppShell() {
         <header
           className="flex h-11 shrink-0 items-center gap-3 border-b border-border-subtle bg-surface-secondary px-3"
           {...TAURI_DRAG_REGION}
-          // Tauri OS lights live in the top-left ~78px strip; pad past them.
-          style={IS_TAURI ? { paddingLeft: 88 } : undefined}
+          // Keep the brand clearly to the right of macOS traffic lights when
+          // using Tauri's overlay title bar. The extra gap is intentional:
+          // "not touching" feels better than "barely not overlapping".
+          style={isTauri ? { paddingLeft: TAURI_TITLEBAR_LEFT_SAFE_PX } : undefined}
         >
+          {isTauri && (
+            <div
+              aria-hidden
+              className="pointer-events-none shrink-0"
+              style={{ width: 8 }}
+            />
+          )}
           {/* Brand — top-left in browser, right after OS traffic lights in Tauri. */}
           <Link
             to="/chat"
@@ -114,14 +121,14 @@ export function AppShell() {
                   const ev = new KeyboardEvent("keydown", {
                     key: "k",
                     code: "KeyK",
-                    metaKey: isMac,
-                    ctrlKey: !isMac,
+                    metaKey: platform.isApple,
+                    ctrlKey: !platform.isApple,
                     bubbles: true,
                   });
                   window.dispatchEvent(ev);
                 }}
-                className="flex h-7 items-center gap-1.5 rounded-md px-1.5 text-foreground-tertiary transition-colors hover:bg-surface-tertiary hover:text-foreground-primary"
-                aria-label={t("shell.cmdkHint")}
+                className="flex h-9 items-center gap-1.5 rounded-md px-2 text-foreground-tertiary transition-colors hover:bg-surface-tertiary hover:text-foreground-primary"
+                aria-label={commandPaletteHint}
               >
                 <Search className="size-4" />
                 {/* ⌘ as a crisp lucide SVG (not the U+2318 font glyph, which
@@ -129,7 +136,7 @@ export function AppShell() {
                     to a "Ctrl" label. Borderless to match the bell / search
                     icon-button weight. */}
                 <span className="hidden items-center gap-0.5 font-mono text-[11px] leading-none text-foreground-tertiary sm:inline-flex">
-                  {isMac ? (
+                  {platform.isApple ? (
                     <Command className="size-3" strokeWidth={2.25} />
                   ) : (
                     <span>Ctrl</span>
@@ -138,7 +145,7 @@ export function AppShell() {
                 </span>
               </button>
             </TooltipTrigger>
-            <TooltipContent side="bottom">{t("shell.cmdkHint")}</TooltipContent>
+            <TooltipContent side="bottom">{commandPaletteHint}</TooltipContent>
           </Tooltip>
 
           {/* Notification bell — Popover quick preview。点 bell 弹 360px

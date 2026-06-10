@@ -50,6 +50,13 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { cn } from "@/lib/cn";
 
 const INIT_SPELL = "init";
@@ -566,57 +573,72 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
                         {/* role + (for a source mount) parent-project picker */}
                         {!isPrimary && (
                           <div className="flex flex-wrap items-center gap-2">
-                            <select
+                            <Select
                               name={`workspace-root-${d.id}-role`}
                               value={d.role}
-                              onChange={(e) =>
+                              onValueChange={(next) =>
                                 setDirs((prev) =>
                                   prev.map((x, j) =>
-                                    j === i ? { ...x, role: e.target.value } : x,
+                                    j === i ? { ...x, role: next } : x,
                                   ),
                                 )
                               }
-                              title={t("wizard.attachedLabel")}
-                              className="h-7 shrink-0 rounded-md border border-border-subtle bg-surface-primary px-2 text-xs text-foreground-secondary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent-primary"
                             >
-                              <option value="project">
-                                {t("wizard.roleProject")}
-                              </option>
-                              <option value="dependency">
-                                {t("wizard.roleDependency")}
-                              </option>
-                              <option value="tool">
-                                {t("wizard.roleTool")}
-                              </option>
-                            </select>
+                              <SelectTrigger
+                                aria-label={t("wizard.attachedLabel")}
+                                title={t("wizard.attachedLabel")}
+                                className="h-7 w-[132px] shrink-0 text-xs"
+                                size="sm"
+                              >
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="project">
+                                  {t("wizard.roleProject")}
+                                </SelectItem>
+                                <SelectItem value="dependency">
+                                  {t("wizard.roleDependency")}
+                                </SelectItem>
+                                <SelectItem value="tool">
+                                  {t("wizard.roleTool")}
+                                </SelectItem>
+                              </SelectContent>
+                            </Select>
                             {!isProject && (
                               <>
                                 <span className="shrink-0 font-caption text-[11px] text-foreground-tertiary">
                                   {t("chat.mountUnder")}
                                 </span>
-                                <select
+                                <Select
                                   name={`workspace-root-${d.id}-parent`}
                                   value={String(d.parent)}
-                                  onChange={(e) =>
+                                  onValueChange={(next) =>
                                     setDirs((prev) =>
                                       prev.map((x, j) =>
                                         j === i
-                                          ? { ...x, parent: Number(e.target.value) }
+                                          ? { ...x, parent: Number(next) }
                                           : x,
                                       ),
                                     )
                                   }
-                                  className="h-7 min-w-0 max-w-[12rem] rounded-md border border-border-subtle bg-surface-primary px-2 text-xs text-foreground-secondary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent-primary"
                                 >
-                                  <option value="0">
-                                    {name.trim() || t("chat.primaryProject")}
-                                  </option>
-                                  {parentOptions.map((p) => (
-                                    <option key={p.id} value={String(p.id)}>
-                                      {baseName(p.path)}
-                                    </option>
-                                  ))}
-                                </select>
+                                  <SelectTrigger
+                                    className="h-7 min-w-0 max-w-[12rem] text-xs"
+                                    size="sm"
+                                  >
+                                    <SelectValue />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="0">
+                                      {name.trim() || t("chat.primaryProject")}
+                                    </SelectItem>
+                                    {parentOptions.map((p) => (
+                                      <SelectItem key={p.id} value={String(p.id)}>
+                                        {baseName(p.path)}
+                                      </SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
                               </>
                             )}
                           </div>

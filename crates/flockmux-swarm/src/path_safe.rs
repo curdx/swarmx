@@ -21,7 +21,11 @@ pub fn resolve_existing(root: &Path, rel: &str) -> Result<PathBuf> {
         .canonicalize()
         .map_err(|e| anyhow!("canonicalize target {}: {}", joined.display(), e))?;
     if !canon.starts_with(&canon_root) {
-        bail!("path {} escapes blackboard root {}", canon.display(), canon_root.display());
+        bail!(
+            "path {} escapes blackboard root {}",
+            canon.display(),
+            canon_root.display()
+        );
     }
     Ok(canon)
 }

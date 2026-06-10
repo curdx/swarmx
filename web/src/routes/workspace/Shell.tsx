@@ -36,6 +36,7 @@ import { useTranslation } from "react-i18next";
 import { FolderOpen } from "lucide-react";
 import { api } from "../../api/http";
 import type {
+  AgentActivity,
   AgentInfo,
   AgentLiveState,
   MessageRecord,
@@ -45,6 +46,12 @@ import { setActiveWorkspaceId } from "../../lib/activeWorkspace";
 import { ErrorBoundary } from "../../components/ErrorBoundary";
 import { Welcome } from "../../components/Welcome";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
 import type { WorkspaceSummary } from "./types";
 import { WorkspaceList } from "./WorkspaceSidebar";
 import { WorkspaceToolbar, ViewTransition, buildTabs } from "./WorkspaceToolbar";
@@ -106,6 +113,9 @@ export interface ShellOutletContext {
    *  agent_id. The members list reads it for the real-time status dot +
    *  "what this worker is doing right now" line. */
   agentStateById: Record<string, AgentLiveState>;
+  /** Bounded per-agent activity history from the swarm WS. Chat uses it to
+   *  patch late tool events into visible thought summaries. */
+  agentActivityById: Record<string, AgentActivity[]>;
   /** Unread tally, already filtered to this workspace's senders. */
   unreadByFrom: Record<string, number>;
   /** Click → bump this counter, MessagesPanel scrolls to first unread. */
@@ -158,6 +168,7 @@ export default function WorkspaceShell() {
 
   // CreateWizard opens from sidebar + ⌘K (window event).
   const [wizardOpen, setWizardOpen] = useState(false);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
   useEffect(() => {
     const onOpen = () => setWizardOpen(true);
     window.addEventListener("flockmux:open-wizard", onOpen as EventListener);
@@ -347,6 +358,7 @@ export default function WorkspaceShell() {
           <WorkspaceList
             workspaces={workspaces}
             activeId={wsId ?? null}
+            isLoading={!wsLoaded}
             onOpenWizard={() => setWizardOpen(true)}
             onDelete={onDeleteWorkspace}
             onRootsChanged={refreshWorkspaces}
@@ -406,6 +418,7 @@ export default function WorkspaceShell() {
     liveMessage,
     liveRead,
     agentStateById,
+    agentActivityById,
     unreadByFrom: activeWorkspaceUnread,
     jumpUnreadTick,
     openAgent,
@@ -419,6 +432,7 @@ export default function WorkspaceShell() {
           workspaces={workspaces}
           activeId={activeWs.id}
           activeThreadSlug={activeThreadSlug}
+          isLoading={!wsLoaded}
           onOpenWizard={() => setWizardOpen(true)}
           onDelete={onDeleteWorkspace}
           onRootsChanged={refreshWorkspaces}
@@ -433,6 +447,7 @@ export default function WorkspaceShell() {
             totalUnread={totalUnread}
             onJumpUnread={() => setJumpUnreadTick((v) => v + 1)}
             onCleanupThread={(threadId) => onDeleteThread(activeWs, threadId)}
+            onOpenWorkspaceNav={() => setMobileNavOpen(true)}
           />
           <ViewTransition>
             {/* View-level boundary: a crash in one tab (malformed ledger
@@ -454,6 +469,29 @@ export default function WorkspaceShell() {
             />
           </Suspense>
         )}
+        <Sheet open={mobileNavOpen} onOpenChange={setMobileNavOpen}>
+          <SheetContent side="left" className="w-full max-w-none p-0 sm:max-w-none">
+            <SheetHeader className="border-b border-border-subtle">
+              <SheetTitle>{t("chat.workspaces")}</SheetTitle>
+            </SheetHeader>
+            <WorkspaceList
+              mobile
+              workspaces={workspaces}
+              activeId={activeWs.id}
+              activeThreadSlug={activeThreadSlug}
+              isLoading={!wsLoaded}
+              onOpenWizard={() => {
+                setMobileNavOpen(false);
+                setWizardOpen(true);
+              }}
+              onDelete={onDeleteWorkspace}
+              onRootsChanged={refreshWorkspaces}
+              onNewDirection={onNewDirection}
+              onDeleteThread={onDeleteThread}
+              onAfterNavigate={() => setMobileNavOpen(false)}
+            />
+          </SheetContent>
+        </Sheet>
         {wizardOpen && (
           <Suspense fallback={null}>
             <CreateWizard

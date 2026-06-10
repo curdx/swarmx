@@ -18,6 +18,11 @@ pub struct SpawnAgentRequest {
     /// CreateWizard. The server will error if missing post-Step-3.
     #[serde(default)]
     pub workspace_id: Option<String>,
+    /// Optional direction/thread FK. UI launchers should pass the active
+    /// thread. When omitted, the server binds the agent to the workspace's
+    /// main thread instead of leaving it orphaned.
+    #[serde(default)]
+    pub thread_id: Option<String>,
     /// Optional model overlay (L5c). Passed to the CLI via its manifest
     /// `model_args` template (e.g. claude/codex `--model <v>`). `None` ⇒ use
     /// the plugin's `default_model`, else the CLI's own default. Decouples
@@ -39,6 +44,22 @@ pub struct CliPluginInfo {
     pub id: String,
     pub display_name: String,
     pub binary: String,
+    /// Whether the plugin's CLI binary is available on the server's augmented
+    /// runtime PATH. This is the same PATH family used for GUI-launched child
+    /// processes, so the Settings page reports what flockmux can actually run.
+    #[serde(default)]
+    pub installed: bool,
+    /// Absolute path resolved for `binary`, when available.
+    #[serde(default)]
+    pub resolved_path: Option<String>,
+    /// Best-effort `<binary> --version` output. Missing if the CLI is absent,
+    /// times out, or doesn't support the flag.
+    #[serde(default)]
+    pub version: Option<String>,
+    /// Official install guidance for known shipped CLIs. Present even when the
+    /// CLI is installed so the UI can expose repair/reinstall docs.
+    #[serde(default)]
+    pub install: Option<CliInstallHint>,
     /// Keystroke-settle delay (ms) the web terminal applies after the CLI
     /// signals ready (codex needs ~300ms; claude 0). Lets the frontend input
     /// policy be data-driven instead of branching on the agent-id prefix.
@@ -49,6 +70,18 @@ pub struct CliPluginInfo {
     /// can pre-fill / offer a model picker without hardcoding per-CLI names.
     #[serde(default)]
     pub default_model: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CliInstallHint {
+    pub title: String,
+    pub summary: String,
+    pub docs_url: String,
+    pub commands: Vec<String>,
+    #[serde(default)]
+    pub verify_command: Option<String>,
+    #[serde(default)]
+    pub login_command: Option<String>,
 }
 
 /// One entry in `GET /api/agent`. Mirrors `SpawnAgentResponse` plus the
@@ -241,6 +274,36 @@ pub struct SendMessageRequest {
     pub in_reply_to: Option<i64>,
 }
 
+/// One user-facing stage in a product-level reasoning / execution summary.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThoughtTraceStep {
+    pub phase: String,
+    pub label: String,
+    pub source: String,
+    pub at: i64,
+}
+
+/// Coarse thought trace attached to chat messages. This is not raw
+/// chain-of-thought; it is a stable user-facing progress summary.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThoughtTrace {
+    pub id: String,
+    pub trigger_message_id: i64,
+    #[serde(default)]
+    pub response_message_id: Option<i64>,
+    pub agent_id: String,
+    #[serde(default)]
+    pub workspace_id: Option<String>,
+    #[serde(default)]
+    pub thread_id: Option<String>,
+    pub status: String,
+    pub started_at: i64,
+    #[serde(default)]
+    pub completed_at: Option<i64>,
+    pub summary: Vec<ThoughtTraceStep>,
+    pub updated_at: i64,
+}
+
 /// Returned by `POST /api/message` so the client knows the persisted row.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MessageRecord {
@@ -262,6 +325,9 @@ pub struct MessageRecord {
     /// `meta.subtype` instead of regex-parsing the prose `body`.
     #[serde(default)]
     pub meta: Option<serde_json::Value>,
+    /// Product-level reasoning / execution summary for this reply.
+    #[serde(default)]
+    pub thought_trace: Option<ThoughtTrace>,
 }
 
 /// `POST /api/message/read` payload. The server enforces `to` matches each

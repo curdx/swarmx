@@ -26,6 +26,14 @@ export interface CliPluginInfo {
   id: string;
   display_name: string;
   binary: string;
+  /** Whether the server can resolve this CLI on its augmented runtime PATH. */
+  installed?: boolean;
+  /** Absolute executable path, when found. */
+  resolved_path?: string | null;
+  /** Best-effort `<binary> --version` first line. */
+  version?: string | null;
+  /** Official install guidance for known bundled CLIs. */
+  install?: CliInstallHint | null;
   /** Keystroke-settle delay (ms) the terminal applies after the CLI is ready
    *  (codex ~300, claude 0). Mirrors the backend manifest; drives the input
    *  policy so adding a CLI needs no frontend edit. Optional for back-compat
@@ -37,6 +45,15 @@ export interface CliPluginInfo {
   default_model?: string;
 }
 
+export interface CliInstallHint {
+  title: string;
+  summary: string;
+  docs_url: string;
+  commands: string[];
+  verify_command?: string | null;
+  login_command?: string | null;
+}
+
 export interface SpawnAgentRequest {
   cli: string;
   role?: string;
@@ -45,6 +62,9 @@ export interface SpawnAgentRequest {
    *  workspace-as-first-class rollout — the orphan `+ Claude` button
    *  is routed through CreateWizard when no active workspace exists. */
   workspace_id: string;
+  /** Direction/thread to bind this agent to. Omit to use the workspace's main
+   *  thread; UI launchers should pass the active direction when available. */
+  thread_id?: string | null;
   /** Optional model overlay (L5c). Passed to the CLI via its manifest
    *  `model_args` template. Omit to use the plugin's default_model / the
    *  CLI's own default. Decouples model from CLI id. */
@@ -133,6 +153,28 @@ export interface MessageRecord {
   /** Direction (thread) this message belongs to; null = main / untagged. */
   thread_id?: string | null;
   meta?: MessageMeta | null;
+  thought_trace?: ThoughtTrace | null;
+}
+
+export interface ThoughtTraceStep {
+  phase: string;
+  label: string;
+  source: string;
+  at: number;
+}
+
+export interface ThoughtTrace {
+  id: string;
+  trigger_message_id: number;
+  response_message_id?: number | null;
+  agent_id: string;
+  workspace_id?: string | null;
+  thread_id?: string | null;
+  status: "active" | "done" | "expired" | "error" | string;
+  started_at: number;
+  completed_at?: number | null;
+  summary: ThoughtTraceStep[];
+  updated_at: number;
 }
 
 export interface SendMessageRequest {
@@ -432,6 +474,7 @@ export type SwarmEvent =
       in_reply_to?: number | null;
       thread_id?: string | null;
       meta?: MessageMeta | null;
+      thought_trace?: ThoughtTrace | null;
     }
   | {
       type: "message_read";

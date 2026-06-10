@@ -239,7 +239,7 @@ export function NotificationPopover({ hasUnseen, onSeen }: Props) {
       <PopoverTrigger asChild>
         <button
           type="button"
-          className="relative flex size-7 items-center justify-center rounded-md text-foreground-tertiary transition-colors hover:bg-surface-tertiary hover:text-foreground-primary"
+          className="relative flex size-9 items-center justify-center rounded-md text-foreground-tertiary transition-colors hover:bg-surface-tertiary hover:text-foreground-primary"
           aria-label={t("nav.notifications")}
         >
           <Bell className="size-4" />

@@ -12,15 +12,16 @@ use axum::{
     Json,
 };
 use flockmux_protocol::rest::{
-    AgentInfo, CliPluginInfo, RunSpellAgent, RunSpellRequest, RunSpellResponse, SpawnAgentRequest,
-    SpawnAgentResponse, SpawnWorkerRequest, SpawnWorkerResponse, SpellAgentInfo, SpellInfo,
+    AgentInfo, CliInstallHint, CliPluginInfo, RunSpellAgent, RunSpellRequest, RunSpellResponse,
+    SpawnAgentRequest, SpawnAgentResponse, SpawnWorkerRequest, SpawnWorkerResponse, SpellAgentInfo,
+    SpellInfo,
 };
 use flockmux_protocol::ws_swarm::{AgentState, SwarmEvent};
 use flockmux_recorder::{Recorder, RecorderConfig};
 use flockmux_storage::{NewAgent, NewRecording, NewSpellRun, NewWorker, ThreadRecord};
 use serde_json::json;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path as FsPath, PathBuf};
 use uuid::Uuid;
 
 fn now_ms() -> i64 {
@@ -188,19 +189,105 @@ fn build_worker_prompt(
 }
 
 pub async fn list_plugins(State(state): State<AppState>) -> impl IntoResponse {
-    let plugins: Vec<CliPluginInfo> = state
-        .plugins
-        .list()
-        .into_iter()
-        .map(|p| CliPluginInfo {
-            id: p.id.clone(),
-            display_name: p.display_name.clone(),
-            binary: p.binary.clone(),
-            input_settle_ms: p.input_settle_ms,
-            default_model: p.default_model.clone(),
-        })
-        .collect();
+    let mut plugins = Vec::new();
+    for p in state.plugins.list() {
+        plugins.push(cli_plugin_info(p).await);
+    }
     Json(plugins)
+}
+
+async fn cli_plugin_info(p: &CliPlugin) -> CliPluginInfo {
+    let resolved_path = crate::runtime_path::resolve_executable(&p.binary);
+    let version = match resolved_path.as_deref() {
+        Some(path) => probe_cli_version(path).await,
+        None => None,
+    };
+    CliPluginInfo {
+        id: p.id.clone(),
+        display_name: p.display_name.clone(),
+        binary: p.binary.clone(),
+        installed: resolved_path.is_some(),
+        resolved_path: resolved_path.map(|p| p.to_string_lossy().into_owned()),
+        version,
+        install: install_hint_for(p),
+        input_settle_ms: p.input_settle_ms,
+        default_model: p.default_model.clone(),
+    }
+}
+
+async fn probe_cli_version(binary: &FsPath) -> Option<String> {
+    use tokio::process::Command;
+    use tokio::time::{timeout, Duration};
+
+    let output = Command::new(binary)
+        .arg("--version")
+        .env("PATH", crate::runtime_path::augmented_path())
+        .kill_on_drop(true)
+        .output();
+
+    let output = timeout(Duration::from_secs(3), output).await.ok()?.ok()?;
+    let raw = if output.stdout.is_empty() {
+        String::from_utf8_lossy(&output.stderr).into_owned()
+    } else {
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    };
+    let line = raw.lines().find(|l| !l.trim().is_empty())?.trim();
+    Some(line.chars().take(200).collect())
+}
+
+fn install_hint_for(p: &CliPlugin) -> Option<CliInstallHint> {
+    match p.id.as_str() {
+        "codex" => Some(CliInstallHint {
+            title: "Install Codex CLI".to_string(),
+            summary: "Official OpenAI installer first; npm and Homebrew are useful fallbacks."
+                .to_string(),
+            docs_url: "https://github.com/openai/codex".to_string(),
+            commands: vec![
+                "curl -fsSL https://chatgpt.com/codex/install.sh | sh".to_string(),
+                "npm install -g @openai/codex".to_string(),
+                "brew install --cask codex".to_string(),
+            ],
+            verify_command: Some("codex --version".to_string()),
+            login_command: Some("codex login".to_string()),
+        }),
+        "claude" => Some(CliInstallHint {
+            title: "Install Claude Code".to_string(),
+            summary: "Official native installer first; Homebrew is supported and npm is now a deprecated fallback."
+                .to_string(),
+            docs_url: "https://code.claude.com/docs/en/setup".to_string(),
+            commands: vec![
+                "curl -fsSL https://claude.ai/install.sh | bash".to_string(),
+                "brew install --cask claude-code".to_string(),
+                "npm install -g @anthropic-ai/claude-code".to_string(),
+            ],
+            verify_command: Some("claude --version".to_string()),
+            login_command: Some("claude".to_string()),
+        }),
+        _ => None,
+    }
+}
+
+fn missing_cli_install_message(plugin: &CliPlugin) -> String {
+    let mut msg = format!(
+        "{} CLI binary `{}` is not installed or not visible on flockmux's runtime PATH.",
+        plugin.display_name, plugin.binary
+    );
+    if let Some(hint) = install_hint_for(plugin) {
+        msg.push_str("\n\nRecommended install commands:\n");
+        for command in &hint.commands {
+            msg.push_str("- ");
+            msg.push_str(command);
+            msg.push('\n');
+        }
+        if let Some(login) = hint.login_command {
+            msg.push_str("After install/login: ");
+            msg.push_str(&login);
+            msg.push('\n');
+        }
+        msg.push_str("Docs: ");
+        msg.push_str(&hint.docs_url);
+    }
+    msg
 }
 
 /// `POST /api/agent/:id/mcp-ready` — called by the agent's own `flockmux-mcp`
@@ -258,15 +345,48 @@ pub async fn spawn(
         .as_deref()
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(&ws.cwd));
+    let resolved_thread_id = match req.thread_id {
+        Some(tid) => state
+            .store
+            .get_thread(tid)
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"error": e.to_string()})),
+                )
+            })?
+            .filter(|t| t.deleted_at.is_none() && t.workspace_id == ws.id)
+            .map(|t| t.id),
+        None => state
+            .store
+            .list_threads(ws.id.clone())
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"error": e.to_string()})),
+                )
+            })?
+            .into_iter()
+            .next()
+            .map(|t| t.id),
+    };
     // Single-agent spawn always uses per-agent subdir layout. Spells
     // are the only path that can ask for a shared workspace.
     let layout = WorkspaceLayout::PerAgent {
         root: workspace_root,
     };
-    // Trailing args: spell_run_id=None (standalone), thread_id=None (a single
-    // ad-hoc agent lands on the workspace's main thread).
     let outcome = spawn_with_bookkeeping(
-        &state, &req.cli, req.role, req.model, None, layout, ws.id, None, None,
+        &state,
+        &req.cli,
+        req.role,
+        req.model,
+        None,
+        layout,
+        ws.id,
+        None,
+        resolved_thread_id,
     )
     .await
     .map_err(|(status, msg)| (status, Json(json!({"error": msg}))))?;
@@ -362,6 +482,12 @@ pub(crate) async fn spawn_with_bookkeeping(
         .get(cli)
         .cloned()
         .ok_or_else(|| (StatusCode::NOT_FOUND, format!("unknown cli plugin: {cli}")))?;
+    if crate::runtime_path::resolve_executable(&plugin.binary).is_none() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            missing_cli_install_message(&plugin),
+        ));
+    }
 
     // F1: resolve the requested abstract tier into the concrete model for THIS
     // cli, using the per-CLI model config. claude keeps its alias ("sonnet" →
@@ -2785,5 +2911,29 @@ mod p0_tests {
         let q = build_worker_prompt("x", &[], "x.error", &["ws1/main/dep.done".to_string()]);
         assert!(q.contains("INPUTS"));
         assert!(q.contains("ws1/main/dep.done"));
+    }
+
+    #[test]
+    fn install_hint_for_codex_prefers_official_installer() {
+        let plugin: CliPlugin =
+            toml::from_str("id='codex'\ndisplay_name='Codex CLI'\nbinary='codex'\n").unwrap();
+        let hint = install_hint_for(&plugin).expect("codex hint");
+        assert_eq!(hint.docs_url, "https://github.com/openai/codex");
+        assert_eq!(
+            hint.commands.first().map(String::as_str),
+            Some("curl -fsSL https://chatgpt.com/codex/install.sh | sh")
+        );
+        assert!(hint.commands.iter().any(|c| c.contains("@openai/codex")));
+        assert_eq!(hint.login_command.as_deref(), Some("codex login"));
+    }
+
+    #[test]
+    fn missing_cli_install_message_lists_recovery_steps() {
+        let plugin: CliPlugin =
+            toml::from_str("id='claude'\ndisplay_name='Claude Code'\nbinary='claude'\n").unwrap();
+        let msg = missing_cli_install_message(&plugin);
+        assert!(msg.contains("Claude Code CLI binary `claude`"));
+        assert!(msg.contains("curl -fsSL https://claude.ai/install.sh | bash"));
+        assert!(msg.contains("https://code.claude.com/docs/en/setup"));
     }
 }

@@ -10,12 +10,20 @@
 
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { FolderOpen } from "lucide-react";
 import { api } from "../../api/http";
 import type { AgentInfo, SwarmEvent, Workspace } from "../../api/types";
 import { useSwarmFeed } from "../../hooks/useSwarmFeed";
 import { accentToCssVar } from "../../lib/workspace";
 import { Welcome } from "../../components/Welcome";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
+import { Button } from "@/components/ui/button";
 import { WorkspaceList, type WorkspaceSummary } from "../workspace/Shell";
 
 const CreateWizard = lazy(() =>
@@ -36,7 +44,9 @@ export default function ChatHome() {
   const navigate = useNavigate();
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [workspaceRows, setWorkspaceRows] = useState<Workspace[]>([]);
+  const [workspacesLoaded, setWorkspacesLoaded] = useState(false);
   const [wizardOpen, setWizardOpen] = useState(false);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
   // CommandPalette → 新建 workspace 走 window event。
   useEffect(() => {
@@ -59,6 +69,8 @@ export default function ChatHome() {
       setWorkspaceRows(await api.listWorkspaces());
     } catch {
       /* best-effort */
+    } finally {
+      setWorkspacesLoaded(true);
     }
   };
 
@@ -110,10 +122,10 @@ export default function ChatHome() {
   // sense as a transient splash. If multiple are alive we still send the
   // user to the first (the sidebar lets them switch instantly).
   useEffect(() => {
-    if (workspaces.length > 0) {
+    if (workspacesLoaded && workspaces.length > 0) {
       navigate(`/chat/${workspaces[0].id}`, { replace: true });
     }
-  }, [workspaces, navigate]);
+  }, [workspacesLoaded, workspaces, navigate]);
 
   const handleDeleteWorkspace = async (workspaceId: string) => {
     // Kill any live agents that belonged to this workspace BEFORE we
@@ -157,15 +169,57 @@ export default function ChatHome() {
         <WorkspaceList
           workspaces={workspaces}
           activeId={null}
+          isLoading={!workspacesLoaded}
           onOpenWizard={() => setWizardOpen(true)}
           onDelete={handleDeleteWorkspace}
           onRootsChanged={refreshWorkspaces}
         />
-        {/* 主战场就一个 — Welcome 屏。删了之前左 sidebar 大卡片 + 中
-         *  间又一个 "新建工作空间" 按钮的双 CTA，sidebar 那边 empty 现
-         *  在只画一行小提示 (WorkspaceList 内部已经做了)，主屏负责讲
-         *  清楚 flockmux 是干啥的 + 主 CTA。 */}
-        <Welcome onCreateWorkspace={() => setWizardOpen(true)} />
+        <div className="flex min-w-0 flex-1 flex-col">
+          <div className="flex items-center justify-between gap-3 border-b border-border-subtle px-4 py-3 md:hidden">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setMobileNavOpen(true)}
+              className="gap-2"
+            >
+              <FolderOpen className="size-4" />
+              工作空间
+            </Button>
+            <span className="font-caption text-[11px] text-foreground-tertiary">
+              {workspacesLoaded
+                ? `${workspaces.length} 个工作空间`
+                : "正在读取工作空间…"}
+            </span>
+          </div>
+          {!workspacesLoaded ? (
+            <section className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 bg-surface-primary text-foreground-tertiary">
+              <FolderOpen className="size-10 opacity-40" />
+              <p className="font-caption text-sm">加载工作空间中…</p>
+            </section>
+          ) : (
+            <Welcome onCreateWorkspace={() => setWizardOpen(true)} />
+          )}
+        </div>
+        <Sheet open={mobileNavOpen} onOpenChange={setMobileNavOpen}>
+          <SheetContent side="left" className="w-full max-w-none p-0 sm:max-w-none">
+            <SheetHeader className="border-b border-border-subtle">
+              <SheetTitle>工作空间</SheetTitle>
+            </SheetHeader>
+            <WorkspaceList
+              mobile
+              workspaces={workspaces}
+              activeId={null}
+              isLoading={!workspacesLoaded}
+              onOpenWizard={() => {
+                setMobileNavOpen(false);
+                setWizardOpen(true);
+              }}
+              onDelete={handleDeleteWorkspace}
+              onRootsChanged={refreshWorkspaces}
+              onAfterNavigate={() => setMobileNavOpen(false)}
+            />
+          </SheetContent>
+        </Sheet>
         {wizardOpen && (
           <Suspense fallback={null}>
             <CreateWizard

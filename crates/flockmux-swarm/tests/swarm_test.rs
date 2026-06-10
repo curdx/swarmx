@@ -1,8 +1,8 @@
 //! Swarm integration tests: send/receive via mpsc, blackboard write+read+DB,
 //! path traversal rejection, and watcher external-edit detection.
 
-use flockmux_protocol::ws_swarm::SwarmEvent;
-use flockmux_storage::{ListMessagesOpts, Store};
+use flockmux_protocol::{rest::AgentActivityRecord, ws_swarm::SwarmEvent};
+use flockmux_storage::{ListMessagesOpts, NewAgent, NewThread, NewWorker, NewWorkspace, Store};
 use flockmux_swarm::{NewMessage, Swarm, WatcherHandle};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -20,6 +20,53 @@ async fn fresh() -> (TempDir, Arc<Swarm>) {
     (dir, swarm)
 }
 
+async fn fresh_threaded() -> (TempDir, Arc<Swarm>) {
+    let (dir, swarm) = fresh().await;
+    let ws = swarm
+        .store()
+        .create_workspace(
+            NewWorkspace {
+                name: "ws".into(),
+                cwd: "/tmp/ws".into(),
+                accent: None,
+            },
+            1,
+        )
+        .await
+        .unwrap();
+    let thread = swarm
+        .store()
+        .create_thread(
+            NewThread {
+                workspace_id: ws.id.clone(),
+                slug: "main".into(),
+                name: Some("main".into()),
+                isolation: "shared".into(),
+                branch: None,
+                cwd: ws.cwd.clone(),
+                state: "ready".into(),
+            },
+            1,
+        )
+        .await
+        .unwrap();
+    swarm
+        .store()
+        .record_agent_spawn(NewAgent {
+            id: "orch".into(),
+            cli: "codex".into(),
+            role: "orchestrator".into(),
+            workspace: ws.cwd,
+            spawned_at: 1,
+            workspace_id: Some(ws.id),
+            spell_run_id: None,
+            thread_id: Some(thread.id),
+        })
+        .await
+        .unwrap();
+    (dir, swarm)
+}
+
 #[tokio::test]
 async fn register_send_receive() {
     let (_dir, swarm) = fresh().await;
@@ -34,7 +81,8 @@ async fn register_send_receive() {
             body: "hi b".into(),
             sent_at: 1,
             in_reply_to: None,
-            meta: None,        })
+            meta: None,
+        })
         .await
         .unwrap();
     assert_eq!(rec.body, "hi b");
@@ -51,7 +99,13 @@ async fn register_send_receive() {
         .unwrap()
         .unwrap();
     match ev {
-        SwarmEvent::Message { id, from_agent, to_agent, body, .. } => {
+        SwarmEvent::Message {
+            id,
+            from_agent,
+            to_agent,
+            body,
+            ..
+        } => {
             assert_eq!(id, rec.id);
             assert_eq!(from_agent, "a");
             assert_eq!(to_agent, "b");
@@ -75,7 +129,8 @@ async fn message_persists_even_without_inbox() {
             body: "queued for later".into(),
             sent_at: 1,
             in_reply_to: None,
-            meta: None,        })
+            meta: None,
+        })
         .await
         .unwrap();
 
@@ -129,7 +184,9 @@ async fn blackboard_write_read_roundtrip_and_db_record() {
         .unwrap()
         .unwrap();
     match ev {
-        SwarmEvent::BlackboardChanged { op, path, agent_id, .. } => {
+        SwarmEvent::BlackboardChanged {
+            op, path, agent_id, ..
+        } => {
             assert_eq!(op, "write");
             assert_eq!(path, "tasks.md");
             assert_eq!(agent_id.as_deref(), Some("a"));
@@ -148,7 +205,10 @@ async fn path_traversal_rejected() {
         .expect("traversal should be rejected");
     let msg = format!("{err:#}");
     assert!(
-        msg.contains("..") || msg.contains("escape") || msg.contains("traversal") || msg.contains("rel path"),
+        msg.contains("..")
+            || msg.contains("escape")
+            || msg.contains("traversal")
+            || msg.contains("rel path"),
         "unexpected error: {msg}"
     );
 }
@@ -183,7 +243,10 @@ async fn watcher_records_external_edit() {
             Err(_) => continue,
         }
     }
-    assert!(found, "watcher should have emitted external BlackboardChanged");
+    assert!(
+        found,
+        "watcher should have emitted external BlackboardChanged"
+    );
 }
 
 #[tokio::test]
@@ -224,7 +287,8 @@ async fn mark_read_broadcasts_event() {
             body: "ping".into(),
             sent_at: 1,
             in_reply_to: None,
-            meta: None,        })
+            meta: None,
+        })
         .await
         .unwrap();
     // Drain the Message broadcast first.
@@ -264,7 +328,8 @@ async fn send_message_with_in_reply_to_threads() {
             body: "first".into(),
             sent_at: 1,
             in_reply_to: None,
-            meta: None,        })
+            meta: None,
+        })
         .await
         .unwrap();
     // Drain parent's broadcast.
@@ -278,7 +343,8 @@ async fn send_message_with_in_reply_to_threads() {
             body: "pong".into(),
             sent_at: 2,
             in_reply_to: Some(parent.id),
-            meta: None,        })
+            meta: None,
+        })
         .await
         .unwrap();
     assert_eq!(reply.in_reply_to, Some(parent.id));
@@ -293,6 +359,159 @@ async fn send_message_with_in_reply_to_threads() {
         }
         other => panic!("unexpected: {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn user_and_agent_messages_auto_attach_thought_trace() {
+    let (_dir, swarm) = fresh_threaded().await;
+    let mut sub = swarm.subscribe();
+
+    let user = swarm
+        .send_message(NewMessage {
+            from_agent: "user".into(),
+            to_agent: "orch".into(),
+            kind: "task".into(),
+            body: "请处理".into(),
+            sent_at: 10,
+            in_reply_to: None,
+            meta: None,
+        })
+        .await
+        .unwrap();
+    assert!(
+        user.thought_trace.is_some(),
+        "user trigger gets active trace"
+    );
+    let _ = timeout(Duration::from_millis(500), sub.recv())
+        .await
+        .unwrap()
+        .unwrap();
+
+    let reply = swarm
+        .send_message(NewMessage {
+            from_agent: "orch".into(),
+            to_agent: "user".into(),
+            kind: "reply".into(),
+            body: "已处理".into(),
+            sent_at: 25,
+            in_reply_to: Some(user.id),
+            meta: None,
+        })
+        .await
+        .unwrap();
+    let trace = reply.thought_trace.expect("reply gets completed trace");
+    assert_eq!(trace.status, "done");
+    assert_eq!(trace.response_message_id, Some(reply.id));
+
+    let ev = timeout(Duration::from_millis(500), sub.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    match ev {
+        SwarmEvent::Message { thought_trace, .. } => {
+            let trace = thought_trace.expect("ws event carries trace");
+            assert_eq!(trace.status, "done");
+        }
+        other => panic!("unexpected: {other:?}"),
+    }
+
+    let rows = swarm
+        .store()
+        .list_messages(ListMessagesOpts {
+            to_agent: Some("user".into()),
+            from_agent: None,
+            only_undelivered: false,
+            limit: 10,
+        })
+        .await
+        .unwrap();
+    assert_eq!(rows[0].id, reply.id);
+    assert!(rows[0].thought_trace.is_some());
+}
+
+#[tokio::test]
+async fn worker_activity_appends_to_parent_thought_trace() {
+    let (_dir, swarm) = fresh_threaded().await;
+    let agents = swarm.store().list_agents().await.unwrap();
+    let orch = agents.iter().find(|a| a.id == "orch").unwrap();
+
+    swarm
+        .store()
+        .record_agent_spawn(NewAgent {
+            id: "worker-a".into(),
+            cli: "codex".into(),
+            role: "implementer".into(),
+            workspace: orch.workspace.clone(),
+            spawned_at: 2,
+            workspace_id: orch.workspace_id.clone(),
+            spell_run_id: None,
+            thread_id: orch.thread_id.clone(),
+        })
+        .await
+        .unwrap();
+    swarm
+        .store()
+        .record_worker(NewWorker {
+            agent_id: "worker-a".into(),
+            parent_agent_id: "orch".into(),
+            role_label: "implementer".into(),
+            system_prompt: "do work".into(),
+            handoff_signal: "ws/main/implementer.done".into(),
+            depends_on_json: "[]".into(),
+            spawned_at: 2,
+            role_slug: "implementer".into(),
+            produces_json: "[\"done\"]".into(),
+            consumes_json: "[]".into(),
+        })
+        .await
+        .unwrap();
+
+    let user = swarm
+        .send_message(NewMessage {
+            from_agent: "user".into(),
+            to_agent: "orch".into(),
+            kind: "task".into(),
+            body: "请实现".into(),
+            sent_at: 10,
+            in_reply_to: None,
+            meta: None,
+        })
+        .await
+        .unwrap();
+    swarm.record_activity(
+        "worker-a",
+        AgentActivityRecord {
+            agent_id: "worker-a".into(),
+            kind: "tool".into(),
+            label: "Edit web/src/App.tsx".into(),
+            phase: "ok".into(),
+            seq: 1,
+            duration_ms: Some(123),
+            at: 20,
+        },
+    );
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let reply = swarm
+        .send_message(NewMessage {
+            from_agent: "orch".into(),
+            to_agent: "user".into(),
+            kind: "reply".into(),
+            body: "已完成".into(),
+            sent_at: 30,
+            in_reply_to: Some(user.id),
+            meta: None,
+        })
+        .await
+        .unwrap();
+    let trace = reply.thought_trace.expect("parent trace completed");
+    assert!(
+        trace
+            .summary_json
+            .contains("完成工具: Edit web/src/App.tsx"),
+        "worker tool activity should be preserved in parent trace summary: {}",
+        trace.summary_json
+    );
 }
 
 // F6 completion: a file left on disk by a crash mid-write (content present but

@@ -248,6 +248,64 @@ pub struct MessageRecord {
     /// Structured metadata for system messages (see [`NewMessage::meta`]).
     #[serde(default)]
     pub meta: Option<serde_json::Value>,
+    /// Product-level reasoning / execution summary for this message. This is
+    /// intentionally a coarse trace, not raw chain-of-thought.
+    #[serde(default)]
+    pub thought_trace: Option<ThoughtTraceRecord>,
+}
+
+/// A single user-facing step inside a thought trace summary.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ThoughtTraceStep {
+    pub phase: String,
+    pub label: String,
+    pub source: String,
+    pub at: i64,
+}
+
+/// Insert payload for [`crate::Store::start_thought_trace`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NewThoughtTrace {
+    pub trigger_message_id: i64,
+    pub agent_id: String,
+    #[serde(default)]
+    pub workspace_id: Option<String>,
+    #[serde(default)]
+    pub thread_id: Option<String>,
+    pub started_at: i64,
+    pub summary_json: String,
+}
+
+/// Append-only detail event for a trace. The UI currently renders
+/// `summary_json`, while this table gives future screens a real timeline.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NewThoughtTraceEvent {
+    pub phase: String,
+    pub label: String,
+    pub source: String,
+    pub at: i64,
+    #[serde(default)]
+    pub meta: Option<serde_json::Value>,
+}
+
+/// Full thought trace row.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThoughtTraceRecord {
+    pub id: String,
+    pub trigger_message_id: i64,
+    #[serde(default)]
+    pub response_message_id: Option<i64>,
+    pub agent_id: String,
+    #[serde(default)]
+    pub workspace_id: Option<String>,
+    #[serde(default)]
+    pub thread_id: Option<String>,
+    pub status: String,
+    pub started_at: i64,
+    #[serde(default)]
+    pub completed_at: Option<i64>,
+    pub summary_json: String,
+    pub updated_at: i64,
 }
 
 /// Filter options for [`crate::Store::list_messages`].

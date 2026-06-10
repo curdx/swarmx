@@ -139,16 +139,16 @@ export default function FilesRoute() {
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
-      <header className="flex items-center gap-2 border-b border-border-subtle px-4 py-3">
+      <header className="flex flex-wrap items-center gap-2 border-b border-border-subtle px-4 py-3">
         <FileText className="size-4 text-foreground-tertiary" />
         <h1 className="font-display text-sm text-foreground-primary">{t("files.title")}</h1>
         <span className="truncate font-mono text-[11px] text-foreground-tertiary" title={list?.dir}>
           {list?.dir}
         </span>
-        <div className="ml-auto flex items-center gap-3">
+        <div className="ml-auto flex flex-wrap items-center justify-end gap-3">
           <label
             htmlFor="browse-all-files"
-            className="flex items-center gap-1.5 font-caption text-[11px] text-foreground-tertiary"
+            className="flex min-h-8 items-center gap-1.5 font-caption text-[11px] text-foreground-tertiary"
           >
             <input
               id="browse-all-files"
@@ -157,7 +157,7 @@ export default function FilesRoute() {
               aria-label={t("files.browseAll")}
               checked={browseAll}
               onChange={toggleBrowseAll}
-              className="size-3.5"
+              className="size-8"
             />
             {t("files.browseAll")}
           </label>
@@ -174,7 +174,7 @@ export default function FilesRoute() {
             <button
               type="button"
               onClick={() => open(list.parent!, browseAll)}
-              className="flex items-center gap-2 px-4 py-1.5 text-left font-mono text-[12px] text-foreground-secondary hover:bg-surface-tertiary"
+              className="flex min-h-9 items-center gap-2 px-4 py-1.5 text-left font-mono text-[12px] text-foreground-secondary hover:bg-surface-tertiary"
             >
               <ArrowUp className="size-3.5 shrink-0 text-foreground-tertiary" />
               ..
@@ -193,7 +193,7 @@ export default function FilesRoute() {
               onClick={() =>
                 e.is_dir ? open(join(list.dir, e.name), browseAll) : openFile(join(list.dir, e.name), browseAll)
               }
-              className="flex items-center gap-2 px-4 py-1.5 text-left font-mono text-[12px] hover:bg-surface-tertiary"
+              className="flex min-h-9 items-center gap-2 px-4 py-1.5 text-left font-mono text-[12px] hover:bg-surface-tertiary"
             >
               {e.is_dir ? (
                 <Folder className="size-3.5 shrink-0 text-accent-primary" />

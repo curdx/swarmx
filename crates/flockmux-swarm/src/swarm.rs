@@ -12,11 +12,15 @@
 use crate::path_safe;
 use anyhow::{Context, Result};
 use dashmap::DashMap;
-use flockmux_protocol::rest::AgentActivityRecord;
+use flockmux_protocol::rest::{
+    AgentActivityRecord, ThoughtTrace as ProtocolThoughtTrace,
+    ThoughtTraceStep as ProtocolThoughtTraceStep,
+};
 use flockmux_protocol::ws_swarm::SwarmEvent;
 use flockmux_storage::{
     BlackboardOpRecord, MessageRecord as StoreMessageRecord, NewBlackboardOp,
-    NewMessage as StoreNewMessage, Store,
+    NewMessage as StoreNewMessage, NewThoughtTrace, NewThoughtTraceEvent, Store,
+    ThoughtTraceRecord, ThoughtTraceStep,
 };
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
@@ -31,6 +35,9 @@ use tokio::sync::{broadcast, mpsc};
 /// long-running worker can't grow this unboundedly; matches the frontend's
 /// in-memory cap so backfill + live stream agree on how much history exists.
 const MAX_ACTIVITY_LOG: usize = 100;
+const USER_AGENT_ID: &str = "user";
+const SYSTEM_AGENT_ID: &str = "system";
+const MAX_TRACE_AGENT_LINEAGE: usize = 8;
 
 /// Envelope handed to a per-agent inbox. M3 only uses this in tests / future
 /// MCP integration — the production path is SQLite + ws/swarm broadcast.
@@ -76,6 +83,145 @@ pub struct Swarm {
     activity_log: DashMap<String, Mutex<VecDeque<AgentActivityRecord>>>,
 }
 
+fn is_user_to_agent(from: &str, to: &str) -> bool {
+    from == USER_AGENT_ID && to != USER_AGENT_ID && to != SYSTEM_AGENT_ID
+}
+
+fn is_agent_to_user(from: &str, to: &str) -> bool {
+    to == USER_AGENT_ID && from != USER_AGENT_ID && from != SYSTEM_AGENT_ID
+}
+
+fn start_trace_steps(at: i64) -> Vec<ThoughtTraceStep> {
+    vec![
+        ThoughtTraceStep {
+            phase: "understand".into(),
+            label: "理解用户请求".into(),
+            source: "system".into(),
+            at,
+        },
+        ThoughtTraceStep {
+            phase: "context".into(),
+            label: "检查当前对话、工作区和任务状态".into(),
+            source: "system".into(),
+            at,
+        },
+        ThoughtTraceStep {
+            phase: "route".into(),
+            label: "判断由自己处理还是分配给 worker".into(),
+            source: "system".into(),
+            at,
+        },
+    ]
+}
+
+fn done_trace_steps(at: i64) -> Vec<ThoughtTraceStep> {
+    let mut steps = start_trace_steps(at);
+    steps.push(ThoughtTraceStep {
+        phase: "answer".into(),
+        label: "整理结果并回复用户".into(),
+        source: "system".into(),
+        at,
+    });
+    steps
+}
+
+fn steps_json(steps: &[ThoughtTraceStep]) -> String {
+    serde_json::to_string(steps).unwrap_or_else(|_| "[]".into())
+}
+
+fn step_to_event(step: &ThoughtTraceStep) -> NewThoughtTraceEvent {
+    NewThoughtTraceEvent {
+        phase: step.phase.clone(),
+        label: step.label.clone(),
+        source: step.source.clone(),
+        at: step.at,
+        meta: None,
+    }
+}
+
+fn trace_to_protocol(trace: &ThoughtTraceRecord) -> ProtocolThoughtTrace {
+    let summary = serde_json::from_str::<Vec<ThoughtTraceStep>>(&trace.summary_json)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|s| ProtocolThoughtTraceStep {
+            phase: s.phase,
+            label: s.label,
+            source: s.source,
+            at: s.at,
+        })
+        .collect();
+    ProtocolThoughtTrace {
+        id: trace.id.clone(),
+        trigger_message_id: trace.trigger_message_id,
+        response_message_id: trace.response_message_id,
+        agent_id: trace.agent_id.clone(),
+        workspace_id: trace.workspace_id.clone(),
+        thread_id: trace.thread_id.clone(),
+        status: trace.status.clone(),
+        started_at: trace.started_at,
+        completed_at: trace.completed_at,
+        summary,
+        updated_at: trace.updated_at,
+    }
+}
+
+fn short_trace_label(label: &str) -> String {
+    const MAX_CHARS: usize = 96;
+    let trimmed = label.trim();
+    let mut out = String::new();
+    for (idx, ch) in trimmed.chars().enumerate() {
+        if idx >= MAX_CHARS {
+            out.push('…');
+            break;
+        }
+        out.push(ch);
+    }
+    out
+}
+
+fn activity_to_trace_event(rec: &AgentActivityRecord) -> Option<NewThoughtTraceEvent> {
+    let (phase, prefix) = match rec.phase.as_str() {
+        "ok" => ("tool_ok", "完成工具"),
+        "error" => ("tool_error", "工具失败"),
+        _ => return None,
+    };
+    Some(NewThoughtTraceEvent {
+        phase: phase.into(),
+        label: format!("{prefix}: {}", short_trace_label(&rec.label)),
+        source: "agent".into(),
+        at: rec.at,
+        meta: Some(serde_json::json!({
+            "agent_id": rec.agent_id,
+            "kind": rec.kind,
+            "seq": rec.seq,
+            "duration_ms": rec.duration_ms,
+        })),
+    })
+}
+
+async fn trace_agent_candidates(store: Arc<Store>, agent_id: String) -> Vec<String> {
+    let mut out = vec![agent_id.clone()];
+    let mut cur = agent_id;
+    for _ in 0..MAX_TRACE_AGENT_LINEAGE {
+        let rows = match store.list_workers_by_ids(vec![cur.clone()]).await {
+            Ok(rows) => rows,
+            Err(err) => {
+                tracing::debug!(?err, agent = %cur, "thought trace parent lookup failed");
+                break;
+            }
+        };
+        let Some(worker) = rows.get(&cur) else {
+            break;
+        };
+        if worker.parent_agent_id.is_empty() || out.contains(&worker.parent_agent_id) {
+            break;
+        }
+        cur = worker.parent_agent_id.clone();
+        out.push(cur.clone());
+    }
+    out
+}
+
 impl Swarm {
     pub fn new(store: Arc<Store>, blackboard_root: PathBuf) -> Arc<Self> {
         // Capacity for the shared SwarmEvent ring (messages + blackboard +
@@ -101,18 +247,30 @@ impl Swarm {
     /// (the same dedupe the UI does), keeping one row per step. Called by the
     /// transcript tailer alongside `publish_event`.
     pub fn record_activity(&self, agent_id: &str, rec: AgentActivityRecord) {
+        let trace_event = activity_to_trace_event(&rec);
         let entry = self
             .activity_log
             .entry(agent_id.to_string())
             .or_insert_with(|| Mutex::new(VecDeque::new()));
         let mut q = entry.lock();
         if let Some(slot) = q.iter_mut().find(|r| r.seq == rec.seq) {
-            *slot = rec;
+            *slot = rec.clone();
         } else {
             if q.len() >= MAX_ACTIVITY_LOG {
                 q.pop_front();
             }
-            q.push_back(rec);
+            q.push_back(rec.clone());
+        }
+        drop(q);
+        if let Some(event) = trace_event {
+            let store = self.store.clone();
+            let agent_id = agent_id.to_string();
+            tokio::spawn(async move {
+                let candidates = trace_agent_candidates(store.clone(), agent_id).await;
+                if let Err(err) = store.append_thought_trace_event(candidates, event).await {
+                    tracing::warn!(?err, "append thought trace activity failed");
+                }
+            });
         }
     }
 
@@ -194,6 +352,67 @@ impl Swarm {
             )
             .await
             .context("store.insert_message")?;
+        let mut record = record;
+
+        if is_user_to_agent(&record.from_agent, &record.to_agent) {
+            let workspace_id = self
+                .store
+                .agent_workspace_id(record.to_agent.clone())
+                .await
+                .ok()
+                .flatten();
+            let steps = start_trace_steps(record.sent_at);
+            let events = steps
+                .iter()
+                .map(step_to_event)
+                .collect::<Vec<NewThoughtTraceEvent>>();
+            match self
+                .store
+                .start_thought_trace(
+                    NewThoughtTrace {
+                        trigger_message_id: record.id,
+                        agent_id: record.to_agent.clone(),
+                        workspace_id,
+                        thread_id: record.thread_id.clone(),
+                        started_at: record.sent_at,
+                        summary_json: steps_json(&steps),
+                    },
+                    events,
+                )
+                .await
+            {
+                Ok(trace) => record.thought_trace = Some(trace),
+                Err(err) => {
+                    tracing::warn!(?err, message_id = record.id, "start thought trace failed")
+                }
+            }
+        } else if is_agent_to_user(&record.from_agent, &record.to_agent) {
+            let steps = done_trace_steps(record.sent_at);
+            let events = steps
+                .iter()
+                .map(step_to_event)
+                .collect::<Vec<NewThoughtTraceEvent>>();
+            match self
+                .store
+                .complete_latest_thought_trace(
+                    record.from_agent.clone(),
+                    record.thread_id.clone(),
+                    record.id,
+                    record.sent_at,
+                    steps_json(&steps),
+                    events,
+                )
+                .await
+            {
+                Ok(Some(trace)) => record.thought_trace = Some(trace),
+                Ok(None) => {}
+                Err(err) => tracing::warn!(
+                    ?err,
+                    message_id = record.id,
+                    "complete thought trace failed"
+                ),
+            }
+        }
 
         // Broadcast first so subscribers see it even if delivery fails.
         let _ = self.events_tx.send(SwarmEvent::Message {
@@ -206,6 +425,7 @@ impl Swarm {
             in_reply_to: record.in_reply_to,
             thread_id: record.thread_id.clone(),
             meta: record.meta.clone(),
+            thought_trace: record.thought_trace.as_ref().map(trace_to_protocol),
         });
 
         // Try the in-memory inbox; if absent or full, the message stays in
@@ -224,11 +444,7 @@ impl Swarm {
         };
         if delivered_now {
             // best-effort; ignore mark_delivered errors
-            if let Err(e) = self
-                .store
-                .mark_delivered(vec![record.id], now_ms())
-                .await
-            {
+            if let Err(e) = self.store.mark_delivered(vec![record.id], now_ms()).await {
                 tracing::warn!(?e, "mark_delivered failed");
             }
         }
@@ -239,11 +455,7 @@ impl Swarm {
     /// the ids that this call actually updated (idempotent — repeats are a
     /// no-op). Broadcasts a `MessageRead` event so subscribers (UI badge,
     /// future read-receipts UI) can decrement live.
-    pub async fn mark_read(
-        &self,
-        to_agent: String,
-        ids: Vec<i64>,
-    ) -> Result<Vec<i64>> {
+    pub async fn mark_read(&self, to_agent: String, ids: Vec<i64>) -> Result<Vec<i64>> {
         if ids.is_empty() {
             return Ok(Vec::new());
         }
@@ -277,9 +489,7 @@ impl Swarm {
         let sha = sha256_hex(content.as_bytes());
         // Prime the seen-sha cache BEFORE writing so the watcher (which
         // may fire on the very next iteration) sees the new hash already.
-        self.seen_sha
-            .lock()
-            .insert(target.clone(), sha.clone());
+        self.seen_sha.lock().insert(target.clone(), sha.clone());
 
         // Run the actual fs write off the runtime thread. Atomic write
         // (tmp → fsync → rename) so a crash mid-write can't leave a truncated
@@ -300,7 +510,10 @@ impl Swarm {
             let mut tmp = target_for_write.clone();
             // Unique per (pid, seq) so concurrent writes to the same path don't
             // clobber each other's temp; same dir so the rename is atomic.
-            tmp.set_file_name(format!(".{fname}.flockmux.{}.{seq}.tmp", std::process::id()));
+            tmp.set_file_name(format!(
+                ".{fname}.flockmux.{}.{seq}.tmp",
+                std::process::id()
+            ));
 
             let write_then_rename = || -> Result<()> {
                 {
@@ -510,9 +723,7 @@ impl Swarm {
 
         // Refresh cache so the next external event matching this content
         // (e.g. user saved the same content twice) doesn't double-record.
-        self.seen_sha
-            .lock()
-            .insert(canon_path.clone(), sha.clone());
+        self.seen_sha.lock().insert(canon_path.clone(), sha.clone());
 
         let now = now_ms();
         let record = self

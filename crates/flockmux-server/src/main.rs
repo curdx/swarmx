@@ -332,25 +332,28 @@ async fn main() -> Result<()> {
     info!(%addr, "flockmux-server listening (loopback only; cross-origin requests rejected)");
     let listener = tokio::net::TcpListener::bind(addr).await?;
 
-    // Magentic-One restart resilience: for every alive workspace whose
-    // orchestrator was settled-as-killed by the orphan sweep above,
-    // re-spawn it. The orchestrator's prompt detects an existing
-    // `task.ledger.md` on the blackboard and short-circuits Phase A
-    // (no re-scan, no duplicate greeting) — so the user perceives the
-    // restart as a brief PTY blip, ledger and task progress survive.
+    // Optional Magentic-One restart resilience: for every alive workspace whose
+    // orchestrator was settled-as-killed by the orphan sweep above, re-spawn it.
+    // This can burn an LLM turn and may revive a provider the operator is
+    // intentionally avoiding, so it is opt-in; the chat view can still revive
+    // on demand when the user actually returns.
     //
     // Done as tokio::spawn so it doesn't delay axum::serve. The
     // orchestrator role is loaded in spell_registry above; if the
     // user has deleted it or pinned to a different role, the spell
     // run fails loudly and the user can re-create the workspace.
-    tokio::spawn({
-        let respawn_state = state.clone();
-        async move {
-            if let Err(err) = auto_respawn_orchestrators(&respawn_state).await {
-                tracing::warn!(?err, "auto-respawn orchestrators failed");
+    if std::env::var("FLOCKMUX_AUTO_RESPAWN_ORCHESTRATORS").ok().as_deref() == Some("1") {
+        tokio::spawn({
+            let respawn_state = state.clone();
+            async move {
+                if let Err(err) = auto_respawn_orchestrators(&respawn_state).await {
+                    tracing::warn!(?err, "auto-respawn orchestrators failed");
+                }
             }
-        }
-    });
+        });
+    } else {
+        info!("auto-respawn: disabled (set FLOCKMUX_AUTO_RESPAWN_ORCHESTRATORS=1 to enable)");
+    }
 
     axum::serve(listener, app).await?;
     Ok(())

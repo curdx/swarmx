@@ -15,6 +15,7 @@ import {
   GitBranch,
   GitMerge,
   MessageSquare,
+  PanelLeft,
   Play,
 } from "lucide-react";
 import type { WorkspaceSummary } from "./types";
@@ -27,6 +28,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/cn";
+import { formatShortcutChord, getClientPlatformInfo } from "@/lib/platform";
 
 interface TabDef {
   to: string;
@@ -57,6 +59,7 @@ export function WorkspaceToolbar({
   totalUnread,
   onJumpUnread,
   onCleanupThread,
+  onOpenWorkspaceNav,
 }: {
   workspace: WorkspaceSummary;
   /** Active direction slug; tabs stay within this direction. */
@@ -66,12 +69,12 @@ export function WorkspaceToolbar({
   onJumpUnread: () => void;
   /** Clean up a direction after merge (delete worktree+branch+card, nav to main). */
   onCleanupThread: (threadId: string) => void;
+  /** Mobile-only entry for opening the workspace / direction rail. */
+  onOpenWorkspaceNav?: () => void;
 }) {
   const { t } = useTranslation();
   const tabs = buildTabs(workspace.id, threadSlug);
-  const isMac =
-    typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
-  const modKey = isMac ? "⌘" : "Ctrl";
+  const platform = getClientPlatformInfo();
 
   // "合并到主线" is offered only for a non-main direction that actually has its
   // own branch (isolated worktree, ready) — a shared/main direction has nothing
@@ -87,12 +90,28 @@ export function WorkspaceToolbar({
   return (
     <div className="shrink-0 border-b border-border-subtle">
       <div className="flex min-h-8 items-center gap-2 border-b border-border-subtle/70 px-3 py-1.5 lg:hidden">
-        <span className="min-w-0 flex-1 truncate font-heading text-xs font-semibold text-foreground-primary">
-          {workspace.name}
-        </span>
-        <span className="max-w-[45%] truncate rounded bg-surface-tertiary px-1.5 py-0.5 font-mono text-[10px] text-foreground-tertiary">
-          {activeThread?.name || activeThread?.slug || threadSlug}
-        </span>
+        <button
+          type="button"
+          onClick={onOpenWorkspaceNav}
+          className="inline-flex size-8 shrink-0 items-center justify-center rounded-md border border-border-subtle bg-surface-elevated text-foreground-secondary hover:bg-surface-tertiary hover:text-foreground-primary"
+          aria-label={t("chat.mobileWorkspaceNav", "打开工作空间列表")}
+          title={t("chat.mobileWorkspaceNav", "打开工作空间列表")}
+        >
+          <PanelLeft className="size-4" />
+        </button>
+        <div className="min-w-0 flex-1">
+          <div className="truncate font-heading text-xs font-semibold text-foreground-primary">
+            {workspace.name}
+          </div>
+          <div className="truncate font-caption text-[10px] text-foreground-tertiary">
+            {activeThread?.name || activeThread?.slug || threadSlug}
+          </div>
+        </div>
+        {totalUnread > 0 && (
+          <Badge className="shrink-0 rounded-full px-2 py-0.5 text-[10px]">
+            {t("chat.unread", { count: totalUnread })}
+          </Badge>
+        )}
       </div>
       <nav className="flex h-10 items-center gap-1 px-3">
         {tabs.map((tab) => {
@@ -106,13 +125,13 @@ export function WorkspaceToolbar({
             end
             className={({ isActive }) =>
               cn(
-                "relative flex shrink-0 items-center gap-1.5 px-3 py-2 text-xs transition-colors",
+                "relative flex min-h-8 shrink-0 items-center gap-1.5 px-3 py-2 text-xs transition-colors",
                 isActive
                   ? "text-foreground-primary after:absolute after:inset-x-0 after:-bottom-px after:h-0.5 after:bg-accent-primary"
                   : "text-foreground-secondary hover:text-foreground-primary",
               )
             }
-            title={`${t(tab.labelKey)}  ${modKey}${tab.shortcut}`}
+            title={`${t(tab.labelKey)}  ${formatShortcutChord(tab.shortcut, platform)}`}
           >
             <Icon className="size-3.5 shrink-0" />
             {/* Label collapses to icon-only below lg so the bar never wraps the

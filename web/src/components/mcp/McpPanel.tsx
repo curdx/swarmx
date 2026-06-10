@@ -228,7 +228,7 @@ export function McpManager() {
                         href={meta?.docsUrl}
                         target="_blank"
                         rel="noreferrer"
-                        className="text-foreground-tertiary transition-colors hover:text-accent-primary"
+                        className="inline-flex size-8 items-center justify-center rounded-md text-foreground-tertiary transition-colors hover:bg-surface-tertiary hover:text-accent-primary"
                         aria-label={t("mcp.docs", "文档")}
                         title={t("mcp.docs", "文档")}
                       >
@@ -260,7 +260,7 @@ export function McpManager() {
                               onClick={() =>
                                 setKeyDialog({ id: srv.id, name: meta?.name ?? srv.id, masked: keyState.masked })
                               }
-                              className="text-accent-primary hover:underline disabled:opacity-50"
+                              className="inline-flex min-h-8 items-center rounded px-2 text-accent-primary hover:bg-accent-primary-soft disabled:opacity-50"
                             >
                               {t("mcp.changeKey", "改密钥")}
                             </button>

@@ -4,14 +4,13 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::rest::ThoughtTrace;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SwarmEvent {
     /// A per-agent lifecycle transition (spawning → ready → idle → exited).
-    AgentState {
-        agent_id: String,
-        state: AgentState,
-    },
+    AgentState { agent_id: String, state: AgentState },
     /// An agent-to-agent message was persisted. Subscribers can rehydrate
     /// the recipient's inbox without going back to SQLite.
     Message {
@@ -37,6 +36,9 @@ pub enum SwarmEvent {
         /// heuristics there). Optional so old clients still round-trip.
         #[serde(default)]
         meta: Option<serde_json::Value>,
+        /// Product-level reasoning / execution summary for this message.
+        #[serde(default)]
+        thought_trace: Option<ThoughtTrace>,
     },
     /// A batch of messages was marked read on behalf of `to_agent`. Used by
     /// the UI to decrement the unread badge live without a REST poll.

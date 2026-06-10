@@ -2,8 +2,8 @@
  * McpActivityBar — 最外层应用导航菜单，常驻在 AppShell 内容区最左。横排菜单项
  * (图标 + 文字)，可展开/收起成纯图标窄条(状态存 localStorage)：
  *   - 顶部组 → MCP / 文件 / 终端 / 定时 / 任务 / 用量(各自独立页面)
- *   - 沉底   → 设置
- *   - 最底   → 菜单展开/收起开关
+ *   - 底部分组 → 设置
+ *   - 最底     → 菜单展开/收起开关
  *
  * 这些页面以前只能 ⌘K 或直接敲 URL 到达(发现性差)；放进常驻左栏作为 app-level
  * 入口。图标/标签与 CommandPalette 的 NAV 保持一致。
@@ -119,57 +119,61 @@ export function McpActivityBar() {
         collapsed ? "w-14 px-1.5" : "w-[184px] px-2",
       )}
     >
-      {/* 顶部组：MCP / 文件 / 终端 / 定时 / 任务 / 用量 */}
-      {NAV.map(({ href, labelKey, fallback, icon: Icon }) => {
-        const label = t(labelKey, fallback);
-        return withTip(
-          label,
+      <div className="flex flex-col gap-1">
+        {/* 顶部组：MCP / 文件 / 终端 / 定时 / 任务 / 用量 */}
+        {NAV.map(({ href, labelKey, fallback, icon: Icon }) => {
+          const label = t(labelKey, fallback);
+          return withTip(
+            label,
+            <NavLink
+              to={href}
+              aria-label={label}
+              className={linkClass(pathname.startsWith(href))}
+            >
+              <Icon className="size-[18px] shrink-0" />
+              {!collapsed && <span className="font-heading">{label}</span>}
+            </NavLink>,
+            href,
+          );
+        })}
+      </div>
+
+      {/* 底部分组：设置固定可见，不再和折叠按钮互相挤压。 */}
+      <div className="mt-auto flex flex-col gap-1 border-t border-border-subtle/80 pt-2">
+        {withTip(
+          t("nav.settings", "设置"),
           <NavLink
-            to={href}
-            aria-label={label}
-            className={linkClass(pathname.startsWith(href))}
+            to="/settings"
+            aria-label={t("nav.settings", "设置")}
+            className={linkClass(pathname.startsWith("/settings"))}
           >
-            <Icon className="size-[18px] shrink-0" />
-            {!collapsed && <span className="font-heading">{label}</span>}
+            <Settings className="size-[18px] shrink-0" />
+            {!collapsed && <span className="font-heading">{t("nav.settings", "设置")}</span>}
           </NavLink>,
-          href,
-        );
-      })}
+          "settings",
+        )}
 
-      {/* 设置 — 沉底，与功能页拉开距离 */}
-      {withTip(
-        t("nav.settings", "设置"),
-        <NavLink
-          to="/settings"
-          aria-label={t("nav.settings", "设置")}
-          className={cn(linkClass(pathname.startsWith("/settings")), "mt-auto")}
-        >
-          <Settings className="size-[18px] shrink-0" />
-          {!collapsed && <span className="font-heading">{t("nav.settings", "设置")}</span>}
-        </NavLink>,
-        "settings",
-      )}
-
-      {/* 底部：菜单展开/收起开关 */}
-      {withTip(
-        collapsed ? t("mcp.menuExpand", "展开菜单") : t("mcp.menuCollapse", "收起菜单"),
-        <button
-          type="button"
-          onClick={() => setCollapsedPersist(!collapsed)}
-          aria-label={collapsed ? t("mcp.menuExpand", "展开菜单") : t("mcp.menuCollapse", "收起菜单")}
-          className={cn(itemBase, "mt-auto", collapsed && "justify-center px-0", itemIdle)}
-        >
-          {collapsed ? (
-            <ChevronsRight className="size-[18px] shrink-0" />
-          ) : (
-            <>
-              <ChevronsLeft className="size-[18px] shrink-0" />
-              <span className="font-heading">{t("mcp.menuCollapse", "收起")}</span>
-            </>
-          )}
-        </button>,
-        "collapse-toggle",
-      )}
+        {/* 底部：菜单展开/收起开关 */}
+        {withTip(
+          collapsed ? t("mcp.menuExpand", "展开菜单") : t("mcp.menuCollapse", "收起菜单"),
+          <button
+            type="button"
+            onClick={() => setCollapsedPersist(!collapsed)}
+            aria-label={collapsed ? t("mcp.menuExpand", "展开菜单") : t("mcp.menuCollapse", "收起菜单")}
+            className={cn(itemBase, collapsed && "justify-center px-0", itemIdle)}
+          >
+            {collapsed ? (
+              <ChevronsRight className="size-[18px] shrink-0" />
+            ) : (
+              <>
+                <ChevronsLeft className="size-[18px] shrink-0" />
+                <span className="font-heading">{t("mcp.menuCollapse", "收起")}</span>
+              </>
+            )}
+          </button>,
+          "collapse-toggle",
+        )}
+      </div>
     </aside>
   );
 }

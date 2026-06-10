@@ -58,7 +58,9 @@ impl WatcherHandle {
             .watch(&root, RecursiveMode::Recursive)
             .with_context(|| format!("watch blackboard root {}", root.display()))?;
         tracing::info!(root = %root.display(), "blackboard watcher running");
-        Ok(Self { _debouncer: debouncer })
+        Ok(Self {
+            _debouncer: debouncer,
+        })
     }
 }
 
@@ -129,9 +131,7 @@ fn is_ignored(p: &Path) -> bool {
         return true;
     }
     // Any path segment of ".git" disqualifies (git index updates etc.).
-    p.components().any(|c| {
-        c.as_os_str() == ".git"
-    })
+    p.components().any(|c| c.as_os_str() == ".git")
 }
 
 /// Re-export for the doc-link in swarm.rs.

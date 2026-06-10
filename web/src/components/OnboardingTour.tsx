@@ -1,10 +1,10 @@
 /**
- * OnboardingTour — 4 步介绍 modal，第一次建完 workspace 进 chat 时弹。
+ * OnboardingTour — 4 步介绍浮层，第一次建完 workspace 进 chat 时弹。
  *
  * 不做精确 spotlight 镂空 anchor 到具体 DOM (那是 driver.js / react-joyride
- * 干的活，引一个库带 portal 体积不值)。做最简 modal carousel：每步一个
- * icon + 标题 + 一行说明，"下一步" / "跳过"。Linear / Notion / Cursor 第
- * 一次启动都是这套路，效果跟 spotlight 接近，工程量减半。
+ * 干的活，引一个库带 portal 体积不值)。做最简非阻塞 carousel：每步一个
+ * icon + 标题 + 一行说明，"下一步" / "跳过"。浮在右下角，不抢焦点、
+ * 不盖住聊天输入，用户可以一边看一边继续工作。
  *
  * 触发条件：用户在 /chat/:wsId/* 下 (=已经有 workspace 了) + localStorage
  * 里 flockmux:tour:onboarding-v1 没标 seen。跳过 / 走完都会 mark seen，
@@ -24,13 +24,6 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { cn } from "@/lib/cn";
 
 const STORAGE_KEY = "flockmux:tour:onboarding-v1";
@@ -105,22 +98,14 @@ export function OnboardingTour() {
   const cur = STEPS[step];
   const Icon = cur.icon;
 
-  return (
-    <Dialog
-      open={open}
-      onOpenChange={(o) => {
-        if (!o) finish();
-      }}
-    >
-      <DialogContent
-        className="max-w-md gap-0 overflow-hidden p-0"
-        showCloseButton={false}
-      >
-        <DialogHeader className="sr-only">
-          <DialogTitle>{t("tour.dialogTitle")}</DialogTitle>
-          <DialogDescription>{t("tour.dialogDesc")}</DialogDescription>
-        </DialogHeader>
+  if (!open) return null;
 
+  return (
+    <aside
+      role="region"
+      aria-label={t("tour.dialogTitle")}
+      className="fixed bottom-24 right-5 z-40 w-[min(22rem,calc(100vw-2rem))] overflow-hidden rounded-xl border border-border-subtle bg-surface-elevated text-sm shadow-[0_18px_55px_rgba(15,23,42,0.16)]"
+    >
         {/* 顶部 progress dots — 表明 4 步进度 */}
         <div className="flex items-center justify-between border-b border-border-subtle px-5 py-3">
           <div className="flex items-center gap-1.5">
@@ -197,7 +182,6 @@ export function OnboardingTour() {
             </button>
           </div>
         </div>
-      </DialogContent>
-    </Dialog>
+    </aside>
   );
 }

@@ -32,6 +32,10 @@ import {
 } from "react";
 import { useTranslation } from "react-i18next";
 import {
+  Brain,
+  ChevronDown,
+  ChevronRight,
+  Clock3,
   CornerUpLeft,
   Filter,
   Loader2,
@@ -43,7 +47,7 @@ import {
   X,
 } from "lucide-react";
 import { api } from "../api/http";
-import type { AgentInfo, MessageRecord } from "../api/types";
+import type { AgentActivity, AgentInfo, MessageRecord, ThoughtTraceStep } from "../api/types";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -57,6 +61,7 @@ import { ImageAttachments } from "@/components/ImageAttachments";
 import { ModelPicker } from "@/components/ModelPicker";
 import { extractImagePaths, fileUrl, baseName } from "@/lib/imagePaths";
 import { roleColorClass as roleColor } from "@/lib/agent";
+import { getClientPlatformInfo } from "@/lib/platform";
 
 const ChatMarkdown = lazy(() =>
   import("@/components/ChatMarkdown").then((m) => ({ default: m.ChatMarkdown })),
@@ -119,6 +124,9 @@ interface Props {
   onSetModel?: (cfg: { tier?: string | null; reasoning?: string | null }) => void;
   /** True while a model/effort switch is applying (picker shows a spinner). */
   modelBusy?: boolean;
+  /** Per-agent activity stream from `/ws/swarm`, used to patch late tool events
+   *  into an already-rendered reply trace without a manual refresh. */
+  agentActivityById?: Record<string, AgentActivity[]>;
 }
 
 const KIND_DEFAULT = "note";
@@ -129,6 +137,7 @@ const GROUP_GAP_MS = 5 * 60_000; // 5 minutes — same heuristic as Telegram
  *  placeholder alive. Beyond this, the agent is probably stuck/done and
  *  the indicator is more misleading than helpful. */
 const PENDING_TIMEOUT_MS = 60_000;
+const MAX_REASONING_SUMMARY_MS = 30 * 60_000;
 
 /** Resolve a role label for a from_agent id.
  *
@@ -176,6 +185,26 @@ function formatDivider(ms: number): string {
       });
 }
 
+function formatElapsed(ms: number): string {
+  const sec = Math.max(0, Math.floor(ms / 1000));
+  if (sec < 60) return `${sec}s`;
+  const min = Math.floor(sec / 60);
+  const s = sec % 60;
+  if (min < 60) return `${min}m ${String(s).padStart(2, "0")}s`;
+  const h = Math.floor(min / 60);
+  return `${h}h ${String(min % 60).padStart(2, "0")}m`;
+}
+
+function snippet(text: string, max = 42): string {
+  const s = text.replace(/\s+/g, " ").trim();
+  return s.length > max ? `${s.slice(0, max - 1)}…` : s;
+}
+
+interface ReasoningSummary {
+  durationMs: number | null;
+  steps: string[];
+}
+
 interface Row {
   msg: MessageRecord;
   showHeader: boolean; // render avatar + name row?
@@ -213,6 +242,7 @@ export function MessagesPanel({
   reasoningEffort = null,
   onSetModel,
   modelBusy = false,
+  agentActivityById,
 }: Props) {
   const aliveForInference = allAliveAgents ?? activeMembers;
   const { t } = useTranslation();
@@ -331,6 +361,57 @@ export function MessagesPanel({
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  useEffect(() => {
+    if (!agentActivityById) return;
+    setItems((prev) => {
+      let changed = false;
+      const next = prev.map((m) => {
+        const trace = m.thought_trace;
+        if (!trace || m.to_agent !== USER_SENDER) return m;
+        const activities = agentActivityById[m.from_agent] ?? [];
+        const lateSteps: ThoughtTraceStep[] = activities
+          .filter((a) => a.phase === "ok" || a.phase === "error")
+          .filter((a) => a.at >= trace.started_at)
+          .filter((a) => trace.completed_at == null || a.at <= trace.completed_at + 30_000)
+          .map((a) => ({
+            phase: a.phase === "error" ? "tool_error" : "tool_ok",
+            label: `完成工具: ${a.label}`,
+            source: "agent",
+            at: a.at,
+          }));
+        if (lateSteps.length === 0) return m;
+        const summary = [...trace.summary];
+        let messageChanged = false;
+        for (const step of lateSteps) {
+          if (
+            summary.some(
+              (s) =>
+                s.phase === step.phase &&
+                s.source === step.source &&
+                s.label === step.label,
+            )
+          ) {
+            continue;
+          }
+          summary.push(step);
+          messageChanged = true;
+        }
+        if (!messageChanged) return m;
+        changed = true;
+        summary.sort((a, b) => a.at - b.at);
+        return {
+          ...m,
+          thought_trace: {
+            ...trace,
+            summary: summary.slice(-12),
+            updated_at: Math.max(trace.updated_at, ...summary.map((s) => s.at)),
+          },
+        };
+      });
+      return changed ? next : prev;
+    });
+  }, [agentActivityById]);
 
   useEffect(() => {
     if (!liveMessage) return;
@@ -481,6 +562,76 @@ export function MessagesPanel({
     });
   }, [items, filter, wsSet, workspaceSlug, activeThreadId]);
   const rows = useMemo(() => buildRows(visible), [visible]);
+  const traceToSummary = useCallback((m: MessageRecord): ReasoningSummary | null => {
+    const trace = m.thought_trace;
+    if (!trace || trace.summary.length === 0) return null;
+    const completedAt = trace.completed_at ?? m.sent_at;
+    const duration = completedAt - trace.started_at;
+    const durationMs =
+      duration > 0 && duration <= MAX_REASONING_SUMMARY_MS ? duration : null;
+    return {
+      durationMs,
+      steps: trace.summary.map((step) => step.label).filter(Boolean),
+    };
+  }, []);
+  const reasoningByMessageId = useMemo(() => {
+    const out = new Map<number, ReasoningSummary>();
+    for (let i = 0; i < visible.length; i++) {
+      const m = visible[i];
+      if (
+        m.from_agent === USER_SENDER ||
+        m.from_agent === SYSTEM_SENDER ||
+        m.to_agent !== USER_SENDER
+      ) {
+        continue;
+      }
+      const persisted = traceToSummary(m);
+      if (persisted) {
+        out.set(m.id, persisted);
+        continue;
+      }
+      const priorUserIndex = (() => {
+        for (let j = i - 1; j >= 0; j--) {
+          if (visible[j].from_agent === USER_SENDER) return j;
+        }
+        return -1;
+      })();
+      if (priorUserIndex < 0) continue;
+      const priorUser = visible[priorUserIndex];
+      const duration = m.sent_at - priorUser.sent_at;
+      const durationMs =
+        duration > 0 && duration <= MAX_REASONING_SUMMARY_MS ? duration : null;
+      const between = visible.slice(priorUserIndex + 1, i);
+      const otherAgents = new Set(
+        between
+          .filter((x) => x.from_agent !== SYSTEM_SENDER && x.from_agent !== m.from_agent)
+          .map((x) => resolveRole(x.from_agent, roleLookup)),
+      );
+      const role = resolveRole(m.from_agent, roleLookup);
+      const steps = [
+        t("messages.reasoning.stepUnderstood", {
+          msg: snippet(priorUser.body),
+        }),
+        role === "orchestrator"
+          ? t("messages.reasoning.stepOrchestrator")
+          : t("messages.reasoning.stepWorker", { role }),
+      ];
+      if (otherAgents.size > 0) {
+        steps.push(
+          t("messages.reasoning.stepMerged", {
+            count: otherAgents.size,
+            roles: [...otherAgents].slice(0, 4).join(" · "),
+          }),
+        );
+      }
+      if (between.some((x) => x.kind === "reply" || x.kind === "note")) {
+        steps.push(t("messages.reasoning.stepCheckedThread"));
+      }
+      steps.push(t("messages.reasoning.stepAnswered"));
+      out.set(m.id, { durationMs, steps });
+    }
+    return out;
+  }, [visible, roleLookup, t, traceToSummary]);
 
   // First agent→user unread message + total count. Drives the Slack-style
   // "N 条新消息" divider that replaces the old per-message amber left
@@ -829,7 +980,11 @@ export function MessagesPanel({
   };
 
   const onComposerKey = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    // Enter to send; Shift+Enter (or IME composing) inserts newline.
+    // Desktop chat convention: Enter sends, Shift+Enter inserts newline.
+    // On touch-first platforms the soft keyboard already exposes an explicit
+    // send affordance, so Enter should stay as newline instead of surprise-send.
+    const platform = getClientPlatformInfo();
+    if (platform.isMobileLike) return;
     if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault();
       send();
@@ -856,6 +1011,10 @@ export function MessagesPanel({
     : onSend
       ? t("messages.composerPlaceholderRevive")
       : t("messages.composerPlaceholderEmpty");
+  const platform = getClientPlatformInfo();
+  const sendHint = platform.isMobileLike
+    ? t("messages.sendHintMobile")
+    : t("messages.sendHintDesktop", { enter: platform.enterKeyLabel });
 
   return (
     <div className="flex h-full flex-col bg-surface-primary">
@@ -867,7 +1026,7 @@ export function MessagesPanel({
           refresh) read as one quiet toolbar under the tabs. */}
       <div className="flex shrink-0 items-center gap-1 px-3 py-1">
         {filterOpen ? (
-          <div className="flex h-7 min-w-0 flex-1 items-center gap-2 rounded-md bg-surface-tertiary px-2.5">
+          <div className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-md bg-surface-tertiary px-2.5">
             <Search className="size-3.5 text-foreground-tertiary" />
             <input
               autoFocus
@@ -885,7 +1044,7 @@ export function MessagesPanel({
                 setFilterOpen(false);
               }}
               title={t("messages.clearFilter")}
-              className="size-6 text-foreground-tertiary"
+              className="size-8 text-foreground-tertiary"
             >
               <X className="size-3" />
             </Button>
@@ -906,7 +1065,7 @@ export function MessagesPanel({
               size="icon"
               onClick={() => setFilterOpen(true)}
               title={t("messages.filter")}
-              className="size-7 text-foreground-tertiary"
+              className="size-8 text-foreground-tertiary"
             >
               <Search className="size-3.5" />
             </Button>
@@ -916,7 +1075,7 @@ export function MessagesPanel({
           <PopoverTrigger asChild>
             <button
               className={cn(
-                "relative flex size-7 items-center justify-center rounded-md hover:bg-surface-tertiary",
+                "relative flex size-8 items-center justify-center rounded-md hover:bg-surface-tertiary",
                 senders.length > 0
                   ? "text-state-danger"
                   : "text-foreground-tertiary",
@@ -968,7 +1127,7 @@ export function MessagesPanel({
           size="icon"
           onClick={refresh}
           title={t("messages.refresh")}
-          className="size-7 text-foreground-tertiary"
+          className="size-8 text-foreground-tertiary"
         >
           <RefreshCw className="size-3.5" />
         </Button>
@@ -987,7 +1146,7 @@ export function MessagesPanel({
             {t("messages.empty")}
           </p>
         )}
-        <div className="flex flex-col gap-0.5">
+        <div className="mx-auto flex w-full max-w-[1040px] flex-col gap-0.5">
           {rows.map(({ msg: m, showHeader, showDividerBefore }) => {
             const isUser = m.from_agent === USER_SENDER;
             const isSystem = m.from_agent === SYSTEM_SENDER;
@@ -999,6 +1158,7 @@ export function MessagesPanel({
               m.to_agent === USER_SENDER;
             const highlighted = highlightId === m.id;
             const isFirstRow = rows[0].msg.id === m.id;
+            const reasoning = reasoningByMessageId.get(m.id);
             // Slack-style "new messages" divider, rendered once before the
             // first unread agent turn instead of marking each one.
             const newDivider =
@@ -1052,7 +1212,7 @@ export function MessagesPanel({
                 >
                   {showDividerBefore && <TimeDivider ms={m.sent_at} />}
                   {newDivider}
-                  <div className="flex max-w-[80%] flex-col items-end">
+                  <div className="flex w-full max-w-[min(82%,780px)] flex-col items-end">
                     {showHeader && (
                       <span className="mb-0.5 px-1 font-heading text-[11px] font-semibold text-foreground-tertiary">
                         {t("messages.you")}
@@ -1073,7 +1233,7 @@ export function MessagesPanel({
                       {m.in_reply_to != null && (
                         <button
                           onClick={() => jumpToParent(m.in_reply_to!)}
-                          className="mb-1 flex items-center gap-0.5 rounded bg-white/15 px-1 py-0.5 text-[10px] text-foreground-on-accent/85 hover:bg-white/25"
+                          className="mb-1 flex min-h-8 items-center gap-0.5 rounded bg-white/15 px-2 py-1 text-[10px] text-foreground-on-accent/85 hover:bg-white/25"
                           title={t("messages.jumpParent")}
                         >
                           <CornerUpLeft className="size-2.5" />#{m.in_reply_to}
@@ -1089,7 +1249,7 @@ export function MessagesPanel({
                       <div className="pointer-events-none absolute -top-3 left-0 flex items-center gap-1 opacity-0 transition-opacity group-hover/bubble:pointer-events-auto group-hover/bubble:opacity-100">
                         <button
                           onClick={() => startReply(m)}
-                          className="rounded-full border border-border-subtle bg-surface-elevated px-2 py-0.5 text-[10px] text-foreground-secondary shadow-sm hover:bg-surface-tertiary"
+                          className="min-h-8 rounded-full border border-border-subtle bg-surface-elevated px-2.5 py-1 text-[10px] text-foreground-secondary shadow-sm hover:bg-surface-tertiary"
                           title={t("messages.reply")}
                         >
                           {t("messages.reply")}
@@ -1121,13 +1281,13 @@ export function MessagesPanel({
                 <div className="group/msg flex gap-3">
                   {/* 28px gutter: role avatar on the group head, a hover-only
                       timestamp on collapsed follow-ups (Slack pattern). */}
-                  <div className="flex w-7 shrink-0 justify-center">
+                  <div className="flex w-8 shrink-0 justify-center">
                     {showHeader ? (
                       <button
                         type="button"
                         onClick={() => onOpenAgent?.(m.from_agent)}
                         className={cn(
-                          "flex size-7 items-center justify-center rounded-full text-xs font-medium text-foreground-on-accent shadow-sm transition-transform hover:scale-105",
+                          "flex size-8 items-center justify-center rounded-full text-xs font-medium text-foreground-on-accent shadow-sm transition-transform hover:scale-105",
                           roleColor(role),
                         )}
                         title={`${role} · ${m.from_agent}`}
@@ -1141,7 +1301,7 @@ export function MessagesPanel({
                     )}
                   </div>
 
-                  <div className="flex min-w-0 max-w-2xl flex-col items-start">
+                  <div className="flex min-w-0 w-full max-w-[min(82%,820px)] flex-col items-start">
                     {showHeader && (
                       <div className="mb-0.5 flex items-baseline gap-2 px-0.5">
                         <span className="font-heading text-[13px] font-semibold text-foreground-primary">
@@ -1174,11 +1334,17 @@ export function MessagesPanel({
                       {m.in_reply_to != null && (
                         <button
                           onClick={() => jumpToParent(m.in_reply_to!)}
-                          className="mb-1 flex items-center gap-0.5 rounded bg-surface-tertiary px-1 py-0.5 text-[10px] text-foreground-tertiary hover:bg-surface-secondary"
+                          className="mb-1 flex min-h-8 items-center gap-0.5 rounded bg-surface-tertiary px-2 py-1 text-[10px] text-foreground-tertiary hover:bg-surface-secondary"
                           title={t("messages.jumpParent")}
                         >
                           <CornerUpLeft className="size-2.5" />#{m.in_reply_to}
                         </button>
+                      )}
+                      {reasoning && (
+                        <ReasoningDisclosure
+                          summary={reasoning}
+                          status="done"
+                        />
                       )}
                       {/* Agent output is GFM markdown (headings/lists/code/
                           tables) — render it, don't show literal `##`/```. */}
@@ -1200,7 +1366,7 @@ export function MessagesPanel({
                       <div className="pointer-events-none absolute -top-2 right-0 flex items-center gap-1 opacity-0 transition-opacity group-hover/bubble:pointer-events-auto group-hover/bubble:opacity-100">
                         <button
                           onClick={() => startReply(m)}
-                          className="rounded-full border border-border-subtle bg-surface-elevated px-2 py-0.5 text-[10px] text-foreground-secondary shadow-sm hover:bg-surface-tertiary"
+                          className="min-h-8 rounded-full border border-border-subtle bg-surface-elevated px-2.5 py-1 text-[10px] text-foreground-secondary shadow-sm hover:bg-surface-tertiary"
                           title={t("messages.reply")}
                         >
                           {t("messages.reply")}
@@ -1209,7 +1375,7 @@ export function MessagesPanel({
                           <button
                             onClick={() => markRead(m)}
                             disabled={marking === m.id}
-                            className="rounded-full border border-border-subtle bg-surface-elevated px-2 py-0.5 text-[10px] text-foreground-secondary shadow-sm hover:bg-surface-tertiary disabled:opacity-50"
+                            className="min-h-8 rounded-full border border-border-subtle bg-surface-elevated px-2.5 py-1 text-[10px] text-foreground-secondary shadow-sm hover:bg-surface-tertiary disabled:opacity-50"
                             title={t("messages.markRead")}
                           >
                             ✓
@@ -1230,6 +1396,7 @@ export function MessagesPanel({
                 role: resolveRole(agentId, roleLookup),
               })}
               replyHint={t("messages.responding", { id: trigger.id })}
+              trigger={trigger}
             />
           ))}
           {/* 之前这里有"<agent> 等你回话"的 ghost line — 删了。
@@ -1240,10 +1407,13 @@ export function MessagesPanel({
       </div>
 
       {/* ── Task activity (chat 内联状态卡片，"AI 正在派活...") ─────── */}
-      {taskActivityBelow}
+      <div className="mx-auto w-full max-w-[1040px] px-4">
+        {taskActivityBelow}
+      </div>
 
       {/* ── composer ─────────────────────────────────────────────────── */}
       <div className="flex shrink-0 flex-col gap-1.5 border-t border-border-subtle bg-surface-secondary px-3 py-2.5">
+        <div className="mx-auto flex w-full max-w-[1040px] flex-col gap-1.5">
         {inReplyTo != null && (
           <div className="flex items-center gap-2 self-start rounded-md bg-accent-primary-soft px-2 py-1 text-[11px] text-accent-primary-deep">
             <CornerUpLeft className="size-3" />
@@ -1297,62 +1467,69 @@ export function MessagesPanel({
           </div>
         )}
         <div className="flex items-end gap-2">
-          {/* default recipient = orchestrator/scout; an inline `@<role>` routes
-              to a specific worker (explicitRecipient wins in send()). */}
-          <Textarea
-            ref={composerRef}
-            name="composer"
-            value={body}
-            onChange={(e) => {
-              setBody(e.target.value);
-              autoGrow(e.target);
-              // User edited the draft — the prior rewrite's undo no longer
-              // applies; drop the affordances so they don't go stale.
-              if (preOptimize !== null) setPreOptimize(null);
-              if (optimizeNote !== null) setOptimizeNote(null);
-            }}
-            onKeyDown={onComposerKey}
-            onPaste={onComposerPaste}
-            onDrop={onComposerDrop}
-            placeholder={composerPlaceholder}
-            disabled={!canCompose}
-            rows={1}
-            className="min-w-0 flex-1 resize-none rounded-2xl px-3 py-2 font-body text-[13px] leading-snug"
-          />
-          {/* 「优化」 — ghost wand, left of Send so it reads as a draft helper,
-              not a second send. Icon swaps to a spinner while rewriting. */}
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={optimize}
-            disabled={optimizing || sending || !body.trim() || !canCompose}
-            aria-label={t("messages.optimize")}
-            title={t("messages.optimizeTooltip")}
-            className="size-9 shrink-0 rounded-full text-foreground-tertiary transition-colors hover:bg-surface-tertiary hover:text-accent-primary disabled:opacity-40"
-          >
-            {optimizing ? (
-              <Loader2 className="size-4 animate-spin" />
-            ) : (
-              <Sparkles className="size-4" />
-            )}
-          </Button>
-          <Button
-            size="icon"
-            onClick={send}
-            disabled={sendDisabled}
-            title={sending ? t("messages.sending") : t("messages.send")}
-            // 默认 Button disabled 只是 opacity:0.5，accent 色 + 50% 看起来
-            // 跟 enabled 几乎一样 — 用户分不清是否能按。这里 disabled 切
-            // 到灰底+灰图标，enabled 时强制 accent + 阴影，对比一目了然。
-            className={cn(
-              "size-9 shrink-0 rounded-full transition-colors",
-              sendDisabled
-                ? "!bg-surface-tertiary !text-foreground-tertiary !opacity-100 shadow-none"
-                : "shadow-sm hover:shadow-md",
-            )}
-          >
-            <Send className="size-4" />
-          </Button>
+          {/* Composer actions live inside the input shell so sending feels like
+              a direct continuation of writing, not a detached toolbar action. */}
+          <div className="relative min-w-0 flex-1">
+            {/* default recipient = orchestrator/scout; an inline `@<role>`
+                routes to a specific worker (explicitRecipient wins in send()). */}
+            <Textarea
+              ref={composerRef}
+              name="composer"
+              value={body}
+              onChange={(e) => {
+                setBody(e.target.value);
+                autoGrow(e.target);
+                // User edited the draft — the prior rewrite's undo no longer
+                // applies; drop the affordances so they don't go stale.
+                if (preOptimize !== null) setPreOptimize(null);
+                if (optimizeNote !== null) setOptimizeNote(null);
+              }}
+              onKeyDown={onComposerKey}
+              onPaste={onComposerPaste}
+              onDrop={onComposerDrop}
+              aria-label={t("messages.composerLabel")}
+              placeholder={composerPlaceholder}
+              disabled={!canCompose}
+              rows={1}
+              className="min-w-0 flex-1 resize-none rounded-2xl px-3 py-2 pr-[7.25rem] pb-12 font-body text-[13px] leading-snug"
+            />
+            <div className="pointer-events-none absolute inset-x-2 bottom-2 flex items-center justify-end gap-1.5">
+              {/* 「优化」 — 次级 ghost action，保留在输入框里但弱于发送。 */}
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={optimize}
+                disabled={optimizing || sending || !body.trim() || !canCompose}
+                aria-label={t("messages.optimize")}
+                title={t("messages.optimizeTooltip")}
+                className="pointer-events-auto size-8 shrink-0 rounded-full text-foreground-tertiary transition-colors hover:bg-surface-tertiary hover:text-accent-primary disabled:opacity-40"
+              >
+                {optimizing ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <Sparkles className="size-4" />
+                )}
+              </Button>
+              <Button
+                size="icon"
+                onClick={send}
+                disabled={sendDisabled}
+                aria-label={sending ? t("messages.sending") : t("messages.send")}
+                title={sending ? t("messages.sending") : t("messages.send")}
+                // 默认 Button disabled 只是 opacity:0.5，accent 色 + 50% 看
+                // 起来跟 enabled 几乎一样。这里 disabled 切到灰底+灰图标，
+                // enabled 时强制 accent + 阴影，对比一目了然。
+                className={cn(
+                  "pointer-events-auto size-8 shrink-0 rounded-full transition-colors",
+                  sendDisabled
+                    ? "!bg-surface-tertiary !text-foreground-tertiary !opacity-100 shadow-none"
+                    : "shadow-sm hover:shadow-md",
+                )}
+              >
+                <Send className="size-4" />
+              </Button>
+            </div>
+          </div>
         </div>
         {/* Hint row: left carries the optimize undo / "no change" feedback,
             right keeps the Enter-to-send hint. */}
@@ -1375,8 +1552,9 @@ export function MessagesPanel({
             )}
           </div>
           <span className="shrink-0 font-caption text-[10px] text-foreground-tertiary">
-            {t("messages.sendHint")}
+            {sendHint}
           </span>
+        </div>
         </div>
       </div>
     </div>
@@ -1418,21 +1596,115 @@ function NewMessagesDivider({ label }: { label: string }) {
 /** "X is responding…" placeholder bubble shown while an agent has received a
  *  message but hasn't yet emitted a reply. Pure UI inference for now —
  *  upgraded to real server-side AgentState::Thinking events in UI/F.2-B. */
+function ReasoningDisclosure({
+  summary,
+  status,
+}: {
+  summary: ReasoningSummary;
+  status: "active" | "done";
+}) {
+  const { t } = useTranslation();
+  const [open, setOpen] = useState(status === "active");
+  const active = status === "active";
+  const elapsed =
+    summary.durationMs == null ? null : formatElapsed(summary.durationMs);
+  return (
+    <div
+      className={cn(
+        "mb-2 overflow-hidden rounded-xl border text-[11px]",
+        active
+          ? "border-accent-primary/30 bg-accent-primary-soft/70"
+          : "border-border-subtle bg-surface-primary/70",
+      )}
+    >
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex min-h-8 w-full items-center gap-2 px-2.5 py-1.5 text-left"
+        aria-expanded={open}
+      >
+        {open ? (
+          <ChevronDown className="size-3.5 shrink-0 text-foreground-tertiary" />
+        ) : (
+          <ChevronRight className="size-3.5 shrink-0 text-foreground-tertiary" />
+        )}
+        <Brain
+          className={cn(
+            "size-3.5 shrink-0",
+            active ? "text-accent-primary" : "text-foreground-tertiary",
+          )}
+        />
+        <span className="min-w-0 flex-1 truncate font-caption font-medium text-foreground-secondary">
+          {active
+            ? t("messages.reasoning.thinking")
+            : t("messages.reasoning.summary")}
+        </span>
+        {elapsed && (
+          <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-surface-elevated px-1.5 py-0.5 font-mono text-[10px] text-foreground-tertiary">
+            <Clock3 className="size-3" />
+            {elapsed}
+          </span>
+        )}
+      </button>
+      {open && (
+        <ol className="space-y-1 border-t border-border-subtle/70 px-3 py-2 text-foreground-secondary">
+          {summary.steps.map((step, idx) => (
+            <li key={`${idx}-${step}`} className="flex gap-2 leading-snug">
+              <span className="mt-0.5 size-1.5 shrink-0 rounded-full bg-accent-primary/70" />
+              <span className="min-w-0">{step}</span>
+            </li>
+          ))}
+        </ol>
+      )}
+    </div>
+  );
+}
+
 function PendingBubble({
   role,
   label,
   replyHint,
+  trigger,
 }: {
   role: string;
   label: string;
   replyHint: string;
+  trigger: MessageRecord;
 }) {
+  const { t } = useTranslation();
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(Date.now()), 500);
+    return () => window.clearInterval(id);
+  }, []);
+  const trace = trigger.thought_trace;
+  const elapsed = Math.max(0, now - (trace?.started_at ?? trigger.sent_at));
+  const summary: ReasoningSummary =
+    trace && trace.summary.length > 0
+      ? {
+          durationMs: elapsed,
+          steps: trace.summary.map((step) => step.label).filter(Boolean),
+        }
+      : {
+          durationMs: elapsed,
+          steps: [
+            t("messages.reasoning.stepUnderstood", {
+              msg: snippet(trigger.body),
+            }),
+            role === "orchestrator"
+              ? t("messages.reasoning.stepOrchestrator")
+              : t("messages.reasoning.stepWorker", { role }),
+            elapsed > 12_000
+              ? t("messages.reasoning.stepExecuting")
+              : t("messages.reasoning.stepPlanning"),
+          ],
+        };
   return (
     <div className="mt-3 flex gap-3">
-      <div className="flex w-7 shrink-0 justify-center">
+      <div className="flex w-8 shrink-0 justify-center">
         <div
           className={cn(
-            "flex size-7 items-center justify-center rounded-full text-xs font-medium text-foreground-on-accent shadow-sm",
+            "flex size-8 items-center justify-center rounded-full text-xs font-medium text-foreground-on-accent shadow-sm",
             roleColor(role),
           )}
           title={`${role} · ${replyHint}`}
@@ -1447,14 +1719,17 @@ function PendingBubble({
             {label}
           </span>
         </span>
-        <span
-          className="flex items-center gap-1 rounded-2xl rounded-bl-sm border border-border-subtle bg-surface-secondary px-3 py-2 shadow-sm"
-          title={replyHint}
-        >
-          <PendingDot delayMs={0} />
-          <PendingDot delayMs={150} />
-          <PendingDot delayMs={300} />
-        </span>
+        <div className="w-[min(82vw,520px)] rounded-2xl rounded-bl-sm border border-border-subtle bg-surface-secondary px-2.5 py-2 shadow-sm">
+          <ReasoningDisclosure summary={summary} status="active" />
+          <span
+            className="flex items-center gap-1 px-1"
+            title={replyHint}
+          >
+            <PendingDot delayMs={0} />
+            <PendingDot delayMs={150} />
+            <PendingDot delayMs={300} />
+          </span>
+        </div>
       </div>
     </div>
   );

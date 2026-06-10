@@ -8,9 +8,10 @@ use axum::{
 };
 use flockmux_protocol::rest::{
     BlackboardEntry, BlackboardHistoryEntry, BlackboardSnapshot, MarkReadRequest, MarkReadResponse,
-    MessageRecord, SendMessageRequest, UnreadCountResponse, WriteBlackboardRequest,
+    MessageRecord, SendMessageRequest, ThoughtTrace, ThoughtTraceStep, UnreadCountResponse,
+    WriteBlackboardRequest,
 };
-use flockmux_storage::ListMessagesOpts;
+use flockmux_storage::{ListMessagesOpts, ThoughtTraceRecord as StoreThoughtTraceRecord};
 use flockmux_swarm::NewMessage;
 use serde::Deserialize;
 use serde_json::json;
@@ -62,6 +63,7 @@ pub async fn list_messages(
                 in_reply_to: r.in_reply_to,
                 thread_id: r.thread_id,
                 meta: r.meta,
+                thought_trace: r.thought_trace.as_ref().map(storage_trace_to_rest),
             })
             .collect(),
     ))
@@ -99,7 +101,35 @@ pub async fn send_message(
         in_reply_to: record.in_reply_to,
         thread_id: record.thread_id,
         meta: record.meta,
+        thought_trace: record.thought_trace.as_ref().map(storage_trace_to_rest),
     }))
+}
+
+fn storage_trace_to_rest(trace: &StoreThoughtTraceRecord) -> ThoughtTrace {
+    let summary =
+        serde_json::from_str::<Vec<flockmux_storage::ThoughtTraceStep>>(&trace.summary_json)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|s| ThoughtTraceStep {
+                phase: s.phase,
+                label: s.label,
+                source: s.source,
+                at: s.at,
+            })
+            .collect();
+    ThoughtTrace {
+        id: trace.id.clone(),
+        trigger_message_id: trace.trigger_message_id,
+        response_message_id: trace.response_message_id,
+        agent_id: trace.agent_id.clone(),
+        workspace_id: trace.workspace_id.clone(),
+        thread_id: trace.thread_id.clone(),
+        status: trace.status.clone(),
+        started_at: trace.started_at,
+        completed_at: trace.completed_at,
+        summary,
+        updated_at: trace.updated_at,
+    }
 }
 
 /// `POST /api/message/read` — caller declares which messages it has read.

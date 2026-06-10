@@ -109,10 +109,19 @@ mod tests {
 
     #[test]
     fn control_json_round_trips() {
-        let msg = ClientControl::Resize { cols: 120, rows: 40 };
+        let msg = ClientControl::Resize {
+            cols: 120,
+            rows: 40,
+        };
         let json = serde_json::to_string(&msg).unwrap();
         assert_eq!(json, r#"{"type":"resize","cols":120,"rows":40}"#);
         let back: ClientControl = serde_json::from_str(&json).unwrap();
-        assert!(matches!(back, ClientControl::Resize { cols: 120, rows: 40 }));
+        assert!(matches!(
+            back,
+            ClientControl::Resize {
+                cols: 120,
+                rows: 40
+            }
+        ));
     }
 }

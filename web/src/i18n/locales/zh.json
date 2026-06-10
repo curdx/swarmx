@@ -85,17 +85,31 @@
     "debug": "Debug"
   },
   "shell": {
-    "cmdkHint": "按 ⌘K 打开命令面板",
+    "cmdkHint": "按 {{shortcut}} 打开命令面板",
     "collapse": "收起",
     "expand": "展开",
     "appMenu": "应用菜单",
     "about": "关于"
   },
   "welcome": {
+    "eyebrow": "多 agent 协作工作台",
     "title": "让 Claude / Codex 在你的项目里协同工作",
     "subtitle": "把你已登录的 AI CLI 组成一支团队——你下达需求，它们自动分工、相互协作、完成交付。",
+    "panelTitle": "首次进入通常这样开始",
     "primary": "新建工作空间",
     "secondary": "查阅文档了解原理",
+    "step1": {
+      "title": "创建工作空间",
+      "body": "绑定你的项目目录，给这次工作一个清晰的上下文边界。"
+    },
+    "step2": {
+      "title": "告诉 AI 目标",
+      "body": "直接描述需求、Bug 或改造任务，调度 agent 会开始拆分与派工。"
+    },
+    "step3": {
+      "title": "在多个视图里盯进度",
+      "body": "聊天、协作图、工作台账、录像互相联通，能同时看状态、证据和终端细节。"
+    },
     "highlight": {
       "chat": {
         "title": "对话式协作",
@@ -252,11 +266,22 @@
     },
     "plugins": {
       "title": "CLI 插件",
-      "hint": "从 cli-plugins/*.toml 加载，当前由 server 管理；自定义启用 / 禁用、路径覆盖即将支持。",
+      "hint": "从 cli-plugins/*.toml 加载；server 会检查真实 CLI 是否可执行，并在缺失时给出官方安装命令。",
       "binaryLabel": "binary",
+      "pathLabel": "路径",
+      "versionLabel": "版本",
       "loadError": "加载失败：{{error}}",
       "empty": "没有插件",
-      "managedTag": "由 server 管理"
+      "managedTag": "由 server 管理",
+      "installedTag": "已安装",
+      "missingTag": "未安装",
+      "unknownTag": "待检测",
+      "installTitle": "{{title}}",
+      "copyCommand": "复制命令",
+      "copied": "已复制",
+      "verifyLabel": "验证：",
+      "loginLabel": "登录：",
+      "docsLink": "官方文档"
     },
     "privacy": {
       "title": "隐私 & 安全",
@@ -331,6 +356,9 @@
     "reviveOrchestrator": "唤醒调度",
     "reviving": "唤醒中…",
     "pmBadge": "调度",
+    "mobileWorkspaceNav": "打开工作空间列表",
+    "backToCurrent": "回到当前工作区",
+    "workspaceViews": "当前工作区",
     "deleteWorkspace": "删除 {{name}}",
     "deleteWorkspaceTooltip": "删除工作空间",
     "mainDirection": "主线",
@@ -633,12 +661,25 @@
     "replying": "正在回复 #{{id}}",
     "cancelReply": "取消回复",
     "clearFilter": "清除过滤",
+    "composerLabel": "聊天输入",
     "composerPlaceholder": "向 AI 描述你的需求…",
     "composerPlaceholderEmpty": "该工作空间还没有 AI 成员…",
     "composerPlaceholderRevive": "发条消息，AI 会自动上线开工…",
     "composerPlaceholderInit": "向 AI 描述你的需求…",
     "responding": "回复 #{{id}} 中",
     "respondingTo": "{{role}} 在回复",
+    "reasoning": {
+      "thinking": "思考中",
+      "summary": "思考摘要",
+      "stepUnderstood": "理解用户这次请求：「{{msg}}」",
+      "stepOrchestrator": "检查对话、工作区状态，并决定自己处理还是派 worker",
+      "stepWorker": "{{role}} 读取任务说明和相关上下文",
+      "stepMerged": "汇总 {{count}} 个相关 agent 的结果：{{roles}}",
+      "stepCheckedThread": "对照本轮消息和已有进展，避免重复或漏项",
+      "stepPlanning": "正在规划执行方式和下一步动作",
+      "stepExecuting": "正在执行、等待工具结果或整理回复",
+      "stepAnswered": "整理成给用户看的最终回复"
+    },
     "you": "我",
     "broadcast": "全员",
     "to": "发给",
@@ -647,7 +688,8 @@
     "details": "详情",
     "send": "发送",
     "sending": "发送中…",
-    "sendHint": "Enter 发送 · Shift+Enter 换行",
+    "sendHintDesktop": "{{enter}} 发送 · Shift+{{enter}} 换行",
+    "sendHintMobile": "回车换行 · 点发送按钮发送",
     "optimize": "优化输入",
     "optimizeTooltip": "用 AI 把你的输入改写得更清晰（保留技术细节，不臆造需求）",
     "optimizing": "优化中…",
@@ -889,7 +931,7 @@
       "navigate": "选择",
       "confirm": "确定",
       "close": "关闭",
-      "openHint": "⌘K 随时呼出"
+      "openHint": "{{shortcut}} 随时呼出"
     }
   }
 }
