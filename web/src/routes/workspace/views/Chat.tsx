@@ -232,6 +232,7 @@ function WorkspaceStatusStrip({
     cliReadiness.installed.length > 0 &&
     cliReadiness.missing.length > 0;
   const cliNames = cliReadiness.installed.map((p) => p.display_name).join(" / ");
+  const missingCliNames = cliReadiness.missing.map((p) => p.display_name).join(" / ");
   return (
     <div className="shrink-0 border-b border-border-subtle bg-surface-primary px-3 py-2">
       <div className="mx-auto flex w-full max-w-[1040px] flex-col gap-2 rounded-lg border border-border-subtle bg-surface-elevated px-3 py-2 shadow-sm sm:flex-row sm:items-center">
@@ -283,11 +284,16 @@ function WorkspaceStatusStrip({
           </div>
         </div>
         {noCliReady ? (
-          <div className="flex flex-col gap-2 sm:max-w-[430px] sm:flex-row sm:items-center">
-            <p className="font-caption text-[11px] leading-5 text-state-warning">
-              <TriangleAlert className="mr-1 inline size-3 align-[-2px]" />
-              {t("chat.workspaceStripCliMissing")}
-            </p>
+          <div className="flex flex-col gap-2 sm:max-w-[440px] sm:flex-row sm:items-center">
+            <div className="font-caption text-[11px] leading-5 text-state-warning">
+              <p>
+                <TriangleAlert className="mr-1 inline size-3 align-[-2px]" />
+                {t("chat.workspaceStripCliMissing")}
+              </p>
+              <p className="text-foreground-tertiary">
+                {t("chat.workspaceStripCliInstallHelp")}
+              </p>
+            </div>
             <Button asChild size="sm" variant="outline" className="h-8 shrink-0 gap-1.5">
               <Link to="/settings/plugins">
                 <PlugZap className="size-3.5" />
@@ -296,11 +302,11 @@ function WorkspaceStatusStrip({
             </Button>
           </div>
         ) : !hasMembers ? (
-          <div className="flex flex-col gap-2 sm:max-w-[360px] sm:flex-row sm:items-center">
+          <div className="flex flex-col gap-2 sm:max-w-[430px] sm:flex-row sm:items-center">
             <p className="font-caption text-[11px] leading-5 text-foreground-tertiary">
               {someCliMissing
-                ? t("chat.workspaceStripCliPartial")
-                : t("chat.workspaceStripReviveHint")}
+                ? t("chat.workspaceStripCliPartial", { names: cliNames, missing: missingCliNames })
+                : t("chat.workspaceStripReviveHint", { names: cliNames })}
             </p>
             <Button
               size="sm"
@@ -313,12 +319,17 @@ function WorkspaceStatusStrip({
             </Button>
           </div>
         ) : someCliMissing ? (
-          <Button asChild size="sm" variant="outline" className="h-8 shrink-0 gap-1.5">
-            <Link to="/settings/plugins">
-              <PlugZap className="size-3.5" />
-              {t("chat.workspaceStripSetupMissingCli")}
-            </Link>
-          </Button>
+          <div className="flex flex-col gap-2 sm:max-w-[430px] sm:flex-row sm:items-center">
+            <p className="font-caption text-[11px] leading-5 text-foreground-tertiary">
+              {t("chat.workspaceStripCliPartial", { names: cliNames, missing: missingCliNames })}
+            </p>
+            <Button asChild size="sm" variant="outline" className="h-8 shrink-0 gap-1.5">
+              <Link to="/settings/plugins">
+                <PlugZap className="size-3.5" />
+                {t("chat.workspaceStripSetupMissingCli")}
+              </Link>
+            </Button>
+          </div>
         ) : null}
       </div>
     </div>
