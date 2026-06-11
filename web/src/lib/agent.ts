@@ -370,3 +370,30 @@ export function formatActivityLine(
     act.phase === "running" ? Math.max(0, now - act.at) : (act.duration_ms ?? 0);
   return { label: act.label, phase: act.phase, elapsedMs };
 }
+
+/* ── Honest health predicates (事实律) ──────────────────────────────────────
+ *  `shim_ready` only means the PTY launched — NOT that the agent can actually
+ *  work; it can still be wedged on a login prompt, an MCP init loop, or a
+ *  silent first turn the watchdog only catches 45–300s later. These read the
+ *  REAL signals the server persists (killed/exit + `last_error` from the
+ *  HealthScanner / first-response watchdog) so the UI stops painting a green
+ *  "Ready" / "在线" over an agent that's dead or can't work. */
+
+/** Alive: the process is up (not killed by us, not exited on its own). */
+export function agentIsAlive(a: AgentInfo): boolean {
+  return a.killed_at == null && a.shim_exit == null;
+}
+
+/** "Alive but can't work" — the server flagged a real error (auth / quota /
+ *  watchdog). Not time-bounded: the latch is cleared server-side the moment the
+ *  agent produces real activity again (transcript tailer recovery), so a
+ *  present `last_error` means it is still failing right now. */
+export function agentIsErrored(a: AgentInfo): boolean {
+  return a.last_error != null;
+}
+
+/** Honest "ready to work": PTY up, alive, and NOT flagged as failing. What a
+ *  green Ready / online dot should bind to instead of bare `shim_ready`. */
+export function agentIsWorkable(a: AgentInfo): boolean {
+  return a.shim_ready && agentIsAlive(a) && !agentIsErrored(a);
+}

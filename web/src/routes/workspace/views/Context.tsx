@@ -272,7 +272,12 @@ export default function ContextView() {
         if (cancelled) return;
         setRoleLookup(buildRoleLookup(agents));
       })
-      .catch(() => {});
+      // L4: a failed role lookup leaves blackboard entries showing raw agent-id
+      // prefixes instead of role names, with no hint why — at least log it.
+      .catch((e) => {
+        // eslint-disable-next-line no-console
+        console.warn("[flockmux] role lookup (listAgents) failed", e);
+      });
     return () => {
       cancelled = true;
     };
@@ -303,11 +308,22 @@ export default function ContextView() {
       if (ev.type !== "blackboard_changed") return;
       refreshList();
       if (ev.path === selected) {
-        api.readBlackboard(ev.path).then(setSnap).catch(() => {});
+        // L3: don't swallow — a failed re-read after a "changed" event leaves
+        // the editor showing stale content while the panel claims it synced.
+        api
+          .readBlackboard(ev.path)
+          .then(setSnap)
+          .catch((e) => {
+            // eslint-disable-next-line no-console
+            console.warn(`[flockmux] blackboard re-read failed (${ev.path})`, e);
+          });
         api
           .listBlackboardHistory(ev.path, 50, false)
           .then(setHistory)
-          .catch(() => {});
+          .catch((e) => {
+            // eslint-disable-next-line no-console
+            console.warn(`[flockmux] blackboard history reload failed (${ev.path})`, e);
+          });
       }
     },
     onReconnect: () => refreshList(),

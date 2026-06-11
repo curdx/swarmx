@@ -164,7 +164,12 @@ export function AgentDrawer({ agentId, activities, onClose }: Props) {
       .then((rows) => {
         if (alive) setBackfill(rows);
       })
-      .catch(() => {});
+      // L2: don't swallow silently — a failed backfill makes the activity tab
+      // look like history only started when the drawer opened. At least log it.
+      .catch((e) => {
+        // eslint-disable-next-line no-console
+        console.warn(`[flockmux] agent activity backfill failed (${agentId})`, e);
+      });
     return () => {
       alive = false;
     };
@@ -368,13 +373,19 @@ function Header({
   const initial = role.slice(0, 1).toUpperCase();
   const spawnedAt = info?.spawned_at ?? null;
   const live = info && info.killed_at == null && info.shim_exit == null;
+  // M3: "alive" (PTY up) is NOT "working". An agent flagged by the server's
+  // HealthScanner / first-response watchdog (last_error set) is alive but
+  // wedged — paint it red "出错", not a green "Ready" with a working spinner.
+  const errored = !!info?.last_error;
   const dotColor = !info
     ? "bg-state-idle"
     : !live
       ? "bg-state-idle"
-      : info.shim_ready
-        ? "bg-state-success"
-        : "bg-state-wake";
+      : errored
+        ? "bg-status-danger"
+        : info.shim_ready
+          ? "bg-state-success"
+          : "bg-state-wake";
 
   return (
     <header className="flex shrink-0 flex-col border-b border-border-subtle">
@@ -409,15 +420,17 @@ function Header({
             </span>
           </div>
           <div className="flex items-center gap-1.5 font-caption text-[11px] text-foreground-secondary">
-            {live && (
+            {live && !errored && (
               <Loader2 className="size-3 animate-spin text-accent-primary" />
             )}
             <span>
-              {live
-                ? info?.shim_ready
-                  ? t("agent.status.ready")
-                  : t("agent.status.starting")
-                : t("agent.status.exited")}
+              {!live
+                ? t("agent.status.exited")
+                : errored
+                  ? t("agent.status.error", { defaultValue: "出错·无法工作" })
+                  : info?.shim_ready
+                    ? t("agent.status.ready")
+                    : t("agent.status.starting")}
               {spawnedAt && (
                 <> · {t("agent.status.uptime", { delta: formatDelta(now - spawnedAt) })}</>
               )}

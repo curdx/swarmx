@@ -28,6 +28,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/cn";
+import { useSwarmFeedStatus } from "@/hooks/useSwarmFeed";
 import { formatShortcutChord, getClientPlatformInfo } from "@/lib/platform";
 
 interface TabDef {
@@ -75,6 +76,11 @@ export function WorkspaceToolbar({
   const { t } = useTranslation();
   const tabs = buildTabs(workspace.id, threadSlug);
   const platform = getClientPlatformInfo();
+  // M4: bind the "LIVE" badge to the REAL socket connection, not just the
+  // member count. After the WS drops (network blip / server restart) the REST
+  // member snapshot lingers, so a count-only badge kept claiming "LIVE" over a
+  // dead feed. Now it dims to an honest "离线" until the feed reconnects.
+  const feedConnected = useSwarmFeedStatus() === "open";
 
   // "合并到主线" is offered only for a non-main direction that actually has its
   // own branch (isolated worktree, ready) — a shared/main direction has nothing
@@ -180,18 +186,38 @@ export function WorkspaceToolbar({
         <Tooltip>
           <TooltipTrigger asChild>
             <span
-              className="flex h-5 shrink-0 items-center gap-1 rounded-full bg-status-running-soft px-2 font-caption text-[10px] font-semibold uppercase tracking-wide text-status-running"
-              title={t("chat.memberCount", { count: agentCount })}
+              className={cn(
+                "flex h-5 shrink-0 items-center gap-1 rounded-full px-2 font-caption text-[10px] font-semibold uppercase tracking-wide",
+                feedConnected
+                  ? "bg-status-running-soft text-status-running"
+                  : "bg-status-warning-soft text-state-warning",
+              )}
+              title={
+                feedConnected
+                  ? t("chat.memberCount", { count: agentCount })
+                  : t("chat.feedOffline", {
+                      defaultValue: "实时连接已断开,下面是最后已知状态",
+                    })
+              }
             >
               <span
-                className="size-1.5 rounded-full bg-status-running"
+                className={cn(
+                  "size-1.5 rounded-full",
+                  feedConnected ? "bg-status-running" : "bg-state-warning animate-pulse",
+                )}
                 aria-hidden
               />
-              {t("common.live")}
+              {feedConnected
+                ? t("common.live")
+                : t("common.offline", { defaultValue: "离线" })}
             </span>
           </TooltipTrigger>
           <TooltipContent side="bottom">
-            {t("chat.memberCount", { count: agentCount })}
+            {feedConnected
+              ? t("chat.memberCount", { count: agentCount })
+              : t("chat.feedOffline", {
+                  defaultValue: "实时连接已断开,下面是最后已知状态",
+                })}
           </TooltipContent>
         </Tooltip>
         )}

@@ -1,0 +1,67 @@
+[
+  {
+    "scores": [
+      {
+        "direction": "conversation-first",
+        "score": 88,
+        "rationale": "Strongest for newbies. Single narrative axis fixes concept overload and firehose by sinking terminal, diff, and token streams into a collapsed drawer. Best aligned with approved final-redesign.md. Centered narrow axis stops the abandonment feeling; three starter prompts give a what-do-I-say scaffold; startup checklist plus 90s watchdog delivers dispatch-and-believe in five minutes. Deduction: members never bubble, all via captain plus delivery card, one indirection layer depending on captain prompt compliance."
+      },
+      {
+        "direction": "cockpit-split",
+        "score": 64,
+        "rationale": "Riskiest for newbies. Persistent split serves power users but taxes first-timers; author admits newbies must build a read-left-watch-right model. Resident right panel goes sparse on simple tasks causing confusion, and information split breaks the calm single voice. Biggest deviation from approved tabbed IA. Reusable: now-live region with ticking timer and 45s downgrade, fast first card with spawn placeholder, band bar; but these favor power users."
+      },
+      {
+        "direction": "thread-as-workspace",
+        "score": 80,
+        "rationale": "Between the two. Shares the newbie-friendly single-stream base nearly matching final-redesign.md. Diff-into-stream is intuitive for verify-and-merge without tab-switching, but one stream with dispatch, delivery, approval, and diff gets heavy and a large diff inline blows up scroll at narrow widths. Newbie first sessions are short so heavy-stream cost mostly misses them. Deduction: dual-send Enter-queue versus Cmd-Enter-interject is a known confusion source; deviates from base doc separate changes tab."
+      }
+    ],
+    "bestElements": [
+      "Single-voice captain conversation with a centered narrow axis",
+      "Members do not bubble; only delivery and needs-you become system cards",
+      "Empty state with three clickable starter prompts that fill the composer",
+      "Member heartbeat row with two moving numbers and 45s silence downgrade",
+      "Fast first-card guarantee with a spawn-immediate placeholder",
+      "Startup checklist plus 90s watchdog flipping to a failure card in place",
+      "Failure card recovery path with a bounded switch-engine action",
+      "Explicit interrupt versus queue so course-correction is never silently queued",
+      "Stable identity with role-derived names and fixed colors, no raw worker IDs",
+      "Diff into stream inline review with merge gate and line-level comments",
+      "Band bar making members activity subjects not static name tags",
+      "Confirm before model switch plus a post-switch system card"
+    ],
+    "verdict": "conversation-first wins from the first-time-user lens."
+  },
+  null,
+  {
+    "scores": [
+      {
+        "direction": "conversation-first (队长在场/机器下沉)",
+        "score": 71,
+        "rationale": "工程诚实度最高、心智负担最小，但增量落地的'可观测性'是其软肋。验证后的优势：(1) 所有诚实化诉求都对得上后端事实——broadcast-only 的 SwarmEvent 流（ws_swarm.rs:74-98 注释明确写'channel drops frames under flood, UI rebuilds from latest event per (agent_id,seq)'）、90s 看门狗（rest.rs:33 FIRST_RESPONSE_WATCHDOG_MS=90_000，且真的 record_agent_error 'watchdog'）、in-memory ring（swarm.rs VecDeque + recent_activity）全部属实，'不假绿点'的根因诊断准确。(2) 复用面真实存在：MessagesPanel 1799 行确含 draft 持久化(263-306)、@autocomplete(728-766)、unread divider(642-661)、optimizePrompt；ModelPicker 已确认'restarts orchestrator'(注释12行/Chat.tsx:537-551)，所以'加确认弹窗'是小改而非新建。(3) 把成员折进抽屉=直接复用 AgentDrawer(872行,5 tab 已齐:terminal/activity/recordings/messages/context)，是三者里对现有抽屉改动最小的。扣分点：① 单声道把 worker 全部下沉，但本方向自己承认'最大风险=系统卡语法覆盖率'——AgentActivity 只有 tool/system 两种 kind(ws_swarm.rs:81-97)，派工/交付/团队树这套卡词表后端目前没有结构化事件源，需要 be-model 把'日志升事件'，这是它和另两者共担的 P1 但本方向更依赖它(因为流里几乎只剩卡)。② '抽屉默认收起'在重并行时把可观测性藏太深，调试体验弱于 cockpit。③ 文件锚点路径错误：把 AgentDrawer/OrchestratorFailureCard/Chat 写成 components/*.tsx，实际在 components/agent/、components/workspace/、routes/workspace/views/——诚实度细节扣分。"
+      },
+      {
+        "direction": "cockpit-split (驾驶舱/透明优先)",
+        "score": 78,
+        "rationale": "工程可行性最强、与现有架构咬合最紧的一版。验证后的核心优势：把右侧升级为'工作面板'本质是把现有 AgentDrawer(872行,5 tab)从 880px 抽屉原地搬成右面板——这是三者中复用度最高、改动语义最清晰的路径(钻取焦点=换右面板内容而非开抽屉，复用成本低)。'现在'live 区直接吃 AgentState(spawning/ready/thinking/idle/waiting_dep/error/exited 七态已在 ws_swarm.rs:102-117)+ AgentActivity 心跳，last_activity_at 已有(store.rs touch_agent_activity)，45s 降级有据。落地路径 P0/P1/P2 分层最务实——P0 不依赖新表先把'不撒谎+不firehose'立住，P1 才补持久化，这个排序对增量交付友好且承认了硬依赖。诚实度高：明确点名'AgentActivity 重连丢失'(ws_swarm.rs 注释佐证)、'recent_activity 是 in-memory ring 重启即没'(已验证 swarm.rs VecDeque + rest.rs:1126 注释'served from in-memory ring')、'首卡若 tailer 700ms 轮询+spawn 慢则迟于3s'——这是三者里对自身风险最具体、最不自欺的一版。扣分点：① 1280px 下 58/42 双区把对话压到约52ch，对单成员简单任务面板大半时间稀疏(自己承认'常驻税')，与现状P1'对话被压成窄带'有同质风险，只是换了方向。② 仍把系统事件持久化估成'半天 spike: messages vs swarm_events'，但实测 messages 表已有 kind+meta 列(store.rs:1070 INSERT 含 kind,meta)，system 事件可直接落 kind=system+meta，比估计的轻——估算偏保守但方向对。③ 同样有派工/交付结构化事件覆盖率的 day-1 spike 依赖。"
+      },
+      {
+        "direction": "thread-as-workspace (会话即编排台)",
+        "score": 64,
+        "rationale": "野心最大、可操控性最完整，但工程风险与后端新建量也最大，增量可落地性最弱。优势真实：diff 进流的行级评审+合并闸门、approve-before-run、QUEUE/INTERRUPT 双发送，把'编排者握方向盘'落得最透；且 interrupt/resume/interrupt_all/wake_agent 端点已存在(rest.rs:1806/1824/1861/1103)，打断/推进有现成后端钩子——这点比另两者更被低估地可行。worker DAG 字段(depends_on/produces/consumes，types.ts:92)真实存在，团队树有数据源。但从本视角扣分最多：① 后端新建清单最长且最重——approve-before-run 需要'会话级自治级字段+spawn 挂起逻辑'(现状 spawn_bootstrap_inject 是即时注入，rest.rs:1170，要插入审批 gate 是非平凡改动)；QUEUE vs INTERRUPT 需要'轮次结束才送达'的 queued message 状态机(现状 send 直接投递)；行级评论→定向消息桥。这些是它独有的、超出另两者的后端负担。② diff 进流(1280px 就地展开)自己承认是'真风险点'——大 diff 撑爆滚动，需虚拟化+按需加载，这是把收口动作塞进单流的固有代价。③ '入流律'后端持久化对它是更硬的硬前提：另两者把过程藏右面板/抽屉，本方向把派工/交付/diff 全塞流里，持久化没补则重连后流内卡片全空、可信度崩得比另两者更明显(它自己也点了这条)。④ 同样把系统事件持久化估成 spike，未利用 messages 表已有 kind+meta 的事实。综合：理念诱人，但'边看边操控'要兑现的后端面最大、性能风险最集中，作为增量首期落地性低于 cockpit。"
+      }
+    ],
+    "verdict": "从工程可行性与诚实度视角，cockpit-split 胜出（78）。理由：它与现有架构的咬合最紧——把已存在的 AgentDrawer（872 行、terminal/activity/recordings/messages/context 五 tab 已齐）从 880px 抽屉原地改成右面板，是三者中改动语义最清晰、复用度最高的路径，钻取焦点=换面板内容而非新建。它对自身风险的描述最具体最不自欺（明确点名 AgentActivity 重连丢失、in-memory ring 重启即没、首卡延迟兜底需 spawn 即同步落占位），且 P0/P1/P2 分层把'不撒谎+不firehose'放在不依赖新表的 P0，承认硬依赖又给了可交付的首期。conversation-first（71）诚实度同样高、心智负担最小，但单声道把 worker 全下沉后，整条流几乎只剩卡片，使它比另两者更重地押在'派工/交付卡词表'这套现状后端尚不存在的结构化事件上（AgentActivity 只有 tool/system 两种 kind），可观测性也藏得过深。thread-as-workspace（64）理念最完整、可操控性最强，但后端新建量最大（approve-gate 需 spawn 挂起逻辑、QUEUE/INTERRUPT 需 queued message 状态机、diff 进流有真实性能风险），作为增量首期落地性最弱。三者共担两条已验证的硬依赖：(1) SwarmEvent 是 broadcast-only、活动 ring 在内存、冷加载/重连会空，必须补持久化；(2) 派工/交付/团队树这套卡需要后端把'日志升事件'，AgentActivity 当前粒度不一定够。一个三者都没利用的事实：messages 表已有 kind+meta 列，系统事件可直接落 kind=system+meta，比它们估的'半天 spike: messages vs swarm_events'更轻。",
+    "bestElements": [
+      "AgentDrawer 复用为右面板/钻取焦点（cockpit）——已存在的 872 行 5-tab 抽屉(terminal/activity/recordings/messages/context)原地改挂，是整套重设计里复用度最高、风险最低的工程支点，无论谁胜都该作为'机器细节的家'",
+      "P0/P1/P2 分层落地路径（cockpit）：P0 只接现有 AgentActivity WS 把'不撒谎+不firehose'立住、不依赖新表；P1 才补三处持久化兑现冷加载回放；P2 做深度面板。这个'先诚实、后持久、再深度'的排序对增量交付最友好",
+      "首卡占位即时落地（cockpit/thread 都提）：spawn 时不等 700ms tailer，同步落一张 ◐启动中 占位事件，保 1-2s 首卡——这是把'入流律'落到工程层、堵住'盯绿点'空窗的最具体一招",
+      "心跳进度行的 two-signal 诚实降级：用 last_activity_at(已有 touch_agent_activity)，45s 无输出→变灰'已 N 秒无活动'，绑 AgentState 让 agent 死即移除——直接修现状 PendingBubble 静默挂 60s 的根因，三方案都该保留",
+      "interrupt/resume 端点已存在的事实应被前置利用（thread）：QUEUE/INTERRUPT 双发送、per-member Stop、接管/交还的'打断'一半后端(rest.rs interrupt/resume/interrupt_all)已就绪，是被低估的可行性，胜者方案应直接接线而非重写",
+      "系统事件用 messages 表已有的 kind+meta 列持久化（评委补充，三者均漏）：messages 表 INSERT 已含 kind,meta(store.rs:1070)，派工/交付/失败/模型切换可落 kind=system+结构化 meta，比三者估的'swarm_events 新表 spike'轻得多，胜者应据此砍掉一个伪 spike",
+      "计划置顶卡的渐进增强降级（thread/cockpit）：队长首条不符合计划结构时不阻塞、渲染成普通消息、卡区提示'尚未给出计划'——把'计划当 UI 契约'的非确定性风险降级为软兜底，是对 prompt 合规依赖的正确工程姿态",
+      "派工/团队树取代独立 DAG 视图：Dag.tsx 是 843 行真实存在的视图，三者一致主张内联微缩化(复用 workers 表 depends_on/produces/consumes)——删一个重视图换流内折叠卡，是减负的正确方向，但需排期承认这部分是'重写'而非'白捡'"
+    ]
+  }
+]
