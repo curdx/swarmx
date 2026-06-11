@@ -25,6 +25,7 @@
 import { lazy, Suspense, type ReactElement } from "react";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { AppShell } from "./layouts/AppShell";
+import { AppToaster } from "./components/ui/sonner";
 import ChatHome from "./routes/chat/Home";
 import WorkspaceShell from "./routes/workspace/Shell";
 import ChatView from "./routes/workspace/views/Chat";
@@ -125,6 +126,8 @@ export default function App() {
         <Route path="/chat/:wsId/replays/:recId" element={lazyView(<ReplayPlayer />)} />
         <Route path="*" element={<Navigate to="/chat" replace />} />
       </Routes>
+      {/* One toast surface for the whole app (honest async-action feedback). */}
+      <AppToaster />
     </BrowserRouter>
   );
 }
