@@ -39,6 +39,28 @@ export function PlanStickyCard({ plan }: { plan: ParsedPlan }) {
   const { t } = useTranslation();
   const total = plan.steps.length;
   const done = plan.steps.filter((s) => s.status === "done").length;
+  const allDone = total > 0 && done === total;
+
+  // Once every step is done the full checklist is pure clutter — a scrollable
+  // all-✓ list squatting on up to 34vh the user can no longer act on. Collapse
+  // to a single confirmation line: frees the space, keeps honest closure, and
+  // (unlike hiding outright) doesn't read as "my plan vanished". A new plan from
+  // the captain flips a step back to todo/doing and the full list returns.
+  if (allDone) {
+    return (
+      <div className="shrink-0 border-b border-border-subtle bg-surface-primary px-3 py-2">
+        <div className="mx-auto flex w-full max-w-[1040px] items-center gap-2 rounded-lg border border-status-success/25 bg-status-success-soft/40 px-3 py-1.5">
+          <CircleCheck className="size-4 shrink-0 text-status-success" aria-hidden />
+          <span className="font-heading text-xs font-medium text-foreground-secondary">
+            {t("chat.plan.allDone", {
+              total,
+              defaultValue: "计划完成 · 全部 {{total}} 步已交付",
+            })}
+          </span>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="shrink-0 border-b border-border-subtle bg-surface-primary px-3 py-2">

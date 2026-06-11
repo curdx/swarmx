@@ -2088,12 +2088,18 @@ function PendingBubble({
               </span>
             </div>
           ) : stale ? (
+            // Neutral, not alarmed: a tool quiet for ≥45s might be genuinely
+            // stuck OR just legitimately long (a big build/test emits no events
+            // for minutes). We can't tell which, so we state the observable fact
+            // — "已 Ns 无活动" — in calm gray and let the elapsed count speak,
+            // rather than editorializing a fault (orange + alert triangle) we
+            // haven't verified. Matches this component's own honesty docstring.
             <div
-              className="flex items-center gap-1.5 px-1 font-caption text-[11px] text-state-warning"
+              className="flex items-center gap-1.5 px-1 font-caption text-[11px] text-foreground-secondary"
               role="status"
               aria-live="polite"
             >
-              <TriangleAlert className="size-3 shrink-0" />
+              <Clock3 className="size-3 shrink-0" />
               <span className="truncate">
                 {t("chat.live.memberStalled", {
                   secs: Math.floor(sinceActivityMs / 1000),
