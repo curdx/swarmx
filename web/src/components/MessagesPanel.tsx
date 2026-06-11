@@ -945,14 +945,8 @@ export function MessagesPanel({
     requestAnimationFrame(() => composerRef.current?.focus());
   };
 
-  // `overrideBody` lets callers (e.g. the 重新发送 button on a vanished-turn
-  // card) send a specific text without first round-tripping through the
-  // composer's async `body` state. Guarded by typeof: `onClick={send}` passes a
-  // MouseEvent here, which must fall through to the composer's `body`.
-  const send = async (overrideBody?: string) => {
-    const trimmed = (
-      typeof overrideBody === "string" ? overrideBody : body
-    ).trim();
+  const send = async () => {
+    const trimmed = body.trim();
     if (!trimmed) return;
     // P0-11: never fire while an attachment failed to upload (Enter bypasses the
     // disabled send button, so guard here too).
@@ -1020,6 +1014,39 @@ export function MessagesPanel({
       setPreOptimize(null);
       setOptimizeNote(null);
       composerRef.current?.focus();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setSending(false);
+    }
+  };
+
+  // 「重新发送」走独立通道,刻意**不碰输入框**:不读 explicitRecipient(@提及)/
+  // inReplyTo / 附件,也绝不 setBody("") —— 否则会冲掉用户在输入框里还没发的草稿
+  // (用户反馈)。直接把原文投给当前默认收件人(活队长直送;没有则经 onSend 拉起
+  // 新队长投递),和原消息当初的去向一致。
+  const resend = async (text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed || sending) return;
+    setSending(true);
+    try {
+      if (!defaultRecipient) {
+        if (onSend) await onSend(trimmed);
+      } else {
+        const rec = await api.sendMessage({
+          from: USER_SENDER,
+          to: defaultRecipient.agent_id,
+          kind: KIND_DEFAULT,
+          body: trimmed,
+        });
+        setItems((prev) =>
+          prev.some((m) => m.id === rec.id) ? prev : [...prev, rec],
+        );
+        api.wakeAgent(defaultRecipient.agent_id).catch(() => {
+          /* swallow */
+        });
+      }
+      setError(null);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -1704,11 +1731,10 @@ export function MessagesPanel({
               role={resolveRole(v.agentId, roleLookup)}
               reason={v.reason}
               sending={sending}
-              // 真正把原消息重发出去(走 composer 同一条发送路径:有活队长直送、
-              // 没有则经 onSend 拉起新队长投递)。发出后它成为最新一条用户消息,
-              // 上面 memo 的 latestUserTriggerAt 判定会让这张卡自动消失。
+              // 直发原消息(独立通道,不碰输入框、不动你的草稿)。发出后它成为最新
+              // 一条用户消息,上面 memo 的 latestUserTriggerAt 判定会让这张卡自动消失。
               onResend={() => {
-                void send(v.trigger.body);
+                void resend(v.trigger.body);
               }}
             />
           ))}
@@ -1856,7 +1882,7 @@ export function MessagesPanel({
               </Button>
               <Button
                 size="icon"
-                onClick={() => send()}
+                onClick={send}
                 disabled={sendDisabled}
                 aria-label={sending ? t("messages.sending") : t("messages.send")}
                 title={sending ? t("messages.sending") : t("messages.send")}
