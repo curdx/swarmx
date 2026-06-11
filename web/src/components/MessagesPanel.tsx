@@ -162,10 +162,15 @@ const KIND_DEFAULT = "note";
 const USER_SENDER = "user";
 const SYSTEM_SENDER = "system";
 const GROUP_GAP_MS = 5 * 60_000; // 5 minutes — same heuristic as Telegram
-/** Window during which an unanswered inbound message keeps the "typing"
- *  placeholder alive. Beyond this, the agent is probably stuck/done and
- *  the indicator is more misleading than helpful. */
-const PENDING_TIMEOUT_MS = 60_000;
+/** How long an ALIVE agent may be TRULY silent — no reply AND no new tool
+ *  event — before we stop showing its "正在响应" bubble. Measured from the last
+ *  sign of life (trigger or last activity), NOT from the trigger, so an agent
+ *  that keeps working renews it indefinitely. Generous (3 min) because a real
+ *  model-thinking turn before the first tool/reply can legitimately run a
+ *  minute-plus; the old 60s-from-trigger cutoff hid the captain mid-work. Death
+ *  (state exited/error) and replies clear the bubble through real signals, so
+ *  this is only a backstop against a forgotten bubble, not the primary control. */
+const PENDING_SILENCE_GIVEUP_MS = 180_000;
 const MAX_REASONING_SUMMARY_MS = 30 * 60_000;
 /** A member whose latest tool event hasn't advanced in this long has gone
  *  quiet. The pending bubble degrades to a gray "已 Ns 无活动" and stops the
@@ -715,7 +720,7 @@ export function MessagesPanel({
   }, [visible]);
 
   // ── pending responder inference (UI/F.2-A) ────────────────────────────
-  // Tick every 5s so PENDING_TIMEOUT_MS naturally retires stale indicators
+  // Tick every 5s so the PENDING_SILENCE_GIVEUP_MS backstop is re-evaluated
   // even when no new events arrive on /ws/swarm.
   const [tick, setTick] = useState(0);
   useEffect(() => {
@@ -757,7 +762,18 @@ export function MessagesPanel({
     for (const [agentId, trigger] of lastReceived) {
       const sentAt = lastSent.get(agentId) ?? 0;
       if (trigger.sent_at <= sentAt) continue;
-      if (now - trigger.sent_at > PENDING_TIMEOUT_MS) continue;
+      // Keep the bubble by REAL liveness, not a blind 60s clock: the agent is
+      // alive (filtered above) and this message is unanswered, so it IS still
+      // its turn. Only give up after a long TRUE silence since the last sign of
+      // life — the trigger, or the agent's last real tool event. A captain that
+      // keeps emitting activity (or is mid a long model-thinking turn) thus
+      // keeps its bubble instead of vanishing at 60s while still working; each
+      // real activity event renews it. Death → alive filter drops it (vanished
+      // card); a reply clears it above. (Was: drop at fixed 60s-from-trigger,
+      // which hid the captain mid-work on any task longer than a minute.)
+      const lastActivityAt = agentLiveStateById?.[agentId]?.activity?.at ?? 0;
+      const lastSignOfLife = Math.max(trigger.sent_at, lastActivityAt);
+      if (now - lastSignOfLife > PENDING_SILENCE_GIVEUP_MS) continue;
       // P1: the exact turn the user interrupted (matched by trigger id) is
       // cancelled — don't keep faking "responding". A newer message has a new
       // id, so it reopens naturally; clock-skew can't affect an id match.
@@ -2141,17 +2157,18 @@ function PendingBubble({
         }
       : null;
 
-  // Real latest tool event drives the two-signal line.
+  // Real latest tool event drives the "what it's doing right now" verb line.
   const act = live?.activity;
   const verb = act ? activityVerb(act.label, act.kind) : null;
   const sinceActivityMs = act ? Math.max(0, now - act.at) : 0;
   const stale =
     act != null && act.phase === "running" && sinceActivityMs >= HEARTBEAT_STALE_MS;
-  const activityElapsedMs = act
-    ? act.phase === "running"
-      ? sinceActivityMs
-      : act.duration_ms ?? 0
-    : 0;
+  // The counter shows the TRUE cumulative wait — how long since the user's
+  // message — not the latest single tool event's duration (which reset every
+  // event and sat at "0s" for fast ops, the reported bug). This ticks up
+  // honestly the whole turn = "队长已为你这条消息忙了 Ns". `now` refreshes every
+  // 500ms (interval above). clamp ≥0 for client/server clock skew.
+  const elapsedSinceTrigger = Math.max(0, now - trigger.sent_at);
 
   return (
     <div className="mt-3 flex gap-3">
@@ -2193,7 +2210,7 @@ function PendingBubble({
                 {t(verb.key, { ...verb.params, defaultValue: verb.fallback })}
               </span>
               <span className="shrink-0 font-mono text-[10px] tabular-nums text-foreground-tertiary">
-                {formatElapsed(activityElapsedMs)}
+                {formatElapsed(elapsedSinceTrigger)}
               </span>
             </div>
           ) : stale ? (
@@ -2217,15 +2234,24 @@ function PendingBubble({
               </span>
             </div>
           ) : (
+            // No tool event yet (the captain is thinking before its first
+            // action). Still show the honest cumulative counter next to the
+            // dots so the user sees real motion from the moment they hit send —
+            // not a frozen "0s" — and knows how long it's genuinely been working.
             <span
-              className="flex items-center gap-1 px-1"
+              className="flex items-center gap-2 px-1"
               role="status"
               aria-live="polite"
               title={replyHint}
             >
-              <PendingDot delayMs={0} />
-              <PendingDot delayMs={150} />
-              <PendingDot delayMs={300} />
+              <span className="inline-flex items-center gap-0.5">
+                <PendingDot delayMs={0} />
+                <PendingDot delayMs={150} />
+                <PendingDot delayMs={300} />
+              </span>
+              <span className="shrink-0 font-mono text-[10px] tabular-nums text-foreground-tertiary">
+                {formatElapsed(elapsedSinceTrigger)}
+              </span>
             </span>
           )}
         </div>
