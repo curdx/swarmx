@@ -49,6 +49,7 @@ import {
   Zap,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
+import { toast } from "@/lib/toast";
 import {
   roleColorClass as roleColor,
   resolveMemberVisual,
@@ -619,15 +620,18 @@ export default function ChatView() {
     async (cfg: { tier?: string | null; reasoning?: string | null }) => {
       if (!activeThread || modelBusy) return;
       setModelBusy(true);
-      try {
-        // Send the COMPLETE desired state: apply the changed knob, keep the
-        // other from the current thread.
-        const nextTier =
-          cfg.tier !== undefined ? cfg.tier : activeThread.model_tier ?? null;
-        const nextReasoning =
-          cfg.reasoning !== undefined
-            ? cfg.reasoning
-            : activeThread.reasoning_effort ?? null;
+      // Send the COMPLETE desired state: apply the changed knob, keep the
+      // other from the current thread.
+      const nextTier =
+        cfg.tier !== undefined ? cfg.tier : activeThread.model_tier ?? null;
+      const nextReasoning =
+        cfg.reasoning !== undefined
+          ? cfg.reasoning
+          : activeThread.reasoning_effort ?? null;
+      const label =
+        (nextTier ?? "默认") + (nextReasoning ? `·${nextReasoning}` : "");
+      const willRestart = activeMembers.some((m) => m.role === "orchestrator");
+      const run = (async () => {
         await api.setThreadModel(workspace.workspaceId, activeThread.id, {
           tier: nextTier,
           reasoning: nextReasoning,
@@ -643,8 +647,23 @@ export default function ChatView() {
             thread_id: activeThread.id,
           });
         }
+      })();
+      // L5: surface the REAL outcome instead of swallowing it into console.warn
+      // (the chip used to just revert with no explanation). toast.promise rides
+      // the loading → success / error states off the actual operation.
+      toast.promise(run, {
+        loading: willRestart
+          ? `正在切换到 ${label} 并重启队长…`
+          : `正在切换到 ${label}…`,
+        success: `已切换到 ${label}`,
+        error: (e) =>
+          `切换模型失败:${(e as Error)?.message ?? "未知错误"}`,
+      });
+      try {
+        await run;
         refreshAgents();
       } catch (e) {
+        // The toast already reported it; keep a console breadcrumb for triage.
         // eslint-disable-next-line no-console
         console.warn("set direction model failed", e);
       } finally {
