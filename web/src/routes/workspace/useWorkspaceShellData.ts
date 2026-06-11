@@ -89,6 +89,25 @@ export interface WorkspaceShellData {
   deleteWorkspace: (workspaceId: string) => Promise<string | null>;
 }
 
+/** A message bumps the user's unread badge only if it's a real agent→user
+ *  reply — not coordination noise (kind=wake), a system event card (from=
+ *  system), or a worker's delivery card (meta.subtype="completion", which
+ *  renders as a status card, not an unread "message"). Mirrors MessagesPanel's
+ *  isUnread so the per-sender badge and the "N 条新消息" divider never disagree
+ *  (the dead /api/message/unread_count endpoint, which counted everything, is
+ *  not used here). */
+function countsAsUserUnread(
+  fromAgent: string,
+  kind: string,
+  meta: { subtype?: string } | null | undefined,
+): boolean {
+  return (
+    fromAgent !== "system" &&
+    kind !== "wake" &&
+    meta?.subtype !== "completion"
+  );
+}
+
 export function useWorkspaceShellData(
   wsId: string | undefined,
   threadSlug: string | undefined,
@@ -145,7 +164,7 @@ export function useWorkspaceShellData(
       const ids = new Map<number, string>();
       for (const m of rows) {
         ids.set(m.id, m.from_agent);
-        if (m.read_at === null && m.to_agent === "user") {
+        if (m.read_at === null && countsAsUserUnread(m.from_agent, m.kind, m.meta)) {
           counts[m.from_agent] = (counts[m.from_agent] ?? 0) + 1;
         }
       }
@@ -252,7 +271,7 @@ export function useWorkspaceShellData(
           };
           setLiveMessage(rec);
           idToFromRef.current.set(ev.id, ev.from_agent);
-          if (ev.to_agent === "user") {
+          if (ev.to_agent === "user" && countsAsUserUnread(ev.from_agent, ev.kind, ev.meta)) {
             setUnreadByFrom((prev) => ({
               ...prev,
               [ev.from_agent]: (prev[ev.from_agent] ?? 0) + 1,
