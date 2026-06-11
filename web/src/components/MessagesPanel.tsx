@@ -782,8 +782,13 @@ export function MessagesPanel({
   const vanishedTurns = useMemo(() => {
     const lastTrigger = new Map<string, MessageRecord>();
     const lastReplyAt = new Map<string, number>();
+    // 全对话里"用户→某 agent"的最新一条时间戳。只有最新那条搁浅了才值得提示;
+    // 用户一旦发出更新的消息(包括点「重新发送」),旧的消失卡就被取代、自动清掉
+    // —— 否则死掉的 agent 永远不会回复它那条,卡会永久赖着(就是用户撞到的 bug)。
+    let latestUserTriggerAt = 0;
     for (const m of items) {
       if (m.from_agent === USER_SENDER && m.to_agent !== USER_SENDER) {
+        if (m.sent_at > latestUserTriggerAt) latestUserTriggerAt = m.sent_at;
         const prev = lastTrigger.get(m.to_agent);
         if (!prev || m.sent_at > prev.sent_at) lastTrigger.set(m.to_agent, m);
       } else if (m.to_agent === USER_SENDER && m.from_agent !== USER_SENDER) {
@@ -797,6 +802,7 @@ export function MessagesPanel({
       reason: string | null;
     }> = [];
     for (const [agentId, trigger] of lastTrigger) {
+      if (trigger.sent_at < latestUserTriggerAt) continue; // 用户已发更新消息 → 取代旧卡
       const live = agentLiveStateById?.[agentId];
       const dead = live?.state === "error" || live?.state === "exited";
       if (!dead) continue; // 还活着(含"慢但在跑")→ 不喊狼来了
@@ -939,8 +945,14 @@ export function MessagesPanel({
     requestAnimationFrame(() => composerRef.current?.focus());
   };
 
-  const send = async () => {
-    const trimmed = body.trim();
+  // `overrideBody` lets callers (e.g. the 重新发送 button on a vanished-turn
+  // card) send a specific text without first round-tripping through the
+  // composer's async `body` state. Guarded by typeof: `onClick={send}` passes a
+  // MouseEvent here, which must fall through to the composer's `body`.
+  const send = async (overrideBody?: string) => {
+    const trimmed = (
+      typeof overrideBody === "string" ? overrideBody : body
+    ).trim();
     if (!trimmed) return;
     // P0-11: never fire while an attachment failed to upload (Enter bypasses the
     // disabled send button, so guard here too).
@@ -1691,12 +1703,12 @@ export function MessagesPanel({
               key={`vanished-${v.agentId}-${v.trigger.id}`}
               role={resolveRole(v.agentId, roleLookup)}
               reason={v.reason}
+              sending={sending}
+              // 真正把原消息重发出去(走 composer 同一条发送路径:有活队长直送、
+              // 没有则经 onSend 拉起新队长投递)。发出后它成为最新一条用户消息,
+              // 上面 memo 的 latestUserTriggerAt 判定会让这张卡自动消失。
               onResend={() => {
-                setBody(v.trigger.body);
-                requestAnimationFrame(() => {
-                  autoGrow(composerRef.current);
-                  composerRef.current?.focus();
-                });
+                void send(v.trigger.body);
               }}
             />
           ))}
@@ -1844,7 +1856,7 @@ export function MessagesPanel({
               </Button>
               <Button
                 size="icon"
-                onClick={send}
+                onClick={() => send()}
                 disabled={sendDisabled}
                 aria-label={sending ? t("messages.sending") : t("messages.send")}
                 title={sending ? t("messages.sending") : t("messages.send")}
@@ -2203,10 +2215,12 @@ function VanishedTurnCard({
   role,
   reason,
   onResend,
+  sending,
 }: {
   role: string;
   reason: string | null;
   onResend: () => void;
+  sending: boolean;
 }) {
   const { t } = useTranslation();
   return (
@@ -2236,9 +2250,10 @@ function VanishedTurnCard({
           <button
             type="button"
             onClick={onResend}
-            className="mt-2 inline-flex items-center gap-1.5 rounded-md border border-border-subtle bg-surface-elevated px-2.5 py-1 font-caption text-[11px] text-foreground-secondary transition-colors hover:bg-surface-tertiary"
+            disabled={sending}
+            className="mt-2 inline-flex items-center gap-1.5 rounded-md border border-border-subtle bg-surface-elevated px-2.5 py-1 font-caption text-[11px] text-foreground-secondary transition-colors hover:bg-surface-tertiary disabled:opacity-50"
           >
-            <RefreshCw className="size-3.5" />
+            <RefreshCw className={cn("size-3.5", sending && "animate-spin")} />
             {t("chat.vanishedTurn.resend", "重新发送这条消息")}
           </button>
         </div>
