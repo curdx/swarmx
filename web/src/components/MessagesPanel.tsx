@@ -1218,7 +1218,13 @@ export function MessagesPanel({
     : t("messages.sendHintDesktop", { enter: platform.enterKeyLabel });
 
   return (
-    <div className="flex h-full flex-col bg-surface-primary">
+    // flex-1 + min-h-0 (not h-full): MessagesPanel must take the *remaining*
+    // height after preceding siblings in the chat column (status strip +
+    // PlanStickyCard), and be allowed to shrink so its internal scroll area
+    // — not the page — absorbs overflow. `h-full` forced 100% of the parent
+    // regardless of siblings, pushing the composer below the viewport once
+    // the plan card appeared (the "no input box" bug).
+    <div className="flex min-h-0 flex-1 flex-col bg-surface-primary">
       {/* ── slim top bar ─────────────────────────────────────────────── */}
       {/* No own border-b: the WorkspaceToolbar's divider directly above is
           the canonical header separator. A second hairline 36px below it
