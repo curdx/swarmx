@@ -771,12 +771,69 @@ export function MessagesPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [items, aliveForInference, agentLiveStateById, interruptedTriggers, tick]);
 
+  // ── 入流律:本轮中断(队长收到任务却没回复就死了)─────────────────────
+  // "正在响应…然后突然消失" 的根因:气泡只在 agent 存活时显示,一旦它被杀 /
+  // 出错 / 干净退出(三种死法都会发布 exited|error 终态),pendingResponders
+  // 立刻把它剔除 → 气泡静默消失;而失败卡过去只在空房间(rows.length===0)渲染,
+  // 有消息时啥都不补。这里纯派生地把诚实信号补回流里:对任一已进终态的 agent,
+  // 取它在本对话里最后一条用户任务;若其后没有它给用户的回复、也没被用户主动
+  // 打断,就是一次"消失的回合"。agentLiveStateById 只增不删(见
+  // useWorkspaceShellData 的 setAgentStateById),所以死掉的 agent 终态仍可查。
+  const vanishedTurns = useMemo(() => {
+    const lastTrigger = new Map<string, MessageRecord>();
+    const lastReplyAt = new Map<string, number>();
+    for (const m of items) {
+      if (m.from_agent === USER_SENDER && m.to_agent !== USER_SENDER) {
+        const prev = lastTrigger.get(m.to_agent);
+        if (!prev || m.sent_at > prev.sent_at) lastTrigger.set(m.to_agent, m);
+      } else if (m.to_agent === USER_SENDER && m.from_agent !== USER_SENDER) {
+        const prev = lastReplyAt.get(m.from_agent) ?? 0;
+        if (m.sent_at > prev) lastReplyAt.set(m.from_agent, m.sent_at);
+      }
+    }
+    const out: Array<{
+      agentId: string;
+      trigger: MessageRecord;
+      reason: string | null;
+    }> = [];
+    for (const [agentId, trigger] of lastTrigger) {
+      const live = agentLiveStateById?.[agentId];
+      const dead = live?.state === "error" || live?.state === "exited";
+      if (!dead) continue; // 还活着(含"慢但在跑")→ 不喊狼来了
+      if ((lastReplyAt.get(agentId) ?? 0) >= trigger.sent_at) continue; // 已回复
+      if (interruptedTriggers[agentId] === trigger.id) continue; // 用户主动打断
+      out.push({
+        agentId,
+        trigger,
+        // 仅当死因是显式错误时才有原因文案(auth/卡死等);中性被杀/退出为 null。
+        reason: live?.state === "error" ? live.activity?.label ?? null : null,
+      });
+    }
+    return out;
+  }, [items, agentLiveStateById, interruptedTriggers]);
+
+  // 诊断面包屑:把"队长本轮无回复就消失"这一刻打到控制台,便于现场复盘
+  // ("正在…然后突然没了" 的报告)。每个回合只打一次。
+  const loggedVanishedRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    for (const v of vanishedTurns) {
+      const key = `${v.agentId}:${v.trigger.id}`;
+      if (loggedVanishedRef.current.has(key)) continue;
+      loggedVanishedRef.current.add(key);
+      console.warn(
+        `[flockmux] 队长本轮中断:agent=${v.agentId} 收到任务#${v.trigger.id} 后进入 ` +
+          `${agentLiveStateById?.[v.agentId]?.state ?? "?"} 终态,未产出回复` +
+          (v.reason ? ` · 原因:${v.reason}` : ""),
+      );
+    }
+  }, [vanishedTurns, agentLiveStateById]);
+
   // Auto-scroll to bottom on new items / live message / new pending bubble.
   useLayoutEffect(() => {
     const el = listRef.current;
     if (!el) return;
     el.scrollTop = el.scrollHeight;
-  }, [rows.length, pendingResponders.length]);
+  }, [rows.length, pendingResponders.length, vanishedTurns.length]);
 
   // ── send / reply / mark-read ──────────────────────────────────────────
   // Magentic-One 重构后用户视角永远只跟"一个 AI 接待员对话":这个角色就是
@@ -1629,6 +1686,20 @@ export function MessagesPanel({
               live={agentLiveStateById?.[agentId]}
             />
           ))}
+          {vanishedTurns.map((v) => (
+            <VanishedTurnCard
+              key={`vanished-${v.agentId}-${v.trigger.id}`}
+              role={resolveRole(v.agentId, roleLookup)}
+              reason={v.reason}
+              onResend={() => {
+                setBody(v.trigger.body);
+                requestAnimationFrame(() => {
+                  autoGrow(composerRef.current);
+                  composerRef.current?.focus();
+                });
+              }}
+            />
+          ))}
           {/* 之前这里有"<agent> 等你回话"的 ghost line — 删了。
               球在用户手里是默认状态,composer 在那儿本身就是邀请,
               再加文字提示反而冗余、翻译尴尬。awaitingAgents 仍然
@@ -2119,6 +2190,57 @@ function PendingBubble({
               <PendingDot delayMs={300} />
             </span>
           )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** 入流律:队长收到任务却没回复就退出了 —— 把"正在响应…然后突然消失"换成一张
+ *  诚实、可操作的卡(说明本轮没送达 + 一键把原消息填回输入框重发),而不是让
+ *  气泡凭空消失。`reason` 仅在死因是显式错误(未登录 / 卡死等)时才有。 */
+function VanishedTurnCard({
+  role,
+  reason,
+  onResend,
+}: {
+  role: string;
+  reason: string | null;
+  onResend: () => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div className="mt-3 flex gap-3">
+      <div className="flex w-8 shrink-0 justify-center">
+        <div className="flex size-8 items-center justify-center rounded-full bg-surface-tertiary text-state-warning shadow-sm">
+          <TriangleAlert className="size-4" />
+        </div>
+      </div>
+      <div className="flex min-w-0 flex-col items-start gap-1">
+        <span className="px-0.5 font-heading text-[13px] font-semibold text-foreground-primary">
+          {role}
+        </span>
+        <div className="w-[min(82vw,520px)] rounded-2xl rounded-bl-sm border border-state-warning/30 bg-status-warning-soft/50 px-3 py-2 shadow-sm">
+          <p className="font-body text-[12px] leading-5 text-foreground-secondary">
+            {t("chat.vanishedTurn.body", {
+              role,
+              defaultValue:
+                "{{role}}本轮没有产出回复就退出了 —— 可能是登录失效、被重启或异常中断,你的上一条消息没能送达。",
+            })}
+          </p>
+          {reason && (
+            <p className="mt-1 break-words font-mono text-[11px] text-state-warning">
+              {reason}
+            </p>
+          )}
+          <button
+            type="button"
+            onClick={onResend}
+            className="mt-2 inline-flex items-center gap-1.5 rounded-md border border-border-subtle bg-surface-elevated px-2.5 py-1 font-caption text-[11px] text-foreground-secondary transition-colors hover:bg-surface-tertiary"
+          >
+            <RefreshCw className="size-3.5" />
+            {t("chat.vanishedTurn.resend", "重新发送这条消息")}
+          </button>
         </div>
       </div>
     </div>
