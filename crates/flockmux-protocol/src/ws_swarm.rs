@@ -4,7 +4,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::rest::ThoughtTrace;
+use crate::rest::{ThoughtTrace, ThoughtTraceStep};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -93,6 +93,19 @@ pub enum SwarmEvent {
         /// Wall-clock duration once finished; `None` while still running.
         #[serde(default)]
         duration_ms: Option<u32>,
+        at: i64,
+    },
+    /// A live append to an IN-FLIGHT thought trace: emitted right after a real
+    /// step is persisted to an agent's still-active trace, so the "正在响应"
+    /// bubble can grow its step list during the turn instead of only learning
+    /// the steps when the agent→user reply finally lands. Carries the FULL
+    /// current summary snapshot (not a delta) keyed by `trigger_message_id`, so
+    /// the UI just replaces by that key — a dropped frame self-heals on the
+    /// next append. Same low frequency as `AgentActivity` (one per tool).
+    ThoughtTraceEvent {
+        trigger_message_id: i64,
+        agent_id: String,
+        steps: Vec<ThoughtTraceStep>,
         at: i64,
     },
 }

@@ -513,6 +513,16 @@ export type SwarmEvent =
       workspace_id: string;
       thread_id: string;
       op: string;
+    }
+  | {
+      // A live append to an in-flight thought trace — lets the "正在响应" bubble
+      // grow its step list during the turn (keyed by trigger_message_id) instead
+      // of waiting for the reply. Full current snapshot, not a delta.
+      type: "thought_trace_event";
+      trigger_message_id: number;
+      agent_id: string;
+      steps: { phase: string; label: string; source: string; at: number }[];
+      at: number;
     };
 
 // ── F1 model settings: per-CLI tier→concrete-model mapping ──────────────────

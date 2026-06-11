@@ -147,6 +147,11 @@ interface Props {
    *  lying with a typing bubble for 60s (P0-3, treats 诊断2 等待期撒谎 root).
    *  It also feeds the pending bubble's honest two-signal activity line. */
   agentLiveStateById?: Record<string, AgentLiveState>;
+  /** Live in-flight reasoning steps keyed by agent id, fed by
+   *  `thought_trace_event`. The pending bubble shows these growing in real time
+   *  during the turn (real captured tool steps only) instead of the summary
+   *  appearing only when the reply lands. */
+  reasoningById?: Record<string, ReasoningSummary>;
   /** CLI engine readiness — renders the helpful empty-room state (P0-8) with
    *  starter prompts + an honest engine pre-check. Omitted by the legacy /debug
    *  panel ⇒ an empty room falls back to plain "暂无消息". */
@@ -235,7 +240,7 @@ function formatElapsed(ms: number): string {
   return `${h}h ${String(min % 60).padStart(2, "0")}m`;
 }
 
-interface ReasoningSummary {
+export interface ReasoningSummary {
   durationMs: number | null;
   steps: string[];
 }
@@ -279,6 +284,7 @@ export function MessagesPanel({
   modelBusy = false,
   agentActivityById,
   agentLiveStateById,
+  reasoningById,
   cliReadiness,
   emptyStateOverride,
 }: Props) {
@@ -1700,6 +1706,7 @@ export function MessagesPanel({
               replyHint={t("messages.responding", { id: trigger.id })}
               trigger={trigger}
               live={agentLiveStateById?.[agentId]}
+              liveReasoning={reasoningById?.[agentId]}
             />
           ))}
           {vanishedTurns.map((v) => (
@@ -2093,12 +2100,14 @@ function PendingBubble({
   replyHint,
   trigger,
   live,
+  liveReasoning,
 }: {
   role: string;
   label: string;
   replyHint: string;
   trigger: MessageRecord;
   live?: AgentLiveState;
+  liveReasoning?: ReasoningSummary;
 }) {
   const { t } = useTranslation();
   const [now, setNow] = useState(Date.now());
@@ -2107,16 +2116,26 @@ function PendingBubble({
     return () => window.clearInterval(id);
   }, []);
 
-  // Only show a reasoning summary when the agent actually emitted one — no
-  // synthesized steps.
+  // Only show a reasoning summary backed by REAL steps — no synthesized ones.
+  // LIVE steps (streamed via thought_trace_event during the turn) win, so the
+  // list grows in real time; the persisted trace is the fallback (e.g. on a
+  // cold load before the live feed catches up). Neither → null → bare dots +
+  // cumulative timer (the honest "thinking, nothing to show yet" floor).
   const trace = trigger.thought_trace;
-  const realSummary: ReasoningSummary | null =
+  const persisted: ReasoningSummary | null =
     trace && trace.summary.length > 0
       ? {
           durationMs: Math.max(0, now - (trace.started_at ?? trigger.sent_at)),
           steps: trace.summary.map((step) => step.label).filter(Boolean),
         }
       : null;
+  const realSummary: ReasoningSummary | null =
+    liveReasoning && liveReasoning.steps.length > 0
+      ? {
+          steps: liveReasoning.steps,
+          durationMs: Math.max(0, now - trigger.sent_at),
+        }
+      : persisted;
 
   // Real latest tool event drives the "what it's doing right now" verb line.
   const act = live?.activity;

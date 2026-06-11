@@ -91,38 +91,19 @@ fn is_agent_to_user(from: &str, to: &str) -> bool {
     to == USER_AGENT_ID && from != USER_AGENT_ID && from != SYSTEM_AGENT_ID
 }
 
-fn start_trace_steps(at: i64) -> Vec<ThoughtTraceStep> {
-    vec![
-        ThoughtTraceStep {
-            phase: "understand".into(),
-            label: "理解用户请求".into(),
-            source: "system".into(),
-            at,
-        },
-        ThoughtTraceStep {
-            phase: "context".into(),
-            label: "检查当前对话、工作区和任务状态".into(),
-            source: "system".into(),
-            at,
-        },
-        ThoughtTraceStep {
-            phase: "route".into(),
-            label: "判断由自己处理还是分配给 worker".into(),
-            source: "system".into(),
-            at,
-        },
-    ]
+// The thought trace shows ONLY real, captured steps now (事实律). The former
+// generic system seeds ("理解用户请求" / "检查状态" / "判断处理还是分配" /
+// "整理结果并回复用户") were identical every turn — boilerplate that read like
+// reasoning but reflected nothing the agent actually did. Removed: a trace
+// accrues only its real tool steps (source=agent, via activity_to_trace_event);
+// a turn with no tool calls has an empty trace and shows no "思考摘要" at all,
+// which is honest. `_at` kept so the seed call sites stay unchanged.
+fn start_trace_steps(_at: i64) -> Vec<ThoughtTraceStep> {
+    Vec::new()
 }
 
-fn done_trace_steps(at: i64) -> Vec<ThoughtTraceStep> {
-    let mut steps = start_trace_steps(at);
-    steps.push(ThoughtTraceStep {
-        phase: "answer".into(),
-        label: "整理结果并回复用户".into(),
-        source: "system".into(),
-        at,
-    });
-    steps
+fn done_trace_steps(_at: i64) -> Vec<ThoughtTraceStep> {
+    Vec::new()
 }
 
 fn steps_json(steps: &[ThoughtTraceStep]) -> String {
@@ -289,10 +270,39 @@ impl Swarm {
         if let Some(event) = trace_event {
             let store = self.store.clone();
             let agent_id = agent_id.to_string();
+            // Clone the broadcast sender into the task: append is async (spawned)
+            // and `self` can't cross the 'static boundary. On a successful append
+            // to a still-ACTIVE trace, push the new full summary live so the
+            // pending bubble grows its steps mid-turn (trigger_message_id +
+            // summary come from the RETURNED record — the only reliable source).
+            let events_tx = self.events_tx.clone();
+            let at = event.at;
             tokio::spawn(async move {
                 let candidates = trace_agent_candidates(store.clone(), agent_id).await;
-                if let Err(err) = store.append_thought_trace_event(candidates, event).await {
-                    tracing::warn!(?err, "append thought trace activity failed");
+                match store.append_thought_trace_event(candidates, event).await {
+                    Ok(Some(trace)) => {
+                        // Protocol step type — that's what SwarmEvent carries (the
+                        // storage type is a separate, JSON-identical struct).
+                        let steps = serde_json::from_str::<Vec<ProtocolThoughtTraceStep>>(
+                            &trace.summary_json,
+                        )
+                        .unwrap_or_default();
+                        // Only meaningful if there's something real to show.
+                        if !steps.is_empty() {
+                            let _ = events_tx.send(SwarmEvent::ThoughtTraceEvent {
+                                trigger_message_id: trace.trigger_message_id,
+                                agent_id: trace.agent_id.clone(),
+                                steps,
+                                at,
+                            });
+                        }
+                    }
+                    // No active trace matched (e.g. already completed) — don't
+                    // broadcast, don't invent a trace.
+                    Ok(None) => {}
+                    Err(err) => {
+                        tracing::warn!(?err, "append thought trace activity failed")
+                    }
                 }
             });
         }

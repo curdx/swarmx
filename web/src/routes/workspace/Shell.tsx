@@ -52,6 +52,7 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
+import type { ReasoningSummary } from "../../components/MessagesPanel";
 import type { WorkspaceSummary } from "./types";
 import { WorkspaceList } from "./WorkspaceSidebar";
 import { WorkspaceToolbar, ViewTransition, buildTabs } from "./WorkspaceToolbar";
@@ -116,6 +117,9 @@ export interface ShellOutletContext {
   /** Bounded per-agent activity history from the swarm WS. Chat uses it to
    *  patch late tool events into visible thought summaries. */
   agentActivityById: Record<string, AgentActivity[]>;
+  /** Live in-flight reasoning steps keyed by agent id, fed by
+   *  `thought_trace_event`, so the pending bubble grows its steps mid-turn. */
+  reasoningById: Record<string, ReasoningSummary>;
   /** Unread tally, already filtered to this workspace's senders. */
   unreadByFrom: Record<string, number>;
   /** Click → bump this counter, MessagesPanel scrolls to first unread. */
@@ -195,6 +199,7 @@ export default function WorkspaceShell() {
     liveRead,
     agentStateById,
     agentActivityById,
+    reasoningById,
     activeWorkspaceUnread,
     totalUnread,
     refreshAgents,
@@ -419,6 +424,7 @@ export default function WorkspaceShell() {
     liveRead,
     agentStateById,
     agentActivityById,
+    reasoningById,
     unreadByFrom: activeWorkspaceUnread,
     jumpUnreadTick,
     openAgent,

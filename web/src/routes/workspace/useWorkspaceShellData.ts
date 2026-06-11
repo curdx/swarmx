@@ -28,6 +28,7 @@ import type {
 import { useSwarmFeed } from "../../hooks/useSwarmFeed";
 import { accentToCssVar, splitWorkspacePath } from "../../lib/workspace";
 import { agentInThread, mainThreadOf } from "../../lib/thread";
+import type { ReasoningSummary } from "../../components/MessagesPanel";
 import type { WorkspaceSummary } from "./types";
 
 /** Cap on per-agent activity history kept in memory for the drawer Activity
@@ -74,6 +75,9 @@ export interface WorkspaceShellData {
   /** Per-agent bounded activity stream, accumulated from the swarm WS so the
    *  drawer's Activity tab survives close/reopen/remount (NOT ephemeral). */
   agentActivityById: Record<string, AgentActivity[]>;
+  /** Live in-flight reasoning steps keyed by agent id, fed by
+   *  `thought_trace_event` so the pending bubble grows its steps mid-turn. */
+  reasoningById: Record<string, ReasoningSummary>;
   /** Unread tally already filtered to the active workspace's senders. */
   activeWorkspaceUnread: Record<string, number>;
   totalUnread: number;
@@ -122,6 +126,15 @@ export function useWorkspaceShellData(
   >({});
   const [agentActivityById, setAgentActivityById] = useState<
     Record<string, AgentActivity[]>
+  >({});
+  // Live, in-flight reasoning steps keyed by AGENT id (an agent has at most one
+  // active trace at a time), fed by `thought_trace_event` so the "正在响应"
+  // bubble grows its step list during the turn. Keyed by agent — NOT by trigger
+  // message id — because the pending bubble's trigger can be a later system
+  // "wake" message while the trace is keyed to the user message; agent id is the
+  // stable join. Cleared when that agent's reply lands.
+  const [reasoningById, setReasoningById] = useState<
+    Record<string, ReasoningSummary>
   >({});
   const [unreadByFrom, setUnreadByFrom] = useState<Record<string, number>>({});
   const idToFromRef = useRef<Map<number, string>>(new Map());
@@ -271,6 +284,18 @@ export function useWorkspaceShellData(
           };
           setLiveMessage(rec);
           idToFromRef.current.set(ev.id, ev.from_agent);
+          // F4: this agent's reply landed — the persisted thought_trace on the
+          // message takes over, so drop its in-flight live reasoning (keyed by
+          // agent) to avoid carrying stale steps into its next turn.
+          if (ev.from_agent !== "user" && ev.to_agent === "user") {
+            const replier = ev.from_agent;
+            setReasoningById((prev) => {
+              if (!(replier in prev)) return prev;
+              const next = { ...prev };
+              delete next[replier];
+              return next;
+            });
+          }
           if (ev.to_agent === "user" && countsAsUserUnread(ev.from_agent, ev.kind, ev.meta)) {
             setUnreadByFrom((prev) => ({
               ...prev,
@@ -308,6 +333,18 @@ export function useWorkspaceShellData(
           // reflects the new name + branch icon without a manual reload.
           refreshWorkspaces();
           break;
+        case "thought_trace_event": {
+          // Live, real steps appended to an in-flight trace — grow the pending
+          // bubble's step list mid-turn. Full snapshot, keyed by the trace's
+          // agent. (No synthesized steps: the backend only emits this for real,
+          // captured tool steps.)
+          const steps = ev.steps.map((s) => s.label).filter(Boolean);
+          setReasoningById((prev) => ({
+            ...prev,
+            [ev.agent_id]: { steps, durationMs: null },
+          }));
+          break;
+        }
       }
     },
     onReconnect: () => {
@@ -474,6 +511,7 @@ export function useWorkspaceShellData(
     liveRead,
     agentStateById,
     agentActivityById,
+    reasoningById,
     activeWorkspaceUnread,
     totalUnread,
     refreshAgents,

@@ -415,6 +415,7 @@ export default function ChatView() {
     liveRead,
     agentStateById,
     agentActivityById,
+    reasoningById,
     unreadByFrom: activeWorkspaceUnread,
     jumpUnreadTick,
     openAgent,
@@ -1006,6 +1007,7 @@ export default function ChatView() {
           modelBusy={modelBusy}
           agentActivityById={agentActivityById}
           agentLiveStateById={agentStateById}
+          reasoningById={reasoningById}
           cliReadiness={cliReadiness}
           emptyStateOverride={
             orchestratorFailure ? (
