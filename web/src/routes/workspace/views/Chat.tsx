@@ -18,7 +18,9 @@ import type { AgentInfo, CliPluginInfo } from "../../../api/types";
 import { MessagesPanel } from "../../../components/MessagesPanel";
 import { OrchestratorFailureCard } from "../../../components/workspace/OrchestratorFailureCard";
 import { BootstrapChecklistCard } from "../../../components/chat/BootstrapChecklistCard";
+import { PlanStickyCard } from "../../../components/chat/PlanStickyCard";
 import { PulseRail } from "../../../components/workspace/PulseRail";
+import { parsePlan, type ParsedPlan } from "../../../lib/parsePlan";
 import { OnboardingTour } from "../../../components/OnboardingTour";
 import {
   TaskActivity,
@@ -116,6 +118,44 @@ function useBreadcrumbs(prefix: string) {
     onReconnect: () => reload(),
   });
   return rows;
+}
+
+/** Pull the captain's STRUCTURED plan (`<ws>/<thread>/plan.json`) for the
+ *  PlanStickyCard. Mirrors useBreadcrumbs: checks existence via listBlackboard
+ *  (so no 404 when absent), reads + defensively parses the JSON, and live-
+ *  refreshes on blackboard_changed for that exact key. Returns null when there
+ *  is no plan or the JSON can't be trusted (parsePlan decides that). */
+function usePlan(prefix: string): ParsedPlan | null {
+  const [plan, setPlan] = useState<ParsedPlan | null>(null);
+  const path = `${prefix}plan.json`;
+  const reload = useCallback(async () => {
+    try {
+      const all = (await api.listBlackboard()) as BlackboardEntry[];
+      if (!all.some((e) => e.path === path)) {
+        setPlan(null);
+        return;
+      }
+      const snap = (await api.readBlackboard(path)) as BlackboardSnapshot | null;
+      setPlan(snap ? parsePlan(snap.content) : null);
+    } catch {
+      setPlan(null);
+    }
+  }, [path]);
+  useEffect(() => {
+    reload();
+  }, [reload]);
+  const lastIdRef = useRef<number>(0);
+  useSwarmFeed({
+    onEvent: (ev: SwarmEvent) => {
+      if (ev.type !== "blackboard_changed") return;
+      if (ev.id === lastIdRef.current) return;
+      if (ev.path !== path) return;
+      lastIdRef.current = ev.id;
+      reload();
+    },
+    onReconnect: () => reload(),
+  });
+  return plan;
 }
 
 function fmtBreadcrumbAgo(at: number, now: number): string {
@@ -747,6 +787,7 @@ export default function ChatView() {
   const breadcrumbsRaw = useBreadcrumbs(
     `${workspace.workspaceId}/${threadSlug}/`,
   );
+  const plan = usePlan(`${workspace.workspaceId}/${threadSlug}/`);
 
   // 每 5s tick 让 statusDot 重新评估时间窗(responding/working 都有时间窗,
   // 没消息进来时也要让它们自然衰减成 idle/awaiting)。
@@ -908,6 +949,9 @@ export default function ChatView() {
           onRevive={reviveOrchestrator}
           hasError={orchestratorFailure != null}
         />
+        {/* P2: the captain's structured plan, pinned above the conversation —
+            accurate ✓/◐/○ from plan.json, not guessed from prose. */}
+        {plan && <PlanStickyCard plan={plan} />}
         <MessagesPanel
           liveMessage={liveMessage}
           liveRead={liveRead}

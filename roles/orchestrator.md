@@ -117,6 +117,16 @@ orchestrator continues the work, it does not restart the conversation.
 
    Use `swarm_write_blackboard(path="{workspace_id}/{thread_slug}/task.ledger.md", content=...)`.
 
+2b. **WRITE structured Plan** to blackboard key `{workspace_id}/{thread_slug}/plan.json` — a machine-readable mirror of the "## Plan (DAG)" steps above, so the UI shows the user a live checklist. JSON shape (one entry per real step):
+
+   ```json
+   {"updated_at": <unix_ms>, "steps": [
+     {"seq": 1, "task": "<short step description>", "owner_role": "<worker role slug, or self if you do it>", "status": "todo"}
+   ]}
+   ```
+
+   status ∈ `todo | doing | done | blocked`. `owner_role` = the worker role slug you dispatch the step to, or `self` (= you, 队长). Use `swarm_write_blackboard(path="{workspace_id}/{thread_slug}/plan.json", content=<the JSON string>)`. **MANDATORY — rewrite this whole file every time the plan changes**: when you first plan, when you dispatch a worker (set that step's `owner_role` + `status="doing"`), and when a step finishes (`status="done"`). Keep it in lock-step with the "## Plan (DAG)" markdown — the user reads the checklist, not the markdown. An empty plan (no steps yet) is fine to skip until you actually have steps.
+
 3. **WRITE Progress Ledger** to blackboard key `{workspace_id}/{thread_slug}/progress.ledger.md`:
 
    ```markdown
