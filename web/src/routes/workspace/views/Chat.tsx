@@ -53,6 +53,8 @@ import {
   roleColorClass as roleColor,
   resolveMemberVisual,
   formatActivityLine,
+  agentIsWorkable,
+  agentIsErrored,
 } from "@/lib/agent";
 import type {
   AgentLiveState,
@@ -881,7 +883,12 @@ export default function ChatView() {
             tsk.spawnedRoles.includes(a.role),
           );
           if (matching.length === 0) return tsk;
-          const allReady = matching.every((a) => a.shim_ready);
+          // M1: "Ready" must mean the agent can actually WORK, not just that its
+          // PTY launched (shim_ready). A spawn wedged on a login prompt / MCP
+          // loop reports shim_ready but carries last_error — agentIsWorkable
+          // gates on the real health signal so the card never flips green over
+          // an agent the watchdog will fail 45–300s later.
+          const allReady = matching.every((a) => agentIsWorkable(a));
           return allReady ? { ...tsk, status: "ready" as const } : tsk;
         }),
       );
@@ -894,10 +901,17 @@ export default function ChatView() {
       // card，agent 加入会通过成员栏体现。
       return;
     }
+    // M2: a just-spawned agent that immediately FAILED (last_error set) is
+    // still in the alive roster — don't count it as dispatched work / inflate
+    // the "正在派活 N" chip. Only not-yet-failing roles get listed.
+    const fresh = newAgents.filter((a) => !agentIsErrored(a));
+    if (fresh.length === 0) return;
     setTasks((prev) => {
       const taskId = `task-${lastUser.id}`;
       const existing = prev.find((t) => t.id === taskId);
-      const allReady = newAgents.every((a) => a.shim_ready);
+      // M1: "ready" gates on agentIsWorkable (PTY up + alive + not failing),
+      // not bare shim_ready — same honest signal as the no-new-agents path.
+      const allReady = fresh.every((a) => agentIsWorkable(a));
       if (existing) {
         // 已经为这条 user msg 创建过 task — append roles
         return prev.map((tsk) =>
@@ -905,7 +919,7 @@ export default function ChatView() {
             ? {
                 ...tsk,
                 status: (allReady ? "ready" : "spawning") as TaskActivityT["status"],
-                spawnedRoles: [...tsk.spawnedRoles, ...newAgents.map((a) => a.role)],
+                spawnedRoles: [...tsk.spawnedRoles, ...fresh.map((a) => a.role)],
               }
             : tsk,
         );
@@ -917,7 +931,7 @@ export default function ChatView() {
           startedAt: lastUser.at,
           status: (allReady ? "ready" : "spawning") as TaskActivityT["status"],
           trigger: lastUser.body,
-          spawnedRoles: newAgents.map((a) => a.role),
+          spawnedRoles: fresh.map((a) => a.role),
         },
       ];
     });
@@ -941,7 +955,10 @@ export default function ChatView() {
         <WorkspaceStatusStrip
           workspaceName={workspace.name}
           directionName={directionName}
-          memberCount={activeMembers.length}
+          // L1: "N 个 AI 在线" counts only agents that can actually work — an
+          // errored/wedged member (last_error set) isn't "online". (was:
+          // activeMembers.length, which counted failing agents as online.)
+          memberCount={activeMembers.filter(agentIsWorkable).length}
           sourceCount={workspace.roots.length + 1}
           cwdBranch={workspace.cwdBranch}
           cliReadiness={cliReadiness}

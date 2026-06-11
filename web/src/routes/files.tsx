@@ -53,7 +53,7 @@ function fenceWrap(lang: string, content: string): string {
 
 export default function FilesRoute() {
   const { t } = useTranslation();
-  const { workspaces, wsId, setWsId, ready } = useToolWorkspaces();
+  const { workspaces, wsId, setWsId, ready, error: wsError } = useToolWorkspaces();
   const [browseAll, setBrowseAll] = useState(false);
   const [list, setList] = useState<FileListResp | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -163,6 +163,14 @@ export default function FilesRoute() {
           </label>
           {workspaces.length > 0 && (
             <WorkspacePicker workspaces={workspaces} value={wsId} onChange={setWsId} />
+          )}
+          {/* M6: an empty list after a FAILED fetch is not "no workspaces". */}
+          {ready && wsError && workspaces.length === 0 && (
+            <span className="font-caption text-[11px] text-state-warning">
+              {t("files.workspacesLoadFailed", {
+                defaultValue: "工作区加载失败,请重试",
+              })}
+            </span>
           )}
         </div>
       </header>

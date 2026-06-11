@@ -157,6 +157,23 @@ function maybeDisconnect() {
   }, LINGER_CLOSE_MS);
 }
 
+/** Passive read of the shared socket's REAL connection status — for UI that
+ *  must reflect "is the live feed actually connected" (e.g. the LIVE badge,
+ *  which otherwise stays lit off a stale REST snapshot after the WS drops).
+ *  Does NOT register an event subscriber and does NOT open/keep-alive the
+ *  socket — the real feed consumers do that; this just observes. */
+export function useSwarmFeedStatus(): SwarmFeedStatus {
+  const [s, setS] = useState<SwarmFeedStatus>(status);
+  useEffect(() => {
+    setS(status); // reconcile any change between render and this effect
+    statusListeners.add(setS);
+    return () => {
+      statusListeners.delete(setS);
+    };
+  }, []);
+  return s;
+}
+
 export function useSwarmFeed({ onEvent, onReconnect }: Options): SwarmFeedStatus {
   // Seed "connecting" (not the module's idle "closed") on a cold mount — the
   // effect below is about to open the socket, so showing a red "closed" dot
