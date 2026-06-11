@@ -753,6 +753,16 @@ pub(crate) async fn spawn_with_bookkeeping(
                     }
                     Ok(LifecycleEvent::ShimExit(code)) => {
                         let at = now_ms();
+                        // Lifecycle breadcrumb: the agent's CLI process ended —
+                        // this is the moment a pending "正在响应" bubble for it
+                        // will vanish on the client. code==0 → neutral Exited
+                        // (no failure card today); code!=0 → Error (red card).
+                        tracing::info!(
+                            agent = %agent_for_task,
+                            code,
+                            terminal = if code == 0 { "exited" } else { "error" },
+                            "shim exited — agent turn ends"
+                        );
                         if let Err(e) = store
                             .record_shim_exit(agent_for_task.clone(), code, at)
                             .await
@@ -1052,6 +1062,13 @@ pub async fn list_agents(State(state): State<AppState>) -> impl IntoResponse {
 pub(crate) async fn teardown_agent(state: &AppState, agent_id: &str) -> bool {
     match state.registry.remove(agent_id) {
         Some(slot) => {
+            // Lifecycle breadcrumb: an explicit teardown (DELETE /api/agent,
+            // WS Kill, model-switch restart, bootstrap-replace). Sets killed_at
+            // and broadcasts a NEUTRAL Exited — so if this agent had an
+            // unanswered user message, its pending bubble vanishes with no
+            // failure card. Logged so "正在…然后突然没了" reports can be traced
+            // to who/when tore the captain down.
+            tracing::info!(agent = %agent_id, "teardown_agent: killing agent (killed_at, neutral Exited)");
             {
                 let slot = slot.lock();
                 slot.bridge.kill();
