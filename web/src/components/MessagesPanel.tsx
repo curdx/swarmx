@@ -235,11 +235,6 @@ function formatElapsed(ms: number): string {
   return `${h}h ${String(min % 60).padStart(2, "0")}m`;
 }
 
-function snippet(text: string, max = 42): string {
-  const s = text.replace(/\s+/g, " ").trim();
-  return s.length > max ? `${s.slice(0, max - 1)}…` : s;
-}
-
 interface ReasoningSummary {
   durationMs: number | null;
   steps: string[];
@@ -649,53 +644,19 @@ export function MessagesPanel({
       ) {
         continue;
       }
+      // Only surface a reasoning summary backed by a REAL thought_trace. Was:
+      // when traceToSummary returned null this FELL THROUGH and heuristically
+      // FABRICATED ~5 plausible "理解了「…」/ 派给 worker / 汇总 N 个 agent /
+      // 整理成最终回复" steps, then rendered them status="done" as if they were
+      // the agent's actual completed thinking — a lie the backend never
+      // produced (the reported "思考摘要" that's sometimes fake). Removed: no
+      // real trace → no disclosure, matching the live PendingBubble's own
+      // stated principle ("nothing yet → no invented steps").
       const persisted = traceToSummary(m);
-      if (persisted) {
-        out.set(m.id, persisted);
-        continue;
-      }
-      const priorUserIndex = (() => {
-        for (let j = i - 1; j >= 0; j--) {
-          if (visible[j].from_agent === USER_SENDER) return j;
-        }
-        return -1;
-      })();
-      if (priorUserIndex < 0) continue;
-      const priorUser = visible[priorUserIndex];
-      const duration = m.sent_at - priorUser.sent_at;
-      const durationMs =
-        duration > 0 && duration <= MAX_REASONING_SUMMARY_MS ? duration : null;
-      const between = visible.slice(priorUserIndex + 1, i);
-      const otherAgents = new Set(
-        between
-          .filter((x) => x.from_agent !== SYSTEM_SENDER && x.from_agent !== m.from_agent)
-          .map((x) => resolveRole(x.from_agent, roleLookup)),
-      );
-      const role = resolveRole(m.from_agent, roleLookup);
-      const steps = [
-        t("messages.reasoning.stepUnderstood", {
-          msg: snippet(priorUser.body),
-        }),
-        role === "orchestrator"
-          ? t("messages.reasoning.stepOrchestrator")
-          : t("messages.reasoning.stepWorker", { role }),
-      ];
-      if (otherAgents.size > 0) {
-        steps.push(
-          t("messages.reasoning.stepMerged", {
-            count: otherAgents.size,
-            roles: [...otherAgents].slice(0, 4).join(" · "),
-          }),
-        );
-      }
-      if (between.some((x) => x.kind === "reply" || x.kind === "note")) {
-        steps.push(t("messages.reasoning.stepCheckedThread"));
-      }
-      steps.push(t("messages.reasoning.stepAnswered"));
-      out.set(m.id, { durationMs, steps });
+      if (persisted) out.set(m.id, persisted);
     }
     return out;
-  }, [visible, roleLookup, t, traceToSummary]);
+  }, [visible, traceToSummary]);
 
   // First agent→user unread message + total count. Drives the Slack-style
   // "N 条新消息" divider that replaces the old per-message amber left
