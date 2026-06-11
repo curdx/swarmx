@@ -35,7 +35,10 @@ export function AppToaster() {
   return (
     <SonnerToaster
       theme={theme}
-      position="top-right"
+      // bottom-right: the enterprise convention for action feedback (Linear /
+      // Vercel / Sentry) and clear of this app's top search bar; sits near the
+      // composer where most actions originate.
+      position="bottom-right"
       richColors
       closeButton
       expand
