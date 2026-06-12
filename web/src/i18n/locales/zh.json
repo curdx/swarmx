@@ -310,7 +310,21 @@
       "cratesTitle": "Rust crates",
       "cratesHint": "9 个 crate 组成后端，src-tauri 是壳",
       "depsTitle": "前端依赖",
-      "credits": "致谢"
+      "credits": "致谢",
+      "update": {
+        "title": "软件更新",
+        "hint": "检查并安装新版本——不会自动更新，由你决定",
+        "current": "当前版本 v{{v}}",
+        "check": "检查更新",
+        "checking": "检查中…",
+        "uptodate": "已是最新版本",
+        "available": "发现新版本 v{{v}}，可下载安装",
+        "download": "下载并安装",
+        "downloading": "下载中 {{pct}}%",
+        "failed": "操作失败，请稍后重试",
+        "desktopOnly": "更新仅在桌面版可用",
+        "badge": "有新版本"
+      }
     },
     "models": {
       "title": "模型配给",

@@ -24,6 +24,8 @@ import {
   Bell,
   Check,
   CheckCircle2,
+  DownloadCloud,
+  RefreshCw,
   CircleUser,
   Copy,
   Cpu,
@@ -42,6 +44,13 @@ import {
   SunMoon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  checkForUpdate,
+  installUpdate,
+  inTauri,
+  useAvailableUpdate,
+  type Update,
+} from "@/lib/updater";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
@@ -1102,6 +1111,8 @@ function AboutPanel() {
         </div>
       </section>
 
+      <UpdateSection />
+
       <Field label={t("settings.about.endpointTitle")} hint={t("settings.about.endpointHint")}>
         <code className="inline-block rounded border border-border-subtle bg-surface-tertiary px-2 py-1 font-mono text-xs text-foreground-primary">
           {apiEndpoint}
@@ -1144,6 +1155,121 @@ function AboutPanel() {
         </ul>
       </Field>
     </div>
+  );
+}
+
+/** Settings → About: manual "check for updates" + install, fully user-driven.
+ *  The silent startup check (useAvailableUpdate) pre-fills any found update so
+ *  this panel and the sidebar badge agree. No auto-install, no startup popup. */
+function UpdateSection() {
+  const { t } = useTranslation();
+  const stashed = useAvailableUpdate();
+  const supported = inTauri();
+  const [update, setUpdate] = useState<Update | null>(stashed);
+  const [phase, setPhase] = useState<
+    "idle" | "checking" | "uptodate" | "downloading" | "error"
+  >("idle");
+  const [pct, setPct] = useState(0);
+
+  // Adopt whatever the background check found (or later cleared).
+  useEffect(() => {
+    setUpdate(stashed);
+  }, [stashed]);
+
+  const onCheck = async () => {
+    setPhase("checking");
+    const u = await checkForUpdate();
+    if (u) {
+      setUpdate(u);
+      setPhase("idle");
+    } else {
+      setUpdate(null);
+      setPhase("uptodate");
+    }
+  };
+
+  const onInstall = async () => {
+    if (!update) return;
+    setPhase("downloading");
+    setPct(0);
+    try {
+      await installUpdate(update, setPct); // relaunches the app on success
+    } catch (e) {
+      console.warn("[updater] install failed:", e);
+      setPhase("error");
+    }
+  };
+
+  return (
+    <Field
+      label={t("settings.about.update.title")}
+      hint={t("settings.about.update.hint")}
+    >
+      <div className="flex flex-col gap-3 rounded-lg border border-border-subtle bg-surface-elevated p-4">
+        <div className="flex items-center justify-between gap-3">
+          <span className="font-caption text-xs text-foreground-tertiary">
+            {t("settings.about.update.current", { v: __APP_VERSION__ })}
+          </span>
+          {!supported ? (
+            <span className="font-caption text-xs text-foreground-tertiary">
+              {t("settings.about.update.desktopOnly")}
+            </span>
+          ) : update ? (
+            <Button
+              size="sm"
+              variant="default"
+              onClick={onInstall}
+              disabled={phase === "downloading"}
+            >
+              <DownloadCloud />
+              {phase === "downloading"
+                ? t("settings.about.update.downloading", { pct })
+                : t("settings.about.update.download")}
+            </Button>
+          ) : (
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={onCheck}
+              disabled={phase === "checking"}
+            >
+              <RefreshCw
+                className={phase === "checking" ? "animate-spin" : undefined}
+              />
+              {phase === "checking"
+                ? t("settings.about.update.checking")
+                : t("settings.about.update.check")}
+            </Button>
+          )}
+        </div>
+
+        {update && (
+          <p className="font-caption text-xs text-accent-primary">
+            {t("settings.about.update.available", { v: update.version })}
+          </p>
+        )}
+        {phase === "downloading" && (
+          <div className="h-1.5 w-full overflow-hidden rounded-full bg-surface-tertiary">
+            <div
+              className="h-full rounded-full bg-accent-primary transition-[width]"
+              style={{ width: `${pct}%` }}
+            />
+          </div>
+        )}
+        {phase === "uptodate" && (
+          <p className="flex items-center gap-1.5 font-caption text-xs text-foreground-secondary">
+            <CheckCircle2 className="size-3.5 text-accent-primary" />
+            {t("settings.about.update.uptodate")}
+          </p>
+        )}
+        {phase === "error" && (
+          <p className="flex items-center gap-1.5 font-caption text-xs text-destructive">
+            <TriangleAlert className="size-3.5" />
+            {t("settings.about.update.failed")}
+          </p>
+        )}
+      </div>
+    </Field>
   );
 }
 
