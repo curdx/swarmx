@@ -85,6 +85,7 @@ import {
   resolveRole,
 } from "../lib/messageRows";
 import { useRoleLookup } from "../lib/useRoleLookup";
+import { useComposerDraft } from "../lib/useComposerDraft";
 
 const ChatMarkdown = lazy(() =>
   import("@/components/ChatMarkdown").then((m) => ({ default: m.ChatMarkdown })),
@@ -225,7 +226,6 @@ export function MessagesPanel({
   const [items, setItems] = useState<MessageRecord[]>([]);
   const [filter, setFilter] = useState("");
   const [filterOpen, setFilterOpen] = useState(false);
-  const [body, setBody] = useState("");
   const [inReplyTo, setInReplyTo] = useState<number | null>(null);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -233,47 +233,11 @@ export function MessagesPanel({
   // ── composer draft persistence (per workspace+direction) ──────────────────
   // Switching direction/workspace or reloading must not lose an in-progress
   // message. Keyed by (workspaceSlug, activeThreadId); restored on open,
-  // saved on switch + tab-close, cleared on send.
+  // saved on switch + tab-close, cleared on send. The state + persistence
+  // effects live in useComposerDraft; the key is computed here because send
+  // (below) also clears it.
   const draftKey = `flockmux:draft:v1:${workspaceSlug ?? "_"}:${activeThreadId ?? "main"}`;
-  const bodyRef = useRef(body);
-  bodyRef.current = body;
-  const draftKeyRef = useRef(draftKey);
-  useEffect(() => {
-    // Load the incoming draft. The cleanup (runs on key change + unmount) saves
-    // the OUTGOING draft under the key it belonged to (refs still hold the old
-    // values at cleanup time — the new effect body updates them afterwards).
-    let v = "";
-    try {
-      v = window.localStorage.getItem(draftKey) ?? "";
-    } catch {
-      /* ignore */
-    }
-    draftKeyRef.current = draftKey;
-    setBody(v);
-    return () => {
-      try {
-        const k = draftKeyRef.current;
-        const val = bodyRef.current;
-        if (val && val.trim()) window.localStorage.setItem(k, val);
-        else window.localStorage.removeItem(k);
-      } catch {
-        /* ignore */
-      }
-    };
-  }, [draftKey]);
-  useEffect(() => {
-    // Hard refresh / tab close doesn't run React cleanup — persist there too.
-    const save = () => {
-      try {
-        const val = bodyRef.current;
-        if (val && val.trim()) window.localStorage.setItem(draftKey, val);
-      } catch {
-        /* ignore */
-      }
-    };
-    window.addEventListener("beforeunload", save);
-    return () => window.removeEventListener("beforeunload", save);
-  }, [draftKey]);
+  const [body, setBody] = useComposerDraft(draftKey);
   // 「优化」 button: the rewrite is reversible (preOptimize holds the pre-rewrite
   // draft for one-click undo); optimizeNote shows a transient "already clear".
   const [optimizing, setOptimizing] = useState(false);
