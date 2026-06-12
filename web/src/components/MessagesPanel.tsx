@@ -76,6 +76,14 @@ import {
 } from "@/components/chat/EmptyState";
 import { SystemCard } from "@/components/chat/SystemCard";
 import { getClientPlatformInfo } from "@/lib/platform";
+import {
+  buildRows,
+  formatClock,
+  formatDivider,
+  formatElapsed,
+  formatFullStamp,
+  resolveRole,
+} from "../lib/messageRows";
 
 const ChatMarkdown = lazy(() =>
   import("@/components/ChatMarkdown").then((m) => ({ default: m.ChatMarkdown })),
@@ -166,7 +174,6 @@ interface Props {
 const KIND_DEFAULT = "note";
 const USER_SENDER = "user";
 const SYSTEM_SENDER = "system";
-const GROUP_GAP_MS = 5 * 60_000; // 5 minutes — same heuristic as Telegram
 /** How long an ALIVE agent may be TRULY silent — no reply AND no new tool
  *  event — before we stop showing its "正在响应" bubble. Measured from the last
  *  sign of life (trigger or last activity), NOT from the trigger, so an agent
@@ -184,85 +191,9 @@ const MAX_REASONING_SUMMARY_MS = 30 * 60_000;
  *  `resolveMemberVisual` keeps its own 300s window (see spec §2.8 ⚖裁决). */
 const HEARTBEAT_STALE_MS = 45_000;
 
-/** Resolve a role label for a from_agent id.
- *
- *  Looks up the lookup map first (populated from /api/agent — covers both
- *  active and exited agents). Falls back to a string heuristic so the very
- *  first paint, before listAgents() resolves, still shows *something*.
- */
-function resolveRole(
-  fromAgent: string,
-  lookup: Map<string, string>,
-): string {
-  const hit = lookup.get(fromAgent);
-  if (hit) return hit;
-  // agent_ids historically follow either `<cli>-<hash>` or `_<role>_<hash>`.
-  // Neither prefix is the role we want, but it's better than the full id.
-  const seg = fromAgent.replace(/^_+/, "").split(/[-_]/)[0];
-  return seg || "agent";
-}
-
-function formatClock(ms: number): string {
-  return new Date(ms).toLocaleTimeString([], {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
-function formatFullStamp(ms: number): string {
-  return new Date(ms).toLocaleString();
-}
-
-function formatDivider(ms: number): string {
-  const now = new Date();
-  const d = new Date(ms);
-  const sameDay =
-    d.getFullYear() === now.getFullYear() &&
-    d.getMonth() === now.getMonth() &&
-    d.getDate() === now.getDate();
-  return sameDay
-    ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-    : d.toLocaleString([], {
-        month: "short",
-        day: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
-      });
-}
-
-function formatElapsed(ms: number): string {
-  const sec = Math.max(0, Math.floor(ms / 1000));
-  if (sec < 60) return `${sec}s`;
-  const min = Math.floor(sec / 60);
-  const s = sec % 60;
-  if (min < 60) return `${min}m ${String(s).padStart(2, "0")}s`;
-  const h = Math.floor(min / 60);
-  return `${h}h ${String(min % 60).padStart(2, "0")}m`;
-}
-
 export interface ReasoningSummary {
   durationMs: number | null;
   steps: string[];
-}
-
-interface Row {
-  msg: MessageRecord;
-  showHeader: boolean; // render avatar + name row?
-  showDividerBefore: boolean;
-}
-
-function buildRows(items: MessageRecord[]): Row[] {
-  const rows: Row[] = [];
-  let prev: MessageRecord | null = null;
-  for (const msg of items) {
-    const gap = prev ? msg.sent_at - prev.sent_at : Infinity;
-    const sameSender = prev?.from_agent === msg.from_agent;
-    const showDividerBefore = prev !== null && gap > GROUP_GAP_MS;
-    const showHeader = !sameSender || showDividerBefore;
-    rows.push({ msg, showHeader, showDividerBefore });
-    prev = msg;
-  }
-  return rows;
 }
 
 export function MessagesPanel({
