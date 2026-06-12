@@ -164,6 +164,10 @@ test("create workspace dialog keeps form controls named and labelled", async ({ 
   await newWorkspaceOption.first().click();
   const dialog = page.getByRole("dialog", { name: /创建工作空间|Create workspace/ });
   await expect(dialog).toBeVisible();
+  // "Add another folder" lives in the collapsed Advanced section — expand it first.
+  await dialog
+    .getByRole("button", { name: /高级源码上下文|Advanced source context/ })
+    .click();
   const addFolder = dialog.getByRole("button", { name: /再加一个文件夹|Add another folder/ });
   await addFolder.scrollIntoViewIfNeeded();
   await addFolder.click();
