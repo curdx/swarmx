@@ -149,8 +149,10 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
       - uses: Swatinem/rust-cache@v2
-      - name: Build server (vite proxies /api → this)
-        run: cargo build -p flockmux-server --locked
+      - name: Build server + shim + mcp
+        # The server locates flockmux-shim / flockmux-mcp at boot and fails to
+        # start without them, so build all three (not just the server).
+        run: cargo build -p flockmux-server -p flockmux-shim -p flockmux-mcp --locked
       - name: Install web deps
         run: npm ci
         working-directory: web
