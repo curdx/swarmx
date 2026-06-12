@@ -86,11 +86,8 @@ import {
 } from "../lib/messageRows";
 import { useRoleLookup } from "../lib/useRoleLookup";
 import { useComposerDraft } from "../lib/useComposerDraft";
-import {
-  derivePendingResponders,
-  deriveVanishedTurns,
-} from "../lib/pendingResponders";
 import { useScrollMarkRead } from "../lib/useScrollMarkRead";
+import { usePendingResponders } from "../lib/usePendingResponders";
 
 const ChatMarkdown = lazy(() =>
   import("@/components/ChatMarkdown").then((m) => ({ default: m.ChatMarkdown })),
@@ -254,17 +251,6 @@ export function MessagesPanel({
   const [stopMenuOpen, setStopMenuOpen] = useState(false);
   const [interruptingId, setInterruptingId] = useState<string | null>(null);
   const [queuedHint, setQueuedHint] = useState(false);
-  // P1: when the user interrupts an agent, optimistically clear its
-  // "responding" indicator NOW instead of waiting for the backend Idle event to
-  // round-trip. Keyed by the CANCELLED turn's trigger message id (server-
-  // assigned, monotonic) — NOT a client wall-clock. This is clock-skew-proof: a
-  // brand-new message gets a new id so it's never wrongly suppressed, and a
-  // stale entry can never match a future turn. (Comparing client Date.now()
-  // against the server's trigger.sent_at mis-fires under laptop clock drift.)
-  // `markInterrupted` is defined after pendingResponders (it reads it).
-  const [interruptedTriggers, setInterruptedTriggers] = useState<
-    Record<string, number>
-  >({});
 
   const listRef = useRef<HTMLDivElement>(null);
   const rowRefs = useRef<Map<number, HTMLDivElement | null>>(new Map());
@@ -488,59 +474,14 @@ export function MessagesPanel({
     return { firstUnreadId: firstId, unreadCount: count };
   }, [visible]);
 
-  // ── pending responder inference (UI/F.2-A) ────────────────────────────
-  // Tick every 5s so the PENDING_SILENCE_GIVEUP_MS backstop is re-evaluated
-  // even when no new events arrive on /ws/swarm.
-  const [tick, setTick] = useState(0);
-  useEffect(() => {
-    const i = window.setInterval(() => setTick((t) => t + 1), 5000);
-    return () => window.clearInterval(i);
-  }, []);
-  const pendingResponders = useMemo(
-    () =>
-      derivePendingResponders({
-        items,
-        aliveForInference,
-        agentLiveStateById,
-        interruptedTriggers,
-        now: Date.now(),
-      }),
-    // tick is purposeful — re-evaluates the give-up cutoff over time even with
-    // no new WS events (Date.now() is read fresh each tick). The inference
-    // itself lives in lib/pendingResponders (unit-tested); this memo only owns
-    // the React deps.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [items, aliveForInference, agentLiveStateById, interruptedTriggers, tick],
-  );
-
-  // ── 入流律:本轮中断(队长收到任务却没回复就死了)─────────────────────
-  // "正在响应…然后突然消失" 的根因:气泡只在 agent 存活时显示,一旦它被杀 /
-  // 出错 / 干净退出(三种死法都会发布 exited|error 终态),pendingResponders
-  // 立刻把它剔除 → 气泡静默消失;而失败卡过去只在空房间(rows.length===0)渲染,
-  // 有消息时啥都不补。这里纯派生地把诚实信号补回流里:对任一已进终态的 agent,
-  // 取它在本对话里最后一条用户任务;若其后没有它给用户的回复、也没被用户主动
-  // 打断,就是一次"消失的回合"。agentLiveStateById 只增不删(见
-  // useWorkspaceShellData 的 setAgentStateById),所以死掉的 agent 终态仍可查。
-  const vanishedTurns = useMemo(
-    () => deriveVanishedTurns({ items, agentLiveStateById, interruptedTriggers }),
-    [items, agentLiveStateById, interruptedTriggers],
-  );
-
-  // 诊断面包屑:把"队长本轮无回复就消失"这一刻打到控制台,便于现场复盘
-  // ("正在…然后突然没了" 的报告)。每个回合只打一次。
-  const loggedVanishedRef = useRef<Set<string>>(new Set());
-  useEffect(() => {
-    for (const v of vanishedTurns) {
-      const key = `${v.agentId}:${v.trigger.id}`;
-      if (loggedVanishedRef.current.has(key)) continue;
-      loggedVanishedRef.current.add(key);
-      console.warn(
-        `[flockmux] 队长本轮中断:agent=${v.agentId} 收到任务#${v.trigger.id} 后进入 ` +
-          `${agentLiveStateById?.[v.agentId]?.state ?? "?"} 终态,未产出回复` +
-          (v.reason ? ` · 原因:${v.reason}` : ""),
-      );
-    }
-  }, [vanishedTurns, agentLiveStateById]);
+  // ── pending responder / vanished turn inference (UI/F.2-A) ────────────
+  // The "正在响应" bubble + "消失的回合" card state machine — interruptedTriggers,
+  // the 5s give-up tick, both derivations (pure lib/pendingResponders), the
+  // once-per-turn vanished console.warn, and markInterrupted — all live in
+  // usePendingResponders now. The component just consumes the three returns
+  // (runningMembers / stop-controls / send / onComposerKey / JSX below).
+  const { pendingResponders, vanishedTurns, markInterrupted } =
+    usePendingResponders({ items, aliveForInference, agentLiveStateById });
 
   // Auto-scroll to bottom on new items / live message / new pending bubble.
   useLayoutEffect(() => {
@@ -582,19 +523,6 @@ export function MessagesPanel({
       );
     });
   }, [activeMembers, agentLiveStateById, pendingResponders]);
-
-  // Mark the agent's CURRENT pending turn as cancelled, keyed by that trigger's
-  // server-assigned message id (looked up from pendingResponders at click time).
-  // Clock-free and self-clearing — a later message has a new id, so it re-shows.
-  const markInterrupted = useCallback(
-    (agentId: string) => {
-      const trig = pendingResponders.find((p) => p.agentId === agentId)?.trigger;
-      if (trig) {
-        setInterruptedTriggers((m) => ({ ...m, [agentId]: trig.id }));
-      }
-    },
-    [pendingResponders],
-  );
 
   const stopMember = useCallback(
     async (agentId: string) => {
