@@ -2,6 +2,7 @@ import { StrictMode } from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
 import { applyInitialTheme, setTheme, getThemeMode } from "./lib/theme";
+import { checkForUpdates } from "./lib/updater";
 import "./i18n"; // side-effect init i18next
 import "@xterm/xterm/css/xterm.css";
 import "./styles/global.css";
@@ -53,3 +54,8 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
     <App />
   </StrictMode>,
 );
+
+// Best-effort software auto-update: when a newer release exists, ask → download
+// → install → relaunch. No-op outside the Tauri shell. Delayed so it never
+// competes with first paint.
+setTimeout(() => void checkForUpdates(), 3000);

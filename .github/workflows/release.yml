@@ -168,6 +168,12 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Sign the updater artifacts (.sig) so the app can verify auto-updates.
+          # createUpdaterArtifacts:true in tauri.conf.json makes tauri build the
+          # updater bundles (.app.tar.gz / .AppImage / .msi) + .sig alongside the
+          # installers.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
         with:
           projectPath: web
           args: ${{ matrix.args }}
@@ -192,7 +198,9 @@ jobs:
               -o -name '*.rpm' \
               -o -name '*.msi' \
               -o -name '*.exe' \
-              -o -name '*.dmg' \) \
+              -o -name '*.dmg' \
+              -o -name '*.app.tar.gz' \
+              -o -name '*.sig' \) \
               | sort
           )
 
@@ -378,3 +386,21 @@ jobs:
           done < <(gh release view "$release_tag" --json assets --jq '.assets[].name')
 
           gh release upload "$release_tag" "${release_assets[@]}" --clobber
+
+      - name: Generate + upload updater manifest (latest.json)
+        # Only stable releases (v* tags) drive auto-update — the app endpoint
+        # points at the "latest" (non-prerelease) release's latest.json; nightly
+        # stays a manual download. Aggregates every platform's .sig into one
+        # manifest. NOTE: verify against a real tagged release the first time —
+        # updater bundle suffixes can vary by tauri/bundler version.
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          date="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+          node scripts/gen-updater-manifest.mjs release-artifacts \
+            "$GITHUB_REF_NAME" "$GITHUB_REPOSITORY" "$date" > latest.json
+          cat latest.json
+          gh release upload "$GITHUB_REF_NAME" latest.json --clobber
