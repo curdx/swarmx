@@ -19,6 +19,71 @@ fn ts(base: i64) -> i64 {
     1_700_000_000_000 + base
 }
 
+// ── corruption recovery (P0-1) ────────────────────────────────────────────
+
+#[tokio::test]
+async fn corrupt_database_is_archived_and_rebuilt() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("flockmux.db");
+    // Non-SQLite bytes → `PRAGMA quick_check` / open fails (NOTADB).
+    std::fs::write(&path, b"this is definitely not a valid sqlite database file").unwrap();
+
+    // open must RECOVER (archive + rebuild), not panic or bubble an error.
+    let store = Store::open(&path)
+        .await
+        .expect("open should recover from a corrupt db instead of crashing");
+
+    // The corrupt file is moved aside to a `*.corrupt-*` archive.
+    let archived = std::fs::read_dir(dir.path())
+        .unwrap()
+        .flatten()
+        .any(|e| e.file_name().to_string_lossy().contains(".corrupt-"));
+    assert!(archived, "corrupt database should be archived aside");
+
+    // The freshly rebuilt database is usable: a write goes through.
+    store
+        .insert_message_threaded(
+            NewMessage {
+                from_agent: "user".into(),
+                to_agent: "agent-a".into(),
+                kind: "task".into(),
+                body: "after rebuild".into(),
+                sent_at: ts(1),
+                in_reply_to: None,
+                meta: None,
+            },
+            Some("t-1".into()),
+        )
+        .await
+        .expect("rebuilt database should accept writes");
+}
+
+// ── retention: usage/activity tables are bounded (P1-9) ───────────────────
+
+#[tokio::test]
+async fn prune_trims_old_agent_usage_keeps_recent() {
+    let (_dir, store) = fresh_store().await;
+    let cutoff = ts(1000);
+    // One row older than the window, one inside it.
+    store
+        .insert_agent_usage("claude-aaaa".into(), Some("sonnet".into()), 10, 20, 0, 0, ts(500))
+        .await
+        .unwrap();
+    store
+        .insert_agent_usage("claude-aaaa".into(), Some("sonnet".into()), 1, 2, 0, 0, ts(2000))
+        .await
+        .unwrap();
+
+    let stats = store.prune_expired(cutoff).await.unwrap();
+    assert_eq!(stats.agent_usage, 1, "the row older than cutoff is pruned");
+
+    // The recent row stays (in-window usage stats remain queryable); a second
+    // pass removes nothing more. agent_activities uses the identical
+    // `DELETE WHERE at < cutoff` path in the same transaction.
+    let again = store.prune_expired(cutoff).await.unwrap();
+    assert_eq!(again.agent_usage, 0);
+}
+
 // ── thought traces ───────────────────────────────────────────────────────
 
 #[tokio::test]

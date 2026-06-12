@@ -76,12 +76,21 @@ pub struct PruneStats {
     pub messages: usize,
     pub recordings: usize,
     pub recording_files_removed: usize,
+    /// Per-step usage rows older than the window (the highest-frequency table —
+    /// one row per agent turn; unbounded without this).
+    pub agent_usage: usize,
+    /// Activity-log rows older than the window (also append-heavy).
+    pub agent_activities: usize,
 }
 
 impl PruneStats {
     /// True if nothing was deleted — lets the caller skip a log line.
     pub fn is_empty(&self) -> bool {
-        self.blackboard_ops == 0 && self.messages == 0 && self.recordings == 0
+        self.blackboard_ops == 0
+            && self.messages == 0
+            && self.recordings == 0
+            && self.agent_usage == 0
+            && self.agent_activities == 0
     }
 }
 
@@ -211,6 +220,113 @@ fn select_thought_trace(conn: &Connection, id: &str) -> rusqlite::Result<Thought
     )
 }
 
+/// Append a raw suffix to a path (e.g. `flockmux.db` + `-wal`). Unlike
+/// `Path::with_extension`, this does NOT replace the existing extension — the
+/// SQLite sidecar files are `<db>-wal` / `<db>-shm`, not `<db>.wal`.
+fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
+    let mut s = path.as_os_str().to_os_string();
+    s.push(suffix);
+    PathBuf::from(s)
+}
+
+/// Best-effort millis since the unix epoch, for unique archive filenames.
+fn unix_millis() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0)
+}
+
+/// Run `PRAGMA quick_check` on an existing database. If it cannot be opened or
+/// fails the check (truncated WAL after power loss, `NOTADB`, …), archive the
+/// file plus its `-wal`/`-shm` sidecars so the caller recreates an empty
+/// database in its place instead of crashing on boot with no path to recovery.
+/// Returns `Err` only if the archival itself fails — leaving a corrupt file in
+/// place would be worse than surfacing that error.
+fn integrity_guard(path: &Path) -> Result<()> {
+    let healthy = match Connection::open(path) {
+        Ok(conn) => match conn.query_row("PRAGMA quick_check", [], |row| row.get::<_, String>(0)) {
+            Ok(result) => result == "ok",
+            Err(e) => {
+                tracing::error!(error = %e, "数据库完整性检查失败，按损坏处理");
+                false
+            }
+        },
+        Err(e) => {
+            tracing::error!(error = %e, "数据库无法打开，按损坏处理");
+            false
+        }
+    };
+
+    if healthy {
+        return Ok(());
+    }
+
+    let archived = with_suffix(path, &format!(".corrupt-{}", unix_millis()));
+    std::fs::rename(path, &archived)
+        .with_context(|| format!("archive corrupt database to {}", archived.display()))?;
+    for ext in ["-wal", "-shm"] {
+        let side = with_suffix(path, ext);
+        if side.exists() {
+            let _ = std::fs::rename(&side, with_suffix(&archived, ext));
+        }
+    }
+    tracing::warn!(
+        archived = %archived.display(),
+        "数据库已损坏：已归档损坏文件并将在原路径重建空库（历史数据保留在归档文件中）"
+    );
+    Ok(())
+}
+
+/// `VACUUM INTO` a consistent snapshot before applying migrations, so a failed
+/// or buggy migration can be rolled back to the pre-migration state. Keeps only
+/// the few most recent snapshots.
+fn snapshot_before_migration(conn: &Connection, path: &Path, target: i64) -> Result<()> {
+    let backup = with_suffix(path, &format!(".pre-v{target}.bak"));
+    // A leftover snapshot from a previous boot at the same target is stale.
+    let _ = std::fs::remove_file(&backup);
+    // VACUUM INTO takes a string literal, not a bind parameter; escape quotes.
+    let escaped = backup.to_string_lossy().replace('\'', "''");
+    conn.execute_batch(&format!("VACUUM INTO '{escaped}'"))
+        .with_context(|| format!("VACUUM INTO snapshot before migrating to v{target}"))?;
+    tracing::info!(backup = %backup.display(), "迁移前已生成数据库快照");
+    prune_old_snapshots(path, 3);
+    Ok(())
+}
+
+/// Keep only the `keep` newest `<db>.pre-v*.bak` snapshots; delete older ones.
+/// Best-effort — any IO error just leaves the extra snapshots in place.
+fn prune_old_snapshots(path: &Path, keep: usize) {
+    let (Some(dir), Some(name)) = (path.parent(), path.file_name().and_then(|s| s.to_str())) else {
+        return;
+    };
+    let prefix = format!("{name}.pre-v");
+    let mut snaps: Vec<(std::time::SystemTime, PathBuf)> = match std::fs::read_dir(dir) {
+        Ok(rd) => rd
+            .flatten()
+            .filter_map(|e| {
+                let p = e.path();
+                let n = p.file_name()?.to_str()?;
+                if n.starts_with(&prefix) && n.ends_with(".bak") {
+                    let mtime = e.metadata().ok()?.modified().ok()?;
+                    Some((mtime, p))
+                } else {
+                    None
+                }
+            })
+            .collect(),
+        Err(_) => return,
+    };
+    if snaps.len() <= keep {
+        return;
+    }
+    snaps.sort_by_key(|(t, _)| *t);
+    let remove = snaps.len() - keep;
+    for (_, p) in snaps.into_iter().take(remove) {
+        let _ = std::fs::remove_file(p);
+    }
+}
+
 impl Store {
     /// Open a store at `path`, running migrations if needed. Parent dir must
     /// already exist.
@@ -222,6 +338,13 @@ impl Store {
     }
 
     fn open_blocking(path: &Path) -> Result<Self> {
+        // Corruption guard: an existing database that fails `PRAGMA quick_check`
+        // is archived aside so the pool below recreates an empty one, rather
+        // than crashing the server on boot with no path to recovery.
+        if path.exists() {
+            integrity_guard(path).context("database integrity guard")?;
+        }
+
         let manager = SqliteConnectionManager::file(path);
         // `min_idle(0)` keeps r2d2 from eagerly opening every connection at
         // `build()` time. Eager parallel opens race on the very first
@@ -237,6 +360,17 @@ impl Store {
         // Run migrations on a dedicated connection (not the pool — we want
         // exclusive access for the schema bring-up).
         let mut conn = pool.get().context("checkout for migrations")?;
+
+        // Snapshot before any schema change so a failed/buggy migration can be
+        // rolled back. Only when an existing, non-empty database actually has
+        // migrations pending (a fresh DB has nothing worth snapshotting).
+        let current = schema::current_version(&conn).unwrap_or(0);
+        let latest = schema::latest_migration();
+        if current > 0 && current < latest {
+            snapshot_before_migration(&conn, path, latest)
+                .context("snapshot database before migration")?;
+        }
+
         schema::run_migrations(&mut conn).context("run migrations")?;
         drop(conn);
         Ok(Self {
@@ -2032,6 +2166,20 @@ impl Store {
                             params![cutoff_ms],
                         )?;
 
+                        // Per-step usage + activity logs: append-only and the
+                        // highest-frequency writers (one row per agent turn).
+                        // Trim rows past the window — aggregate stats within the
+                        // window stay intact; only history older than the
+                        // retention horizon is dropped.
+                        let agent_usage = tx.execute(
+                            "DELETE FROM agent_usage WHERE at < ?1",
+                            params![cutoff_ms],
+                        )?;
+                        let agent_activities = tx.execute(
+                            "DELETE FROM agent_activities WHERE at < ?1",
+                            params![cutoff_ms],
+                        )?;
+
                         tx.commit()?;
                         Ok((
                             PruneStats {
@@ -2039,6 +2187,8 @@ impl Store {
                                 messages,
                                 recordings,
                                 recording_files_removed: 0,
+                                agent_usage,
+                                agent_activities,
                             },
                             files,
                         ))
@@ -2916,5 +3066,57 @@ impl Store {
         })
         .await
         .context("spawn_blocking search_blackboard")?
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn with_suffix_appends_not_replaces() {
+        let p = Path::new("/data/flockmux.db");
+        assert_eq!(with_suffix(p, "-wal"), PathBuf::from("/data/flockmux.db-wal"));
+        assert_eq!(
+            with_suffix(p, ".corrupt-9"),
+            PathBuf::from("/data/flockmux.db.corrupt-9")
+        );
+    }
+
+    #[test]
+    fn snapshot_creates_usable_backup() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("flockmux.db");
+        let mut conn = Connection::open(&path).unwrap();
+        crate::schema::run_migrations(&mut conn).unwrap();
+        let latest = crate::schema::latest_migration();
+
+        snapshot_before_migration(&conn, &path, latest).unwrap();
+
+        let backup = with_suffix(&path, &format!(".pre-v{latest}.bak"));
+        assert!(backup.exists(), "snapshot .bak should exist");
+        // The backup is a valid SQLite database that passes its own check.
+        let bconn = Connection::open(&backup).unwrap();
+        let check: String = bconn
+            .query_row("PRAGMA quick_check", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(check, "ok");
+    }
+
+    #[test]
+    fn prune_keeps_only_newest_snapshots() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("flockmux.db");
+        for v in 1..=5 {
+            std::fs::write(with_suffix(&path, &format!(".pre-v{v}.bak")), b"x").unwrap();
+        }
+        prune_old_snapshots(&path, 3);
+        let remaining = std::fs::read_dir(dir.path())
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().contains(".pre-v"))
+            .count();
+        assert_eq!(remaining, 3, "should keep only the 3 newest snapshots");
     }
 }

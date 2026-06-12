@@ -65,6 +65,35 @@ pub enum WorkspaceLayout {
 /// `recorder` is an optional asciicast v2 sink. When set, the PTY pump
 /// mirrors every chunk (including OSC lifecycle markers) into the
 /// recorder; when unset, the recording layer is bypassed.
+/// Environment variables forwarded from the server's env into a spawned worker
+/// IF present — non-secret runtime essentials (locale, proxy, TLS CA bundles)
+/// plus the load-bearing identity vars. `USER` / `LOGNAME` are required for
+/// macOS Keychain access: claude stores its OAuth token in the login keychain
+/// and the Security framework resolves it via `$USER`. Dropping `USER` makes a
+/// logged-in claude print "Not logged in" — a real regression (it was missing
+/// from this allowlist once) that `forwarded_env_keeps_macos_keychain_vars`
+/// guards against. `HOME` and `PATH` are inserted unconditionally above, not
+/// via this list.
+pub(crate) const FORWARDED_ENV_KEYS: &[&str] = &[
+    "USER",
+    "LOGNAME",
+    "LC_ALL",
+    "LC_CTYPE",
+    "TMPDIR",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "NO_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+    "no_proxy",
+    "NODE_EXTRA_CA_CERTS",
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
+    "REQUESTS_CA_BUNDLE",
+];
+
 #[allow(clippy::too_many_arguments)]
 pub fn spawn_agent(
     plugin: &CliPlugin,
@@ -244,39 +273,9 @@ pub fn spawn_agent(
             .into_owned(),
     );
     // Non-secret runtime essentials the CLI may need to reach the network /
-    // render unicode. Forwarded only if present. Locale (LC_*), temp dir,
-    // HTTP(S) proxy, and TLS CA bundles cover corporate / proxied setups
-    // (e.g. routing codex through a relay) that would otherwise break once we
-    // stopped inheriting the full env.
-    for key in [
-        // USER (and its POSIX twin LOGNAME) are required for macOS Keychain
-        // access: Claude Code stores its OAuth token in the login keychain, and
-        // the Security framework resolves the user's keychain via $USER. Without
-        // it the spawned claude reads an empty credential set and prints
-        // "Not logged in · Run /login" — even though the same binary run from a
-        // normal shell is authenticated. Verified by bisection: `env -i HOME=…
-        // PATH=… USER=$USER claude -p` succeeds; dropping USER fails (LOGNAME
-        // alone does NOT substitute). Non-secret identity vars, so forwarding
-        // them is consistent with the allowlist's "what a CLI legitimately
-        // needs" intent.
-        "USER",
-        "LOGNAME",
-        "LC_ALL",
-        "LC_CTYPE",
-        "TMPDIR",
-        "HTTP_PROXY",
-        "HTTPS_PROXY",
-        "ALL_PROXY",
-        "NO_PROXY",
-        "http_proxy",
-        "https_proxy",
-        "all_proxy",
-        "no_proxy",
-        "NODE_EXTRA_CA_CERTS",
-        "SSL_CERT_FILE",
-        "SSL_CERT_DIR",
-        "REQUESTS_CA_BUNDLE",
-    ] {
+    // render unicode. Forwarded only if present — see FORWARDED_ENV_KEYS for
+    // the full list plus the macOS-Keychain rationale behind USER/LOGNAME.
+    for &key in FORWARDED_ENV_KEYS {
         if let Ok(v) = std::env::var(key) {
             env.insert(key.into(), v);
         }
@@ -1167,6 +1166,22 @@ mod billing_policy_tests {
     use crate::plugins::{
         BillingSurface, McpFormat, ReadyStep, StopHookFormat, Transport, TrustFormat,
     };
+
+    #[test]
+    fn forwarded_env_keeps_macos_keychain_vars() {
+        // USER / LOGNAME are load-bearing: macOS Keychain (claude's OAuth token
+        // store) resolves the login keychain via $USER. They were dropped from
+        // this spawn allowlist once, silently breaking login. Pin them so a
+        // future edit to FORWARDED_ENV_KEYS can't regress it unnoticed.
+        assert!(
+            FORWARDED_ENV_KEYS.contains(&"USER"),
+            "USER must stay forwarded (macOS Keychain / claude login)"
+        );
+        assert!(
+            FORWARDED_ENV_KEYS.contains(&"LOGNAME"),
+            "LOGNAME must stay forwarded alongside USER"
+        );
+    }
 
     fn minimal_plugin(id: &str) -> CliPlugin {
         CliPlugin {

@@ -212,10 +212,10 @@ function structFields(text, structName) {
 // AND applied (apply(conn, N, ...)) in schema.rs.
 //
 // Root cause it guards: adding `migrations/00NN_*.sql` requires two manual
-// edits in schema.rs — a `const MIGRATION_00NN = include_str!(...)` and an
-// `apply(conn, N, MIGRATION_00NN)` block. Miss either and the crate compiles
-// fine but the migration SILENTLY never runs, so the new table/column doesn't
-// exist at runtime (a query fails far from the cause).
+// edits in schema.rs — a `const MIGRATION_00NN = include_str!(...)` and a
+// `(N, MIGRATION_00NN)` entry in the `MIGRATIONS` array. Miss either and the
+// crate compiles fine but the migration SILENTLY never runs, so the new
+// table/column doesn't exist at runtime (a query fails far from the cause).
 // ─────────────────────────────────────────────────────────────────────────
 {
   const { readdir } = await import("node:fs/promises");
@@ -239,9 +239,94 @@ function structFields(text, structName) {
         `规则5: 迁移 ${f} 未在 ${schemaPath} 注册 —— 缺 \`const ${constName}: &str = include_str!(...)\`。新迁移忘登记会静默不执行（编译过但新表/列不存在）。`,
       );
     }
-    if (!new RegExp(`apply\\(conn,\\s*${n}\\s*,\\s*${constName}\\b`).test(schema)) {
+    if (!new RegExp(`\\(\\s*${n}\\s*,\\s*${constName}\\b`).test(schema)) {
       fail(
-        `规则5: 迁移 ${f} 未在 ${schemaPath} 的 run_migrations 里 apply —— 缺 \`apply(conn, ${n}, ${constName})\`。`,
+        `规则5: 迁移 ${f} 未在 ${schemaPath} 的 MIGRATIONS 数组里登记 —— 缺 \`(${n}, ${constName})\`。新迁移忘登记会静默不执行（编译过但新表/列不存在）。`,
+      );
+    }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// 规则6: README 不得教用户运行已删除的 spell。
+// Root cause it guards: spells were deleted (critic-loop / fullstack-feature /
+// auto-dispatch) but the READMEs kept Quick-Start / walkthrough steps telling
+// users to run them — a fresh user's very first example then fails. Assert that
+// every `spells/<name>.md` path the READMEs reference actually exists on disk.
+// ─────────────────────────────────────────────────────────────────────────
+{
+  const { readdir } = await import("node:fs/promises");
+  let existing = new Set();
+  try {
+    existing = new Set(
+      (await readdir(path.join(root, "spells")))
+        .filter((f) => f.endsWith(".md"))
+        .map((f) => f.slice(0, -3)),
+    );
+  } catch (e) {
+    fail(`规则6: 读不到 spells 目录：${e.message}`);
+  }
+  for (const rel of ["README.md", "README.zh-CN.md"]) {
+    let text = "";
+    try {
+      text = await readText(rel);
+    } catch {
+      continue; // 缺某语言 README 不在本规则职责内
+    }
+    // Skip backlog/roadmap rows (`| P1 | ... |`): those legitimately list
+    // FUTURE spell files that don't exist yet (same as `cli-plugins/*.toml`
+    // entries) — they aren't teaching anyone to run a removed spell.
+    for (const line of text.split("\n")) {
+      if (/^\s*\|\s*P[0-9]\s*\|/.test(line)) continue;
+      for (const m of line.matchAll(/spells\/([a-z0-9][a-z0-9-]*)\.md/g)) {
+        if (!existing.has(m[1])) {
+          fail(
+            `规则6: ${rel} 引用了 spells/${m[1]}.md，但该 spell 不存在（已删除的 spell 仍在文档里教用户运行 → 新用户照做必失败）。`,
+          );
+        }
+      }
+    }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// 规则7: 每个被代码读取的 FLOCKMUX_* 变量必须在 docs/configuration.md 有条目。
+// Root cause it guards: a new `std::env::var("FLOCKMUX_NEW_THING")` ships but
+// nobody documents it, so users can't discover the knob. Scan every .rs under
+// crates/ for `FLOCKMUX_*` and assert the config doc mentions each.
+// ─────────────────────────────────────────────────────────────────────────
+{
+  const { readdir, readFile: rf } = await import("node:fs/promises");
+  async function collectRs(dir, acc) {
+    let entries;
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      if (e.name === "target" || e.name === "node_modules") continue;
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) await collectRs(full, acc);
+      else if (e.name.endsWith(".rs")) acc.push(await rf(full, "utf8"));
+    }
+  }
+  const sources = [];
+  await collectRs(path.join(root, "crates"), sources);
+  const used = new Set();
+  for (const text of sources) {
+    for (const m of text.matchAll(/FLOCKMUX_[A-Z_]+/g)) used.add(m[0]);
+  }
+  let doc = "";
+  try {
+    doc = await readText("docs/configuration.md");
+  } catch (e) {
+    fail(`规则7: 读不到 docs/configuration.md：${e.message}`);
+  }
+  for (const v of [...used].sort()) {
+    if (!doc.includes(v)) {
+      fail(
+        `规则7: 环境变量 ${v} 被代码读取但 docs/configuration.md 没有条目（新加 env 忘记文档化 → 用户无从发现）。`,
       );
     }
   }

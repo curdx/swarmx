@@ -105,3 +105,74 @@ jobs:
         # `npm run build` is `tsc -b && vite build`; tsc is the typecheck gate.
         run: npm run build
         working-directory: web
+      - name: Unit tests (vitest, hard gate)
+        run: npm run test
+        working-directory: web
+      - name: Lint (eslint — react-hooks rules-of-hooks is the hard gate; the
+          # exhaustive-deps + ghost-disable findings are warnings, not blockers)
+        run: npm run lint
+        working-directory: web
+
+  audit:
+    name: Dependency audit (cargo-audit · npm audit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      # cargo-audit checks Cargo.lock against the RustSec advisory DB; installed
+      # as a prebuilt binary (fast) rather than `cargo install` (compiles).
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+      # Informational for now (existing advisories shouldn't block unrelated
+      # PRs); tighten to a hard gate once the tree is clean. Dependabot opens
+      # the remediation PRs (see .github/dependabot.yml).
+      - name: cargo audit (informational)
+        run: cargo audit
+        continue-on-error: true
+      - name: npm audit (informational)
+        run: npm audit --audit-level=high
+        working-directory: web
+        continue-on-error: true
+
+  e2e:
+    name: Web e2e (Playwright · hard gate)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - uses: Swatinem/rust-cache@v2
+      - name: Build server (vite proxies /api → this)
+        run: cargo build -p flockmux-server --locked
+      - name: Install web deps
+        run: npm ci
+        working-directory: web
+      # `channel: "chrome"` in playwright.config → install Google Chrome stable.
+      - name: Install Playwright Chrome
+        run: npx playwright install --with-deps chrome
+        working-directory: web
+      - name: Boot isolated server
+        # Throwaway data dirs (FLOCKMUX_*), same pattern as the smoke job, so the
+        # e2e run never touches a real ~/.flockmux. Playwright's webServer brings
+        # up vite itself; this just backs its /api proxy.
+        run: |
+          set -euo pipefail
+          D="$(mktemp -d)"
+          FLOCKMUX_PORT=7777 FLOCKMUX_DB_PATH="$D/d.db" \
+            FLOCKMUX_WORKSPACES_DIR="$D/ws" FLOCKMUX_BLACKBOARD_DIR="$D/bb" \
+            FLOCKMUX_RECORDINGS_DIR="$D/rec" RUST_LOG=error \
+            ./target/debug/flockmux-server &
+          for _ in $(seq 1 60); do
+            curl -sf http://127.0.0.1:7777/api/workspaces >/dev/null 2>&1 && break
+            sleep 0.5
+          done
+      - name: Run e2e (hard gate)
+        run: npm run test:e2e
+        working-directory: web

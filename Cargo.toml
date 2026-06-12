@@ -28,7 +28,7 @@ tokio-util = { version = "0.7", features = ["io"] }
 # web
 axum = { version = "0.7", features = ["ws", "macros"] }
 tower = "0.5"
-tower-http = { version = "0.6", features = ["fs", "cors", "trace"] }
+tower-http = { version = "0.6", features = ["fs", "cors", "trace", "catch-panic"] }
 
 # pty
 portable-pty = "0.9"
@@ -43,6 +43,7 @@ anyhow = "1"
 thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
 
 # misc
 bytes = "1.7"

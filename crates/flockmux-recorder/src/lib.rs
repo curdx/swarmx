@@ -15,4 +15,6 @@
 
 mod writer;
 
-pub use writer::{FinalizeResult, Recorder, RecorderConfig, RecorderHandle};
+pub use writer::{
+    FinalizeResult, Recorder, RecorderConfig, RecorderHandle, DEFAULT_MAX_CAST_BYTES,
+};

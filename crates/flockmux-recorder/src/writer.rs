@@ -26,7 +26,15 @@ pub struct RecorderConfig {
     /// [`Recorder::start`] returning, not from this value.
     pub started_at_ms: i64,
     pub file_path: PathBuf,
+    /// Soft cap on bytes written to this single `.cast` (0 = unlimited). Past
+    /// it the writer keeps draining the channel but stops writing to disk, so a
+    /// runaway agent can't produce an unbounded recording file.
+    pub max_bytes: u64,
 }
+
+/// Default soft cap for a single recording (64 MiB). A chatty agent rarely
+/// exceeds a few MiB; this bounds the pathological case without a config knob.
+pub const DEFAULT_MAX_CAST_BYTES: u64 = 64 * 1024 * 1024;
 
 /// Result emitted by the writer task when the recording finalizes.
 #[derive(Debug, Clone)]
@@ -106,8 +114,16 @@ impl Recorder {
         let (fin_tx, fin_rx) = oneshot::channel::<FinalizeResult>();
         let path = cfg.file_path.clone();
         let started_at_ms = cfg.started_at_ms;
+        let max_bytes = cfg.max_bytes;
 
-        tokio::spawn(writer_loop(writer, rx, fin_tx, path, started_at_ms));
+        tokio::spawn(writer_loop(
+            writer,
+            rx,
+            fin_tx,
+            path,
+            started_at_ms,
+            max_bytes,
+        ));
 
         Ok(Self {
             owner_handle: RecorderHandle { tx },
@@ -137,20 +153,35 @@ async fn writer_loop(
     fin_tx: oneshot::Sender<FinalizeResult>,
     path: PathBuf,
     started_at_ms: i64,
+    max_bytes: u64,
 ) {
     // Monotonic clock for per-event deltas — robust to wall-clock jumps.
     let start_instant = Instant::now();
     let mut last_seq: i64 = 0;
     let mut io_failed = false;
+    let mut written: u64 = 0;
+    let mut truncated = false;
 
     while let Some(chunk) = rx.recv().await {
+        last_seq += chunk.len() as i64;
         if io_failed {
             // Keep draining so the channel can close cleanly, but skip the
             // disk writes — we've already lost write integrity.
-            last_seq += chunk.len() as i64;
             continue;
         }
-        last_seq += chunk.len() as i64;
+        // Soft single-file cap (0 = unlimited): once past it, keep draining but
+        // stop writing so a runaway agent can't produce an unbounded .cast.
+        if max_bytes > 0 && written >= max_bytes {
+            if !truncated {
+                tracing::warn!(
+                    path = %path.display(),
+                    max_bytes,
+                    "cast recording hit size cap; truncating further output"
+                );
+                truncated = true;
+            }
+            continue;
+        }
         let delta = start_instant.elapsed().as_secs_f64();
         // asciicast v2 requires `data` to be a valid UTF-8 string. PTY
         // output is *usually* UTF-8 already; lossy conversion replaces
@@ -174,6 +205,7 @@ async fn writer_loop(
             io_failed = true;
             continue;
         }
+        written += line.len() as u64 + 1;
         // asciicast files are commonly tailed live (asciinema-player can
         // stream a growing file). Without per-event flush the BufWriter
         // holds everything until shutdown — so a live recording looks

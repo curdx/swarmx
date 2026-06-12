@@ -1,11 +1,16 @@
-//! Migration runner. Single-shot for now (only 0001_init) but structured so
-//! future migrations slot in as additional `include_str!` entries.
+//! Migration runner. Migrations live in `MIGRATIONS` (version, sql) and are
+//! applied in ascending order; each runs inside `BEGIN IMMEDIATE` so a
+//! concurrent reader cannot observe a half-applied schema (SQLite WAL allows
+//! readers during writes, and our triggers + FTS5 are not atomic-without-tx).
 //!
-//! Each migration runs inside `BEGIN IMMEDIATE` so a concurrent reader
-//! cannot observe a half-applied schema (SQLite WAL allows readers during
-//! writes, and our triggers + FTS5 are not atomic-without-tx).
+//! `run_migrations` refuses to start when the database's recorded version is
+//! HIGHER than the newest migration this binary knows about: an older binary
+//! must never write to a database a newer binary already upgraded, or it would
+//! silently corrupt rows under a schema it does not understand. Adding a
+//! migration is a one-line edit to `MIGRATIONS`; `latest_migration()` and the
+//! upper-bound guard derive from that list automatically.
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use rusqlite::Connection;
 
 const MIGRATION_0001: &str = include_str!("../migrations/0001_init.sql");
@@ -32,83 +37,63 @@ const MIGRATION_0021: &str = include_str!("../migrations/0021_thought_traces.sql
 const MIGRATION_0022: &str = include_str!("../migrations/0022_agent_last_error.sql");
 const MIGRATION_0023: &str = include_str!("../migrations/0023_agent_activities.sql");
 
+/// Every migration in apply order. Append new entries here — nothing else needs
+/// to change; `latest_migration()` and the upper-bound guard derive from this.
+const MIGRATIONS: &[(i64, &str)] = &[
+    (1, MIGRATION_0001),
+    (2, MIGRATION_0002),
+    (3, MIGRATION_0003),
+    (4, MIGRATION_0004),
+    (5, MIGRATION_0005),
+    (6, MIGRATION_0006),
+    (7, MIGRATION_0007),
+    (8, MIGRATION_0008),
+    (9, MIGRATION_0009),
+    (10, MIGRATION_0010),
+    (11, MIGRATION_0011),
+    (12, MIGRATION_0012),
+    (13, MIGRATION_0013),
+    (14, MIGRATION_0014),
+    (15, MIGRATION_0015),
+    (16, MIGRATION_0016),
+    (17, MIGRATION_0017),
+    (18, MIGRATION_0018),
+    (19, MIGRATION_0019),
+    (20, MIGRATION_0020),
+    (21, MIGRATION_0021),
+    (22, MIGRATION_0022),
+    (23, MIGRATION_0023),
+];
+
+/// Highest migration version this binary can apply.
+pub(crate) fn latest_migration() -> i64 {
+    MIGRATIONS.last().map(|(v, _)| *v).unwrap_or(0)
+}
+
 pub(crate) fn run_migrations(conn: &mut Connection) -> Result<()> {
     let current = current_version(conn).unwrap_or(0);
-    tracing::debug!(current, "running flockmux-storage migrations");
+    let latest = latest_migration();
 
-    if current < 1 {
-        apply(conn, 1, MIGRATION_0001).context("apply migration 0001")?;
+    // Upper-bound guard: a database upgraded by a NEWER flockmux must not be
+    // written by this (older) binary — it would apply no migrations yet keep
+    // writing under a schema it doesn't understand, silently corrupting data.
+    if current > latest {
+        bail!(
+            "数据库 schema 版本 v{current} 高于本 flockmux 版本支持的 v{latest}；\
+             为避免旧版本以不兼容的 schema 写坏数据，已拒绝启动。请升级 flockmux 后重试。"
+        );
     }
-    if current < 2 {
-        apply(conn, 2, MIGRATION_0002).context("apply migration 0002")?;
-    }
-    if current < 3 {
-        apply(conn, 3, MIGRATION_0003).context("apply migration 0003")?;
-    }
-    if current < 4 {
-        apply(conn, 4, MIGRATION_0004).context("apply migration 0004")?;
-    }
-    if current < 5 {
-        apply(conn, 5, MIGRATION_0005).context("apply migration 0005")?;
-    }
-    if current < 6 {
-        apply(conn, 6, MIGRATION_0006).context("apply migration 0006")?;
-    }
-    if current < 7 {
-        apply(conn, 7, MIGRATION_0007).context("apply migration 0007")?;
-    }
-    if current < 8 {
-        apply(conn, 8, MIGRATION_0008).context("apply migration 0008")?;
-    }
-    if current < 9 {
-        apply(conn, 9, MIGRATION_0009).context("apply migration 0009")?;
-    }
-    if current < 10 {
-        apply(conn, 10, MIGRATION_0010).context("apply migration 0010")?;
-    }
-    if current < 11 {
-        apply(conn, 11, MIGRATION_0011).context("apply migration 0011")?;
-    }
-    if current < 12 {
-        apply(conn, 12, MIGRATION_0012).context("apply migration 0012")?;
-    }
-    if current < 13 {
-        apply(conn, 13, MIGRATION_0013).context("apply migration 0013")?;
-    }
-    if current < 14 {
-        apply(conn, 14, MIGRATION_0014).context("apply migration 0014")?;
-    }
-    if current < 15 {
-        apply(conn, 15, MIGRATION_0015).context("apply migration 0015")?;
-    }
-    if current < 16 {
-        apply(conn, 16, MIGRATION_0016).context("apply migration 0016")?;
-    }
-    if current < 17 {
-        apply(conn, 17, MIGRATION_0017).context("apply migration 0017")?;
-    }
-    if current < 18 {
-        apply(conn, 18, MIGRATION_0018).context("apply migration 0018")?;
-    }
-    if current < 19 {
-        apply(conn, 19, MIGRATION_0019).context("apply migration 0019")?;
-    }
-    if current < 20 {
-        apply(conn, 20, MIGRATION_0020).context("apply migration 0020")?;
-    }
-    if current < 21 {
-        apply(conn, 21, MIGRATION_0021).context("apply migration 0021")?;
-    }
-    if current < 22 {
-        apply(conn, 22, MIGRATION_0022).context("apply migration 0022")?;
-    }
-    if current < 23 {
-        apply(conn, 23, MIGRATION_0023).context("apply migration 0023")?;
+
+    tracing::debug!(current, latest, "running flockmux-storage migrations");
+    for (version, sql) in MIGRATIONS {
+        if current < *version {
+            apply(conn, *version, sql).with_context(|| format!("apply migration {version}"))?;
+        }
     }
     Ok(())
 }
 
-fn current_version(conn: &Connection) -> Result<i64> {
+pub(crate) fn current_version(conn: &Connection) -> Result<i64> {
     // schema_version may not exist yet (fresh DB).
     let exists: i64 = conn.query_row(
         "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='schema_version'",
@@ -133,4 +118,40 @@ fn apply(conn: &mut Connection, version: i64, sql: &str) -> Result<()> {
         .with_context(|| format!("execute migration {version}"))?;
     tx.commit()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fresh_db_migrates_to_latest() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        run_migrations(&mut conn).unwrap();
+        assert_eq!(current_version(&conn).unwrap(), latest_migration());
+    }
+
+    #[test]
+    fn migrations_are_idempotent() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        run_migrations(&mut conn).unwrap();
+        // 二次运行不应报错，也不应重复应用（版本保持不变）。
+        run_migrations(&mut conn).unwrap();
+        assert_eq!(current_version(&conn).unwrap(), latest_migration());
+    }
+
+    #[test]
+    fn rejects_database_newer_than_binary() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        run_migrations(&mut conn).unwrap();
+        // 伪造一个比本二进制更高的版本，模拟旧二进制打开新库。
+        let ahead = latest_migration() + 1;
+        conn.execute("INSERT INTO schema_version (version) VALUES (?1)", [ahead])
+            .unwrap();
+        let err = run_migrations(&mut conn).unwrap_err();
+        assert!(
+            err.to_string().contains("高于本 flockmux"),
+            "expected upper-bound guard to trip, got: {err}"
+        );
+    }
 }

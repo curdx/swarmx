@@ -101,6 +101,63 @@ fn jail_denied() -> axum::response::Response {
         .into_response()
 }
 
+/// Hard denylist enforced on EVERY request — regardless of `workspace_id` or
+/// the `all=1` "browse whole filesystem" toggle. The file browser is a dev
+/// convenience, not a credential-exfiltration oracle: a local process (a rogue
+/// MCP child, a malicious dependency, a landed XSS) must never be able to turn
+/// `/api/files/read` into a reader for SSH keys, cloud creds, or the OAuth
+/// token in `~/.claude.json`. Matched on the CANONICAL path (callers canon
+/// first), so `..` / symlink tricks can't dodge it.
+fn is_sensitive(path: &Path) -> bool {
+    let home = home();
+    // Credential directories — no legitimate "browse my code" reason to enter.
+    const DIRS: &[&str] = &[
+        ".ssh",
+        ".aws",
+        ".gnupg",
+        ".kube",
+        ".azure",
+        ".config/gcloud",
+    ];
+    for rel in DIRS {
+        if path.starts_with(home.join(rel)) {
+            return true;
+        }
+    }
+    // Specific high-value files under $HOME.
+    const FILES: &[&str] = &[".claude.json", ".netrc", ".pgpass", ".git-credentials"];
+    for rel in FILES {
+        if path == home.join(rel) {
+            return true;
+        }
+    }
+    // Name-based denylist (covers private keys / env / credential stores
+    // anywhere on disk). Kept narrow to avoid breaking legit source browsing:
+    // `tokenizer.json`, `token.ts`, `secrets.example.ts` stay readable.
+    let name = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    name == ".env"
+        || name.ends_with(".pem")
+        || name.ends_with(".key")
+        || name.ends_with(".p12")
+        || name.contains("credential")
+        || name == "id_rsa"
+        || name == "id_ed25519"
+}
+
+fn sensitive_denied() -> axum::response::Response {
+    (
+        StatusCode::FORBIDDEN,
+        Json(json!({
+            "error": "path is on the sensitive-files denylist (credentials/keys are never served)"
+        })),
+    )
+        .into_response()
+}
+
 pub async fn list_dir(
     State(state): State<AppState>,
     Query(q): Query<ListQuery>,
@@ -120,6 +177,10 @@ pub async fn list_dir(
         Ok(p) => p,
         Err(e) => return (StatusCode::NOT_FOUND, Json(json!({ "error": e }))).into_response(),
     };
+    // Hard denylist first — never list a credential directory, even with all=1.
+    if is_sensitive(&dir) {
+        return sensitive_denied();
+    }
     // Jail gate: scoped + not opted out + outside every root ⇒ 403.
     if ws_id.is_some() && !truthy(&q.all) && !is_within_any(&dir, &roots) {
         return jail_denied();
@@ -181,6 +242,11 @@ pub async fn read_file(
         Ok(p) => p,
         Err(e) => return (StatusCode::NOT_FOUND, Json(json!({ "error": e }))).into_response(),
     };
+    // Hard denylist first — credentials/keys are never served, even with all=1
+    // or no workspace_id (the previously-unrestricted bare-call path).
+    if is_sensitive(&path) {
+        return sensitive_denied();
+    }
     let ws_id = q.workspace_id.as_deref().filter(|s| !s.is_empty());
     if ws_id.is_some() && !truthy(&q.all) {
         let roots = allowed_roots(&state, ws_id.unwrap()).await;
@@ -261,5 +327,27 @@ mod tests {
         assert!(!truthy(&Some("0".into())));
         assert!(!truthy(&Some(String::new())));
         assert!(!truthy(&None));
+    }
+
+    #[test]
+    fn is_sensitive_blocks_credentials_not_source() {
+        let home = home();
+        // Credential dirs / files denied wherever they resolve under $HOME.
+        assert!(is_sensitive(&home.join(".ssh/id_rsa")));
+        assert!(is_sensitive(&home.join(".aws/credentials")));
+        assert!(is_sensitive(&home.join(".claude.json")));
+        assert!(is_sensitive(&home.join(".git-credentials")));
+        // Name-based: private keys / env / credential stores anywhere on disk.
+        assert!(is_sensitive(Path::new("/anywhere/server.pem")));
+        assert!(is_sensitive(Path::new("/x/private.key")));
+        assert!(is_sensitive(Path::new("/x/cert.p12")));
+        assert!(is_sensitive(Path::new("/proj/.env")));
+        assert!(is_sensitive(Path::new("/x/aws-credentials.txt")));
+        assert!(is_sensitive(Path::new("/somewhere/id_ed25519")));
+        // Legit source browsing must NOT be broken.
+        assert!(!is_sensitive(Path::new("/proj/src/main.rs")));
+        assert!(!is_sensitive(Path::new("/proj/tokenizer.json")));
+        assert!(!is_sensitive(Path::new("/proj/README.md")));
+        assert!(!is_sensitive(Path::new("/proj/.env.example")));
     }
 }
