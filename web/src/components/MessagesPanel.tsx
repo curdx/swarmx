@@ -84,6 +84,7 @@ import {
   formatFullStamp,
   resolveRole,
 } from "../lib/messageRows";
+import { useRoleLookup } from "../lib/useRoleLookup";
 
 const ChatMarkdown = lazy(() =>
   import("@/components/ChatMarkdown").then((m) => ({ default: m.ChatMarkdown })),
@@ -315,32 +316,9 @@ export function MessagesPanel({
   const pendingReadRef = useRef<Set<number>>(new Set());
   const flushTimerRef = useRef<number | null>(null);
 
-  // agent_id → role lookup covering exited agents too; needed so historical
-  // messages render with the right avatar colour even after agents die.
-  const [roleLookup, setRoleLookup] = useState<Map<string, string>>(
-    () => new Map(),
-  );
-  useEffect(() => {
-    api
-      .listAgents()
-      .then((all) => {
-        setRoleLookup((prev) => {
-          const next = new Map(prev);
-          for (const a of all) next.set(a.agent_id, a.role);
-          return next;
-        });
-      })
-      .catch(() => {
-        /* best-effort; resolveRole falls back to id-prefix heuristic */
-      });
-  }, []);
-  useEffect(() => {
-    setRoleLookup((prev) => {
-      const next = new Map(prev);
-      for (const a of activeMembers) next.set(a.agent_id, a.role);
-      return next;
-    });
-  }, [activeMembers]);
+  // agent_id → role lookup covering exited agents too, so historical messages
+  // render with the right avatar colour even after agents die.
+  const roleLookup = useRoleLookup(activeMembers);
 
   // ── data loaders ──────────────────────────────────────────────────────
   const refresh = useCallback(async () => {
