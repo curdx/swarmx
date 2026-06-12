@@ -49,6 +49,7 @@ use std::sync::Arc;
 use tower::ServiceExt; // ServeDir::oneshot in the path-aware SPA fallback
 use tower_http::cors::CorsLayer;
 use tower_http::services::{ServeDir, ServeFile};
+use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
 use tower_http::trace::TraceLayer;
 use tracing::info;
 
@@ -394,7 +395,28 @@ async fn main() -> Result<()> {
         // any request whose Origin isn't a local host — including the
         // cross-site WebSocket upgrades that CORS does NOT cover.
         .layer(CorsLayer::permissive())
-        .layer(TraceLayer::new_for_http())
+        // request-id plumbing. axum applies layers inside-out (the LAST .layer
+        // runs FIRST on the request), so the effective order is: SetRequestId
+        // (mint the uuid) → TraceLayer (read it into the span) → Propagate (copy
+        // it onto the response). Every log line for one request then shares an
+        // id, and x-request-id is echoed back to the client.
+        .layer(PropagateRequestIdLayer::x_request_id())
+        .layer(
+            TraceLayer::new_for_http().make_span_with(|req: &axum::http::Request<_>| {
+                let request_id = req
+                    .headers()
+                    .get("x-request-id")
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("-");
+                tracing::info_span!(
+                    "http",
+                    %request_id,
+                    method = %req.method(),
+                    path = %req.uri().path(),
+                )
+            }),
+        )
+        .layer(SetRequestIdLayer::x_request_id(MakeRequestUuid::default()))
         // Outermost layer (added last ⇒ runs first): drop cross-site
         // requests before they reach any handler.
         .layer(middleware::from_fn(require_local_origin))

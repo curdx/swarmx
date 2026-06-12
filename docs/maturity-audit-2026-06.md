@@ -351,9 +351,9 @@ flockmux 已经是一个"工程素养明显在线"的成熟原型——后端健
 - **依赖**：与 P0-3 / P0-5 的进程回收逻辑协同
 - **预估**：半天
 
-#### [~] P2-2 · MessagesPanel 拆 god component ⏳ 留作前端重构（需 e2e 兜底 + 浏览器验证行为不变）
+#### [~] P2-2 · MessagesPanel 拆 god component ⏳ 第一刀已落地（纯函数+单测），hook 抽取渐进进行
 
-> 2351 行 god component 拆 hook 是纯结构重构，但"行为不变"必须靠浏览器/e2e 验证（流式渲染、滚动、看门狗、状态机）。当前环境无法跑浏览器验证，盲拆 2351 行风险 > 收益。**P1-1 已把 Playwright e2e 接入 CI，正是这次重构的安全网**——建议在能跑 e2e 的环境下分步进行。
+> **第一步已完成（亲验，已上 main 149fa58）**：把分组/格式化/role 纯函数抽到 `web/src/lib/messageRows.ts` + 8 个 vitest 单测（固化 `buildRows` 的 header 折叠 / sender 切换 / `>` vs `>=` 分界），行为不变，2351 → 2282 行，vitest 17 + build + eslint 全绿。**剩余拆分**（composer draft / watchdog / pending-bubble hook）都涉及 state+effect，"行为不变"必须靠 preview/e2e 逐个验证（流式渲染、滚动、看门狗时序），**不在长 session 末尾盲拆**——建议作为带浏览器验证的聚焦 session 续做，e2e（P1-1）已是安全网。
 
 - **关联差距**：FE-03
 - **涉及文件**：`web/src/**/MessagesPanel*`（约 2351 行的巨型组件）
@@ -395,9 +395,9 @@ flockmux 已经是一个"工程素养明显在线"的成熟原型——后端健
 - **依赖**：无
 - **预估**：半天
 
-#### [~] P2-6 · request-id 中间件 + 关键路径 `#[instrument]` ⏳ 留作可观测性增量
+#### [x] P2-6 · request-id 中间件 + 关键路径 `#[instrument]` ✅ 已完成（亲验：response 带 x-request-id；每请求日志共享 request_id span）
 
-> 核心可观测性已交付：结构化日志 + **日志落盘（P2-5）** + reaper/effective-config 的明确日志。request-id 要真正有用，需让 id 进入 tracing span（TraceLayer `make_span_with` 读 header）+ 给关键路径逐个加 `#[instrument]`，属中等增量；本轮聚焦了更高优先级的 OBS 项（坎 2 的 reaper、P2-5 日志落盘）。
+> **实际交付（亲验）**：tower-http `SetRequestIdLayer`(MakeRequestUuid) + `TraceLayer::make_span_with`（把 x-request-id 读进 `http` span 的 `request_id` 字段）+ `PropagateRequestIdLayer`（回传 response）。axum 是 inside-out 应用 layer——首次顺序放反、response 没带 id，修正为 Propagate(inner)→TraceLayer→SetRequestId(outer) 后实跑确认 response 带 `x-request-id: <uuid>`，227 server 测试无回归。HTTP span 已让 handler 内所有日志共享 request_id；逐 fn `#[instrument]`（后台 task 脱离 HTTP span 才需要）作为可选细化，未强求。
 
 - **关联差距**：OBS-04
 - **涉及文件**：`crates/flockmux-server/src/main.rs`、关键 handler / spawn 路径
