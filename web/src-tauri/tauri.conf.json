@@ -34,6 +34,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "createUpdaterArtifacts": true,
     "externalBin": [
       "binaries/flockmux-server",
       "binaries/flockmux-shim",
@@ -46,5 +47,13 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDFDOEIwMDI1OEI5OTFBRjkKUldUNUdwbUxKUUNMSEVPcmM1d3I1TE1iQW9TMGFHQjFEaHFFamNrUkhtVVg1aGZqTDVQYnI5ZEYK",
+      "endpoints": [
+        "https://github.com/curdx/flockmux-core/releases/latest/download/latest.json"
+      ]
+    }
   }
 }

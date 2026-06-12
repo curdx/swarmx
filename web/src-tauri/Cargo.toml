@@ -34,3 +34,6 @@ tauri-plugin-shell = "2"
 # 让 wizard 能调系统原生文件夹选择器 (open({ directory: true }))，告别让
 # 用户手粘绝对路径。前端通过 @tauri-apps/plugin-dialog 调用。
 tauri-plugin-dialog = "2"
+# 软件自动更新：检测 / 下载 / 安装新版（plugin-process 提供安装后 relaunch）。
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
