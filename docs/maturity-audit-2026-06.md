@@ -351,9 +351,9 @@ flockmux 已经是一个"工程素养明显在线"的成熟原型——后端健
 - **依赖**：与 P0-3 / P0-5 的进程回收逻辑协同
 - **预估**：半天
 
-#### [~] P2-2 · MessagesPanel 拆 god component ⏳ 已落地 3 刀（纯函数+2 hook），渐进进行
+#### [~] P2-2 · MessagesPanel 拆 god component ⏳ 已落地 4 刀（3 纯函数层+2 hook），渐进进行
 
-> **已完成 3 步（亲验，已上 main）**：① 分组/格式化/role 纯函数 → `lib/messageRows.ts` + 8 vitest 单测（149fa58）；② `useRoleLookup` hook（role-lookup 的 state + 2 effect，逐字抽取，tsc + preview-console 验证，2e18e74）；③ composer 草稿持久化 → `useComposerDraft` hook + `draftStore.ts` 纯函数（loadDraft/saveDraft）+ 7 vitest 单测。**关键方法论**：第 3 步原判"必须 spawn 有消息的 /chat 验证"，但 composer 草稿是**纯前端 localStorage 逻辑**，把存取语义抽成接收 `Storage` 参数的纯函数后，用「vitest 单测（空/whitespace→删、非空→存、storage throw 不崩）＋ tsc ＋ react-hooks lint ＋ 逐行等价审查」即可达到等价置信度，**无需 spawn、不烧 token**——能纯函数化的逻辑一律走这条路。2351 → ~2228 行，三步全 CI 绿。**剩余拆分**（watchdog / scroll-mark-read / pending-bubble）才真正涉及 DOM 滚动/交互/时序、无法纯函数化——这些"行为不变"仍须在**有消息的 /chat** 验证（需 workspace + agent 数据，spawn 真实 claude），续做需提供数据环境或授权 spawn 测试 orchestrator。
+> **已完成 4 步（亲验，已上 main）**：① 分组/格式化/role 纯函数 → `lib/messageRows.ts` + 8 vitest（149fa58）；② `useRoleLookup` hook（2e18e74）；③ composer 草稿 → `useComposerDraft` hook + `draftStore.ts` 纯函数 + 7 vitest（c1bc14e）；④ **诚实性核心**——"正在响应"气泡何时显示/放弃、何算"消失的回合"两段最 load-bearing 的推断 → `lib/pendingResponders.ts` 纯函数（`derivePendingResponders`/`deriveVanishedTurns`/`computeAliveIds`/`isInterrupted`，clock 注入）+ 17 vitest 覆盖全部不变式（alive+未答→显示；已答→清；error/exited/shim/killed→剔；>180s 真静默→剔但新 activity 续命；中断精确 id→剔但新 id 重开；最早优先稳定排序；vanished：死且未答→卡、已答/被取代/被打断→无卡、error→label vs exit→null）。`PENDING_SILENCE_GIVEUP_MS` 单一真相也随之移入（原来组件里重复定义）。memo 只保留 React deps（含有意的 5s-tick dep + eslint-disable，逐字保留）。**关键方法论延伸**：连这类"涉及时序/存活推断"的逻辑也能纯函数化——把 `now` 注入、把存活集合抽成 `Set`，时序就变成可单测的纯输入输出；第三份方法论胜利。**这一刀首次启用真实环境验证**（用户授权"碰真实目录"）：起隔离后端（data 全在 `/tmp`，不污染真实 `~/.flockmux`）+ 真实小项目 → spawn 真实 claude orchestrator → MessagesPanel 渲染真实 chat 视图、**零 console 错误**（抽出的 memo 驱动真实"队长上岗"路径不崩）。2351 → 2142 行，四步全绿。**剩余拆分**（state/effect 真正搬进 hook：`usePendingResponders` / `useScrollMarkRead` / `useInterruptControls`）——纯函数层已把诚实性逻辑抽走、风险大降，但这三个 hook 的 state+effect 搬迁涉及循环依赖（`markInterrupted`↔`pendingResponders`↔`interruptedTriggers`）、IntersectionObserver+debounce timer、6+ 个消费点接线，属更大结构改动，需 live 逐项验证（环境已就绪）。
 
 - **关联差距**：FE-03
 - **涉及文件**：`web/src/**/MessagesPanel*`（约 2351 行的巨型组件）

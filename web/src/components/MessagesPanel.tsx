@@ -86,6 +86,10 @@ import {
 } from "../lib/messageRows";
 import { useRoleLookup } from "../lib/useRoleLookup";
 import { useComposerDraft } from "../lib/useComposerDraft";
+import {
+  derivePendingResponders,
+  deriveVanishedTurns,
+} from "../lib/pendingResponders";
 
 const ChatMarkdown = lazy(() =>
   import("@/components/ChatMarkdown").then((m) => ({ default: m.ChatMarkdown })),
@@ -176,15 +180,6 @@ interface Props {
 const KIND_DEFAULT = "note";
 const USER_SENDER = "user";
 const SYSTEM_SENDER = "system";
-/** How long an ALIVE agent may be TRULY silent — no reply AND no new tool
- *  event — before we stop showing its "正在响应" bubble. Measured from the last
- *  sign of life (trigger or last activity), NOT from the trigger, so an agent
- *  that keeps working renews it indefinitely. Generous (3 min) because a real
- *  model-thinking turn before the first tool/reply can legitimately run a
- *  minute-plus; the old 60s-from-trigger cutoff hid the captain mid-work. Death
- *  (state exited/error) and replies clear the bubble through real signals, so
- *  this is only a backstop against a forgotten bubble, not the primary control. */
-const PENDING_SILENCE_GIVEUP_MS = 180_000;
 const MAX_REASONING_SUMMARY_MS = 30 * 60_000;
 /** A member whose latest tool event hasn't advanced in this long has gone
  *  quiet. The pending bubble degrades to a gray "已 Ns 无活动" and stops the
@@ -567,65 +562,22 @@ export function MessagesPanel({
     const i = window.setInterval(() => setTick((t) => t + 1), 5000);
     return () => window.clearInterval(i);
   }, []);
-  const pendingResponders = useMemo(() => {
-    const aliveIds = new Set(
-      aliveForInference
-        .filter((m) => {
-          if (m.shim_exit != null || m.killed_at != null) return false;
-          // P0-3: bind to the REAL swarm state. A member whose live state has
-          // gone error/exited is not "responding" — drop it immediately so the
-          // typing placeholder vanishes (≤1 render, agentLiveStateById is a
-          // dep below) instead of lying for the full 60s window. Fixes 诊断2.
-          const st = agentLiveStateById?.[m.agent_id]?.state;
-          if (st === "error" || st === "exited") return false;
-          return true;
-        })
-        .map((m) => m.agent_id),
-    );
-    if (aliveIds.size === 0) return [];
-    const now = Date.now();
-    const lastSent = new Map<string, number>();
-    const lastReceived = new Map<string, MessageRecord>();
-    for (const m of items) {
-      if (aliveIds.has(m.from_agent)) {
-        const prev = lastSent.get(m.from_agent) ?? 0;
-        if (m.sent_at > prev) lastSent.set(m.from_agent, m.sent_at);
-      }
-      if (aliveIds.has(m.to_agent)) {
-        const prev = lastReceived.get(m.to_agent);
-        if (!prev || m.sent_at > prev.sent_at) {
-          lastReceived.set(m.to_agent, m);
-        }
-      }
-    }
-    const out: Array<{ agentId: string; trigger: MessageRecord }> = [];
-    for (const [agentId, trigger] of lastReceived) {
-      const sentAt = lastSent.get(agentId) ?? 0;
-      if (trigger.sent_at <= sentAt) continue;
-      // Keep the bubble by REAL liveness, not a blind 60s clock: the agent is
-      // alive (filtered above) and this message is unanswered, so it IS still
-      // its turn. Only give up after a long TRUE silence since the last sign of
-      // life — the trigger, or the agent's last real tool event. A captain that
-      // keeps emitting activity (or is mid a long model-thinking turn) thus
-      // keeps its bubble instead of vanishing at 60s while still working; each
-      // real activity event renews it. Death → alive filter drops it (vanished
-      // card); a reply clears it above. (Was: drop at fixed 60s-from-trigger,
-      // which hid the captain mid-work on any task longer than a minute.)
-      const lastActivityAt = agentLiveStateById?.[agentId]?.activity?.at ?? 0;
-      const lastSignOfLife = Math.max(trigger.sent_at, lastActivityAt);
-      if (now - lastSignOfLife > PENDING_SILENCE_GIVEUP_MS) continue;
-      // P1: the exact turn the user interrupted (matched by trigger id) is
-      // cancelled — don't keep faking "responding". A newer message has a new
-      // id, so it reopens naturally; clock-skew can't affect an id match.
-      if (interruptedTriggers[agentId] === trigger.id) continue;
-      out.push({ agentId, trigger });
-    }
-    // Stable order: earliest-triggered first, so older waiters appear above.
-    out.sort((a, b) => a.trigger.sent_at - b.trigger.sent_at);
-    return out;
-    // tick is purposeful — re-evaluates the "now - sent_at" cutoff over time.
+  const pendingResponders = useMemo(
+    () =>
+      derivePendingResponders({
+        items,
+        aliveForInference,
+        agentLiveStateById,
+        interruptedTriggers,
+        now: Date.now(),
+      }),
+    // tick is purposeful — re-evaluates the give-up cutoff over time even with
+    // no new WS events (Date.now() is read fresh each tick). The inference
+    // itself lives in lib/pendingResponders (unit-tested); this memo only owns
+    // the React deps.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [items, aliveForInference, agentLiveStateById, interruptedTriggers, tick]);
+    [items, aliveForInference, agentLiveStateById, interruptedTriggers, tick],
+  );
 
   // ── 入流律:本轮中断(队长收到任务却没回复就死了)─────────────────────
   // "正在响应…然后突然消失" 的根因:气泡只在 agent 存活时显示,一旦它被杀 /
@@ -635,44 +587,10 @@ export function MessagesPanel({
   // 取它在本对话里最后一条用户任务;若其后没有它给用户的回复、也没被用户主动
   // 打断,就是一次"消失的回合"。agentLiveStateById 只增不删(见
   // useWorkspaceShellData 的 setAgentStateById),所以死掉的 agent 终态仍可查。
-  const vanishedTurns = useMemo(() => {
-    const lastTrigger = new Map<string, MessageRecord>();
-    const lastReplyAt = new Map<string, number>();
-    // 全对话里"用户→某 agent"的最新一条时间戳。只有最新那条搁浅了才值得提示;
-    // 用户一旦发出更新的消息(包括点「重新发送」),旧的消失卡就被取代、自动清掉
-    // —— 否则死掉的 agent 永远不会回复它那条,卡会永久赖着(就是用户撞到的 bug)。
-    let latestUserTriggerAt = 0;
-    for (const m of items) {
-      if (m.from_agent === USER_SENDER && m.to_agent !== USER_SENDER) {
-        if (m.sent_at > latestUserTriggerAt) latestUserTriggerAt = m.sent_at;
-        const prev = lastTrigger.get(m.to_agent);
-        if (!prev || m.sent_at > prev.sent_at) lastTrigger.set(m.to_agent, m);
-      } else if (m.to_agent === USER_SENDER && m.from_agent !== USER_SENDER) {
-        const prev = lastReplyAt.get(m.from_agent) ?? 0;
-        if (m.sent_at > prev) lastReplyAt.set(m.from_agent, m.sent_at);
-      }
-    }
-    const out: Array<{
-      agentId: string;
-      trigger: MessageRecord;
-      reason: string | null;
-    }> = [];
-    for (const [agentId, trigger] of lastTrigger) {
-      if (trigger.sent_at < latestUserTriggerAt) continue; // 用户已发更新消息 → 取代旧卡
-      const live = agentLiveStateById?.[agentId];
-      const dead = live?.state === "error" || live?.state === "exited";
-      if (!dead) continue; // 还活着(含"慢但在跑")→ 不喊狼来了
-      if ((lastReplyAt.get(agentId) ?? 0) >= trigger.sent_at) continue; // 已回复
-      if (interruptedTriggers[agentId] === trigger.id) continue; // 用户主动打断
-      out.push({
-        agentId,
-        trigger,
-        // 仅当死因是显式错误时才有原因文案(auth/卡死等);中性被杀/退出为 null。
-        reason: live?.state === "error" ? live.activity?.label ?? null : null,
-      });
-    }
-    return out;
-  }, [items, agentLiveStateById, interruptedTriggers]);
+  const vanishedTurns = useMemo(
+    () => deriveVanishedTurns({ items, agentLiveStateById, interruptedTriggers }),
+    [items, agentLiveStateById, interruptedTriggers],
+  );
 
   // 诊断面包屑:把"队长本轮无回复就消失"这一刻打到控制台,便于现场复盘
   // ("正在…然后突然没了" 的报告)。每个回合只打一次。
