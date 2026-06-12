@@ -310,7 +310,21 @@
       "cratesTitle": "Rust crates",
       "cratesHint": "9 crates make up the backend; src-tauri is the desktop shell",
       "depsTitle": "Frontend dependencies",
-      "credits": "Credits"
+      "credits": "Credits",
+      "update": {
+        "title": "Software update",
+        "hint": "Check for and install new versions — never automatic, your call",
+        "current": "Current version v{{v}}",
+        "check": "Check for updates",
+        "checking": "Checking…",
+        "uptodate": "You're on the latest version",
+        "available": "Version v{{v}} available to download",
+        "download": "Download & install",
+        "downloading": "Downloading {{pct}}%",
+        "failed": "Something went wrong, please retry",
+        "desktopOnly": "Updates are available in the desktop app only",
+        "badge": "Update available"
+      }
     },
     "models": {
       "title": "Model allocation",

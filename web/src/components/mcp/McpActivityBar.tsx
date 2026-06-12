@@ -30,6 +30,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/cn";
+import { useAvailableUpdate } from "@/lib/updater";
 
 const MENU_KEY = "flockmux:mcp:menuCollapsed:v1";
 
@@ -81,6 +82,9 @@ export function McpActivityBar() {
     return () => mq.removeEventListener("change", sync);
   }, []);
   const collapsed = collapsedPref || narrow;
+  // Non-intrusive "有新版本" badge: the silent startup check stashes any update;
+  // we dot the settings icon so the user notices without a popup.
+  const hasUpdate = useAvailableUpdate() != null;
 
   // NOTE: NavLink's function-style className ({isActive}) => ... does NOT
   // survive Radix `asChild`/Slot. In the collapsed state each NavLink is
@@ -147,8 +151,18 @@ export function McpActivityBar() {
             aria-label={t("nav.settings", "设置")}
             className={linkClass(pathname.startsWith("/settings"))}
           >
-            <Settings className="size-[18px] shrink-0" />
-            {!collapsed && <span className="font-heading">{t("nav.settings", "设置")}</span>}
+            <span className="relative shrink-0">
+              <Settings className="size-[18px]" />
+              {hasUpdate && (
+                <span
+                  className="absolute -right-1 -top-1 size-2 rounded-full bg-destructive ring-2 ring-surface-secondary"
+                  aria-label={t("settings.about.update.badge", "有新版本")}
+                />
+              )}
+            </span>
+            {!collapsed && (
+              <span className="font-heading">{t("nav.settings", "设置")}</span>
+            )}
           </NavLink>,
           "settings",
         )}
