@@ -351,9 +351,9 @@ flockmux 已经是一个"工程素养明显在线"的成熟原型——后端健
 - **依赖**：与 P0-3 / P0-5 的进程回收逻辑协同
 - **预估**：半天
 
-#### [~] P2-2 · MessagesPanel 拆 god component ⏳ 第一刀已落地（纯函数+单测），hook 抽取渐进进行
+#### [~] P2-2 · MessagesPanel 拆 god component ⏳ 已落地 3 刀（纯函数+2 hook），渐进进行
 
-> **第一步已完成（亲验，已上 main 149fa58）**：把分组/格式化/role 纯函数抽到 `web/src/lib/messageRows.ts` + 8 个 vitest 单测（固化 `buildRows` 的 header 折叠 / sender 切换 / `>` vs `>=` 分界），行为不变，2351 → 2282 行，vitest 17 + build + eslint 全绿。**剩余拆分**（composer draft / watchdog / pending-bubble hook）都涉及 state+effect，"行为不变"必须靠 preview/e2e 逐个验证（流式渲染、滚动、看门狗时序），**不在长 session 末尾盲拆**——建议作为带浏览器验证的聚焦 session 续做，e2e（P1-1）已是安全网。
+> **已完成 3 步（亲验，已上 main）**：① 分组/格式化/role 纯函数 → `lib/messageRows.ts` + 8 vitest 单测（149fa58）；② `useRoleLookup` hook（role-lookup 的 state + 2 effect，逐字抽取，tsc + preview-console 验证，2e18e74）；③ composer 草稿持久化 → `useComposerDraft` hook + `draftStore.ts` 纯函数（loadDraft/saveDraft）+ 7 vitest 单测。**关键方法论**：第 3 步原判"必须 spawn 有消息的 /chat 验证"，但 composer 草稿是**纯前端 localStorage 逻辑**，把存取语义抽成接收 `Storage` 参数的纯函数后，用「vitest 单测（空/whitespace→删、非空→存、storage throw 不崩）＋ tsc ＋ react-hooks lint ＋ 逐行等价审查」即可达到等价置信度，**无需 spawn、不烧 token**——能纯函数化的逻辑一律走这条路。2351 → ~2228 行，三步全 CI 绿。**剩余拆分**（watchdog / scroll-mark-read / pending-bubble）才真正涉及 DOM 滚动/交互/时序、无法纯函数化——这些"行为不变"仍须在**有消息的 /chat** 验证（需 workspace + agent 数据，spawn 真实 claude），续做需提供数据环境或授权 spawn 测试 orchestrator。
 
 - **关联差距**：FE-03
 - **涉及文件**：`web/src/**/MessagesPanel*`（约 2351 行的巨型组件）
