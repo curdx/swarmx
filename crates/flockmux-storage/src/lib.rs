@@ -15,7 +15,8 @@ mod schema;
 mod store;
 
 pub use models::{
-    AgentRecord, BlackboardOpRecord, CronJobRecord, GoalEvidenceRecord, GoalRecord,
+    AgentActivityRow, AgentRecord, BlackboardOpRecord, CronJobRecord, GoalEvidenceRecord,
+    GoalRecord,
     ListMessagesOpts, MessageRecord, NewAgent, NewBlackboardOp, NewGoal, NewGoalEvidence,
     NewMessage, NewRecording, NewSpellRun, NewThoughtTrace, NewThoughtTraceEvent, NewThread,
     NewWorker, NewWorkspace, NewWorkspaceRoot, RecordingRecord, SpellRunRecord, TaskRecord,

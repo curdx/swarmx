@@ -618,6 +618,7 @@ pub(crate) async fn spawn_with_bookkeeping(
         rows: 32,
         started_at_ms: spawned_at,
         file_path: recording_path.clone(),
+        max_bytes: flockmux_recorder::DEFAULT_MAX_CAST_BYTES,
     })
     .await
     {

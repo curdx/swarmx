@@ -171,6 +171,17 @@ impl PtyBridge {
         }
     }
 
+    /// Non-blocking: if the child has already exited, return its exit code,
+    /// else `None`. Pairs with [`is_alive`] so the server can synthesize a
+    /// `ShimExit` when the shim died without emitting its OSC exit marker
+    /// (SIGKILL / crash / OOM), instead of leaving the agent forever "alive".
+    pub fn try_exit_code(&self) -> Option<i32> {
+        match self.child.lock().try_wait() {
+            Ok(Some(status)) => Some(status.exit_code() as i32),
+            _ => None,
+        }
+    }
+
     /// Best-effort terminate. Used by `Drop`; safe to call multiple times.
     ///
     /// `portable_pty::Child::kill` SIGKILLs only the **direct** child — the

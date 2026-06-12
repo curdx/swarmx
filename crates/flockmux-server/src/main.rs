@@ -19,6 +19,7 @@ mod models_config;
 mod plugins;
 mod pre_spawn;
 mod pty_stream;
+mod reaper;
 mod registry;
 mod roles;
 mod routes;
@@ -102,12 +103,32 @@ pub struct AppState {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info,flockmux=debug".into()),
+    // File logging: a daily-rolled log under ~/.flockmux/logs so a crash leaves
+    // a trail beyond the terminal. The non-blocking writer's guard must outlive
+    // the program — `_log_guard` holds it for `main`'s whole duration.
+    let logs_dir = log_dir_default();
+    let _ = std::fs::create_dir_all(&logs_dir);
+    let file_appender = tracing_appender::rolling::daily(&logs_dir, "flockmux.log");
+    let (file_writer, _log_guard) = tracing_appender::non_blocking(file_appender);
+
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| "info,flockmux=debug".into());
+    tracing_subscriber::registry()
+        .with(env_filter)
+        .with(tracing_subscriber::fmt::layer())
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_writer(file_writer)
+                .with_ansi(false),
         )
         .init();
+
+    // Subcommand: `flockmux-server doctor` runs a preflight self-check + exits.
+    if std::env::args().nth(1).as_deref() == Some("doctor") {
+        return run_doctor().await;
+    }
 
     // L5a: layered registry — bundled `cli-plugins/` first, then the user
     // override layer `~/.flockmux/cli-plugins/` (last-writer-wins by id). Lets
@@ -225,6 +246,8 @@ async fn main() -> Result<()> {
                 messages = stats.messages,
                 recordings = stats.recordings,
                 cast_files = stats.recording_files_removed,
+                agent_usage = stats.agent_usage,
+                agent_activities = stats.agent_activities,
                 "pruned expired rows past the retention window"
             ),
             Ok(_) => {}
@@ -288,6 +311,52 @@ async fn main() -> Result<()> {
     cron::spawn_scheduler(state.clone());
     info!("cron scheduler started");
 
+    // Liveness reaper: deterministic backstop that retires any agent whose
+    // child process actually died without emitting/synthesizing a ShimExit, so
+    // the UI never sits forever on a green dot for a process that is gone.
+    reaper::spawn(
+        state.registry.clone(),
+        state.store.clone(),
+        state.swarm.clone(),
+    );
+    info!("liveness reaper started");
+
+    // Periodic retention: the boot-time prune above runs once; this keeps the
+    // append-only tables (messages / blackboard / recordings / agent_usage /
+    // agent_activities) from growing unbounded across a long-lived session.
+    // Skipped entirely when retention is disabled (FLOCKMUX_RETENTION_DAYS=0).
+    if retention_window_ms().is_some() {
+        let prune_store = state.store.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(6 * 60 * 60));
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                tick.tick().await;
+                let Some(window) = retention_window_ms() else {
+                    continue;
+                };
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis() as i64)
+                    .unwrap_or(0);
+                let cutoff = now.saturating_sub(window);
+                match prune_store.prune_expired(cutoff).await {
+                    Ok(stats) if !stats.is_empty() => tracing::info!(
+                        blackboard_ops = stats.blackboard_ops,
+                        messages = stats.messages,
+                        recordings = stats.recordings,
+                        agent_usage = stats.agent_usage,
+                        agent_activities = stats.agent_activities,
+                        "periodic retention prune"
+                    ),
+                    Ok(_) => {}
+                    Err(err) => tracing::warn!(?err, "periodic retention prune failed"),
+                }
+            }
+        });
+        info!("retention prune loop started (every 6h)");
+    }
+
     let mut app = routes::api::router();
 
     // Serve the built web bundle so `http://127.0.0.1:<port>` actually shows the
@@ -315,6 +384,10 @@ async fn main() -> Result<()> {
     }
 
     let app = app
+        // Innermost: turn a handler panic into a 500 for that one request
+        // instead of dropping the whole connection (which would also poison
+        // other in-flight requests sharing it).
+        .layer(tower_http::catch_panic::CatchPanicLayer::new())
         // CORS stays permissive so the Tauri webview's cross-origin fetch
         // (tauri://localhost → 127.0.0.1:7777) keeps working. The actual
         // security boundary is `require_local_origin` below, which rejects
@@ -326,6 +399,19 @@ async fn main() -> Result<()> {
         // requests before they reach any handler.
         .layer(middleware::from_fn(require_local_origin))
         .with_state(state.clone());
+
+    // Effective config dump — one place to see every resolved knob (pairs with
+    // docs/configuration.md). Helps diagnose "why is it using THAT dir / port".
+    info!(
+        port,
+        server_url = %state.server_url,
+        db = %db_path_default().display(),
+        workspaces = %state.workspaces_root.display(),
+        blackboard = %state.blackboard_root.display(),
+        recordings = %state.recordings_root.display(),
+        retention_days = retention_window_ms().map(|ms| ms / 86_400_000).unwrap_or(0),
+        "effective config"
+    );
 
     // `port` parsed above (it also derives server_url). Bind loopback only.
     let addr: SocketAddr = ([127, 0, 0, 1], port).into();
@@ -355,7 +441,9 @@ async fn main() -> Result<()> {
         info!("auto-respawn: disabled (set FLOCKMUX_AUTO_RESPAWN_ORCHESTRATORS=1 to enable)");
     }
 
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
     Ok(())
 }
 
@@ -482,6 +570,109 @@ fn workspaces_root_default() -> PathBuf {
     PathBuf::from(".flockmux/workspaces")
 }
 
+/// `flockmux-server doctor` — preflight self-check. Prints a red/green list of
+/// what a first launch needs (shim/mcp binaries, the CLIs on PATH, a free port,
+/// a writable data dir) and exits non-zero if any hard requirement is missing,
+/// so a new user gets an actionable diagnosis instead of a confusing mid-boot
+/// failure (e.g. the "missing shim → startup fails" footgun).
+async fn run_doctor() -> Result<()> {
+    println!("flockmux doctor — preflight check\n");
+    let mut all_ok = true;
+    macro_rules! check {
+        ($label:expr, $pass:expr, $detail:expr) => {{
+            let pass: bool = $pass;
+            println!("{} {}: {}", if pass { "✓" } else { "✗" }, $label, $detail);
+            all_ok &= pass;
+        }};
+    }
+
+    match spawn::locate_shim() {
+        Ok(p) => check!("flockmux-shim", true, p.display()),
+        Err(e) => check!(
+            "flockmux-shim",
+            false,
+            format!("{e} — run `cargo build --workspace`")
+        ),
+    }
+    match spawn::locate_mcp() {
+        Ok(p) => check!("flockmux-mcp", true, p.display()),
+        Err(e) => check!("flockmux-mcp", false, e.to_string()),
+    }
+    // CLIs are a soft warning: you can run flockmux with only one of them.
+    for cli in ["claude", "codex"] {
+        match on_path(cli) {
+            Some(p) => println!("✓ {cli}: {}", p.display()),
+            None => println!("⚠ {cli}: not on PATH (install it before spawning {cli} agents)"),
+        }
+    }
+    let port: u16 = std::env::var("FLOCKMUX_PORT")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(7777);
+    match tokio::net::TcpListener::bind(("127.0.0.1", port)).await {
+        Ok(_) => check!("port", true, format!("{port} is free")),
+        Err(e) => check!(
+            "port",
+            false,
+            format!("{port} — {e} (another flockmux running, or a stale orphan holding it?)")
+        ),
+    }
+    let db = db_path_default();
+    let dir_ok = db
+        .parent()
+        .map(|p| p.exists() || std::fs::create_dir_all(p).is_ok())
+        .unwrap_or(false);
+    check!(
+        "data dir",
+        dir_ok,
+        db.parent().map(|p| p.display().to_string()).unwrap_or_default()
+    );
+
+    println!();
+    if all_ok {
+        println!("All checks passed.");
+        Ok(())
+    } else {
+        println!("Some checks failed — fix the ✗ items above before launching.");
+        std::process::exit(1);
+    }
+}
+
+/// First match for `bin` on `$PATH`, if any.
+fn on_path(bin: &str) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .map(|dir| dir.join(bin))
+        .find(|full| full.is_file())
+}
+
+/// Resolves on SIGINT (Ctrl-C) or SIGTERM so `axum::serve` stops accepting new
+/// connections and drains in-flight ones, then the process exits cleanly —
+/// letting Drop tear down PTYs / child processes instead of leaving them on a
+/// hard kill.
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
+    #[cfg(unix)]
+    let terminate = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut s) => {
+                s.recv().await;
+            }
+            Err(_) => std::future::pending::<()>().await,
+        }
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
+    }
+    tracing::info!("shutdown signal received — draining connections");
+}
+
 /// Retention window in ms from `FLOCKMUX_RETENTION_DAYS` (default 30 days).
 /// Returns `None` when the var is set to 0 or negative — "keep everything,
 /// never prune". A non-numeric value falls back to the default.
@@ -491,6 +682,13 @@ fn retention_window_ms() -> Option<i64> {
         .and_then(|v| v.trim().parse().ok())
         .unwrap_or(30);
     (days > 0).then(|| days * 24 * 60 * 60 * 1000)
+}
+
+fn log_dir_default() -> PathBuf {
+    if let Ok(home) = std::env::var("HOME") {
+        return PathBuf::from(home).join(".flockmux").join("logs");
+    }
+    PathBuf::from(".flockmux/logs")
 }
 
 fn db_path_default() -> PathBuf {
@@ -639,8 +837,51 @@ async fn require_local_origin(req: Request, next: Next) -> Response {
             )
                 .into_response();
         }
+    } else {
+        // No Origin = a native client (MCP reqwest, curl, the Tauri webview's
+        // asset-scheme requests) — all of which hit 127.0.0.1 directly. So
+        // *additionally* require the Host to be loopback: a DNS-rebind request
+        // (Host: attacker.com resolving to 127.0.0.1, which browsers send with
+        // NO Origin on top-level / `<img>` / form-GET navigations) is then
+        // rejected, while genuine native clients still pass. A missing Host
+        // (rare; HTTP/2 carries the authority in the URI) is allowed.
+        let host_ok = req
+            .headers()
+            .get(header::HOST)
+            .and_then(|h| h.to_str().ok())
+            .or_else(|| req.uri().host())
+            .map(host_is_loopback)
+            .unwrap_or(true);
+        if !host_ok {
+            tracing::warn!("rejected no-Origin request with non-loopback Host");
+            return (
+                StatusCode::FORBIDDEN,
+                "request rejected (flockmux is loopback-only)",
+            )
+                .into_response();
+        }
     }
     next.run(req).await
+}
+
+/// True if a `Host` header value (`127.0.0.1:7777`, `localhost:5173`,
+/// `[::1]:7777`) points at a loopback host. Used to reject no-Origin DNS-rebind
+/// requests, whose Host carries the attacker's own domain.
+fn host_is_loopback(host: &str) -> bool {
+    let host = host.trim();
+    let h = if let Some(rest) = host.strip_prefix('[') {
+        // IPv6 literal: `[::1]` / `[::1]:port`.
+        rest.split(']').next().unwrap_or("")
+    } else {
+        // `host` or `host:port` — strip a trailing `:port`.
+        host.rsplit_once(':').map(|(a, _)| a).unwrap_or(host)
+    };
+    if h == "localhost" || h.ends_with(".localhost") {
+        return true;
+    }
+    h.parse::<std::net::IpAddr>()
+        .map(|ip| ip.is_loopback())
+        .unwrap_or(false)
 }
 
 /// True if an `Origin` header value (e.g. `http://localhost:5173`,
@@ -689,6 +930,30 @@ mod origin_tests {
             "",
         ] {
             assert!(!origin_is_local(o), "should reject {o}");
+        }
+    }
+
+    #[test]
+    fn host_loopback_gate() {
+        use super::host_is_loopback;
+        for h in [
+            "127.0.0.1:7777",
+            "127.0.0.1",
+            "localhost:5173",
+            "localhost",
+            "[::1]:7777",
+            "foo.localhost:7777",
+        ] {
+            assert!(host_is_loopback(h), "should allow {h}");
+        }
+        for h in [
+            "evil.com",
+            "attacker.example:443",
+            "169.254.1.1",      // link-local, not loopback
+            "10.0.0.5:7777",    // private LAN
+            "localhost.evil.com", // suffix attack
+        ] {
+            assert!(!host_is_loopback(h), "should reject {h}");
         }
     }
 }

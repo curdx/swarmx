@@ -73,8 +73,7 @@ session credentials — see [Security &amp; Credentials](#security--credentials)
 - [Screenshots](#screenshots)
 - [Quick Start](#quick-start)
 - [Concepts](#concepts)
-- [Walkthrough: critic-loop in 60 seconds](#walkthrough-critic-loop-in-60-seconds)
-- [Walkthrough: fullstack-feature in ~9 minutes (M6)](#walkthrough-fullstack-feature-in-9-minutes-m6)
+- [Walkthrough: orchestrator dispatch](#walkthrough-orchestrator-dispatch)
 - [Architecture](#architecture)
 - [Configuration reference](#configuration-reference)
 - [REST &amp; WebSocket API](#rest--websocket-api)
@@ -196,14 +195,23 @@ In the **messages** drawer on the right:
    `swarm_send_message`. The reply appears in the messages drawer with the
    correct `in_reply_to` parent link.
 
-### Run a spell
+### Talk to your workspace's orchestrator
 
-In the header dropdown, pick **✨ critic-loop**, type a task description
-(e.g. `haiku about Rust async cancellation`), hit **run**. Three agents
-spawn — writer, critic, editor — and you watch them hand the work off
-through the messages drawer. The final piece comes back addressed to
-`system` with `kind: "reply"` and an `in_reply_to` linking back to the
-critic's notes.
+flockmux gives each workspace a single point of contact: an **orchestrator**
+agent (claude), spawned automatically when you create the workspace (the
+built-in `spells/init.md`). It scans your project (~30s), writes
+`task.ledger.md` + `progress.ledger.md` to the blackboard, and greets you.
+
+From then on you just talk to it in natural language. The orchestrator decides
+per task whether to answer directly, do the work itself, or dispatch one or
+more workers via `swarm_spawn_worker` — scaling the team to the task (the
+Magentic-One model) instead of pre-allocating a fixed topology. Workers come
+and go in the swarm drawer; the orchestrator stays.
+
+> There is no "pick a spell from a dropdown" step: the earlier pre-declared
+> multi-agent spells (`critic-loop` / `fullstack-feature*` / `auto-dispatch`)
+> were removed in favour of this runtime-scaled dispatch. See `spells/init.md`
+> and `roles/orchestrator.md` for the one spell that still ships.
 
 ## Concepts
 
@@ -221,107 +229,28 @@ critic's notes.
 | **Shim** | `flockmux-shim` — ~70-line binary that `execvp`s the real CLI and emits OSC `ready` / `exit` sequences so flockmux can detect lifecycle without polling. | `flockmux-shim` |
 | **MCP** | `flockmux-mcp` — stdio JSON-RPC server exposing `swarm_send_message`, `swarm_list_messages`, blackboard tools. Auto-installed in each agent's CLI config so the LLM can call them as native tools. Claude gets a per-agent `--mcp-config` file under `~/.flockmux/mcp/<agent_id>.json` so shared-workspace agents don't clobber each other's identity in `~/.claude.json`. | `flockmux-mcp` |
 
-## Walkthrough: critic-loop in 60 seconds
+## Walkthrough: orchestrator dispatch
 
 ```bash
 # 1. Start the stack
 cargo run -p flockmux-server &
 cd web && npm run dev &
-
-# 2. Fire the spell directly via REST (the UI does the same call)
-curl -sX POST http://127.0.0.1:7777/api/spell/run \
-  -H 'content-type: application/json' \
-  -d '{
-        "name": "critic-loop",
-        "task": "haiku about Rust async cancellation"
-      }' | jq .
-
-# Response:
-# {
-#   "spell": "critic-loop",
-#   "agents": [
-#     { "role": "writer", "cli": "claude", "agent_id": "claude-890b3c93" },
-#     { "role": "critic", "cli": "codex",  "agent_id": "codex-5796ef7c" },
-#     { "role": "editor", "cli": "claude", "agent_id": "claude-c46442a7" }
-#   ]
-# }
-
-# 3. Watch the message bus
-curl -sN http://127.0.0.1:7777/api/message | jq '.[-3:]'
-# Three messages will appear:
-#   #7  writer → critic   (draft haiku)
-#   #8  critic → editor   (draft + critique notes)            in_reply_to=#7
-#   #9  editor → system   (final revised haiku, kind="reply") in_reply_to=#8
 ```
 
-The whole loop takes ~3.5 minutes wall-clock on a warm cache. Each
-hand-off is the agent's Stop hook firing `wake-check`, seeing the unread
-message from upstream, and continuing into a `swarm_list_messages` →
-`swarm_send_message` pair. No polling, no PTY injection beyond the
-initial system-prompt bootstrap.
+2. Open the web UI and create a workspace pointed at a real project
+   directory. flockmux runs the built-in `spells/init.md`, which spawns one
+   orchestrator (claude) in that directory.
+3. The orchestrator pane scans the repo (~30s), writes `task.ledger.md` +
+   `progress.ledger.md` to the blackboard, and greets you.
+4. Type a task in natural language. Watch it decide: a small ask it answers
+   or does itself; a larger one it breaks down and dispatches to workers via
+   `swarm_spawn_worker`. Each worker appears in the swarm drawer; hand-offs
+   flow through the messages drawer and the blackboard.
 
-## Walkthrough: fullstack-feature in ~9 minutes (M6)
-
-`fullstack-feature` is the spell that pushed the architecture into its M6
-shape: three agents sharing one monorepo, fork-joining on blackboard
-contracts.
-
-```bash
-# 1. Start the stack (same as critic-loop)
-cargo run -p flockmux-server &
-cd web && npm run dev &
-
-# 2. Prepare a fresh shared workspace
-mkdir -p /tmp/m6-todo && cd /tmp/m6-todo && git init -q
-
-# 3. Fire the spell (UI does the same call from the dropdown)
-curl -sX POST http://127.0.0.1:7777/api/spell/run \
-  -H 'content-type: application/json' \
-  -d '{
-        "name": "fullstack-feature",
-        "task": "做一个 todo app: React 前端 (apps/frontend) + FastAPI 后端 (apps/backend) + SQLite, 支持添加 / 标完成 / 删除",
-        "workspace_dir": "/tmp/m6-todo"
-      }' | jq .
-
-# Response shape:
-# {
-#   "spell": "fullstack-feature",
-#   "agents": [
-#     { "role": "frontend", "cli": "claude", "agent_id": "claude-XXXXXXXX" },
-#     { "role": "backend",  "cli": "codex",  "agent_id": "codex-YYYYYYYY"  },
-#     { "role": "test",     "cli": "claude", "agent_id": "claude-ZZZZZZZZ" }
-#   ]
-# }
-```
-
-What you'll see in the server log over the next ~9 minutes (real numbers
-from the demo run committed in `228c260`):
-
-```
-00:00  3 agents spawn, each with its own --mcp-config file under
-       ~/.flockmux/mcp/<agent_id>.json (sidesteps ~/.claude.json
-       cwd-keyed identity collision)
-00:40  BE writes api.spec to ~/.flockmux/blackboard/
-       → WakeCoordinator: "wake delivered target=FE-id key=api.spec"
-04:07  FE writes apps/frontend/ + commits + writes frontend.done
-       → WakeCoordinator: "wake delivered target=test-id key=frontend.done"
-05:22  BE writes apps/backend/ + commits + writes backend.done
-       → WakeCoordinator: "wake delivered target=test-id key=backend.done"
-08:44  test installs Playwright, writes tests/, runs 14 tests, all green,
-       commits tests/ + writes test.passed
-```
-
-End state in `/tmp/m6-todo`:
-- `apps/frontend/` — React 18 + TS + Vite + Tailwind, runnable with `npm run dev`
-- `apps/backend/` — FastAPI + SQLite + uvicorn, runnable with `uvicorn main:app`
-- `tests/` — Playwright suite covering all 4 endpoints + UI smoke
-- 4 git commits, one per agent (FE 2: main + .gitignore tweak; BE 1; test 1)
-- 4 blackboard keys: `api.spec`, `frontend.done`, `backend.done`, `test.passed`
-
-The handoffs are 100% architecturally driven — no role looks at a clock,
-no role polls, no human pokes a PTY. Each `wake delivered` line is the
-`WakeCoordinator` task firing as a side effect of someone else's
-`swarm_write_blackboard` call.
+Every hand-off is architecturally driven — an agent's Stop hook fires
+`flockmux-mcp wake-check`, sees unread mail or a changed blackboard key, and
+continues into a `swarm_list_messages` → `swarm_send_message` turn. No
+polling, no human poking a PTY beyond the initial bootstrap.
 
 ## Architecture
 

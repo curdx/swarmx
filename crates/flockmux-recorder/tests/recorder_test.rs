@@ -21,6 +21,7 @@ async fn header_then_events_then_finalize() {
         rows: 32,
         started_at_ms,
         file_path: path.clone(),
+        max_bytes: 0,
     })
     .await
     .expect("start recorder");
@@ -68,6 +69,7 @@ async fn empty_recording_yields_only_header() {
         rows: 24,
         started_at_ms: 1_700_000_000_000,
         file_path: path.clone(),
+        max_bytes: 0,
     })
     .await
     .unwrap();
@@ -91,6 +93,7 @@ async fn invalid_utf8_replaced_lossy() {
         rows: 24,
         started_at_ms: 1_700_000_000_000,
         file_path: path.clone(),
+        max_bytes: 0,
     })
     .await
     .unwrap();
@@ -120,6 +123,7 @@ async fn deltas_are_monotonically_nondecreasing() {
         rows: 24,
         started_at_ms: 1_700_000_000_000,
         file_path: path.clone(),
+        max_bytes: 0,
     })
     .await
     .unwrap();
@@ -139,4 +143,32 @@ async fn deltas_are_monotonically_nondecreasing() {
         .unwrap();
     assert!(d2 >= d1, "{} >= {}", d2, d1);
     assert!(d2 - d1 >= 0.015, "~20ms gap shows up, got {}", d2 - d1);
+}
+
+#[tokio::test]
+async fn writer_stops_at_size_cap() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("capped.cast");
+    let rec = Recorder::start(RecorderConfig {
+        agent_id: "a-cap".into(),
+        cols: 80,
+        rows: 24,
+        started_at_ms: 1_700_000_000_000,
+        file_path: path.clone(),
+        max_bytes: 100, // tiny cap for the test
+    })
+    .await
+    .unwrap();
+    let h = rec.handle();
+    // Write ~500 bytes — well past the 100-byte cap.
+    for _ in 0..50 {
+        h.write_chunk(Bytes::from_static(b"0123456789"));
+    }
+    drop(h);
+    rec.wait_finalize().await.unwrap();
+
+    // File is bounded near the cap (header + a few events), not the full input —
+    // proof the writer stopped writing once it crossed max_bytes.
+    let size = tokio::fs::metadata(&path).await.unwrap().len();
+    assert!(size < 400, "capped recording should stay bounded, got {size} bytes");
 }

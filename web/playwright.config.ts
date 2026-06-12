@@ -6,6 +6,15 @@ export default defineConfig({
   expect: { timeout: 8_000 },
   fullyParallel: false,
   reporter: [["list"]],
+  // Auto-start the vite dev server for the run; locally reuse an already-running
+  // one. The backend (7777) is started separately in CI (and already up in dev);
+  // vite proxies /api → 7777, which the suite's first test actually hits.
+  webServer: {
+    command: "npm run dev",
+    url: "http://localhost:5173",
+    reuseExistingServer: !process.env.CI,
+    timeout: 120_000,
+  },
   use: {
     baseURL: process.env.PLAYWRIGHT_BASE_URL ?? "http://localhost:5173",
     channel: "chrome",

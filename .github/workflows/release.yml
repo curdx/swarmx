@@ -17,8 +17,28 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
+  # Gate: never package a commit that fails tests / harness checks. build-tauri
+  # `needs` this, so a red test blocks the release artifacts instead of shipping
+  # a broken nightly to users (the REL-06 footgun: release was decoupled from CI).
+  test:
+    name: Gate — cargo test + harness must pass before packaging
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - uses: Swatinem/rust-cache@v2
+      - name: Version manifests agree
+        run: node scripts/bump-version.mjs --check
+      - name: Test (hard gate)
+        run: cargo test --workspace --locked
+      - name: Harness check (cross-file invariants)
+        run: node scripts/harness-check.mjs
+
   build-tauri:
     name: Tauri ${{ matrix.label }}
+    needs: test
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
