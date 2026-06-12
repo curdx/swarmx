@@ -22,7 +22,7 @@ jobs:
     name: Harness check (cross-file invariants)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - uses: actions/setup-node@v5
         with:
           node-version: 22
@@ -40,7 +40,7 @@ jobs:
     name: Rust (build · test · clippy)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       # rust-toolchain.toml pins channel=stable + clippy/rustfmt, so rustup
       # auto-installs the right toolchain and components on first cargo call.
       - uses: Swatinem/rust-cache@v2
@@ -59,7 +59,7 @@ jobs:
     name: E2E smoke (server · directions live-refresh)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - uses: Swatinem/rust-cache@v2
       - uses: actions/setup-node@v5
         with:
@@ -92,7 +92,7 @@ jobs:
     name: Web (typecheck · build)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - uses: actions/setup-node@v5
         with:
           node-version: 22
@@ -117,7 +117,7 @@ jobs:
     name: Dependency audit (cargo-audit · npm audit)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - uses: actions/setup-node@v5
         with:
           node-version: 22
@@ -142,7 +142,7 @@ jobs:
     name: Web e2e (Playwright · hard gate)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - uses: actions/setup-node@v5
         with:
           node-version: 22

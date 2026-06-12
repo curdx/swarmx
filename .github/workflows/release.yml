@@ -24,7 +24,7 @@ jobs:
     name: Gate — cargo test + harness must pass before packaging
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - uses: actions/setup-node@v5
         with:
           node-version: 22
@@ -62,7 +62,7 @@ jobs:
             args: ""
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Install Linux Tauri dependencies
         if: runner.os == 'Linux'
@@ -221,7 +221,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: build-tauri
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
