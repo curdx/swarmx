@@ -158,21 +158,24 @@ jobs:
       - name: Install Playwright Chrome
         run: npx playwright install --with-deps chrome
         working-directory: web
-      - name: Boot isolated server
-        # Throwaway data dirs (FLOCKMUX_*), same pattern as the smoke job, so the
-        # e2e run never touches a real ~/.flockmux. Playwright's webServer brings
-        # up vite itself; this just backs its /api proxy.
+      - name: Boot server + run e2e (hard gate)
+        # The server MUST start in the same step as the test run: a background
+        # process spawned in a separate step is reaped when that step ends, so
+        # vite's /api proxy would then hit a dead 7777 (ECONNREFUSED). Throwaway
+        # data dirs (FLOCKMUX_*) so the run never touches a real ~/.flockmux;
+        # Playwright's webServer brings up vite itself.
+        working-directory: web
         run: |
           set -euo pipefail
           D="$(mktemp -d)"
           FLOCKMUX_PORT=7777 FLOCKMUX_DB_PATH="$D/d.db" \
             FLOCKMUX_WORKSPACES_DIR="$D/ws" FLOCKMUX_BLACKBOARD_DIR="$D/bb" \
             FLOCKMUX_RECORDINGS_DIR="$D/rec" RUST_LOG=error \
-            ./target/debug/flockmux-server &
+            "$GITHUB_WORKSPACE/target/debug/flockmux-server" &
+          SRV=$!
+          trap 'kill "$SRV" 2>/dev/null || true' EXIT
           for _ in $(seq 1 60); do
             curl -sf http://127.0.0.1:7777/api/workspaces >/dev/null 2>&1 && break
             sleep 0.5
           done
-      - name: Run e2e (hard gate)
-        run: npm run test:e2e
-        working-directory: web
+          npm run test:e2e
