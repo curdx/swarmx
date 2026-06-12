@@ -90,6 +90,7 @@ import {
   derivePendingResponders,
   deriveVanishedTurns,
 } from "../lib/pendingResponders";
+import { useScrollMarkRead } from "../lib/useScrollMarkRead";
 
 const ChatMarkdown = lazy(() =>
   import("@/components/ChatMarkdown").then((m) => ({ default: m.ChatMarkdown })),
@@ -270,11 +271,6 @@ export function MessagesPanel({
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const [highlightId, setHighlightId] = useState<number | null>(null);
 
-  // F5 auto-mark-read: ids whose bubble has scrolled into view (foregrounded)
-  // and are pending a batched mark-read POST, plus the debounce timer.
-  const pendingReadRef = useRef<Set<number>>(new Set());
-  const flushTimerRef = useRef<number | null>(null);
-
   // agent_id → role lookup covering exited agents too, so historical messages
   // render with the right avatar colour even after agents die.
   const roleLookup = useRoleLookup(activeMembers);
@@ -366,73 +362,11 @@ export function MessagesPanel({
   }, [liveRead]);
 
   // ── F5: auto-mark-read on actual view ─────────────────────────────────
-  // The panel deliberately does NOT treat "opened" as "read". But a bubble
-  // that has scrolled into the viewport while the tab is foregrounded HAS
-  // plausibly been seen by a human, so we mark it read then — clearing the
-  // unread badge as the user browses instead of forcing a manual click. The
-  // parent's per-sender tally decrements via the `message_read` WS broadcast
-  // that POST /api/message/read emits, so we only touch local `items` here.
-  const flushAutoRead = useCallback(() => {
-    flushTimerRef.current = null;
-    const ids = [...pendingReadRef.current];
-    pendingReadRef.current.clear();
-    if (ids.length === 0) return;
-    // All collected ids are to_agent === "user" (see the observer filter).
-    api
-      .markMessagesRead(USER_SENDER, ids)
-      .then((res) => {
-        if (res.marked.length === 0) return;
-        const marked = new Set(res.marked);
-        setItems((prev) =>
-          prev.map((m) => (marked.has(m.id) ? { ...m, read_at: res.at } : m)),
-        );
-      })
-      .catch(() => {
-        /* best-effort — the bubble stays observed and retries next intersect */
-      });
-  }, []);
-
-  useEffect(() => {
-    const root = listRef.current;
-    if (!root || typeof IntersectionObserver === "undefined") return;
-    const elToId = new Map<Element, number>();
-    const io = new IntersectionObserver(
-      (entries) => {
-        // Foreground-only: a backgrounded tab scrolling (e.g. via anchor)
-        // isn't a human reading. Honors the original "opened ≠ read" caveat.
-        if (document.visibilityState !== "visible") return;
-        let added = false;
-        for (const e of entries) {
-          if (!e.isIntersecting) continue;
-          const id = elToId.get(e.target);
-          if (id == null) continue;
-          pendingReadRef.current.add(id);
-          added = true;
-        }
-        if (added && flushTimerRef.current == null) {
-          flushTimerRef.current = window.setTimeout(flushAutoRead, 400);
-        }
-      },
-      { root, threshold: 0 },
-    );
-    for (const m of items) {
-      if (m.to_agent !== USER_SENDER || m.read_at !== null) continue;
-      const el = rowRefs.current.get(m.id);
-      if (el) {
-        elToId.set(el, m.id);
-        io.observe(el);
-      }
-    }
-    return () => io.disconnect();
-  }, [items, flushAutoRead]);
-
-  // Cancel any pending flush on unmount.
-  useEffect(
-    () => () => {
-      if (flushTimerRef.current != null) window.clearTimeout(flushTimerRef.current);
-    },
-    [],
-  );
+  // The panel deliberately does NOT treat "opened" as "read", but a bubble
+  // scrolled into the foregrounded viewport HAS plausibly been seen — so the
+  // hook batches a debounced mark-read POST and stamps read_at locally as the
+  // user browses. listRef/rowRefs stay component-owned (shared with scroll).
+  useScrollMarkRead({ listRef, rowRefs, items, setItems });
 
   // ── filtering + grouping ──────────────────────────────────────────────
   // workspaceAgentIds 限定当前房间：message 命中 from 或 to 在集合内才显示。

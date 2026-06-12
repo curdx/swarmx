@@ -1,0 +1,95 @@
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  type Dispatch,
+  type RefObject,
+  type SetStateAction,
+} from "react";
+import { api } from "../api/http";
+import type { MessageRecord } from "../api/types";
+import { applyMarkedRead, collectObservableIds } from "./markReadBatch";
+
+const USER_SENDER = "user";
+
+/**
+ * F5 auto-mark-read: as agent→user bubbles scroll into the list viewport — and
+ * only while the tab is foregrounded — batch a debounced POST /api/message/read
+ * and stamp read_at locally. Side-effecting; returns nothing.
+ *
+ * Extracted verbatim from MessagesPanel: same IntersectionObserver, same 400ms
+ * debounce-batch, same foreground gate (a backgrounded tab scrolling via an
+ * anchor isn't a human reading), same two cleanups (observer disconnect + the
+ * pending-flush clearTimeout on unmount). `listRef`/`rowRefs` stay owned by the
+ * component (shared with scroll-to-parent, auto-scroll, JSX ref-callbacks) and
+ * are passed in. The read/write data rules live in markReadBatch (unit-tested).
+ */
+export function useScrollMarkRead(opts: {
+  listRef: RefObject<HTMLDivElement | null>;
+  rowRefs: RefObject<Map<number, HTMLDivElement | null>>;
+  items: MessageRecord[];
+  setItems: Dispatch<SetStateAction<MessageRecord[]>>;
+}): void {
+  const { listRef, rowRefs, items, setItems } = opts;
+  const pendingReadRef = useRef<Set<number>>(new Set());
+  const flushTimerRef = useRef<number | null>(null);
+
+  const flushAutoRead = useCallback(() => {
+    flushTimerRef.current = null;
+    const ids = [...pendingReadRef.current];
+    pendingReadRef.current.clear();
+    if (ids.length === 0) return;
+    // All collected ids are to_agent === "user" (see the observer filter).
+    api
+      .markMessagesRead(USER_SENDER, ids)
+      .then((res) => {
+        if (res.marked.length === 0) return;
+        setItems((prev) => applyMarkedRead(prev, res.marked, res.at));
+      })
+      .catch(() => {
+        /* best-effort — the bubble stays observed and retries next intersect */
+      });
+  }, [setItems]);
+
+  useEffect(() => {
+    const root = listRef.current;
+    if (!root || typeof IntersectionObserver === "undefined") return;
+    const elToId = new Map<Element, number>();
+    const io = new IntersectionObserver(
+      (entries) => {
+        // Foreground-only: a backgrounded tab scrolling (e.g. via anchor)
+        // isn't a human reading. Honors the original "opened ≠ read" caveat.
+        if (document.visibilityState !== "visible") return;
+        let added = false;
+        for (const e of entries) {
+          if (!e.isIntersecting) continue;
+          const id = elToId.get(e.target);
+          if (id == null) continue;
+          pendingReadRef.current.add(id);
+          added = true;
+        }
+        if (added && flushTimerRef.current == null) {
+          flushTimerRef.current = window.setTimeout(flushAutoRead, 400);
+        }
+      },
+      { root, threshold: 0 },
+    );
+    for (const id of collectObservableIds(items)) {
+      const el = rowRefs.current?.get(id);
+      if (el) {
+        elToId.set(el, id);
+        io.observe(el);
+      }
+    }
+    return () => io.disconnect();
+  }, [items, flushAutoRead, listRef, rowRefs]);
+
+  // Cancel any pending flush on unmount.
+  useEffect(
+    () => () => {
+      if (flushTimerRef.current != null)
+        window.clearTimeout(flushTimerRef.current);
+    },
+    [],
+  );
+}
