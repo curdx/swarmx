@@ -89,6 +89,7 @@ import { useComposerDraft } from "../lib/useComposerDraft";
 import { useScrollMarkRead } from "../lib/useScrollMarkRead";
 import { usePendingResponders } from "../lib/usePendingResponders";
 import { useInterruptControls } from "../lib/useInterruptControls";
+import { useVirtualizer } from "@tanstack/react-virtual";
 
 const ChatMarkdown = lazy(() =>
   import("@/components/ChatMarkdown").then((m) => ({ default: m.ChatMarkdown })),
@@ -347,13 +348,6 @@ export function MessagesPanel({
     );
   }, [liveRead]);
 
-  // ── F5: auto-mark-read on actual view ─────────────────────────────────
-  // The panel deliberately does NOT treat "opened" as "read", but a bubble
-  // scrolled into the foregrounded viewport HAS plausibly been seen — so the
-  // hook batches a debounced mark-read POST and stamps read_at locally as the
-  // user browses. listRef/rowRefs stay component-owned (shared with scroll).
-  useScrollMarkRead({ listRef, rowRefs, items, setItems });
-
   // ── filtering + grouping ──────────────────────────────────────────────
   // workspaceAgentIds 限定当前房间：message 命中 from 或 to 在集合内才显示。
   // user/system 不在 agent 集合里，但与他们配对的另一头一定是 agent_id，所以
@@ -415,6 +409,40 @@ export function MessagesPanel({
     });
   }, [items, filter, wsSet, workspaceSlug, activeThreadId]);
   const rows = useMemo(() => buildRows(visible), [visible]);
+
+  // ── virtualization (P2-3) ─────────────────────────────────────────────
+  // Only on-screen rows render — off-screen ones leave the DOM entirely. Row
+  // heights are dynamic (markdown / reasoning / images), so each row measures
+  // itself via measureElement. idToIndex maps message id → row index for
+  // jump-to-parent / jump-to-unread, which can no longer read a DOM ref.
+  const idToIndex = useMemo(() => {
+    const m = new Map<number, number>();
+    rows.forEach((r, i) => m.set(r.msg.id, i));
+    return m;
+  }, [rows]);
+  const virtualizer = useVirtualizer({
+    count: rows.length,
+    getScrollElement: () => listRef.current,
+    estimateSize: () => 72,
+    getItemKey: (i) => rows[i].msg.id,
+    overscan: 6,
+  });
+
+  // F5 auto-mark-read (see useScrollMarkRead): a bubble scrolled into the
+  // foregrounded viewport HAS plausibly been seen → debounced mark-read POST.
+  // revision = the virtualizer's visible range, so the IntersectionObserver
+  // re-subscribes over the rows currently mounted as the user scrolls.
+  const vRange = virtualizer.range;
+  const markReadRevision = vRange
+    ? `${vRange.startIndex}-${vRange.endIndex}`
+    : "";
+  useScrollMarkRead({
+    listRef,
+    rowRefs,
+    items,
+    setItems,
+    revision: markReadRevision,
+  });
   const traceToSummary = useCallback((m: MessageRecord): ReasoningSummary | null => {
     const trace = m.thought_trace;
     if (!trace || trace.summary.length === 0) return null;
@@ -484,11 +512,13 @@ export function MessagesPanel({
     usePendingResponders({ items, aliveForInference, agentLiveStateById });
 
   // Auto-scroll to bottom on new items / live message / new pending bubble.
+  // Virtualized: scroll the last row into view (align: end) rather than poking
+  // scrollTop, so it lands against the measured total size, not an estimate.
   useLayoutEffect(() => {
-    const el = listRef.current;
-    if (!el) return;
-    el.scrollTop = el.scrollHeight;
-  }, [rows.length, pendingResponders.length, vanishedTurns.length]);
+    if (rows.length > 0) {
+      virtualizer.scrollToIndex(rows.length - 1, { align: "end" });
+    }
+  }, [rows.length, pendingResponders.length, vanishedTurns.length, virtualizer]);
 
   // ── send / reply / mark-read ──────────────────────────────────────────
   // Magentic-One 重构后用户视角永远只跟"一个 AI 接待员对话":这个角色就是
@@ -834,9 +864,9 @@ export function MessagesPanel({
   };
 
   const jumpToParent = (parentId: number) => {
-    const el = rowRefs.current.get(parentId);
-    if (!el) return;
-    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    const idx = idToIndex.get(parentId);
+    if (idx == null) return;
+    virtualizer.scrollToIndex(idx, { align: "center", behavior: "smooth" });
     setHighlightId(parentId);
     window.setTimeout(
       () => setHighlightId((cur) => (cur === parentId ? null : cur)),
@@ -852,9 +882,9 @@ export function MessagesPanel({
       (m) => m.read_at === null && m.to_agent === USER_SENDER,
     );
     if (!firstUnread) return;
-    const el = rowRefs.current.get(firstUnread.id);
-    if (!el) return;
-    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    const idx = idToIndex.get(firstUnread.id);
+    if (idx == null) return;
+    virtualizer.scrollToIndex(idx, { align: "center", behavior: "smooth" });
     setHighlightId(firstUnread.id);
     window.setTimeout(
       () => setHighlightId((cur) => (cur === firstUnread.id ? null : cur)),
@@ -1084,8 +1114,12 @@ export function MessagesPanel({
                 {t("messages.empty")}
               </p>
             )))}
-        <div className="mx-auto flex w-full max-w-[1040px] flex-col gap-0.5">
-          {rows.map(({ msg: m, showHeader, showDividerBefore }) => {
+        <div
+          className="relative mx-auto w-full max-w-[1040px]"
+          style={{ height: virtualizer.getTotalSize() }}
+        >
+          {virtualizer.getVirtualItems().map((vi) => {
+            const { msg: m, showHeader, showDividerBefore } = rows[vi.index];
             const isUser = m.from_agent === USER_SENDER;
             const isSystem = m.from_agent === SYSTEM_SENDER;
             // A worker's farewell/completion (from=worker, meta.subtype=
@@ -1116,27 +1150,34 @@ export function MessagesPanel({
             if (isSystem || isDelivery) {
               return (
                 <div
-                  key={m.id}
-                  ref={(el) => {
-                    if (el) rowRefs.current.set(m.id, el);
-                    else rowRefs.current.delete(m.id);
-                  }}
-                  className="my-1.5 flex flex-col items-center gap-0.5"
+                  key={vi.key}
+                  data-index={vi.index}
+                  ref={virtualizer.measureElement}
+                  className="absolute left-0 top-0 w-full"
+                  style={{ transform: `translateY(${vi.start}px)` }}
                 >
-                  {showDividerBefore && <TimeDivider ms={m.sent_at} />}
-                  {newDivider}
-                  <span
-                    className={cn(
-                      highlighted && "rounded-lg ring-1 ring-accent-primary",
-                    )}
-                    title={`#${m.id} · ${m.kind} · ${formatFullStamp(m.sent_at)}`}
+                  <div
+                    ref={(el) => {
+                      if (el) rowRefs.current.set(m.id, el);
+                      else rowRefs.current.delete(m.id);
+                    }}
+                    className="py-1.5 flex flex-col items-center gap-0.5"
                   >
-                    <SystemCard
-                      message={m}
-                      fromRole={role}
-                      onOpenAgent={onOpenAgent}
-                    />
-                  </span>
+                    {showDividerBefore && <TimeDivider ms={m.sent_at} />}
+                    {newDivider}
+                    <span
+                      className={cn(
+                        highlighted && "rounded-lg ring-1 ring-accent-primary",
+                      )}
+                      title={`#${m.id} · ${m.kind} · ${formatFullStamp(m.sent_at)}`}
+                    >
+                      <SystemCard
+                        message={m}
+                        fromRole={role}
+                        onOpenAgent={onOpenAgent}
+                      />
+                    </span>
+                  </div>
                 </div>
               );
             }
@@ -1151,15 +1192,21 @@ export function MessagesPanel({
             if (isUser) {
               return (
                 <div
-                  key={m.id}
-                  className={cn(
-                    "flex flex-col items-end",
-                    !isFirstRow && (showHeader ? "mt-3" : "mt-2"),
-                  )}
+                  key={vi.key}
+                  data-index={vi.index}
+                  ref={virtualizer.measureElement}
+                  className="absolute left-0 top-0 w-full"
+                  style={{ transform: `translateY(${vi.start}px)` }}
                 >
-                  {showDividerBefore && <TimeDivider ms={m.sent_at} />}
-                  {newDivider}
-                  <div className="flex w-full max-w-[min(82%,780px)] flex-col items-end">
+                  <div
+                    className={cn(
+                      "flex flex-col items-end",
+                      !isFirstRow && (showHeader ? "pt-3" : "pt-2"),
+                    )}
+                  >
+                    {showDividerBefore && <TimeDivider ms={m.sent_at} />}
+                    {newDivider}
+                    <div className="flex w-full max-w-[min(82%,780px)] flex-col items-end">
                     {showHeader && (
                       <span className="mb-0.5 px-1 font-heading text-[11px] font-semibold text-foreground-tertiary">
                         {t("messages.you")}
@@ -1203,6 +1250,7 @@ export function MessagesPanel({
                         </button>
                       </div>
                     </div>
+                    </div>
                   </div>
                 </div>
               );
@@ -1217,15 +1265,21 @@ export function MessagesPanel({
             // divider — never a per-row coloured border.
             return (
               <div
-                key={m.id}
-                className={cn(
-                  "flex flex-col",
-                  !isFirstRow && (showHeader ? "mt-3" : "mt-2"),
-                )}
+                key={vi.key}
+                data-index={vi.index}
+                ref={virtualizer.measureElement}
+                className="absolute left-0 top-0 w-full"
+                style={{ transform: `translateY(${vi.start}px)` }}
               >
-                {showDividerBefore && <TimeDivider ms={m.sent_at} />}
-                {newDivider}
-                <div className="group/msg flex gap-3">
+                <div
+                  className={cn(
+                    "flex flex-col",
+                    !isFirstRow && (showHeader ? "pt-3" : "pt-2"),
+                  )}
+                >
+                  {showDividerBefore && <TimeDivider ms={m.sent_at} />}
+                  {newDivider}
+                  <div className="group/msg flex gap-3">
                   {/* 28px gutter: role avatar on the group head, a hover-only
                       timestamp on collapsed follow-ups (Slack pattern). */}
                   <div className="flex w-8 shrink-0 justify-center">
@@ -1332,9 +1386,12 @@ export function MessagesPanel({
                     </div>
                   </div>
                 </div>
+                </div>
               </div>
             );
           })}
+        </div>
+        <div className="mx-auto flex w-full max-w-[1040px] flex-col gap-0.5">
           {pendingResponders.map(({ agentId, trigger }) => (
             <PendingBubble
               key={`pending-${agentId}`}
