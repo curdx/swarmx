@@ -725,6 +725,10 @@ export interface CronJob {
   enabled: boolean;
   created_at: number;
   last_run_at: number | null;
+  /** Minutes east of UTC the expression is written in (0 = UTC, +480 = UTC+8). */
+  tz_offset_minutes: number;
+  /** Next fire time (unix ms, UTC) the scheduler will pick; null if disabled or no upcoming occurrence. Server-computed. */
+  next_run: number | null;
 }
 export interface CronListResp {
   jobs: CronJob[];

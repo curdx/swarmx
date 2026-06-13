@@ -199,13 +199,14 @@ export const api = {
   listCron: () => requestEndpoint<CronListResp>(apiRoutes.cron.list()),
   // Live validation + next-run preview for the create form. next_run is unix ms
   // (UTC) or null (valid but no occurrence within a year), the model evaluates.
-  cronPreview: (expr: string) =>
-    requestEndpoint<{ valid: boolean; next_run: number | null }>(apiRoutes.cron.preview(expr)),
+  cronPreview: (expr: string, offset: number) =>
+    requestEndpoint<{ valid: boolean; next_run: number | null }>(apiRoutes.cron.preview(expr, offset)),
   createCron: (req: {
     workspace_id: string;
     name: string;
     cron_expr: string;
     prompt: string;
+    tz_offset_minutes: number;
   }) => requestEndpoint<{ ok: boolean; id?: string; error?: string }>(apiRoutes.cron.create(), req),
   deleteCron: (id: string) => requestEndpoint<{ ok: boolean }>(apiRoutes.cron.delete(id)),
   toggleCron: (id: string, enabled: boolean) =>

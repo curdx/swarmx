@@ -452,6 +452,14 @@ pub struct CronJobRecord {
     pub enabled: bool,
     pub created_at: i64,
     pub last_run_at: Option<i64>,
+    /// Minutes east of UTC the `cron_expr` is interpreted in (e.g. +480 for
+    /// UTC+8). The scheduler decomposes `now + offset` into calendar fields, so
+    /// `0 9 * * *` fires at 09:00 **local** wall-clock. `0` keeps the original
+    /// UTC behaviour (the migration default for pre-existing rows). A fixed
+    /// offset — not an IANA zone — keeps the tz database out of the build; the
+    /// one thing it does not model is DST transitions.
+    #[serde(default)]
+    pub tz_offset_minutes: i32,
 }
 
 /// A first-class goal attached to a workspace and optionally one direction
