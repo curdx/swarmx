@@ -23,6 +23,7 @@ import {
   Search,
 } from "lucide-react";
 import { api } from "../../../api/http";
+import { downloadRecordingCast } from "@/lib/download";
 import type { AgentInfo, RecordingInfo } from "../../../api/types";
 import { useSwarmFeed } from "../../../hooks/useSwarmFeed";
 import { Button } from "@/components/ui/button";
@@ -288,15 +289,15 @@ export default function ReplaysView() {
                       <Play className="size-3" />
                       {t("replays.play")}
                     </Link>
-                    <a
-                      href={api.recordingCastUrl(r.id)}
-                      download={`${r.id}.cast`}
+                    <button
+                      type="button"
+                      onClick={() => downloadRecordingCast(r.id)}
                       className="flex h-8 items-center gap-1 rounded-md border border-border-subtle bg-surface-elevated px-2.5 text-xs hover:bg-surface-tertiary"
                       title={t("player.downloadCast")}
                     >
                       <Download className="size-3" />
                       {t("replays.download")}
-                    </a>
+                    </button>
                   </div>
                 </article>
               );

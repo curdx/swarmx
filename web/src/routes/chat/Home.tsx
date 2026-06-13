@@ -45,6 +45,7 @@ export default function ChatHome() {
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [workspaceRows, setWorkspaceRows] = useState<Workspace[]>([]);
   const [workspacesLoaded, setWorkspacesLoaded] = useState(false);
+  const [workspacesError, setWorkspacesError] = useState(false);
   const [wizardOpen, setWizardOpen] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
@@ -67,8 +68,13 @@ export default function ChatHome() {
   const refreshWorkspaces = async () => {
     try {
       setWorkspaceRows(await api.listWorkspaces());
+      setWorkspacesError(false);
     } catch {
-      /* best-effort */
+      // P0-5 (co-cause): a backend-down fetch failure must NOT be swallowed into
+      // an empty list — that renders the "create your first workspace" splash and
+      // hides that the backend (127.0.0.1:7777) is unreachable. Flag it so we can
+      // show a real "can't reach backend / retry" state instead of lying.
+      setWorkspacesError(true);
     } finally {
       setWorkspacesLoaded(true);
     }
@@ -195,6 +201,23 @@ export default function ChatHome() {
             <section className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 bg-surface-primary text-foreground-tertiary">
               <FolderOpen className="size-10 opacity-40" />
               <p className="font-caption text-sm">加载工作空间中…</p>
+            </section>
+          ) : workspacesError && workspaceRows.length === 0 ? (
+            <section className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 bg-surface-primary px-6 text-center">
+              <FolderOpen className="size-10 text-state-danger opacity-60" />
+              <p className="font-heading text-sm text-foreground-primary">连接不上后端服务</p>
+              <p className="max-w-sm font-caption text-xs text-foreground-tertiary">
+                flockmux 后端 (127.0.0.1:7777) 没有响应，所以读不到你的工作空间。请确认服务在运行，然后重试。
+              </p>
+              <Button
+                variant="secondary"
+                onClick={() => {
+                  setWorkspacesLoaded(false);
+                  refreshWorkspaces();
+                }}
+              >
+                重试
+              </Button>
             </section>
           ) : (
             <Welcome onCreateWorkspace={() => setWizardOpen(true)} />

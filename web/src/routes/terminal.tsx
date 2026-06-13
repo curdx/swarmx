@@ -45,7 +45,7 @@ function terminalSessionId(wsId: string): string {
 
 export default function TerminalRoute() {
   const { t } = useTranslation();
-  const { workspaces, wsId, setWsId, ready } = useToolWorkspaces();
+  const { workspaces, wsId, setWsId, ready, error } = useToolWorkspaces();
   const hostRef = useRef<HTMLDivElement>(null);
   const [armed, setArmed] = useState(false);
   const activeWs = workspaces.find((w) => w.id === wsId) ?? null;
@@ -140,20 +140,33 @@ export default function TerminalRoute() {
                 <h1 className="font-heading text-base font-semibold text-foreground-primary">
                   {t("terminal.confirmTitle")}
                 </h1>
-                <p className="mt-1 font-caption text-xs leading-relaxed text-foreground-secondary">
-                  {t("terminal.confirmDesc", {
-                    workspace: activeWs?.name ?? t("common.all"),
-                  })}
+                <p
+                  className={`mt-1 font-caption text-xs leading-relaxed ${
+                    error ? "text-state-danger" : "text-foreground-secondary"
+                  }`}
+                >
+                  {error
+                    ? t("terminal.backendDown", {
+                        defaultValue:
+                          "连接不上后端 (127.0.0.1:7777)，无法打开终端。请确认 flockmux 服务在运行。",
+                      })
+                    : t("terminal.confirmDesc", {
+                        workspace: activeWs?.name ?? t("common.all"),
+                      })}
                 </p>
               </div>
             </div>
             <Button
               className="self-start gap-1.5"
-              onClick={() => ready && setArmed(true)}
-              disabled={!ready}
+              onClick={() => ready && !error && setArmed(true)}
+              disabled={!ready || !!error}
             >
               <TerminalIcon className="size-3.5" />
-              {ready ? t("terminal.connect") : t("common.loading")}
+              {error
+                ? t("terminal.unavailable", { defaultValue: "后端未连接" })
+                : ready
+                  ? t("terminal.connect")
+                  : t("common.loading")}
             </Button>
           </section>
         </div>

@@ -528,12 +528,12 @@
     "confirm": {
       "interruptAll": {
         "title": "暂停所有 agent？",
-        "desc": "会向当前工作空间所有运行中的 agent 发送中断，并停止它们的自动唤醒，直到你恢复。",
+        "desc": "会向当前方向所有运行中的 agent 发送中断，并停止它们的自动唤醒，直到你恢复。",
         "confirm": "全停"
       },
       "resumeAll": {
         "title": "恢复所有暂停 agent？",
-        "desc": "会逐个恢复当前工作空间内暂停的 agent，并让它们继续处理当前工作。",
+        "desc": "会逐个恢复当前方向内暂停的 agent，并让它们继续处理当前工作。",
         "confirm": "全恢复"
       }
     }

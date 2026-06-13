@@ -420,17 +420,31 @@ export default function DagView() {
   // event will retrigger refresh; we also nudge it manually here).
   const [busy, setBusy] = useState(false);
   const onInterruptAll = useCallback(async () => {
-    if (busy || liveAgents.length === 0) return;
+    // Interrupt EXACTLY the live agents shown in THIS direction — the same set
+    // the confirm dialog counts. (Was: a workspace-bulk endpoint that also
+    // stopped agents in *other* directions while the dialog only counted this
+    // one — P0-2.) Per-agent, mirroring onResumeAll; no cross-direction reach.
+    const targets = liveAgents.filter((a) => !a.paused);
+    if (busy || targets.length === 0) return;
     setBusy(true);
     try {
-      await api.interruptAllInWorkspace(workspace.workspaceId);
+      const results = await Promise.allSettled(
+        targets.map((a) => api.interruptAgent(a.agent_id)),
+      );
+      const failed = results.filter((r) => r.status === "rejected").length;
+      if (failed > 0) {
+        setError(
+          t("dag.interruptAll.partialFail", {
+            n: failed,
+            defaultValue: "{{n}} 个 agent 暂停失败，请重试",
+          }),
+        );
+      }
       await refresh();
-    } catch (e) {
-      setError((e as Error).message);
     } finally {
       setBusy(false);
     }
-  }, [busy, liveAgents.length, refresh, workspace.workspaceId]);
+  }, [busy, liveAgents, refresh, t]);
 
   // Resume every paused agent in the active workspace. No batch endpoint —
   // resume is per-agent because each one synthesizes a manual wake; ≤ a
@@ -481,7 +495,7 @@ export default function DagView() {
       }),
       description: t(
         "dag.confirm.interruptAll.desc",
-        "会向当前工作空间所有运行中的 agent 发送中断，并停止它们的自动唤醒，直到你恢复。",
+        "会向当前方向所有运行中的 agent 发送中断，并停止它们的自动唤醒，直到你恢复。",
       ),
       confirmLabel: t("dag.interruptAll"),
       variant: "destructive",

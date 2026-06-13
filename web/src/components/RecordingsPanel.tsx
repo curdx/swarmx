@@ -10,6 +10,7 @@
 
 import { useEffect, useState } from "react";
 import { api } from "../api/http";
+import { downloadRecordingCast } from "@/lib/download";
 import type { RecordingInfo } from "../api/types";
 import { AsciicastPlayer } from "./AsciicastPlayer";
 
@@ -123,13 +124,13 @@ export function RecordingsPanel({ refreshTick }: Props) {
                 >
                   原始 .cast
                 </a>
-                <a
-                  href={api.recordingCastUrl(r.id)}
-                  download={`${r.id}.cast`}
+                <button
+                  type="button"
+                  onClick={() => downloadRecordingCast(r.id)}
                   style={linkButton}
                 >
                   下载
-                </a>
+                </button>
               </div>
             </div>
           );

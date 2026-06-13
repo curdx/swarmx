@@ -134,6 +134,16 @@ export function BlackboardPanel({ liveChange }: Props) {
   const createNew = async () => {
     const path = newPath.trim();
     if (!path) return;
+    // P0-8: "new" must never clobber an existing file. writeBlackboard is a
+    // blind overwrite, so creating a name that already exists would blank a
+    // file other agents depend on (design.md, *.ledger.md). If it already
+    // exists, just open it instead of writing empty content over it.
+    if (entries.some((e) => e.path === path)) {
+      setNewPath("");
+      await openPath(path);
+      setError(`「${path}」已存在，已为你打开（未覆盖）`);
+      return;
+    }
     try {
       await api.writeBlackboard(path, { content: "" });
       setNewPath("");

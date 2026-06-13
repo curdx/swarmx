@@ -184,25 +184,43 @@ export default function LedgerView() {
   // CLIs self-manage their own window; what grows here is the ledger state.
   const [compacting, setCompacting] = useState(false);
   const [compactNote, setCompactNote] = useState<string | null>(null);
+  const [compactErr, setCompactErr] = useState(false);
   const compact = useCallback(async () => {
     setCompacting(true);
     setCompactNote(null);
+    setCompactErr(false);
     try {
-      const results = await Promise.all([
-        api.compactBlackboard(taskKey).catch(() => null),
-        api.compactBlackboard(progressKey).catch(() => null),
+      // P0-7: don't swallow failures into a fake "已是最简，无需压缩". The backend
+      // can return 402 (paid transport off), 503 (no claude plugin), 5xx — those
+      // mean it never ran, not "nothing to do". Surface the real reason so the
+      // user isn't told it succeeded when it didn't.
+      const results = await Promise.allSettled([
+        api.compactBlackboard(taskKey),
+        api.compactBlackboard(progressKey),
       ]);
-      const saved = results
-        .filter((r): r is NonNullable<typeof r> => !!r && r.changed)
-        .reduce((acc, r) => acc + (r.before_tokens - r.after_tokens), 0);
-      if (mountedRef.current) {
+      if (!mountedRef.current) return;
+      const ok = results.flatMap((r) => (r.status === "fulfilled" ? [r.value] : []));
+      const errs = results.flatMap((r) => (r.status === "rejected" ? [r.reason] : []));
+      if (ok.length === 0 && errs.length > 0) {
+        const e = errs[0] as { detail?: string; message?: string };
+        const why = e?.detail || e?.message || String(errs[0]);
+        setCompactErr(true);
+        setCompactNote(t("ledger.compactFailed", { msg: why, defaultValue: "压缩失败：{{msg}}" }));
+      } else {
+        const saved = ok
+          .filter((r) => r && r.changed)
+          .reduce((acc, r) => acc + (r.before_tokens - r.after_tokens), 0);
         setCompactNote(
           saved > 0
             ? t("ledger.compactSaved", { n: saved, defaultValue: "已压缩，省约 {{n}} tokens" })
             : t("ledger.compactNoop", { defaultValue: "已是最简，无需压缩" }),
         );
-        window.setTimeout(() => mountedRef.current && setCompactNote(null), 4000);
       }
+      window.setTimeout(() => {
+        if (!mountedRef.current) return;
+        setCompactNote(null);
+        setCompactErr(false);
+      }, 6000);
       await refresh();
     } finally {
       if (mountedRef.current) setCompacting(false);
@@ -246,7 +264,14 @@ export default function LedgerView() {
         </div>
         <div className="flex items-center gap-2">
           {compactNote && (
-            <span className="font-caption text-[11px] text-foreground-tertiary">{compactNote}</span>
+            <span
+              className={cn(
+                "font-caption text-[11px]",
+                compactErr ? "text-state-danger" : "text-foreground-tertiary",
+              )}
+            >
+              {compactNote}
+            </span>
           )}
           <Button
             variant="outline"
