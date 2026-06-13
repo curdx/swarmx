@@ -852,7 +852,12 @@
     "lastRun": "上次",
     "running": "触发中…",
     "ranOk": "已触发，投递给编排器",
-    "confirmDelete": "确认删除"
+    "confirmDelete": "确认删除",
+    "edit": "编辑",
+    "save": "保存",
+    "saving": "保存中…",
+    "savedOk": "已保存",
+    "orphaned": "工作空间已删除"
   },
   "files": {
     "title": "文件浏览器",

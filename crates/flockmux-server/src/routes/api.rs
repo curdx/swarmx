@@ -32,7 +32,9 @@ pub fn router() -> Router<AppState> {
         .route("/api/cron/preview", get(super::cron::preview_cron))
         .route(
             "/api/cron/:id",
-            delete(super::cron::delete_cron).patch(super::cron::toggle_cron),
+            delete(super::cron::delete_cron)
+                .patch(super::cron::toggle_cron)
+                .put(super::cron::update_cron),
         )
         .route("/api/cron/:id/run", post(super::cron::run_cron))
         .route(

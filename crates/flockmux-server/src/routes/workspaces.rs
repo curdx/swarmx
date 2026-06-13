@@ -1643,7 +1643,16 @@ pub async fn delete_workspace_handler(
             StatusCode::NOT_FOUND,
             Json(json!({"error": format!("workspace {id} not found or already deleted")})),
         ),
-        Ok(_) => (StatusCode::NO_CONTENT, Json(json!({"ok": true}))),
+        Ok(_) => {
+            // Stop this workspace's scheduled jobs from firing into a workspace
+            // that's gone (the scheduler would keep trying to revive an
+            // orchestrator). Non-destructive — the rows stay, shown as orphaned
+            // on /cron. Best-effort: the workspace delete already committed.
+            if let Err(e) = state.store.disable_cron_jobs_for_workspace(id.clone()).await {
+                tracing::warn!(?e, ws_id = %id, "disable_cron_jobs_for_workspace failed");
+            }
+            (StatusCode::NO_CONTENT, Json(json!({"ok": true})))
+        }
         Err(e) => {
             tracing::warn!(?e, ws_id = %id, "soft_delete_workspace failed");
             (

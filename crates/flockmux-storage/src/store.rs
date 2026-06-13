@@ -1212,6 +1212,52 @@ impl Store {
         .context("spawn_blocking touch_cron_run")?
     }
 
+    /// Edit a job's mutable fields (everything except id/created_at/enabled/
+    /// last_run_at). Returns rows affected (0 = no such id). `enabled` is left
+    /// untouched so editing doesn't silently re-enable a paused job.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn update_cron_job(
+        &self,
+        id: String,
+        workspace_id: String,
+        name: String,
+        cron_expr: String,
+        prompt: String,
+        tz_offset_minutes: i32,
+    ) -> Result<usize> {
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || {
+            with_busy_retry(&pool, |conn| -> rusqlite::Result<usize> {
+                conn.execute(
+                    "UPDATE cron_jobs SET workspace_id = ?2, name = ?3, cron_expr = ?4, \
+                     prompt = ?5, tz_offset_minutes = ?6 WHERE id = ?1",
+                    params![id, workspace_id, name, cron_expr, prompt, tz_offset_minutes],
+                )
+            })
+        })
+        .await
+        .context("spawn_blocking update_cron_job")?
+    }
+
+    /// Disable every cron job bound to a workspace. Called when a workspace is
+    /// deleted so its schedules stop firing (the scheduler would otherwise keep
+    /// trying to revive an orchestrator in a workspace that's gone). Non-
+    /// destructive: the rows remain so the /cron page can show them as orphaned.
+    /// Returns rows affected.
+    pub async fn disable_cron_jobs_for_workspace(&self, workspace_id: String) -> Result<usize> {
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || {
+            with_busy_retry(&pool, |conn| -> rusqlite::Result<usize> {
+                conn.execute(
+                    "UPDATE cron_jobs SET enabled = 0 WHERE workspace_id = ?1 AND enabled = 1",
+                    params![workspace_id],
+                )
+            })
+        })
+        .await
+        .context("spawn_blocking disable_cron_jobs_for_workspace")?
+    }
+
     pub async fn list_agents(&self) -> Result<Vec<AgentRecord>> {
         let pool = self.pool.clone();
         tokio::task::spawn_blocking(move || {

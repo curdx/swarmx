@@ -104,6 +104,7 @@ export const apiRoutes = {
     preview: (expr: string, offset: number) =>
       endpoint("cron.preview", "GET", `/api/cron/preview${queryString({ expr, offset })}`),
     create: () => endpoint("cron.create", "POST", "/api/cron"),
+    update: (id: string) => endpoint("cron.update", "PUT", `/api/cron/${encodeURIComponent(id)}`),
     delete: (id: string) => endpoint("cron.delete", "DELETE", `/api/cron/${encodeURIComponent(id)}`),
     toggle: (id: string) => endpoint("cron.toggle", "PATCH", `/api/cron/${encodeURIComponent(id)}`),
     run: (id: string) => endpoint("cron.run", "POST", `/api/cron/${encodeURIComponent(id)}/run`),

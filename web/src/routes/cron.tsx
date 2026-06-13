@@ -2,15 +2,16 @@
  * Cron page (`/cron`).
  *
  * Schedule a prompt to be delivered to a workspace's orchestrator on a 5-field
- * cron. Times are interpreted in the **browser's local offset** (captured once
- * and sent to the server, which evaluates the expression in that fixed offset);
- * the UI never shows raw UTC. A live cronstrue description + server-computed
- * next-run preview catch a typo before create; each job row shows when it next
- * fires. "Run now" fires immediately via /api/cron/:id/run.
+ * cron. Times are interpreted in a fixed offset (the browser's local offset for
+ * new jobs; the job's own stored offset when editing), which the server uses to
+ * evaluate the expression — the UI never shows raw UTC. A live cronstrue
+ * description + server-computed next-run preview catch a typo before save; each
+ * row shows when it next fires, can be edited in place, and "Run now" fires
+ * immediately via /api/cron/:id/run.
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Play, Trash2, Loader2, Check, X } from "lucide-react";
+import { Play, Trash2, Loader2, Check, X, Pencil } from "lucide-react";
 import { api } from "@/api/http";
 import type { CronJob, Workspace } from "@/api/types";
 import { cn } from "@/lib/cn";
@@ -32,30 +33,74 @@ const PRESETS: { key: string; expr: string }[] = [
   { key: "monthly1", expr: "0 9 1 * *" },
 ];
 
-export default function CronRoute() {
-  const { t, i18n } = useTranslation();
-  const lang = i18n.language ?? "zh";
-  // The expression is written in (and displayed in) the browser's local offset.
-  const tzOffset = useMemo(() => localOffsetMinutes(), []);
+type FormValues = {
+  workspace_id: string;
+  name: string;
+  cron_expr: string;
+  prompt: string;
+  tz_offset_minutes: number;
+};
+
+type TFn = ReturnType<typeof useTranslation>["t"];
+
+/** "今天 09:00 · 约 3 小时后" — a UTC instant rendered in a fixed offset. */
+function formatRun(utcMs: number, offsetMin: number, now: number, t: TFn, lang: string): string {
+  const w = wallClock(utcMs, offsetMin, now);
+  const day =
+    w.dayDiff === 0
+      ? t("cron.today")
+      : w.dayDiff === 1
+        ? t("cron.tomorrow")
+        : w.dayDiff === -1
+          ? t("cron.yesterday")
+          : fmtDate(w);
+  return `${day} ${fmtTime(w)} · ${relativeFromNow(utcMs, now, lang)}`;
+}
+
+/**
+ * Shared create/edit form. `tzOffset` is the offset the expression is authored
+ * in — the browser's local offset for a new job, the job's own offset when
+ * editing (so an edit never silently shifts the schedule's timezone).
+ */
+function CronJobForm({
+  workspaces,
+  tzOffset,
+  lang,
+  initial,
+  submitLabel,
+  submittingLabel,
+  onSubmit,
+  onDone,
+  onCancel,
+  resetAfterSubmit,
+}: {
+  workspaces: Workspace[];
+  tzOffset: number;
+  lang: string;
+  initial: { wsId: string; name: string; expr: string; prompt: string };
+  submitLabel: string;
+  submittingLabel: string;
+  onSubmit: (v: FormValues) => Promise<{ ok: boolean; error?: string }>;
+  onDone: (describe: string | null) => void;
+  onCancel?: () => void;
+  resetAfterSubmit?: boolean;
+}) {
+  const { t } = useTranslation();
   const tzLabel = tzOffsetLabel(tzOffset);
-
-  const [jobs, setJobs] = useState<CronJob[]>([]);
-  const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+  const [wsId, setWsId] = useState(initial.wsId);
+  const [name, setName] = useState(initial.name);
+  const [expr, setExpr] = useState(initial.expr);
+  const [prompt, setPrompt] = useState(initial.prompt);
+  const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  // create form
-  const [wsId, setWsId] = useState("");
-  const [name, setName] = useState("");
-  const [expr, setExpr] = useState("0 9 * * *");
-  const [prompt, setPrompt] = useState("");
-  const [creating, setCreating] = useState(false);
-  // Live validation + next-run preview (debounced) so a typo'd expr is caught
-  // before create and the user sees when it will actually fire.
   const [exprPreview, setExprPreview] = useState<{ valid: boolean; next_run: number | null } | null>(null);
-
-  // Instant client-side human description (no round-trip); null until 5 fields.
   const describe = useMemo(() => describeCron(expr, lang), [expr, lang]);
+
+  // Fill an empty workspace once the list arrives (create mode mounts before
+  // workspaces load). Never overrides a value already set (edit mode).
+  useEffect(() => {
+    if (!wsId && workspaces.length) setWsId(workspaces[0].id);
+  }, [workspaces, wsId]);
 
   useEffect(() => {
     const e = expr.trim();
@@ -83,12 +128,178 @@ export default function CronRoute() {
     };
   }, [expr, tzOffset]);
 
-  // Create success feedback + per-row run feedback (success or skip), each on a
-  // short auto-clearing timer; a two-step inline delete confirm that also resets.
+  const now = Date.now();
+  const canSubmit = !busy && !!wsId && !!expr.trim() && !!prompt.trim() && exprPreview?.valid !== false;
+
+  const submit = async () => {
+    setBusy(true);
+    setErr(null);
+    try {
+      const res = await onSubmit({
+        workspace_id: wsId,
+        name,
+        cron_expr: expr,
+        prompt,
+        tz_offset_minutes: tzOffset,
+      });
+      if (!res.ok) {
+        setErr(res.error ?? "failed");
+      } else {
+        if (resetAfterSubmit) {
+          setName("");
+          setPrompt("");
+        }
+        onDone(describe);
+      }
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+        <label className="flex flex-col gap-1">
+          <span className="font-caption text-[11px] text-foreground-tertiary">{t("cron.workspace")}</span>
+          <select
+            name="cron-workspace"
+            value={wsId}
+            onChange={(e) => setWsId(e.target.value)}
+            className="min-h-8 rounded border border-border-subtle bg-surface-primary px-2 py-1 text-[13px]"
+          >
+            {workspaces.length === 0 && <option value="">—</option>}
+            {/* an edited job may point at a deleted workspace not in the list */}
+            {wsId && !workspaces.some((w) => w.id === wsId) && <option value={wsId}>{wsId.slice(0, 8)}</option>}
+            {workspaces.map((w) => (
+              <option key={w.id} value={w.id}>
+                {w.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="font-caption text-[11px] text-foreground-tertiary">
+            {t("cron.expr")} · {tzLabel}
+          </span>
+          <input
+            name="cron-expression"
+            value={expr}
+            onChange={(e) => setExpr(e.target.value)}
+            placeholder="0 9 * * 1-5"
+            spellCheck={false}
+            aria-invalid={exprPreview?.valid === false}
+            className={cn(
+              "min-h-8 rounded border bg-surface-primary px-2 py-1 font-mono text-[13px]",
+              exprPreview && !exprPreview.valid ? "border-status-danger" : "border-border-subtle",
+            )}
+          />
+        </label>
+      </div>
+
+      {/* preset chips */}
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="font-caption text-[11px] text-foreground-tertiary">{t("cron.presetsLabel")}</span>
+        {PRESETS.map((p) => (
+          <button
+            key={p.key}
+            type="button"
+            onClick={() => setExpr(p.expr)}
+            aria-pressed={expr.trim() === p.expr}
+            className={cn(
+              "rounded-full border px-2 py-0.5 font-caption text-[11px] transition-colors",
+              expr.trim() === p.expr
+                ? "border-accent-primary bg-accent-primary/10 text-accent-primary"
+                : "border-border-subtle text-foreground-secondary hover:bg-surface-tertiary",
+            )}
+          >
+            {t(`cron.preset.${p.key}`)}
+          </button>
+        ))}
+      </div>
+
+      {/* human-readable description + validity / next-run */}
+      <div className="min-h-[16px] font-caption text-[11px]">
+        {exprPreview?.valid === false ? (
+          <span className="text-status-danger">{t("cron.invalidExpr")}</span>
+        ) : describe ? (
+          <span className="text-foreground-secondary">
+            {describe}
+            {exprPreview?.next_run
+              ? ` · ${t("cron.nextLabel")} ${formatRun(exprPreview.next_run, tzOffset, now, t, lang)}`
+              : exprPreview && exprPreview.next_run === null && exprPreview.valid
+                ? ` · ${t("cron.noUpcoming")}`
+                : ""}
+          </span>
+        ) : (
+          <span className="text-foreground-tertiary">{t("cron.exprHint")}</span>
+        )}
+      </div>
+
+      <label className="flex flex-col gap-1">
+        <span className="font-caption text-[11px] text-foreground-tertiary">{t("cron.name")}</span>
+        <input
+          name="cron-name"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder={t("cron.namePlaceholder")}
+          className="min-h-8 rounded border border-border-subtle bg-surface-primary px-2 py-1 text-[13px]"
+        />
+      </label>
+      <label className="flex flex-col gap-1">
+        <span className="font-caption text-[11px] text-foreground-tertiary">{t("cron.prompt")}</span>
+        <textarea
+          name="cron-prompt"
+          value={prompt}
+          onChange={(e) => setPrompt(e.target.value)}
+          rows={2}
+          placeholder={t("cron.promptPlaceholder")}
+          className="resize-none rounded border border-border-subtle bg-surface-primary px-2 py-1 text-[13px]"
+        />
+      </label>
+
+      {err && <div className="font-caption text-[11px] text-status-danger">{err}</div>}
+
+      <div className="flex justify-end gap-2">
+        {onCancel && (
+          <button
+            type="button"
+            onClick={onCancel}
+            className="min-h-8 rounded-md border border-border-subtle px-3 py-1.5 text-[13px] text-foreground-secondary hover:bg-surface-tertiary"
+          >
+            {t("cron.cancel")}
+          </button>
+        )}
+        <button
+          type="button"
+          disabled={!canSubmit}
+          onClick={submit}
+          className="min-h-8 rounded-md bg-accent-primary px-3 py-1.5 text-[13px] text-foreground-on-accent disabled:opacity-50"
+        >
+          {busy ? submittingLabel : submitLabel}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+export default function CronRoute() {
+  const { t, i18n } = useTranslation();
+  const lang = i18n.language ?? "zh";
+  const tzOffset = useMemo(() => localOffsetMinutes(), []);
+  const tzLabel = tzOffsetLabel(tzOffset);
+
+  const [jobs, setJobs] = useState<CronJob[]>([]);
+  const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+  const [err, setErr] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
   const [notice, setNotice] = useState<string | null>(null);
   const [runResult, setRunResult] = useState<{ id: string; ok: boolean; msg: string } | null>(null);
   const [runningId, setRunningId] = useState<string | null>(null);
   const [confirmDel, setConfirmDel] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!notice) return;
@@ -111,9 +322,6 @@ export default function CronRoute() {
       const [c, ws] = await Promise.all([api.listCron(), api.listWorkspaces().catch(() => [])]);
       setJobs(c.jobs);
       setWorkspaces(ws);
-      // Default the create-form workspace once, without re-running this loader
-      // on every dropdown change (a stale `wsId` dep used to refetch the list).
-      setWsId((prev) => prev || ws[0]?.id || "");
       setErr(null);
     } catch (e) {
       setErr((e as Error).message);
@@ -125,32 +333,6 @@ export default function CronRoute() {
   useEffect(() => {
     load();
   }, [load]);
-
-  const create = async () => {
-    setCreating(true);
-    setErr(null);
-    try {
-      const res = await api.createCron({
-        workspace_id: wsId,
-        name,
-        cron_expr: expr,
-        prompt,
-        tz_offset_minutes: tzOffset,
-      });
-      if (!res.ok) {
-        setErr(res.error ?? "create failed");
-      } else {
-        setName("");
-        setPrompt("");
-        setNotice(describe ? t("cron.createdOk", { desc: describe }) : t("cron.createdPlain"));
-        await load();
-      }
-    } catch (e) {
-      setErr((e as Error).message);
-    } finally {
-      setCreating(false);
-    }
-  };
 
   const toggle = async (j: CronJob) => {
     // Optimistic: flip immediately, reconcile on the response.
@@ -187,16 +369,6 @@ export default function CronRoute() {
   const wsName = (id: string) => workspaces.find((w) => w.id === id)?.name ?? id.slice(0, 8);
   const now = Date.now();
 
-  /** "今天 09:00 · 约 3 小时后" style line for a UTC instant in the job's offset. */
-  const fmtRun = (utcMs: number, offsetMin: number) => {
-    const w = wallClock(utcMs, offsetMin, now);
-    const day =
-      w.dayDiff === 0 ? t("cron.today") : w.dayDiff === 1 ? t("cron.tomorrow") : w.dayDiff === -1 ? t("cron.yesterday") : fmtDate(w);
-    return `${day} ${fmtTime(w)} · ${relativeFromNow(utcMs, now, lang)}`;
-  };
-
-  const canCreate = !creating && !!wsId && !!expr.trim() && !!prompt.trim() && exprPreview?.valid !== false;
-
   return (
     <div className="h-full overflow-y-auto">
       <div className="mx-auto flex max-w-3xl flex-col gap-6 px-6 py-6">
@@ -208,113 +380,21 @@ export default function CronRoute() {
         </header>
 
         {/* create form */}
-        <section className="flex flex-col gap-2 rounded-lg border border-border-subtle bg-surface-secondary p-4">
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-            <label className="flex flex-col gap-1">
-              <span className="font-caption text-[11px] text-foreground-tertiary">{t("cron.workspace")}</span>
-              <select
-                name="cron-workspace"
-                value={wsId}
-                onChange={(e) => setWsId(e.target.value)}
-                className="min-h-8 rounded border border-border-subtle bg-surface-primary px-2 py-1 text-[13px]"
-              >
-                {workspaces.length === 0 && <option value="">—</option>}
-                {workspaces.map((w) => (
-                  <option key={w.id} value={w.id}>
-                    {w.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="flex flex-col gap-1">
-              <span className="font-caption text-[11px] text-foreground-tertiary">
-                {t("cron.expr")} · {tzLabel}
-              </span>
-              <input
-                name="cron-expression"
-                value={expr}
-                onChange={(e) => setExpr(e.target.value)}
-                placeholder="0 9 * * 1-5"
-                spellCheck={false}
-                aria-invalid={exprPreview?.valid === false}
-                className={cn(
-                  "min-h-8 rounded border bg-surface-primary px-2 py-1 font-mono text-[13px]",
-                  exprPreview && !exprPreview.valid ? "border-status-danger" : "border-border-subtle",
-                )}
-              />
-            </label>
-          </div>
-
-          {/* preset chips */}
-          <div className="flex flex-wrap items-center gap-1.5">
-            <span className="font-caption text-[11px] text-foreground-tertiary">{t("cron.presetsLabel")}</span>
-            {PRESETS.map((p) => (
-              <button
-                key={p.key}
-                type="button"
-                onClick={() => setExpr(p.expr)}
-                aria-pressed={expr.trim() === p.expr}
-                className={cn(
-                  "rounded-full border px-2 py-0.5 font-caption text-[11px] transition-colors",
-                  expr.trim() === p.expr
-                    ? "border-accent-primary bg-accent-primary/10 text-accent-primary"
-                    : "border-border-subtle text-foreground-secondary hover:bg-surface-tertiary",
-                )}
-              >
-                {t(`cron.preset.${p.key}`)}
-              </button>
-            ))}
-          </div>
-
-          {/* human-readable description + validity / next-run */}
-          <div className="min-h-[16px] font-caption text-[11px]">
-            {exprPreview?.valid === false ? (
-              <span className="text-status-danger">{t("cron.invalidExpr")}</span>
-            ) : describe ? (
-              <span className="text-foreground-secondary">
-                {describe}
-                {exprPreview?.next_run
-                  ? ` · ${t("cron.nextLabel")} ${fmtRun(exprPreview.next_run, tzOffset)}`
-                  : exprPreview && exprPreview.next_run === null && exprPreview.valid
-                    ? ` · ${t("cron.noUpcoming")}`
-                    : ""}
-              </span>
-            ) : (
-              <span className="text-foreground-tertiary">{t("cron.exprHint")}</span>
-            )}
-          </div>
-
-          <label className="flex flex-col gap-1">
-            <span className="font-caption text-[11px] text-foreground-tertiary">{t("cron.name")}</span>
-            <input
-              name="cron-name"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder={t("cron.namePlaceholder")}
-              className="min-h-8 rounded border border-border-subtle bg-surface-primary px-2 py-1 text-[13px]"
-            />
-          </label>
-          <label className="flex flex-col gap-1">
-            <span className="font-caption text-[11px] text-foreground-tertiary">{t("cron.prompt")}</span>
-            <textarea
-              name="cron-prompt"
-              value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
-              rows={2}
-              placeholder={t("cron.promptPlaceholder")}
-              className="resize-none rounded border border-border-subtle bg-surface-primary px-2 py-1 text-[13px]"
-            />
-          </label>
-          <div className="flex justify-end">
-            <button
-              type="button"
-              disabled={!canCreate}
-              onClick={create}
-              className="min-h-8 rounded-md bg-accent-primary px-3 py-1.5 text-[13px] text-foreground-on-accent disabled:opacity-50"
-            >
-              {creating ? t("cron.creating") : t("cron.create")}
-            </button>
-          </div>
+        <section className="rounded-lg border border-border-subtle bg-surface-secondary p-4">
+          <CronJobForm
+            workspaces={workspaces}
+            tzOffset={tzOffset}
+            lang={lang}
+            initial={{ wsId: "", name: "", expr: "0 9 * * *", prompt: "" }}
+            submitLabel={t("cron.create")}
+            submittingLabel={t("cron.creating")}
+            resetAfterSubmit
+            onSubmit={(v) => api.createCron(v)}
+            onDone={(describe) => {
+              setNotice(describe ? t("cron.createdOk", { desc: describe }) : t("cron.createdPlain"));
+              load();
+            }}
+          />
         </section>
 
         {err && <div className="font-caption text-sm text-status-danger">{err}</div>}
@@ -334,7 +414,34 @@ export default function CronRoute() {
             <div className="font-caption text-[11px] text-foreground-tertiary">{t("cron.count", { n: jobs.length })}</div>
             <ul className="flex flex-col gap-2">
               {jobs.map((j) => {
+                if (editingId === j.id) {
+                  return (
+                    <li
+                      key={j.id}
+                      className="rounded-lg border border-accent-primary/40 bg-surface-secondary px-3 py-3"
+                    >
+                      <CronJobForm
+                        workspaces={workspaces}
+                        // Edit in the job's OWN offset so changing name/expr/prompt
+                        // never silently shifts the schedule's timezone.
+                        tzOffset={j.tz_offset_minutes}
+                        lang={lang}
+                        initial={{ wsId: j.workspace_id, name: j.name, expr: j.cron_expr, prompt: j.prompt }}
+                        submitLabel={t("cron.save")}
+                        submittingLabel={t("cron.saving")}
+                        onCancel={() => setEditingId(null)}
+                        onSubmit={(v) => api.updateCron(j.id, v)}
+                        onDone={() => {
+                          setEditingId(null);
+                          setNotice(t("cron.savedOk"));
+                          load();
+                        }}
+                      />
+                    </li>
+                  );
+                }
                 const desc = describeCron(j.cron_expr, lang);
+                const orphaned = workspaces.length > 0 && !workspaces.some((w) => w.id === j.workspace_id);
                 return (
                   <li
                     key={j.id}
@@ -361,6 +468,11 @@ export default function CronRoute() {
                               {t("cron.paused")}
                             </span>
                           )}
+                          {orphaned && (
+                            <span className="shrink-0 rounded bg-status-danger/10 px-1 py-px font-caption text-[10px] text-status-danger">
+                              {t("cron.orphaned")}
+                            </span>
+                          )}
                         </span>
                         <span className="truncate font-caption text-[11px] text-foreground-tertiary" title={j.cron_expr}>
                           {desc ?? j.cron_expr} · {wsName(j.workspace_id)}
@@ -372,7 +484,7 @@ export default function CronRoute() {
                         </span>
                         <span className="truncate font-caption text-[11px] text-foreground-tertiary">
                           {j.enabled && j.next_run
-                            ? `${t("cron.nextLabel")} ${fmtRun(j.next_run, j.tz_offset_minutes)}`
+                            ? `${t("cron.nextLabel")} ${formatRun(j.next_run, j.tz_offset_minutes, now, t, lang)}`
                             : j.enabled
                               ? t("cron.noUpcoming")
                               : ""}
@@ -381,6 +493,18 @@ export default function CronRoute() {
                             : ""}
                         </span>
                       </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setConfirmDel(null);
+                          setEditingId(j.id);
+                        }}
+                        aria-label={t("cron.edit")}
+                        title={t("cron.edit")}
+                        className="flex size-8 shrink-0 items-center justify-center rounded text-foreground-tertiary hover:bg-surface-tertiary hover:text-foreground-primary"
+                      >
+                        <Pencil className="size-3.5" />
+                      </button>
                       <button
                         type="button"
                         disabled={runningId === j.id}

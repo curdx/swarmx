@@ -96,15 +96,21 @@ pub fn matches(expr: &str, f: Fields) -> bool {
 /// Match against pre-split fields. Hot-loop callers (`next_after`) split once and
 /// reuse this, avoiding a `Vec<&str>` allocation per candidate minute.
 fn matches_parts(parts: &[&str], f: Fields) -> bool {
+    date_matches(parts, f)
+        && field_matches(parts[0], f.minute, 0, 59)
+        && field_matches(parts[1], f.hour, 0, 23)
+}
+
+/// Match only the DATE fields (dom/month/dow). If a day fails this, no time of
+/// that day can match — `next_after` uses it to skip a whole day at once instead
+/// of probing all 1440 minutes (turns a never-firing expr's ~527k-minute scan
+/// into ~366 day checks). Same AND-semantics as `matches_parts` so the two agree.
+fn date_matches(parts: &[&str], f: Fields) -> bool {
     // dow: accept 7 as Sunday by normalising the value side too.
     let dow_field = parts[4];
     let dow_ok =
         field_matches(dow_field, f.dow, 0, 6) || (f.dow == 0 && field_matches(dow_field, 7, 0, 7));
-    field_matches(parts[0], f.minute, 0, 59)
-        && field_matches(parts[1], f.hour, 0, 23)
-        && field_matches(parts[2], f.dom, 1, 31)
-        && field_matches(parts[3], f.month, 1, 12)
-        && dow_ok
+    field_matches(parts[2], f.dom, 1, 31) && field_matches(parts[3], f.month, 1, 12) && dow_ok
 }
 
 /// Validate one field against its [min,max] range. Accepts `*`, `*/n` (n>0),
@@ -162,15 +168,22 @@ pub fn next_after(expr: &str, from_secs: i64, offset_min: i32) -> Option<i64> {
     if !is_valid(expr) {
         return None;
     }
-    // Split the 5 fields ONCE (is_valid guaranteed exactly 5) and reuse them; the
-    // window can be ~527k minutes for a never-firing expr, so re-splitting per
-    // candidate would allocate that many throwaway Vecs.
+    // Split the 5 fields ONCE (is_valid guaranteed exactly 5) and reuse them.
     let parts: Vec<&str> = expr.split_whitespace().collect();
     let shift = offset_min as i64 * 60;
     let mut t = (from_secs / 60 + 1) * 60; // next whole minute
     let limit = t + 366 * 86_400;
     while t <= limit {
-        if matches_parts(&parts, fields_from_unix(t + shift)) {
+        let f = fields_from_unix(t + shift);
+        // If the day's date fields can't match, jump straight to the next local
+        // midnight rather than probing 1440 dead minutes. For a never-firing
+        // expr (e.g. `0 0 30 2 *`) this is ~366 iterations instead of ~527k.
+        if !date_matches(&parts, f) {
+            let local = t + shift;
+            t = (local.div_euclid(86_400) + 1) * 86_400 - shift; // next local midnight, back to UTC
+            continue;
+        }
+        if field_matches(parts[1], f.hour, 0, 23) && field_matches(parts[0], f.minute, 0, 59) {
             return Some(t);
         }
         t += 60;
@@ -415,5 +428,21 @@ mod tests {
         let f = fields_from_unix((monday + 3 * 3_600) + (-300) * 60);
         assert_eq!((f.hour, f.dow), (22, 0));
         assert!(matches("0 22 * * 0", f));
+    }
+
+    #[test]
+    fn next_after_day_skip_finds_yearly_and_weekly() {
+        let base = 1_609_459_200; // 2021-01-01 00:00 UTC (Friday)
+        // Yearly: next "0 0 1 7 *" is July 1 00:00 — reached via day-skip, not a
+        // 6-month minute crawl. Verify it lands on the exact field combination.
+        let jul1 = next_after("0 0 1 7 *", base, 0).unwrap();
+        let f = fields_from_unix(jul1);
+        assert_eq!((f.month, f.dom, f.hour, f.minute), (7, 1, 0, 0));
+        assert!(jul1 > base && jul1 - base < 366 * 86_400);
+        // Weekly: next Wednesday 14:30. Jan 6 2021 is the first Wednesday.
+        let wed = next_after("30 14 * * 3", base, 0).unwrap();
+        assert_eq!(wed, base + 5 * 86_400 + 14 * 3_600 + 30 * 60);
+        let wf = fields_from_unix(wed);
+        assert_eq!((wf.dow, wf.hour, wf.minute), (3, 14, 30));
     }
 }
