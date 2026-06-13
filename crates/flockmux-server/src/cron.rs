@@ -90,6 +90,12 @@ pub fn matches(expr: &str, f: Fields) -> bool {
     if parts.len() != 5 {
         return false;
     }
+    matches_parts(&parts, f)
+}
+
+/// Match against pre-split fields. Hot-loop callers (`next_after`) split once and
+/// reuse this, avoiding a `Vec<&str>` allocation per candidate minute.
+fn matches_parts(parts: &[&str], f: Fields) -> bool {
     // dow: accept 7 as Sunday by normalising the value side too.
     let dow_field = parts[4];
     let dow_ok =
@@ -145,17 +151,26 @@ pub fn is_valid(expr: &str) -> bool {
 }
 
 /// Next unix **seconds** (minute-aligned) strictly after `from_secs` at which
-/// `expr` fires, searching up to ~366 days. `None` if the expr is invalid or has
-/// no occurrence in that window (e.g. an impossible `0 0 30 2 *`). Reuses
-/// `matches` so the preview agrees exactly with the scheduler.
-pub fn next_after(expr: &str, from_secs: i64) -> Option<i64> {
+/// `expr` fires, searching up to ~366 days. `offset_min` is minutes east of UTC
+/// the expression is written in (0 = UTC): the returned instant is in UTC, but
+/// the expression's fields are matched against `t + offset` so `0 9 * * *` with
+/// `offset_min = 480` resolves to the UTC instant whose **local** wall-clock is
+/// 09:00. `None` if the expr is invalid or has no occurrence in that window
+/// (e.g. an impossible `0 0 30 2 *`). Reuses `matches` so the preview agrees
+/// exactly with the scheduler.
+pub fn next_after(expr: &str, from_secs: i64, offset_min: i32) -> Option<i64> {
     if !is_valid(expr) {
         return None;
     }
+    // Split the 5 fields ONCE (is_valid guaranteed exactly 5) and reuse them; the
+    // window can be ~527k minutes for a never-firing expr, so re-splitting per
+    // candidate would allocate that many throwaway Vecs.
+    let parts: Vec<&str> = expr.split_whitespace().collect();
+    let shift = offset_min as i64 * 60;
     let mut t = (from_secs / 60 + 1) * 60; // next whole minute
     let limit = t + 366 * 86_400;
     while t <= limit {
-        if matches(expr, fields_from_unix(t)) {
+        if matches_parts(&parts, fields_from_unix(t + shift)) {
             return Some(t);
         }
         t += 60;
@@ -257,13 +272,16 @@ pub fn spawn_scheduler(state: AppState) {
         loop {
             tick.tick().await;
             let now = now_ms();
-            let f = fields_from_unix(now / 1000);
+            let now_secs = now / 1000;
             let cur_min = now / 60_000;
             let jobs = match state.store.list_cron_jobs().await {
                 Ok(j) => j,
                 Err(_) => continue,
             };
             for job in jobs {
+                // Decompose `now + offset` per job so the expression is matched
+                // against the job's local wall-clock (offset 0 = UTC).
+                let f = fields_from_unix(now_secs + job.tz_offset_minutes as i64 * 60);
                 if !job.enabled || !matches(&job.cron_expr, f) {
                     continue;
                 }
@@ -359,12 +377,43 @@ mod tests {
     fn next_after_finds_upcoming() {
         // 2021-01-01 00:00:00 UTC (Friday). Next "0 0 * * *" is the next midnight.
         let base = 1_609_459_200;
-        assert_eq!(next_after("0 0 * * *", base), Some(base + 86_400));
+        assert_eq!(next_after("0 0 * * *", base, 0), Some(base + 86_400));
         // Every minute → the very next minute.
-        assert_eq!(next_after("* * * * *", base + 10), Some(base + 60));
+        assert_eq!(next_after("* * * * *", base + 10, 0), Some(base + 60));
         // Impossible date → no occurrence within a year.
-        assert_eq!(next_after("0 0 30 2 *", base), None);
+        assert_eq!(next_after("0 0 30 2 *", base, 0), None);
         // Invalid → None.
-        assert_eq!(next_after("99 99 99 99 99", base), None);
+        assert_eq!(next_after("99 99 99 99 99", base, 0), None);
+    }
+
+    #[test]
+    fn offset_shifts_hour() {
+        // 2021-01-01 00:00 UTC = 08:00 local in UTC+8 (offset 480).
+        let base = 1_609_459_200;
+        // "every day 09:00 local" fires at 01:00 UTC the same day.
+        assert_eq!(next_after("0 9 * * *", base, 480), Some(base + 3_600));
+        // UTC-5 (offset -300): 09:00 local = 14:00 UTC.
+        assert_eq!(next_after("0 9 * * *", base, -300), Some(base + 14 * 3_600));
+        // Sanity: offset 0 is the plain-UTC behaviour.
+        assert_eq!(next_after("0 9 * * *", base, 0), Some(base + 9 * 3_600));
+    }
+
+    #[test]
+    fn offset_rolls_day_of_week_correctly() {
+        // 2021-01-04 is a Monday. base = its 00:00 UTC.
+        let monday = 1_609_459_200 + 3 * 86_400;
+        let sunday_2200 = monday - 2 * 3_600; // 2021-01-03 22:00 UTC (a Sunday)
+        // UTC-5: "Sunday 22:00 local" = Monday 03:00 UTC. The matcher must read
+        // the *local* dow (Sunday=0), not the UTC dow (Monday) — the rollover a
+        // naive hour-shift would get wrong.
+        assert_eq!(
+            next_after("0 22 * * 0", sunday_2200, -300),
+            Some(monday + 3 * 3_600),
+        );
+        // And the live scheduler agrees: at Monday 03:00 UTC with offset -300,
+        // the decomposed fields are Sunday 22:00.
+        let f = fields_from_unix((monday + 3 * 3_600) + (-300) * 60);
+        assert_eq!((f.hour, f.dow), (22, 0));
+        assert!(matches("0 22 * * 0", f));
     }
 }

@@ -27,22 +27,54 @@ fn now_ms() -> i64 {
 
 pub async fn list_cron(State(state): State<AppState>) -> impl IntoResponse {
     let jobs = state.store.list_cron_jobs().await.unwrap_or_default();
-    Json(json!({ "jobs": jobs }))
+    let now_secs = now_ms() / 1000;
+    // Enrich each row with `next_run` (unix ms, UTC) so the list can show "next
+    // fires at X" — the single most useful column for a schedule. Disabled jobs
+    // have no next run. Computed with the job's own offset so the instant is the
+    // one the scheduler will actually pick.
+    //
+    // `next_after` is a minute-by-minute scan that, for a valid-but-never-firing
+    // expr (e.g. `0 0 30 2 *`), walks the full ~366-day window — pure CPU. Run
+    // the whole enrichment on a blocking thread so a pathological job list can't
+    // stall the async executor handling other requests.
+    let enriched: Vec<serde_json::Value> = tokio::task::spawn_blocking(move || {
+        jobs.iter()
+            .map(|j| {
+                let next_run = if j.enabled {
+                    crate::cron::next_after(&j.cron_expr, now_secs, j.tz_offset_minutes)
+                        .map(|s| s * 1000)
+                } else {
+                    None
+                };
+                let mut v = serde_json::to_value(j).unwrap_or_else(|_| json!({}));
+                v["next_run"] = json!(next_run);
+                v
+            })
+            .collect()
+    })
+    .await
+    .unwrap_or_default();
+    Json(json!({ "jobs": enriched }))
 }
 
 #[derive(Deserialize)]
 pub struct PreviewQuery {
     expr: String,
+    /// Minutes east of UTC the expression is written in (0 = UTC). Optional so
+    /// older clients keep working.
+    #[serde(default)]
+    offset: i32,
 }
 
 /// Live validation + next-run preview for the create form. `valid=false` → the
 /// expr is malformed or out-of-range; `next_run` is the next fire time (unix ms,
 /// UTC) the scheduler would pick, or null when valid-but-no-occurrence-within-a-
-/// year (e.g. `0 0 30 2 *`). Reuses the scheduler's own matcher.
+/// year (e.g. `0 0 30 2 *`). Reuses the scheduler's own matcher, evaluated in the
+/// supplied offset so the preview matches what the user means locally.
 pub async fn preview_cron(Query(q): Query<PreviewQuery>) -> impl IntoResponse {
     let valid = crate::cron::is_valid(&q.expr);
     let next_run = if valid {
-        crate::cron::next_after(&q.expr, now_ms() / 1000).map(|s| s * 1000)
+        crate::cron::next_after(&q.expr, now_ms() / 1000, q.offset).map(|s| s * 1000)
     } else {
         None
     };
@@ -55,6 +87,10 @@ pub struct CreateCronRequest {
     name: String,
     cron_expr: String,
     prompt: String,
+    /// Minutes east of UTC the expression is written in (0 = UTC). Optional so
+    /// older clients default to the prior UTC behaviour.
+    #[serde(default)]
+    tz_offset_minutes: i32,
 }
 
 pub async fn create_cron(
@@ -88,6 +124,7 @@ pub async fn create_cron(
         enabled: true,
         created_at: now_ms(),
         last_run_at: None,
+        tz_offset_minutes: req.tz_offset_minutes,
     };
     match state.store.record_cron_job(rec.clone()).await {
         Ok(()) => (StatusCode::OK, Json(json!({ "ok": true, "id": rec.id }))).into_response(),

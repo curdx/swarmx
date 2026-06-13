@@ -36,6 +36,7 @@ const MIGRATION_0020: &str = include_str!("../migrations/0020_goal_evidence.sql"
 const MIGRATION_0021: &str = include_str!("../migrations/0021_thought_traces.sql");
 const MIGRATION_0022: &str = include_str!("../migrations/0022_agent_last_error.sql");
 const MIGRATION_0023: &str = include_str!("../migrations/0023_agent_activities.sql");
+const MIGRATION_0024: &str = include_str!("../migrations/0024_cron_tz_offset.sql");
 
 /// Every migration in apply order. Append new entries here — nothing else needs
 /// to change; `latest_migration()` and the upper-bound guard derive from this.
@@ -63,6 +64,7 @@ const MIGRATIONS: &[(i64, &str)] = &[
     (21, MIGRATION_0021),
     (22, MIGRATION_0022),
     (23, MIGRATION_0023),
+    (24, MIGRATION_0024),
 ];
 
 /// Highest migration version this binary can apply.

@@ -1124,8 +1124,8 @@ impl Store {
         let pool = self.pool.clone();
         tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<()> {
             conn.execute(
-                "INSERT INTO cron_jobs (id, workspace_id, name, cron_expr, prompt, enabled, created_at, last_run_at) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                "INSERT INTO cron_jobs (id, workspace_id, name, cron_expr, prompt, enabled, created_at, last_run_at, tz_offset_minutes) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                 params![
                     rec.id,
                     rec.workspace_id,
@@ -1135,6 +1135,7 @@ impl Store {
                     rec.enabled as i64,
                     rec.created_at,
                     rec.last_run_at,
+                    rec.tz_offset_minutes,
                 ],
             )?;
             Ok(())
@@ -1147,7 +1148,7 @@ impl Store {
         let pool = self.pool.clone();
         tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<Vec<crate::models::CronJobRecord>> {
             let mut stmt = conn.prepare(
-                "SELECT id, workspace_id, name, cron_expr, prompt, enabled, created_at, last_run_at \
+                "SELECT id, workspace_id, name, cron_expr, prompt, enabled, created_at, last_run_at, tz_offset_minutes \
                  FROM cron_jobs ORDER BY created_at DESC",
             )?;
             let rows = stmt.query_map([], |row| {
@@ -1160,6 +1161,7 @@ impl Store {
                     enabled: row.get::<_, i64>(5)? != 0,
                     created_at: row.get(6)?,
                     last_run_at: row.get(7)?,
+                    tz_offset_minutes: row.get(8)?,
                 })
             })?;
             rows.collect::<rusqlite::Result<Vec<_>>>()
