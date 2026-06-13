@@ -439,14 +439,14 @@ checksum = "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582"
 
 [[package]]
 name = "flockmux-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
 ]
 
 [[package]]
 name = "flockmux-mcp"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -462,7 +462,7 @@ dependencies = [
 
 [[package]]
 name = "flockmux-protocol"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -471,7 +471,7 @@ dependencies = [
 
 [[package]]
 name = "flockmux-pty"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "bytes",
@@ -486,7 +486,7 @@ dependencies = [
 
 [[package]]
 name = "flockmux-recorder"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "bytes",
@@ -499,7 +499,7 @@ dependencies = [
 
 [[package]]
 name = "flockmux-server"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -531,11 +531,11 @@ dependencies = [
 
 [[package]]
 name = "flockmux-shim"
-version = "0.1.0"
+version = "0.1.1"
 
 [[package]]
 name = "flockmux-storage"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "r2d2",
@@ -550,7 +550,7 @@ dependencies = [
 
 [[package]]
 name = "flockmux-swarm"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "dashmap",
