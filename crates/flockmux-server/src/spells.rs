@@ -313,6 +313,38 @@ impl SpellRegistry {
         Ok(Self { spells })
     }
 
+    /// Compiled-in spell catalog — the production `init` spell baked into the
+    /// binary via `include_str!`, so a packaged app whose CWD has no `spells/`
+    /// dir (and whose CARGO_MANIFEST_DIR points at a vanished build path) still
+    /// drives workspace creation / orchestrator spawn / auto-respawn. Without
+    /// this, the registry was EMPTY on a user machine and "新建空间" failed with
+    /// spell-not-found. A malformed embed `warn!` + skips. Mirrors
+    /// `roles::RoleRegistry::builtin()`; the on-disk `spells/` dir overlays
+    /// this base (dev override by name).
+    pub fn builtin() -> Self {
+        const BUILTIN: &[(&str, &str)] = &[("init.md", include_str!("../../../spells/init.md"))];
+        let mut spells = HashMap::new();
+        for (name, content) in BUILTIN {
+            match parse_spell(content, Path::new(name)) {
+                Ok(spell) => {
+                    spells.insert(spell.manifest.name.clone(), spell);
+                }
+                Err(err) => {
+                    tracing::warn!(?err, spell = name, "skip builtin spell: parse failed");
+                }
+            }
+        }
+        Self { spells }
+    }
+
+    /// Overlay `other`'s spells onto self, overriding by name (other wins).
+    /// Used to layer: built-ins → repo `spells/` dir.
+    pub fn overlay(&mut self, other: SpellRegistry) {
+        for (name, spell) in other.spells {
+            self.spells.insert(name, spell);
+        }
+    }
+
     pub fn get(&self, name: &str) -> Option<&Spell> {
         self.spells.get(name)
     }
@@ -933,6 +965,50 @@ cli = "claude"
         let nonexistent = dir.path().join("does-not-exist");
         let reg = SpellRegistry::load_dir(&nonexistent).unwrap();
         assert_eq!(reg.list().len(), 0);
+    }
+
+    #[test]
+    fn builtin_ships_init_spell() {
+        // The compiled-in `init` spell is what makes "新建空间" work on a
+        // packaged app with no reachable spells/ dir. If this ever fails, a
+        // fresh install can't create a workspace — exactly the bug this guards.
+        let reg = SpellRegistry::builtin();
+        let init = reg.get("init").expect("builtin `init` spell must be embedded");
+        assert_eq!(init.manifest.name, "init");
+        assert!(
+            !init.manifest.agents.is_empty(),
+            "init spell must declare its orchestrator agent"
+        );
+    }
+
+    #[test]
+    fn builtin_survives_absent_dir_overlay() {
+        // Simulate the user-machine condition: builtin base + an overlay dir
+        // that doesn't exist. The `init` spell must still be present.
+        let dir = tempdir().unwrap();
+        let absent = dir.path().join("no-spells-here");
+        let mut reg = SpellRegistry::builtin();
+        reg.overlay(SpellRegistry::load_dir(&absent).unwrap());
+        assert!(reg.get("init").is_some(), "init must survive an empty overlay");
+    }
+
+    #[test]
+    fn overlay_dir_spell_overrides_builtin_by_name() {
+        // A dev editing spells/init.md (or adding a same-named spell) must win
+        // over the embedded copy — last-writer-wins by name.
+        let dir = tempdir().unwrap();
+        write(
+            dir.path(),
+            "init.md",
+            "+++\nname = \"init\"\n[[agents]]\nrole = \"r\"\ncli = \"claude\"\nsystem_prompt = \"overridden\"\n+++\n",
+        );
+        let mut reg = SpellRegistry::builtin();
+        reg.overlay(SpellRegistry::load_dir(dir.path()).unwrap());
+        let init = reg.get("init").unwrap();
+        assert_eq!(
+            init.manifest.agents[0].system_prompt, "overridden",
+            "dir overlay must shadow the builtin init"
+        );
     }
 
     #[test]

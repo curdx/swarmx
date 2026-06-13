@@ -312,8 +312,16 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
     let created: Workspace | null = null;
     try {
       if (!hasInitSpell) {
+        // Defensive guard only — the `init` spell is compiled into the server
+        // binary now (spells::SpellRegistry::builtin), so on a healthy install
+        // this is always present. If we still get here it means the local
+        // service didn't report ready (e.g. a transient /api/spells failure),
+        // so show the user something actionable, not server-internal jargon.
         throw new Error(
-          "后端未加载 `init` spell — 请重启 flockmux-server 让它发现 spells/init.md",
+          t(
+            "wizard.errBackendNotReady",
+            "本地服务尚未就绪,请稍候重试;若一直这样,重启 flockmux 即可。",
+          ),
         );
       }
       // workspace-as-first-class refactor: workspace is created in the
