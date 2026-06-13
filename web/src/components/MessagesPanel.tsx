@@ -88,6 +88,7 @@ import { useRoleLookup } from "../lib/useRoleLookup";
 import { useComposerDraft } from "../lib/useComposerDraft";
 import { useScrollMarkRead } from "../lib/useScrollMarkRead";
 import { usePendingResponders } from "../lib/usePendingResponders";
+import { useInterruptControls } from "../lib/useInterruptControls";
 
 const ChatMarkdown = lazy(() =>
   import("@/components/ChatMarkdown").then((m) => ({ default: m.ChatMarkdown })),
@@ -247,9 +248,8 @@ export function MessagesPanel({
   const attachIdRef = useRef(0);
   const [marking, setMarking] = useState<number | null>(null);
   const [bySenderOpen, setBySenderOpen] = useState(false);
-  // P0-9 可操控：在跑成员的「打断」菜单 + 排队提示。
-  const [stopMenuOpen, setStopMenuOpen] = useState(false);
-  const [interruptingId, setInterruptingId] = useState<string | null>(null);
+  // P0-9 排队提示 chip（send-side）：「打断」菜单 + interruptingId 已搬进
+  // useInterruptControls；queuedHint 的 writer 在 send() 里，所以留这。
   const [queuedHint, setQueuedHint] = useState(false);
 
   const listRef = useRef<HTMLDivElement>(null);
@@ -524,27 +524,13 @@ export function MessagesPanel({
     });
   }, [activeMembers, agentLiveStateById, pendingResponders]);
 
-  const stopMember = useCallback(
-    async (agentId: string) => {
-      setInterruptingId(agentId);
-      markInterrupted(agentId); // optimistic clear, before the round-trip
-      try {
-        await api.interruptAgent(agentId);
-      } catch {
-        /* best-effort — interrupt is idempotent; UI doesn't block on it */
-      } finally {
-        setInterruptingId(null);
-      }
-    },
-    [markInterrupted],
-  );
-
-  const stopAllRunning = useCallback(async () => {
-    const ids = runningMembers.map((m) => m.agent_id);
-    ids.forEach(markInterrupted);
-    setStopMenuOpen(false);
-    await Promise.allSettled(ids.map((id) => api.interruptAgent(id)));
-  }, [runningMembers, markInterrupted]);
+  const {
+    stopMenuOpen,
+    setStopMenuOpen,
+    interruptingId,
+    stopMember,
+    stopAllRunning,
+  } = useInterruptControls({ markInterrupted, runningMembers });
 
   // @mention: a leading/inline `@<role|id-prefix>` token routes the message to
   // THAT live worker instead of the default orchestrator (the token stays
