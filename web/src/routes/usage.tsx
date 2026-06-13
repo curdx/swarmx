@@ -433,6 +433,15 @@ function PricingEditor({
               path: pricing.path,
             })}
           </p>
+          {pricing.fallback && pricing.fallback.models > 0 && (
+            <p className="mt-0.5 font-caption text-[11px] text-foreground-tertiary">
+              {t("usage.pricingFallback", {
+                defaultValue:
+                  "未列出的模型自动套用 LiteLLM 价格表兜底（覆盖 {{count}} 个模型）",
+                count: pricing.fallback.models,
+              })}
+            </p>
+          )}
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <button

@@ -31,6 +31,61 @@ struct Rate {
     cache_write: f64,
 }
 
+/// Embedded LiteLLM pricing snapshot (USD per 1M tokens), refreshed via
+/// `scripts/update-litellm-pricing.mjs`. This is the FALLBACK rate source: the
+/// hand-maintained `default_pricing_rules()` below stay the editable primary
+/// layer (and a user's pricing.json overrides everything), but any model id no
+/// rule matches falls through to this table — so a brand-new model auto-prices
+/// instead of showing tokens-only. Same source ccusage uses.
+const LITELLM_PRICING_JSON: &str = include_str!("../../resources/litellm_pricing.json");
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+struct LiteLlmEntry {
+    input: f64,
+    output: f64,
+    cache_read: f64,
+    cache_write: f64,
+    #[serde(default)]
+    context_window: Option<u32>,
+}
+
+fn litellm_table() -> &'static std::collections::HashMap<String, LiteLlmEntry> {
+    static TABLE: std::sync::OnceLock<std::collections::HashMap<String, LiteLlmEntry>> =
+        std::sync::OnceLock::new();
+    TABLE.get_or_init(|| match serde_json::from_str(LITELLM_PRICING_JSON) {
+        Ok(map) => map,
+        Err(err) => {
+            tracing::error!(?err, "embedded litellm_pricing.json failed to parse; fallback pricing disabled");
+            std::collections::HashMap::new()
+        }
+    })
+}
+
+/// Normalise a model id toward a LiteLLM key: lowercase, drop a provider prefix
+/// (`anthropic/claude-…`), and strip flockmux's 1M-context markers (`[1m]` /
+/// `-1m`) that LiteLLM keys don't carry.
+fn normalize_model(model: &str) -> String {
+    let mut m = model.trim().to_ascii_lowercase();
+    m = m.replace("[1m]", "");
+    if let Some(stripped) = m.strip_suffix("-1m") {
+        m = stripped.to_string();
+    }
+    if let Some(idx) = m.rfind('/') {
+        m = m[idx + 1..].to_string();
+    }
+    m.trim().to_string()
+}
+
+/// Look a model up in the embedded LiteLLM table: exact lowercase first, then
+/// the normalised form. None for models LiteLLM doesn't know either.
+fn litellm_lookup(model: &str) -> Option<&'static LiteLlmEntry> {
+    let table = litellm_table();
+    let lower = model.trim().to_ascii_lowercase();
+    table
+        .get(&lower)
+        .or_else(|| table.get(&normalize_model(model)))
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct PricingRule {
     id: String,
@@ -183,18 +238,25 @@ fn save_pricing_rules(rules: &[PricingRule]) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Best-effort rate lookup by model-name substring. Returns None for unknown
-/// models (cost contribution = 0, `priced` flips false).
+/// Best-effort rate lookup. Primary layer: model-name substring against the
+/// (user-editable) pricing rules. Fallback: exact/normalised match in the
+/// embedded LiteLLM snapshot. Returns None only when neither knows the model
+/// (cost contribution = 0, `priced` flips false).
 fn rate_for(model: &str, rules: &[PricingRule]) -> Option<Rate> {
     let m = model.to_ascii_lowercase();
-    rules
-        .iter()
-        .find(|rule| {
-            rule.matchers
-                .iter()
-                .any(|needle| m.contains(&needle.to_ascii_lowercase()))
-        })
-        .map(|rule| rule.rates_usd_per_mtok)
+    if let Some(rule) = rules.iter().find(|rule| {
+        rule.matchers
+            .iter()
+            .any(|needle| m.contains(&needle.to_ascii_lowercase()))
+    }) {
+        return Some(rule.rates_usd_per_mtok);
+    }
+    litellm_lookup(model).map(|e| Rate {
+        input: e.input,
+        output: e.output,
+        cache_read: e.cache_read,
+        cache_write: e.cache_write,
+    })
 }
 
 /// Best-effort context-window size (tokens) by model-name substring. Surfaced
@@ -207,7 +269,7 @@ fn context_window_for(model: &str, rules: &[PricingRule]) -> Option<u32> {
         // 1M-context betas exist; the safe default for claude opus/sonnet is 200k.
         return Some(1_000_000);
     }
-    rules
+    if let Some(cw) = rules
         .iter()
         .find(|rule| {
             rule.matchers
@@ -215,6 +277,10 @@ fn context_window_for(model: &str, rules: &[PricingRule]) -> Option<u32> {
                 .any(|needle| m.contains(&needle.to_ascii_lowercase()))
         })
         .and_then(|rule| rule.context_window)
+    {
+        return Some(cw);
+    }
+    litellm_lookup(model).and_then(|e| e.context_window)
 }
 
 fn cost_of(
@@ -332,6 +398,12 @@ pub async fn usage_pricing_get() -> impl IntoResponse {
         "source": source,
         "path": pricing_config_path(),
         "rules": rules,
+        // Models no rule matches fall through to this embedded LiteLLM snapshot
+        // (refresh: scripts/update-litellm-pricing.mjs) so new models still price.
+        "fallback": {
+            "source": "litellm",
+            "models": litellm_table().len(),
+        },
     }))
 }
 
@@ -361,5 +433,71 @@ pub async fn usage_pricing_reset() -> Response {
             Json(json!({ "error": error.to_string() })),
         )
             .into_response(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn litellm_snapshot_parses_and_is_populated() {
+        // If include_str! or the JSON shape broke, this drops to 0 and every
+        // fallback price silently disappears — guard against that.
+        assert!(
+            litellm_table().len() > 1000,
+            "embedded snapshot should hold the full table, got {}",
+            litellm_table().len()
+        );
+    }
+
+    #[test]
+    fn litellm_conversion_is_correct() {
+        // Anchors the USD-per-token -> USD-per-1M-token (×1e6) conversion against
+        // a known published price. opus: 1.5e-5/7.5e-5/1.5e-6/1.875e-5 per token.
+        let opus = litellm_lookup("claude-opus-4-1").expect("opus in snapshot");
+        assert_eq!(opus.input, 15.0);
+        assert_eq!(opus.output, 75.0);
+        assert_eq!(opus.cache_read, 1.5);
+        assert_eq!(opus.cache_write, 18.75);
+        assert_eq!(opus.context_window, Some(200_000));
+
+        // A provider without cache-creation pricing must come through as 0, not absent.
+        let codex = litellm_lookup("gpt-5-codex").expect("gpt-5-codex in snapshot");
+        assert_eq!(codex.cache_write, 0.0);
+    }
+
+    #[test]
+    fn normalize_strips_prefix_and_1m_markers() {
+        assert_eq!(normalize_model("anthropic/claude-opus-4-1"), "claude-opus-4-1");
+        assert_eq!(normalize_model("claude-opus-4-8[1m]"), "claude-opus-4-8");
+        assert_eq!(normalize_model("Gemini-2.5-Pro-1m"), "gemini-2.5-pro");
+    }
+
+    #[test]
+    fn primary_rules_win_over_litellm_fallback() {
+        // opus hits the hand-maintained substring rule; the [1m] marker must not
+        // knock it down to the fallback.
+        let rules = default_pricing_rules();
+        let r = rate_for("claude-opus-4-8[1m]", &rules).expect("opus priced");
+        assert_eq!(r.input, 15.0);
+        assert_eq!(r.output, 75.0);
+    }
+
+    #[test]
+    fn litellm_fallback_prices_models_no_rule_covers() {
+        // gemini matches none of opus/sonnet/haiku/gpt-5/codex/o4 — before the
+        // fallback it was tokens-only; now it prices and surfaces a window.
+        let rules = default_pricing_rules();
+        let r = rate_for("gemini-2.5-pro", &rules).expect("gemini priced via fallback");
+        assert!(r.input > 0.0 && r.output > 0.0);
+        assert!(context_window_for("gemini-2.5-pro", &rules).is_some());
+    }
+
+    #[test]
+    fn truly_unknown_model_stays_unpriced() {
+        let rules = default_pricing_rules();
+        assert!(rate_for("totally-made-up-model-xyz", &rules).is_none());
+        assert!(cost_of(Some("totally-made-up-model-xyz"), 100, 100, 0, 0, &rules).is_none());
     }
 }

@@ -623,6 +623,8 @@ export interface UsagePricingResponse {
   source: "default" | "user" | string;
   path: string;
   rules: UsagePricingRule[];
+  /** Models no rule matches fall through to this embedded snapshot (LiteLLM). */
+  fallback?: { source: string; models: number };
 }
 
 // ── goals (GET/POST/PATCH /api/goals) ─────────────────────────────────────
