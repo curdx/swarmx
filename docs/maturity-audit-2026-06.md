@@ -419,9 +419,16 @@ flockmux 已经是一个"工程素养明显在线"的成熟原型——后端健
 - **依赖**：P1-5（集中 Config 时一并处理）
 - **预估**：1 天
 
-#### [~] P2-8 · `terminal.tsx` 复用重连 hook + CHANGELOG ⏳ CHANGELOG 已完成；terminal.tsx 重连 hook 复用留作前端重构
+#### [x] P2-8 · `terminal.tsx` 复用重连 hook + CHANGELOG ✅ CHANGELOG 完成；重连复用经核实不适用（前提不成立）
 
-> **CHANGELOG 已完成**：新建 `CHANGELOG.md`（Keep a Changelog 格式 + Unreleased 章节，记录本轮全部改动）。**terminal.tsx 复用全局 WS 重连 hook** 属前端重构（需对照现有重连 hook + 浏览器验证断网恢复行为一致），与 P2-2/P2-3 一并留作需 e2e 兜底的前端 PR，不在此次盲改。
+> **CHANGELOG 已完成**：新建 `CHANGELOG.md`（Keep a Changelog 格式 + Unreleased 章节）。
+>
+> **重连复用经核实不适用（2026-06-13，反向核实）**：任务前提「terminal 有一套与全局重复的重连逻辑」不成立。现状三套 WS 各自独立、语义不同——
+> ① `hooks/useSwarmFeed.ts` 连 `/ws/swarm`：单例共享 socket + JSON multiplex + exponential backoff（200ms→4s）自动重连；
+> ② `components/XtermPane.tsx` 连 agent PTY：per-instance、**二进制流 `[4B seq][bytes]`** + seq-resume（lastSeq 存 sessionStorage、remount 带 `?last_seq=N` 从 server ring buffer replay gap），`onclose` **不 backoff 重连**（只设 error，靠 remount 恢复，有意设计）；
+> ③ `routes/terminal.tsx` 连 `/ws/terminal` 交互 shell：`onclose` 只写 `[session closed]`、**本就没有重连逻辑**（临时 shell 关了即关，合理）。
+>
+> 三者连**不同 endpoint、不同消息格式、不同重连语义**，无重复逻辑可消除；强行统一会破坏 seq-resume / 二进制流 / 单例模型。同 P1-11（SEC-4）反向核实后判定无需改动——不为完成度做有害重构。
 
 - **关联差距**：FE-05、DOC-06
 - **涉及文件**：`web/src/**/terminal.tsx`、已有的 WS 重连 hook、新增 `CHANGELOG.md`
