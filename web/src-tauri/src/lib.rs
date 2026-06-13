@@ -79,12 +79,64 @@ pub fn run() {
             // ── Release-only sidecar spawn ───────────────────────────
             #[cfg(not(debug_assertions))]
             {
+                use tauri::Emitter;
+                use tauri_plugin_shell::process::CommandEvent;
                 match app.shell().sidecar("flockmux-server") {
                     Ok(cmd) => match cmd.spawn() {
-                        Ok((_rx, child)) => {
+                        Ok((mut rx, child)) => {
                             log::info!("flockmux-server sidecar started (pid={})", child.pid());
                             // Stash the child so the exit hook can kill it.
                             *app.state::<ServerSidecar>().0.lock().unwrap() = Some(child);
+                            // P0-5: do NOT drop the event stream. If the sidecar
+                            // dies or errors after startup (port 7777 taken, a
+                            // read-only HOME, a panic), surface it instead of
+                            // leaving the user a frozen app that can never reach
+                            // the backend and never says why. We keep a short
+                            // stderr tail, log it on exit, and emit an event the
+                            // webview can turn into a "backend stopped — restart"
+                            // banner.
+                            let handle = app.handle().clone();
+                            tauri::async_runtime::spawn(async move {
+                                let mut tail: std::collections::VecDeque<String> =
+                                    std::collections::VecDeque::with_capacity(20);
+                                while let Some(ev) = rx.recv().await {
+                                    match ev {
+                                        CommandEvent::Stderr(bytes) => {
+                                            let line =
+                                                String::from_utf8_lossy(&bytes).trim_end().to_string();
+                                            if !line.is_empty() {
+                                                if tail.len() == 20 {
+                                                    tail.pop_front();
+                                                }
+                                                tail.push_back(line);
+                                            }
+                                        }
+                                        CommandEvent::Error(err) => {
+                                            log::error!("flockmux-server sidecar error: {err}");
+                                            let _ = handle.emit("backend-sidecar-down", err);
+                                        }
+                                        CommandEvent::Terminated(payload) => {
+                                            let trail =
+                                                tail.iter().cloned().collect::<Vec<_>>().join("\n");
+                                            log::error!(
+                                                "flockmux-server sidecar terminated (code={:?}, \
+                                                 signal={:?})\nstderr tail:\n{trail}",
+                                                payload.code,
+                                                payload.signal
+                                            );
+                                            let _ = handle.emit(
+                                                "backend-sidecar-down",
+                                                format!(
+                                                    "backend exited (code={:?})\n{trail}",
+                                                    payload.code
+                                                ),
+                                            );
+                                            break;
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                            });
                         }
                         Err(e) => {
                             log::error!("failed to spawn flockmux-server sidecar: {e}");

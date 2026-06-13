@@ -528,12 +528,12 @@
     "confirm": {
       "interruptAll": {
         "title": "Pause all agents?",
-        "desc": "This interrupts every running agent in the current workspace and stops auto-wake until you resume them.",
+        "desc": "This interrupts every running agent in this direction and stops auto-wake until you resume them.",
         "confirm": "Pause all"
       },
       "resumeAll": {
         "title": "Resume all paused agents?",
-        "desc": "This resumes each paused agent in the current workspace and lets them continue working.",
+        "desc": "This resumes each paused agent in this direction and lets them continue working.",
         "confirm": "Resume all"
       }
     }

@@ -13,7 +13,10 @@
 //! developer can peek at sibling repos / config / logs. A bare call with no
 //! `workspace_id` is unrestricted (loopback + same posture as `/api/file`).
 
-use axum::{extract::Query, extract::State, http::StatusCode, response::IntoResponse, Json};
+use axum::{
+    extract::Query, extract::State, http::header, http::HeaderMap, http::StatusCode,
+    response::IntoResponse, Json,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::path::{Path, PathBuf};
@@ -60,6 +63,56 @@ fn canon(p: &Path) -> Result<PathBuf, String> {
 /// into a bool, so we parse it ourselves).
 fn truthy(o: &Option<String>) -> bool {
     matches!(o.as_deref(), Some("1") | Some("true"))
+}
+
+/// A request is "from the app UI" iff it carries an `Origin` header pointing at
+/// a local host (vite dev `localhost:5173`, the bundle on `:7777`, the Tauri
+/// webview `tauri.localhost`). Headless local clients — `curl`, the MCP
+/// subprocess (reqwest), a sandboxed/landed exploit that can only speak HTTP to
+/// loopback — send no Origin. The middleware lets those through as "native
+/// clients", which is fine for jailed reads but must NOT grant *unscoped*
+/// full-disk access: that turned `/api/files/read` into an arbitrary-file-read
+/// oracle for any local process. So bare (no `workspace_id`) and `all=1`
+/// (jail-escape) reads now require a UI request; everyone else is confined to a
+/// workspace's roots. NOTE: a process that forges an `Origin` header, or a
+/// same-origin XSS inside the webview, still slips past this — those are the
+/// irreducible limit of a token-less loopback tool; `is_sensitive` is the
+/// remaining backstop for them.
+fn is_ui_request(headers: &HeaderMap) -> bool {
+    headers
+        .get(header::ORIGIN)
+        .and_then(|v| v.to_str().ok())
+        .map(origin_host_is_local)
+        .unwrap_or(false)
+}
+
+/// True if an `Origin` value (`http://localhost:5173`, `tauri://localhost`,
+/// `https://tauri.localhost`, `http://[::1]:7777`) names a loopback host.
+fn origin_host_is_local(origin: &str) -> bool {
+    let host = origin.split_once("://").map(|(_, r)| r).unwrap_or(origin);
+    let host = host.split('/').next().unwrap_or(host);
+    // strip a trailing `:port` (but keep IPv6 inside brackets intact first).
+    let host = if let Some(rest) = host.strip_prefix('[') {
+        rest.split(']').next().unwrap_or(rest)
+    } else {
+        host.rsplit_once(':').map(|(h, _)| h).unwrap_or(host)
+    };
+    host == "localhost"
+        || host == "127.0.0.1"
+        || host == "::1"
+        || host.ends_with(".localhost")
+}
+
+/// 403 for an unscoped (full-disk) read attempted by a non-UI client.
+fn unscoped_denied() -> axum::response::Response {
+    (
+        StatusCode::FORBIDDEN,
+        Json(json!({
+            "error": "full-disk file access is limited to the flockmux UI; \
+                      pass a workspace_id to browse within a workspace"
+        })),
+    )
+        .into_response()
 }
 
 /// The canonicalised roots a workspace is allowed to browse: its `cwd` plus any
@@ -117,15 +170,34 @@ fn is_sensitive(path: &Path) -> bool {
         ".gnupg",
         ".kube",
         ".azure",
+        ".docker",          // config.json holds registry auth tokens
         ".config/gcloud",
+        ".config/gh",       // GitHub CLI OAuth token
+        ".config/git",      // may hold credential stores
+        "Library/Keychains", // macOS keychains
     ];
     for rel in DIRS {
         if path.starts_with(home.join(rel)) {
             return true;
         }
     }
-    // Specific high-value files under $HOME.
-    const FILES: &[&str] = &[".claude.json", ".netrc", ".pgpass", ".git-credentials"];
+    // Specific high-value files under $HOME: creds, tokens, and shell/REPL
+    // histories (which routinely leak secrets typed on a command line).
+    const FILES: &[&str] = &[
+        ".claude.json",
+        ".netrc",
+        ".pgpass",
+        ".git-credentials",
+        ".npmrc",
+        ".pypirc",
+        ".bash_history",
+        ".zsh_history",
+        ".sh_history",
+        ".python_history",
+        ".node_repl_history",
+        ".mysql_history",
+        ".psql_history",
+    ];
     for rel in FILES {
         if path == home.join(rel) {
             return true;
@@ -140,11 +212,18 @@ fn is_sensitive(path: &Path) -> bool {
         .unwrap_or("")
         .to_ascii_lowercase();
     name == ".env"
+        || (name.starts_with(".env.") && !name.ends_with(".example") && !name.ends_with(".sample"))
         || name.ends_with(".pem")
         || name.ends_with(".key")
         || name.ends_with(".p12")
+        || name.ends_with(".pfx")
+        || name.ends_with(".ppk")
+        || name.ends_with(".keystore")
+        || name.ends_with(".jks")
         || name.contains("credential")
         || name == "id_rsa"
+        || name == "id_dsa"
+        || name == "id_ecdsa"
         || name == "id_ed25519"
 }
 
@@ -160,9 +239,15 @@ fn sensitive_denied() -> axum::response::Response {
 
 pub async fn list_dir(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(q): Query<ListQuery>,
 ) -> impl IntoResponse {
     let ws_id = q.workspace_id.as_deref().filter(|s| !s.is_empty());
+    // Unscoped (no workspace jail, or `all=1` escape) ⇒ full-disk reach. Only
+    // the UI may do that; a headless local process is confined to a workspace.
+    if (ws_id.is_none() || truthy(&q.all)) && !is_ui_request(&headers) {
+        return unscoped_denied();
+    }
     // Fetch the jail roots once; reuse them for both the default dir and the gate.
     let roots = match ws_id {
         Some(id) => allowed_roots(&state, id).await,
@@ -236,8 +321,17 @@ pub struct ReadQuery {
 
 pub async fn read_file(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(q): Query<ReadQuery>,
 ) -> impl IntoResponse {
+    let ws_id = q.workspace_id.as_deref().filter(|s| !s.is_empty());
+    // Unscoped (no workspace jail, or `all=1` escape) ⇒ arbitrary absolute
+    // path. Only the UI may do that; a headless local process (curl, a rogue
+    // MCP child, a landed exploit) is confined to a workspace's roots — this
+    // is what closes the arbitrary-file-read oracle.
+    if (ws_id.is_none() || truthy(&q.all)) && !is_ui_request(&headers) {
+        return unscoped_denied();
+    }
     let path = match canon(Path::new(&q.path)) {
         Ok(p) => p,
         Err(e) => return (StatusCode::NOT_FOUND, Json(json!({ "error": e }))).into_response(),
@@ -247,7 +341,6 @@ pub async fn read_file(
     if is_sensitive(&path) {
         return sensitive_denied();
     }
-    let ws_id = q.workspace_id.as_deref().filter(|s| !s.is_empty());
     if ws_id.is_some() && !truthy(&q.all) {
         let roots = allowed_roots(&state, ws_id.unwrap()).await;
         if !is_within_any(&path, &roots) {
@@ -318,6 +411,29 @@ mod tests {
         assert!(!is_within_any(Path::new("/deps/other"), &roots));
         assert!(!is_within_any(Path::new("/etc/passwd"), &roots));
         assert!(!is_within_any(Path::new("/etc"), &[]));
+    }
+
+    #[test]
+    fn origin_host_is_local_distinguishes_ui_from_attacker() {
+        // Real UI origins (vite dev, bundle on :7777, Tauri webview).
+        assert!(origin_host_is_local("http://localhost:5173"));
+        assert!(origin_host_is_local("http://127.0.0.1:7777"));
+        assert!(origin_host_is_local("http://[::1]:7777"));
+        assert!(origin_host_is_local("tauri://localhost"));
+        assert!(origin_host_is_local("https://tauri.localhost"));
+        // Anything off-box is not a UI request.
+        assert!(!origin_host_is_local("http://evil.com"));
+        assert!(!origin_host_is_local("https://attacker.example:443"));
+        assert!(!origin_host_is_local("http://localhost.evil.com"));
+    }
+
+    #[test]
+    fn env_variants_blocked_but_examples_readable() {
+        assert!(is_sensitive(Path::new("/proj/.env")));
+        assert!(is_sensitive(Path::new("/proj/.env.local")));
+        assert!(is_sensitive(Path::new("/proj/.env.production")));
+        assert!(!is_sensitive(Path::new("/proj/.env.example")));
+        assert!(!is_sensitive(Path::new("/proj/.env.sample")));
     }
 
     #[test]

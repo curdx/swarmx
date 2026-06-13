@@ -17,6 +17,7 @@ import { api } from "@/api/http";
 import type { TaskRow } from "@/api/types";
 import { cn } from "@/lib/cn";
 import { relTime } from "@/lib/relTime";
+import { toast } from "@/lib/toast";
 import { useToolWorkspaces } from "@/lib/useToolWorkspaces";
 import { WorkspacePicker } from "@/components/WorkspacePicker";
 import {
@@ -64,6 +65,7 @@ export default function TasksRoute() {
   const setStatus = useCallback(
     async (agentId: string, status: string | null) => {
       // optimistic: reflect immediately, then refetch for ground truth
+      const snapshot = tasks; // P0-1: keep the pre-change list so we can revert
       setTasks((prev) =>
         prev
           ? prev.map((tk) =>
@@ -75,11 +77,18 @@ export default function TasksRoute() {
       );
       try {
         await api.setTaskStatus(agentId, status);
-      } finally {
         load();
+      } catch (e) {
+        // P0-1: a failed write must NOT masquerade as success. Roll the card
+        // back to its real state and tell the user, instead of leaving it
+        // optimistically "completed" while the backend never recorded it.
+        setTasks(snapshot);
+        toast.error(t("tasks.statusFailed", { defaultValue: "状态更新失败，请重试" }), {
+          description: (e as Error)?.message,
+        });
       }
     },
-    [load],
+    [tasks, load, t],
   );
 
   const byCol = (key: string) => (tasks ?? []).filter((tk) => tk.status === key);

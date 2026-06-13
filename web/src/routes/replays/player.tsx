@@ -17,6 +17,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { ArrowLeft, Download, FileSearch, Share2, X } from "lucide-react";
 import { api } from "../../api/http";
+import { downloadRecordingCast } from "@/lib/download";
 import type { AgentInfo, RecordingInfo } from "../../api/types";
 import { AsciicastPlayer } from "../../components/AsciicastPlayer";
 import { AgentChip } from "../../components/agent/AgentChip";
@@ -200,14 +201,14 @@ export default function ReplayPlayer() {
             {t("player.recording")}
           </span>
         )}
-        <a
-          href={api.recordingCastUrl(recording.id)}
-          download={`${recording.id}.cast`}
+        <button
+          type="button"
+          onClick={() => downloadRecordingCast(recording.id)}
           className="flex size-9 items-center justify-center rounded-md bg-[#1F1F1F] text-foreground-inverse-secondary hover:bg-[#262626] hover:text-foreground-inverse"
           title={t("player.downloadCast")}
         >
           <Download className="size-4" />
-        </a>
+        </button>
         <a
           href={api.recordingCastUrl(recording.id)}
           target="_blank"

@@ -50,6 +50,7 @@ import {
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { api } from "../../api/http";
+import { downloadRecordingCast } from "@/lib/download";
 import type {
   AgentActivity,
   AgentInfo,
@@ -630,9 +631,9 @@ function RecordingsTab({
               </span>
               <ChevronRight className="hidden size-4 shrink-0 text-foreground-tertiary sm:block" />
             </Link>
-            <a
-              href={api.recordingCastUrl(r.id)}
-              download={`${r.id}.cast`}
+            <button
+              type="button"
+              onClick={() => downloadRecordingCast(r.id)}
               className="flex size-7 shrink-0 items-center justify-center rounded-md text-foreground-tertiary hover:bg-surface-tertiary"
               aria-label={t("agent.downloadCastNamed", {
                 id: r.id,
@@ -641,7 +642,7 @@ function RecordingsTab({
               title={t("agent.downloadCast")}
             >
               <Download className="size-3.5" />
-            </a>
+            </button>
           </div>
         );
       })}
