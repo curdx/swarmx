@@ -5,6 +5,13 @@
 // `version`, and if newer downloads the matching platform `url` + verifies it
 // against the `.sig` `signature` with the bundled public key.
 //
+// The Tauri updater matches a platform by its `url` (NOT by filename), so the
+// url here MUST point at a file that was actually uploaded under that exact
+// name. We find each platform's signature by the stable, version-independent
+// tail from release-naming.mjs (the same module rename-release-assets.mjs uses
+// to produce the names) and derive the bundle url from the matched file — so
+// the manifest and the uploaded assets can't drift apart.
+//
 // Usage: node scripts/gen-updater-manifest.mjs <assets-dir> <tag> <repo> [date]
 //   <assets-dir>  dir holding the downloaded release assets (with `.sig` files)
 //   <tag>         release tag, e.g. v0.2.0
@@ -12,21 +19,13 @@
 //   [date]        RFC3339 pub_date (pass from the workflow; Date.now isn't used)
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
+import { TARGETS, updaterSigTail } from "./release-naming.mjs";
 
 const [assetsDir, tag, repo, date] = process.argv.slice(2);
 if (!assetsDir || !tag || !repo) {
   console.error("usage: gen-updater-manifest.mjs <assets-dir> <tag> <repo> [date]");
   process.exit(1);
 }
-
-// Rust target triple → Tauri updater platform key + updater-bundle suffix.
-// (prepare-assets prefixes every asset filename with "<triple>-".)
-const TARGETS = [
-  { triple: "aarch64-apple-darwin", platform: "darwin-aarch64", suffix: ".app.tar.gz" },
-  { triple: "x86_64-apple-darwin", platform: "darwin-x86_64", suffix: ".app.tar.gz" },
-  { triple: "x86_64-unknown-linux-gnu", platform: "linux-x86_64", suffix: ".AppImage" },
-  { triple: "x86_64-pc-windows-msvc", platform: "windows-x86_64", suffix: ".msi" },
-];
 
 async function walk(dir) {
   const out = [];
@@ -40,18 +39,39 @@ async function walk(dir) {
 
 const files = await walk(assetsDir);
 const platforms = {};
+const broken = [];
 
 for (const t of TARGETS) {
-  const sig = files.find(
-    (f) => path.basename(f).includes(t.triple) && f.endsWith(`${t.suffix}.sig`),
+  const tail = updaterSigTail(t); // e.g. "macos-arm64.app.tar.gz.sig"
+  const sig = files.find((f) => path.basename(f).endsWith(tail));
+  if (sig) {
+    const signature = (await readFile(sig, "utf8")).trim();
+    const assetName = path.basename(sig).replace(/\.sig$/, "");
+    platforms[t.platform] = {
+      signature,
+      url: `https://github.com/${repo}/releases/download/${tag}/${assetName}`,
+    };
+    continue;
+  }
+  // No signature for this platform. If the platform's updater BUNDLE itself
+  // shipped (e.g. the .app.tar.gz / .AppImage / .msi is present) but its .sig
+  // didn't, the signature silently went missing — that leg can still exit 0
+  // because the manual-download .dmg/.deb was produced. Publishing latest.json
+  // without this platform would strand every installed user on it ("no update
+  // available" forever — the v0.1.1-class symptom). Fail loudly instead.
+  const bundleTail = `${t.label}${t.updaterSuffix}`; // e.g. "macos-arm64.app.tar.gz"
+  const bundle = files.find((f) => path.basename(f).endsWith(bundleTail));
+  if (bundle) broken.push(`${t.platform}: have ${path.basename(bundle)} but no ${path.basename(bundle)}.sig`);
+  // else: platform genuinely not built in this run (partial dispatch) — skip.
+}
+
+if (broken.length) {
+  console.error(
+    "updater bundle present but its signature is missing — refusing to publish a\n" +
+      "partial latest.json that would strand those users:\n  " +
+      broken.join("\n  "),
   );
-  if (!sig) continue; // platform not built in this run
-  const signature = (await readFile(sig, "utf8")).trim();
-  const assetName = path.basename(sig).replace(/\.sig$/, "");
-  platforms[t.platform] = {
-    signature,
-    url: `https://github.com/${repo}/releases/download/${tag}/${assetName}`,
-  };
+  process.exit(1);
 }
 
 if (Object.keys(platforms).length === 0) {
