@@ -105,10 +105,35 @@ export default function UsageRoute() {
 
   // Live-ish: first load (with spinner) on workspace change, then poll so the
   // cost/token numbers don't sit frozen while workers keep burning tokens.
+  // Visibility-aware: pause the poll while the tab is hidden (no point hammering
+  // the API from a background tab) and refresh immediately on return so you
+  // never stare at stale numbers.
   useEffect(() => {
     load(true);
-    const id = window.setInterval(() => load(false), 8000);
-    return () => window.clearInterval(id);
+    let id: number | undefined;
+    const start = () => {
+      if (id == null) id = window.setInterval(() => load(false), 8000);
+    };
+    const stop = () => {
+      if (id != null) {
+        window.clearInterval(id);
+        id = undefined;
+      }
+    };
+    const onVisibility = () => {
+      if (document.hidden) {
+        stop();
+      } else {
+        load(false);
+        start();
+      }
+    };
+    if (!document.hidden) start();
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      stop();
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
   }, [load]);
 
   const loadPricing = useCallback(async () => {
