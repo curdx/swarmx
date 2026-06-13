@@ -23,14 +23,22 @@ const USER_SENDER = "user";
  * pending-flush clearTimeout on unmount). `listRef`/`rowRefs` stay owned by the
  * component (shared with scroll-to-parent, auto-scroll, JSX ref-callbacks) and
  * are passed in. The read/write data rules live in markReadBatch (unit-tested).
+ *
+ * `revision` is an opaque token that changes whenever the set of currently
+ * mounted rows changes (e.g. the virtualizer's visible range). When the list is
+ * virtualized, off-screen rows aren't in the DOM, so a row scrolling INTO view
+ * is a fresh mount the existing observer never saw — bumping revision
+ * re-subscribes the observer over the now-current rowRefs. Omit it for a
+ * fully-rendered (non-virtualized) list.
  */
 export function useScrollMarkRead(opts: {
   listRef: RefObject<HTMLDivElement | null>;
   rowRefs: RefObject<Map<number, HTMLDivElement | null>>;
   items: MessageRecord[];
   setItems: Dispatch<SetStateAction<MessageRecord[]>>;
+  revision?: string;
 }): void {
-  const { listRef, rowRefs, items, setItems } = opts;
+  const { listRef, rowRefs, items, setItems, revision } = opts;
   const pendingReadRef = useRef<Set<number>>(new Set());
   const flushTimerRef = useRef<number | null>(null);
 
@@ -82,7 +90,9 @@ export function useScrollMarkRead(opts: {
       }
     }
     return () => io.disconnect();
-  }, [items, flushAutoRead, listRef, rowRefs]);
+    // revision re-subscribes the observer when the virtualizer's mounted rows
+    // change (scroll); harmless (no-op dep) for a non-virtualized list.
+  }, [items, flushAutoRead, listRef, rowRefs, revision]);
 
   // Cancel any pending flush on unmount.
   useEffect(
