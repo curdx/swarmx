@@ -208,6 +208,16 @@ export const api = {
     prompt: string;
     tz_offset_minutes: number;
   }) => requestEndpoint<{ ok: boolean; id?: string; error?: string }>(apiRoutes.cron.create(), req),
+  updateCron: (
+    id: string,
+    req: {
+      workspace_id: string;
+      name: string;
+      cron_expr: string;
+      prompt: string;
+      tz_offset_minutes: number;
+    },
+  ) => requestEndpoint<{ ok: boolean; error?: string }>(apiRoutes.cron.update(id), req),
   deleteCron: (id: string) => requestEndpoint<{ ok: boolean }>(apiRoutes.cron.delete(id)),
   toggleCron: (id: string, enabled: boolean) =>
     requestEndpoint<{ ok: boolean }>(apiRoutes.cron.toggle(id), { enabled }),

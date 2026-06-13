@@ -136,6 +136,64 @@ pub async fn create_cron(
     }
 }
 
+#[derive(Deserialize)]
+pub struct UpdateCronRequest {
+    workspace_id: String,
+    name: String,
+    cron_expr: String,
+    prompt: String,
+    #[serde(default)]
+    tz_offset_minutes: i32,
+}
+
+/// Edit an existing job's workspace/name/expr/prompt/offset. Same validation as
+/// create; `enabled`/`created_at`/`last_run_at` are preserved. 404 if no such id.
+pub async fn update_cron(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(req): Json<UpdateCronRequest>,
+) -> impl IntoResponse {
+    if !crate::cron::is_valid(&req.cron_expr) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": format!("invalid cron expr `{}` (5 fields, each in range: min 0-59, hour 0-23, dom 1-31, month 1-12, dow 0-7)", req.cron_expr) })),
+        )
+            .into_response();
+    }
+    if req.workspace_id.trim().is_empty() || req.prompt.trim().is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "workspace_id and prompt are required" })),
+        )
+            .into_response();
+    }
+    let name = if req.name.trim().is_empty() {
+        req.cron_expr.clone()
+    } else {
+        req.name
+    };
+    match state
+        .store
+        .update_cron_job(
+            id,
+            req.workspace_id,
+            name,
+            req.cron_expr,
+            req.prompt,
+            req.tz_offset_minutes,
+        )
+        .await
+    {
+        Ok(0) => (StatusCode::NOT_FOUND, Json(json!({ "error": "no such job" }))).into_response(),
+        Ok(_) => (StatusCode::OK, Json(json!({ "ok": true }))).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
 pub async fn delete_cron(
     State(state): State<AppState>,
     Path(id): Path<String>,

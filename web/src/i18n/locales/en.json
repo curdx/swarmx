@@ -852,7 +852,12 @@
     "lastRun": "last",
     "running": "Firing…",
     "ranOk": "Fired — delivered to the orchestrator",
-    "confirmDelete": "Confirm delete"
+    "confirmDelete": "Confirm delete",
+    "edit": "Edit",
+    "save": "Save",
+    "saving": "Saving…",
+    "savedOk": "Saved",
+    "orphaned": "Workspace deleted"
   },
   "files": {
     "title": "File browser",
