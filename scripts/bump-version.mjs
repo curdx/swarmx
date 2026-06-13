@@ -6,6 +6,7 @@
 // Usage:  node scripts/bump-version.mjs <x.y.z>
 //         node scripts/bump-version.mjs --check   (assert all four agree)
 import { readFile, writeFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
 
 const MANIFESTS = [
   // [file, regex capturing everything up to the value, with the value as "..."]
@@ -71,4 +72,20 @@ for (const [file, re] of MANIFESTS) {
   await writeFile(file, next);
   console.log(`✓ ${file} → ${version}`);
 }
+
+// Cargo.lock records each workspace crate's version too. A bumped Cargo.toml
+// without a synced lock makes the release gate (`cargo test --locked`) fail
+// with "cannot update the lock file because --locked was passed". Sync it now —
+// `--workspace` only rewrites the flockmux-* member versions, not any deps.
+try {
+  execFileSync("cargo", ["update", "--workspace"], { stdio: "inherit" });
+  console.log("✓ Cargo.lock synced (cargo update --workspace)");
+} catch {
+  console.error(
+    "✗ Cargo.lock NOT synced. Run `cargo update --workspace` before committing,\n" +
+      "  otherwise the release gate (cargo test --locked) will fail.",
+  );
+  process.exit(1);
+}
+
 console.log(`\nAll manifests synced to ${version}. Commit, then tag v${version}.`);
