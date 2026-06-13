@@ -698,6 +698,7 @@
     "aiNamed": "AI 起名",
     "errAbsolutePath": "请填写绝对路径（以 / 开头），例如 /Users/你的用户名/code/项目",
     "errDirMissing": "这个目录不存在——请确认路径填对了，且指向一个已存在的绝对路径。",
+    "errBackendNotReady": "本地服务尚未就绪，请稍候重试；若一直这样，重启 flockmux 即可。",
     "pathChecking": "正在检查目录…",
     "pathOk": "目录可访问",
     "step2": "选择主项目",

@@ -143,10 +143,20 @@ async fn main() -> Result<()> {
     let plugin_registry = plugins::PluginRegistry::load_layered(&plugin_layers);
     info!(count = plugin_registry.list().len(), "plugins loaded");
 
+    // Two-layer spell registry: built-ins compiled into the binary (so a
+    // packaged app with no reachable `spells/` dir still ships the `init`
+    // spell that every workspace-create / orchestrator-spawn drives) overlaid
+    // by the repo's `spells/` dir (dev override by name). Same pattern as the
+    // role registry below.
     let spells_dir = spells::default_spells_dir();
-    info!(dir = %spells_dir.display(), "loading spells");
-    let spell_registry = spells::SpellRegistry::load_dir(&spells_dir)
-        .with_context(|| format!("load spells from {}", spells_dir.display()))?;
+    info!(dir = %spells_dir.display(), "loading spells (builtin + dir overlay)");
+    let mut spell_registry = spells::SpellRegistry::builtin();
+    match spells::SpellRegistry::load_dir(&spells_dir) {
+        Ok(dir_spells) => spell_registry.overlay(dir_spells),
+        Err(e) => {
+            tracing::warn!(?e, dir = %spells_dir.display(), "spells dir overlay failed; using builtins only")
+        }
+    }
     info!(count = spell_registry.list().len(), "spells loaded");
 
     // Two-layer role registry: built-ins compiled into the binary (so a

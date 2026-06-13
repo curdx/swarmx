@@ -367,16 +367,54 @@ impl PluginRegistry {
     /// definition. Per-layer resilience is preserved — a bad file or missing
     /// layer is warn-skipped, never fatal.
     pub fn load_layered(dirs: &[PathBuf]) -> Self {
-        let mut plugins: HashMap<String, CliPlugin> = HashMap::new();
+        // Seed from the compiled-in builtin catalog FIRST, so a packaged app
+        // (whose CWD has no `cli-plugins/` dir, and whose CARGO_MANIFEST_DIR
+        // points at a build-machine path that doesn't exist on the user's box)
+        // still has claude/codex and can spawn agents. On-disk layers then
+        // OVERLAY by id (last-writer-wins), so dev edits in the repo
+        // `cli-plugins/` dir and a user's `~/.flockmux/cli-plugins/` still take
+        // effect. Mirrors `roles::RoleRegistry::builtin()` + dir overlay — the
+        // proven pattern; without this base layer the registry was EMPTY on a
+        // user machine and EVERY spawn failed NOT_FOUND.
+        let mut reg = Self::builtin();
         let mut source: HashMap<String, PathBuf> = HashMap::new();
         for dir in dirs {
-            Self::merge_dir(dir, &mut plugins, &mut source);
+            Self::merge_dir(dir, &mut reg.plugins, &mut source);
         }
-        if plugins.is_empty() {
+        if reg.plugins.is_empty() {
             tracing::warn!(
                 layers = dirs.len(),
-                "no CLI plugins loaded from any layer; spawns will fail with NOT_FOUND"
+                "no CLI plugins loaded from builtins or any layer; spawns will fail with NOT_FOUND"
             );
+        }
+        reg
+    }
+
+    /// Compiled-in CLI plugin catalog — `claude` and `codex` baked into the
+    /// binary via `include_str!` so a deployed server with no reachable
+    /// `cli-plugins/` dir still spawns agents (the plugins carry
+    /// binary/args/trust/mcp/stop-hook/health config). A malformed embed
+    /// `warn!` + skips — a parse slip never aborts startup. Mirrors
+    /// `roles::RoleRegistry::builtin()`; the on-disk layers in `load_layered`
+    /// overlay this base.
+    pub fn builtin() -> Self {
+        const BUILTIN: &[(&str, &str)] = &[
+            (
+                "claude.toml",
+                include_str!("../../../cli-plugins/claude.toml"),
+            ),
+            ("codex.toml", include_str!("../../../cli-plugins/codex.toml")),
+        ];
+        let mut plugins: HashMap<String, CliPlugin> = HashMap::new();
+        for (name, content) in BUILTIN {
+            match toml::from_str::<CliPlugin>(content) {
+                Ok(p) => {
+                    plugins.insert(p.id.clone(), p);
+                }
+                Err(err) => {
+                    tracing::warn!(?err, plugin = name, "skip builtin cli-plugin: parse failed");
+                }
+            }
         }
         Self { plugins }
     }
@@ -601,6 +639,25 @@ mod tests {
         assert_eq!(structured_command(&claude), None);
     }
 
+    /// The compiled-in catalog must carry claude + codex. Without these baked
+    /// into the binary, a packaged app (no reachable cli-plugins/ dir) gets an
+    /// EMPTY registry and EVERY agent spawn fails NOT_FOUND — the bug this guards.
+    #[test]
+    fn builtin_ships_claude_and_codex() {
+        let reg = PluginRegistry::builtin();
+        assert!(reg.get("claude").is_some(), "claude must be embedded");
+        assert!(reg.get("codex").is_some(), "codex must be embedded");
+    }
+
+    /// Simulate the user-machine condition: load_layered with only unreachable
+    /// dirs must still yield claude/codex from the builtin base layer.
+    #[test]
+    fn load_layered_falls_back_to_builtins_when_no_dir_resolves() {
+        let reg = PluginRegistry::load_layered(&[PathBuf::from("/nonexistent/flockmux-no-such-dir")]);
+        assert!(reg.get("claude").is_some(), "claude must survive empty layers");
+        assert!(reg.get("codex").is_some(), "codex must survive empty layers");
+    }
+
     /// A new field with a kebab-case typo must FAIL parse (→ warn-skip at load),
     /// never silently deserialize to `None` and strand the agent.
     #[test]
@@ -686,25 +743,36 @@ binary="x"
         assert_eq!(reg.list().len(), 3, "claude + codex + gemini");
     }
 
-    /// An entirely absent user layer is a no-op (the common case), and a missing
-    /// bundled layer just yields an empty registry — never a panic/error.
+    /// An entirely absent user layer is a no-op (the common case), and even
+    /// ALL-absent layers still yield the compiled-in builtins (claude + codex)
+    /// — never empty, never a panic/error. This is the safety net (the bug fix)
+    /// that keeps a packaged app spawning agents when no `cli-plugins/` dir is
+    /// reachable on the user's machine.
     #[test]
     fn layered_tolerates_absent_layers() {
         let base = tempfile::tempdir().unwrap();
         std::fs::write(
             base.path().join("claude.toml"),
-            "id=\"claude\"\ndisplay_name=\"Claude\"\nbinary=\"claude\"\n",
+            "id=\"claude\"\ndisplay_name=\"Claude (dir)\"\nbinary=\"claude\"\n",
         )
         .unwrap();
         let missing = base.path().join("does-not-exist");
 
+        // base overrides the builtin claude; codex survives from builtins; the
+        // missing layer adds nothing.
         let reg = PluginRegistry::load_layered(&[base.path().to_path_buf(), missing.clone()]);
-        assert_eq!(reg.list().len(), 1, "absent override layer is a no-op");
-
-        let empty = PluginRegistry::load_layered(&[missing]);
-        assert!(
-            empty.list().is_empty(),
-            "all-absent layers → empty, not error"
+        assert_eq!(
+            reg.get("claude").unwrap().display_name,
+            "Claude (dir)",
+            "dir layer overrides builtin claude"
         );
+        assert!(reg.get("codex").is_some(), "codex stays from builtins");
+        assert_eq!(reg.list().len(), 2, "claude(dir) + codex(builtin)");
+
+        // All-absent layers → fall back to the builtin catalog, not empty.
+        let only_builtins = PluginRegistry::load_layered(&[missing]);
+        assert!(only_builtins.get("claude").is_some());
+        assert!(only_builtins.get("codex").is_some());
+        assert_eq!(only_builtins.list().len(), 2, "builtins are the floor");
     }
 }

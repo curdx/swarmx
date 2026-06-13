@@ -698,6 +698,7 @@
     "aiNamed": "AI suggested",
     "errAbsolutePath": "Enter an absolute path, e.g. /Users/you/code/project",
     "errDirMissing": "That directory doesn't exist — check the path is correct and points to an existing absolute path.",
+    "errBackendNotReady": "The local service isn't ready yet — please retry in a moment; if it keeps happening, restart flockmux.",
     "pathChecking": "Checking directory…",
     "pathOk": "Directory is accessible",
     "step2": "Choose the primary project",
