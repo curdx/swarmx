@@ -35,6 +35,8 @@ jobs:
         run: cargo test --workspace --locked
       - name: Harness check (cross-file invariants)
         run: node scripts/harness-check.mjs
+      - name: Release-asset naming + updater manifest (end-to-end)
+        run: node --test scripts/release-naming.test.mjs
 
   build-tauri:
     name: Tauri ${{ matrix.label }}
@@ -187,34 +189,45 @@ jobs:
           set -euo pipefail
 
           target="${{ matrix.target }}"
+          version="$(node -p "require('./web/src-tauri/tauri.conf.json').version")"
+          raw_dir="$GITHUB_WORKSPACE/release-raw"
           output_dir="$GITHUB_WORKSPACE/release-assets/$target"
-          mkdir -p "$output_dir"
-          copied_bundle_file=0
+          mkdir -p "$raw_dir" "$output_dir"
 
+          # Stage the raw bundler output (original names) into one flat dir, then
+          # let rename-release-assets.mjs give them friendly, collision-free
+          # names. Doing the naming in JS (shared with gen-updater-manifest.mjs)
+          # keeps the asset names and the latest.json urls from ever drifting.
+          # Only collect the installer/updater artifacts we actually ship — the
+          # `-setup.exe` glob matches the NSIS installer but skips stray .exe so a
+          # rogue binary can't hard-fail the rename. A duplicate basename means
+          # two bundle files would collapse onto each other in the flat dir; fail
+          # loudly rather than let last-cp-wins silently drop one.
           while IFS= read -r asset; do
-            cp "$asset" "$output_dir/$target-$(basename "$asset")"
-            copied_bundle_file=1
+            dest="$raw_dir/$(basename "$asset")"
+            if [[ -e "$dest" ]]; then
+              echo "✗ duplicate bundle basename in target tree: $dest" >&2
+              exit 1
+            fi
+            cp "$asset" "$dest"
           done < <(
             find web/src-tauri/target -path '*/bundle/*' -type f \
               \( -name '*.AppImage' \
               -o -name '*.deb' \
               -o -name '*.rpm' \
               -o -name '*.msi' \
-              -o -name '*.exe' \
+              -o -name '*-setup.exe' \
               -o -name '*.dmg' \
               -o -name '*.app.tar.gz' \
               -o -name '*.sig' \) \
               | sort
           )
 
-          if [[ "$RUNNER_OS" == "macOS" && "$copied_bundle_file" -eq 0 ]]; then
-            while IFS= read -r app; do
-              (
-                cd "$(dirname "$app")"
-                zip -qry "$output_dir/$target-$(basename "$app").zip" "$(basename "$app")"
-              )
-            done < <(find web/src-tauri/target -path '*/bundle/*' -type d -name '*.app' | sort)
-          fi
+          # An empty raw_dir (e.g. macOS produced no .app.tar.gz/.dmg) makes the
+          # rename script exit non-zero ("no bundle artifacts found"), so a
+          # broken bundle step stops the release loudly here — no silent ship of
+          # an un-updatable macOS .app.zip.
+          node scripts/rename-release-assets.mjs "$raw_dir" "$output_dir" "$target" "$version"
 
           find "$output_dir" -type f | sort
           test -n "$(find "$output_dir" -type f -print -quit)"
@@ -309,13 +322,13 @@ jobs:
             fi
           }
 
-          mac_arm_cell="$(asset_cell 'aarch64-apple-darwin-*.dmg')"
-          mac_intel_cell="$(asset_cell 'x86_64-apple-darwin-*.dmg')"
-          windows_setup_cell="$(asset_cell 'x86_64-pc-windows-msvc-*-setup.exe')"
-          windows_msi_cell="$(asset_cell 'x86_64-pc-windows-msvc-*.msi')"
-          linux_appimage_cell="$(asset_cell 'x86_64-unknown-linux-gnu-*.AppImage')"
-          linux_deb_cell="$(asset_cell 'x86_64-unknown-linux-gnu-*.deb')"
-          linux_rpm_cell="$(asset_cell 'x86_64-unknown-linux-gnu-*.rpm')"
+          mac_arm_cell="$(asset_cell '*_macos-arm64.dmg')"
+          mac_intel_cell="$(asset_cell '*_macos-x64.dmg')"
+          windows_setup_cell="$(asset_cell '*_windows-x64-setup.exe')"
+          windows_msi_cell="$(asset_cell '*_windows-x64.msi')"
+          linux_appimage_cell="$(asset_cell '*_linux-x86_64.AppImage')"
+          linux_deb_cell="$(asset_cell '*_linux-x86_64.deb')"
+          linux_rpm_cell="$(asset_cell '*_linux-x86_64.rpm')"
 
           short_sha="${GITHUB_SHA::7}"
           build_time="$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
