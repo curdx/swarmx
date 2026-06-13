@@ -363,9 +363,9 @@ flockmux 已经是一个"工程素养明显在线"的成熟原型——后端健
 - **依赖**：P1-1、P1-2（重构需测试网兜底）
 - **预估**：2–3 天
 
-#### [~] P2-3 · 消息列表虚拟化 ⏳ 留作前端重构（需 @tanstack/react-virtual + 浏览器验证滚动）
+#### [x] P2-3 · 消息列表虚拟化 ✅ 完成 — @tanstack/react-virtual，150 条 live 验证只挂 ~13 行（cb2a566）
 
-> 虚拟化需引入 @tanstack/react-virtual + 重构列表渲染 + 处理变高行 / 自动滚动到底，必须浏览器验证滚动流畅性与"放开 200 上限后不卡"。依赖 P2-2 的拆分。同属需浏览器验证的前端 PR。
+> **完成（2026-06-13，live 验证）**：引入 `@tanstack/react-virtual` 3.14.2，`useVirtualizer` 驱动消息行，per-row `measureElement` 动态测高（markdown / reasoning / 图片行高不一）。重构了依赖「所有行都在 DOM」的 scroll 子系统：jumpToParent/jumpUnread 改 `idToIndex` + `scrollToIndex`；auto-scroll 改 `scrollToIndex(last, end)`；`useScrollMarkRead` 加 `revision`（可见 range）让 IntersectionObserver 随滚动重订阅当前挂载行；pendingResponders/vanishedTurns 移出虚拟容器到下方正常流；行 margin→padding（measureElement 测 offsetHeight 不含 margin，否则重叠）。**live 验证**：起隔离后端 + 灌 150 条变长消息，任一时刻只挂 ~13 行（非 150）、动态高度**零重叠**（contiguous data-index、maxOverlap 0px）、顶/中/底三段滚动（0..11 / 34..52 / 138..149）正确切换且稳定、auto-scroll 精确到底、`inErrorFallback=false`。tsc + eslint + 46 vitest + harness 全绿。**已知小瑕疵**：auto-scroll 的 scrollToIndex 是 sticky 的，mount / 新消息后几百 ms 内持续修正到底、短暂抵抗上滚（等价于原无条件滚底；`anchorTo:'end'` 可作未来优化）。mark-read 的 foreground gate 在 headless preview 测不到（visibilityState hidden），但逻辑有 markReadBatch 单测 + revision 已接线，foreground 时工作。
 
 - **关联差距**：PERF-02
 - **涉及文件**：消息列表渲染组件、`web/package.json`
