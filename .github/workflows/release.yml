@@ -47,11 +47,14 @@ jobs:
           - label: macOS arm64
             os: macos-latest
             target: aarch64-apple-darwin
-            args: --target aarch64-apple-darwin --bundles dmg
+            # app → updater bundle (.app.tar.gz + .sig); dmg → manual download.
+            # Without `app`, createUpdaterArtifacts has no .app to archive, so
+            # latest.json silently loses the darwin platforms (the v0.1.1 bug).
+            args: --target aarch64-apple-darwin --bundles app,dmg
           - label: macOS x64
             os: macos-15-intel
             target: x86_64-apple-darwin
-            args: --target x86_64-apple-darwin --bundles dmg
+            args: --target x86_64-apple-darwin --bundles app,dmg
           - label: Linux x64
             os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
