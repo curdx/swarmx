@@ -13,6 +13,7 @@
  * button / loader.
  */
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Toaster as SonnerToaster } from "sonner";
 
 function readTheme(): "light" | "dark" {
@@ -20,6 +21,7 @@ function readTheme(): "light" | "dark" {
 }
 
 export function AppToaster() {
+  const { t } = useTranslation();
   const [theme, setTheme] = useState<"light" | "dark">(readTheme);
   useEffect(() => {
     // Settings flips data-theme imperatively (no event) — observe it so the
@@ -46,9 +48,11 @@ export function AppToaster() {
       gap={10}
       offset={16}
       // Container ARIA label (the live region announced to screen readers).
-      containerAriaLabel="通知"
+      containerAriaLabel={t("common.notifications", { defaultValue: "通知" })}
       toastOptions={{
-        closeButtonAriaLabel: "关闭通知",
+        closeButtonAriaLabel: t("common.closeNotification", {
+          defaultValue: "关闭通知",
+        }),
         classNames: {
           toast:
             "font-body shadow-lg border backdrop-blur-sm [&_[data-icon]]:shrink-0",

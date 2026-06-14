@@ -71,7 +71,26 @@
     "notInstalled": "未安装",
     "opFailed": "操作失败",
     "opOkRefreshFailed": "已操作成功，但状态刷新失败，显示的开关可能不是最新",
-    "loadFailed": "加载 MCP 配置失败"
+    "loadFailed": "加载 MCP 配置失败",
+    "catalogPurpose": {
+      "filesystem": "在白名单目录内读写文件",
+      "git": "读 / 搜 / 改本地 Git 仓库",
+      "github": "仓库 / issue / PR / Actions / 代码扫描",
+      "context7": "把最新库 / 框架文档注入 prompt",
+      "playwright": "基于无障碍树的浏览器自动化",
+      "chrome-devtools": "驱动 / 检查实时 Chrome、性能、网络",
+      "fetch": "抓取 URL 并转 markdown",
+      "postgres": "Postgres + 健康检查 / 索引调优 / EXPLAIN",
+      "sentry": "查错误 / issue / trace / 性能",
+      "linear": "issue / 项目 / 评论",
+      "stripe": "支付 API + 文档",
+      "figma": "拉设计上下文做 design-to-code",
+      "brave-search": "网页 / 本地 / 图片 / 新闻搜索",
+      "sequential-thinking": "结构化分步推理脚手架",
+      "aws": "AWS API / 文档 / EKS / ECS / IaC"
+    },
+    "keyHintContext7": "context7.com 免费申请",
+    "keyOverridePlaceholder": "{{masked}}（输入新 key 覆盖）"
   },
   "nav": {
     "chat": "对话",
@@ -185,7 +204,10 @@
     "off": "off",
     "offline": "离线",
     "copied": "已复制",
-    "copy": "复制"
+    "copy": "复制",
+    "networkError": "连接不上本地服务（127.0.0.1:7777），请确认 flockmux 正在运行",
+    "notifications": "通知",
+    "closeNotification": "关闭通知"
   },
   "workspace": {
     "picker": "工作空间"
@@ -537,7 +559,17 @@
     "workspaceStripPreparing": "正在准备 orchestrator…",
     "workspaceStripFailed": "AI 启动失败",
     "breadcrumbsTitle": "近况",
-    "paused": "已暂停"
+    "paused": "已暂停",
+    "role": {
+      "captain": "队长",
+      "member": "成员"
+    },
+    "ago": {
+      "seconds": "{{n}}s 前",
+      "minutes": "{{n}}m 前",
+      "hours": "{{n}}h 前"
+    },
+    "typingIndicator": "AI 正在输入"
   },
   "dag": {
     "title": "协作图",
@@ -754,13 +786,17 @@
       "starting": "STARTING",
       "exited": "EXITED",
       "uptime": "已运行 {{delta}}",
-      "error": "出错·无法工作"
+      "error": "出错·无法工作",
+      "ended": "已结束",
+      "paused": "已暂停"
     },
     "wakeOk": "已唤醒 {{role}}",
     "wakeFailed": "唤醒失败",
     "resumeFailed": "恢复失败",
     "pauseFailed": "暂停失败",
-    "deadNoAction": "该 agent 已结束,无法操作"
+    "deadNoAction": "该 agent 已结束,无法操作",
+    "sheetDesc": "PTY 终端 / 录像 / 消息 / 上下文 for agent {{id}}",
+    "notifyReply": "{{from}} 回复了你"
   },
   "wizard": {
     "title": "创建工作空间",
@@ -814,7 +850,8 @@
     "enterAnyway": "直接进入房间",
     "pathNotADirectory": "这个路径是一个文件,不是文件夹 —— 请填项目所在的文件夹路径。",
     "pathPermissionDenied": "没有访问该目录的权限 —— 换一个你有读取权限的目录,或在系统里授予访问权。",
-    "attachedErrorCount": "{{count}} 个附加目录有问题，展开修正"
+    "attachedErrorCount": "{{count}} 个附加目录有问题，展开修正",
+    "pickFolderTitle": "选择项目文件夹"
   },
   "messages": {
     "filter": "过滤 发送方 / 接收方 / 正文",
@@ -859,7 +896,8 @@
       "stepCheckedThread": "对照本轮消息和已有进展，避免重复或漏项",
       "stepPlanning": "正在规划执行方式和下一步动作",
       "stepExecuting": "正在执行、等待工具结果或整理回复",
-      "stepAnswered": "整理成给用户看的最终回复"
+      "stepAnswered": "整理成给用户看的最终回复",
+      "toolComplete": "完成工具: {{label}}"
     },
     "you": "我",
     "broadcast": "全员",
@@ -955,7 +993,8 @@
     "browseAllWarning": "解除工作区隔离,可浏览整台机器的文件 — 请谨慎使用。",
     "previewCapped": "仅预览前 {{size}}",
     "noWorkspace": "选择一个工作区开始浏览",
-    "emptyDir": "此目录为空"
+    "emptyDir": "此目录为空",
+    "workspacesLoadFailedShort": "加载工作区失败"
   },
   "tasks": {
     "title": "任务看板",
@@ -1108,7 +1147,9 @@
     "backendDown": "连接不上后端 (127.0.0.1:7777)，无法打开终端。请确认 flockmux 服务在运行。",
     "disconnected": "连接已断开",
     "reconnect": "重新连接",
-    "unavailable": "后端未连接"
+    "unavailable": "后端未连接",
+    "connError": "连接出错",
+    "notConnectedInputDropped": "未连接，输入未发送"
   },
   "model": {
     "label": "模型",
@@ -1201,7 +1242,46 @@
     "deleteConfirmDesc": "“{{path}}”将从共享区移除，此操作无法撤销。",
     "deleteConfirmAction": "删除文件",
     "versionPreviewArea": "历史版本内容（只读）",
-    "editorArea": "文件内容编辑器"
+    "editorArea": "文件内容编辑器",
+    "connectFail": "连接不上本地服务（127.0.0.1:7777），请确认 flockmux 正在运行",
+    "discardConfirmTitle": "放弃未保存的修改？",
+    "discardConfirmDesc": "“{{path}}”还有未保存内容，{{target}}会丢弃这些修改。",
+    "discardConfirmAction": "放弃修改",
+    "switchTo": "切换到“{{path}}”",
+    "viewHistoryVersion": "查看历史版本",
+    "savedInfo": "已保存 {{path}}",
+    "openLabel": "打开“{{path}}”",
+    "alreadyExists": "「{{path}}」已存在，已为你打开（未覆盖）",
+    "createLabel": "新建“{{path}}”",
+    "approvedInfo": "已写入通过标记 design.approved · 等待 agent 据此推进",
+    "rejectedInfo": "已写入拒绝标记 design.rejected · 等待 architect 据此推进",
+    "diskChangedWarn": "⚠ {{path}} 在磁盘上发生变化 (op={{op}}) — 你有未保存的修改",
+    "refreshedInfo": "已根据 {{op}} 刷新",
+    "newPathPlaceholder": "新文件路径（如 tasks.md）",
+    "createTitle": "创建",
+    "refreshTitle": "刷新",
+    "emptyFiles": "暂无文件",
+    "unsavedTag": "(未保存)",
+    "approveTitle": "批准该设计 — 写入 design.approved，唤醒前后端",
+    "approveBtn": "✓ 通过",
+    "rejectTitle": "要求重做 — 写入 design.rejected 并附原因；architect 会重新起稿",
+    "rejectBtn": "✗ 驳回",
+    "historyLabel": "历史 ({{count}}{{loading}})",
+    "deleteFileTitle": "删除该文件",
+    "deleteShort": "删除",
+    "rejectReasonPlaceholder": "驳回原因（一句话）— architect 会读这条并改稿",
+    "sendReject": "发送驳回",
+    "cancel": "取消",
+    "emptyHistory": "暂无历史",
+    "externalSource": "外部",
+    "viewingVersion": "正在查看版本 {{sha}}…（{{source}} · {{time}}）",
+    "close": "关闭",
+    "contentNotLoaded": "(尚未加载内容)",
+    "selectFileHint": "请在左侧选择一个文件",
+    "relJustNow": "刚刚",
+    "relMinutes": "{{n}} 分钟前",
+    "relHours": "{{n}} 小时前",
+    "relDays": "{{n}} 天前"
   },
   "debug": {
     "wakeAgent": "手动唤醒",
@@ -1211,7 +1291,21 @@
     "killAgent": "终止 agent",
     "cliNotDetected": "未检测到该 CLI",
     "spawnFailed": "启动失败",
-    "killFailed": "终止失败"
+    "killFailed": "终止失败",
+    "localSingleUser": "本地单用户 · 仅回环",
+    "agentCount": "{{total}} 个 agent · 显示 {{visible}}",
+    "pluginsLoadFailed": "插件加载失败：{{error}}",
+    "launchBinary": "启动 {{binary}}",
+    "toggleSwarmPanel": "切换协作面板",
+    "hidePanel": "隐藏面板",
+    "showPanel": "显示面板",
+    "noAgentsHint": "还没有 agent — 在上方输入任务点 ✨ Auto，或单独启动一个 CLI",
+    "wakeSent": "已发送唤醒",
+    "wakeFailed": "唤醒失败",
+    "wakeAgentHint": "手动唤醒（agent 卡住时点这个 — 给它发一条系统消息让它继续）",
+    "kill": "终止",
+    "minimizedLabel": "已最小化：",
+    "restoreAgent": "还原 {{id}}"
   },
   "ledger": {
     "agoSeconds": "{{n}}s 前",
@@ -1245,5 +1339,59 @@
     "loadingWorkspaces": "正在读取工作空间…",
     "backendUnreachable": "连接不上后端服务",
     "backendUnreachableDesc": "flockmux 后端 (127.0.0.1:7777) 没有响应，所以读不到你的工作空间。请确认服务在运行，然后重试。"
+  },
+  "recordings": {
+    "downloadFailed": "下载录像失败",
+    "filterPlaceholder": "按 agent_id 过滤",
+    "refresh": "刷新",
+    "loading": "加载中…",
+    "loadFailed": "加载录像失败",
+    "retrying": "重试中…",
+    "retry": "重试",
+    "empty": "暂无录像",
+    "badgeLive": "● 实时",
+    "badgeDone": "○ 已完结",
+    "startedAt": "开始于 {{time}}",
+    "playTitleLive": "实时录像可以回放，但只能播到已写入的字节为止",
+    "playTitleDone": "回放这条录像（全屏）",
+    "play": "▶ 播放",
+    "rawCast": "原始 .cast",
+    "download": "下载",
+    "closeEsc": "关闭（Esc）",
+    "close": "× 关闭",
+    "liveTruncatedHint": "● 录制中，内容不完整：回放只到当前已落盘的部分，结尾可能突然截断。完结后重新打开可看到完整录像。",
+    "shortcutsLabel": "快捷键：",
+    "keySpace": "空格",
+    "shortcutPlayPause": "播放/暂停",
+    "shortcutFullscreen": "全屏",
+    "shortcutClose": "关闭"
+  },
+  "spells": {
+    "loadFailed": "法术列表加载失败：{{msg}}",
+    "needWorkspaceToRun": "请在工作区内使用：法术需要一个工作区上下文才能运行",
+    "needWorkspaceShort": "请在工作区内使用：法术需要一个工作区上下文",
+    "launchedSummary": "已通过 {{name}} 启动 {{count}} 个 agent：{{agents}}",
+    "agentSeparator": "、",
+    "runFailed": "运行失败：{{msg}}",
+    "taskPlaceholder": "想做什么？例如：做个简单的密码强度检测",
+    "autoTitle": "自动：planner 看你的任务自动挑法术。下方共享 workspace 配置会被忽略 — planner 自己挑一个。",
+    "thinking": "思考中…",
+    "auto": "✨ Auto",
+    "or": "或",
+    "runTitle": "按下拉框里选中的法术运行",
+    "run": "运行",
+    "advancedTitle": "展开/收起共享 workspace 配置（fullstack 类法术才需要）",
+    "advancedExpanded": "高级 ▾",
+    "advancedCollapsed": "高级 ▸",
+    "workspaceDirPlaceholder": "共享 workspace 绝对路径（仅 fullstack 类法术）",
+    "workspaceDirTitle": "绝对路径。仅当法术 manifest 声明 shared_workspace=true 时才会生效。留空则由服务端自动分配。"
+  },
+  "swarm": {
+    "tabs": {
+      "messages": "消息",
+      "blackboard": "共享区",
+      "recordings": "录像"
+    },
+    "wsStatus": "协作 WS：{{status}}"
   }
 }

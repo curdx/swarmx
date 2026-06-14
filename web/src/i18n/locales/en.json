@@ -71,7 +71,26 @@
     "notInstalled": "Not installed",
     "opFailed": "Operation failed",
     "opOkRefreshFailed": "Operation succeeded, but refreshing the status failed — the toggles shown may be out of date",
-    "loadFailed": "Failed to load MCP configuration"
+    "loadFailed": "Failed to load MCP configuration",
+    "catalogPurpose": {
+      "filesystem": "Read and write files within allowlisted directories",
+      "git": "Read, search, and edit local Git repositories",
+      "github": "Repos, issues, PRs, Actions, and code scanning",
+      "context7": "Inject up-to-date library and framework docs into prompts",
+      "playwright": "Accessibility-tree-based browser automation",
+      "chrome-devtools": "Drive and inspect live Chrome, performance, and network",
+      "fetch": "Fetch a URL and convert it to markdown",
+      "postgres": "Postgres with health checks, index tuning, and EXPLAIN",
+      "sentry": "Inspect errors, issues, traces, and performance",
+      "linear": "Issues, projects, and comments",
+      "stripe": "Payments API plus documentation",
+      "figma": "Pull design context for design-to-code",
+      "brave-search": "Web, local, image, and news search",
+      "sequential-thinking": "Structured step-by-step reasoning scaffold",
+      "aws": "AWS API, docs, EKS, ECS, and IaC"
+    },
+    "keyHintContext7": "Free key at context7.com",
+    "keyOverridePlaceholder": "{{masked}} (enter a new key to overwrite)"
   },
   "nav": {
     "chat": "Chat",
@@ -185,7 +204,10 @@
     "off": "off",
     "offline": "Offline",
     "copied": "Copied",
-    "copy": "Copy"
+    "copy": "Copy",
+    "networkError": "Can't reach the local service (127.0.0.1:7777). Make sure flockmux is running.",
+    "notifications": "Notifications",
+    "closeNotification": "Close notification"
   },
   "workspace": {
     "picker": "Workspace"
@@ -537,7 +559,17 @@
     "workspaceStripPreparing": "Preparing orchestrator…",
     "workspaceStripFailed": "AI failed to start",
     "breadcrumbsTitle": "Recent",
-    "paused": "Paused"
+    "paused": "Paused",
+    "role": {
+      "captain": "Captain",
+      "member": "Member"
+    },
+    "ago": {
+      "seconds": "{{n}}s ago",
+      "minutes": "{{n}}m ago",
+      "hours": "{{n}}h ago"
+    },
+    "typingIndicator": "AI is typing"
   },
   "dag": {
     "title": "Flow",
@@ -754,13 +786,17 @@
       "starting": "STARTING",
       "exited": "EXITED",
       "uptime": "up {{delta}}",
-      "error": "Error · cannot work"
+      "error": "Error · cannot work",
+      "ended": "Ended",
+      "paused": "Paused"
     },
     "wakeOk": "Woke {{role}}",
     "wakeFailed": "Wake failed",
     "resumeFailed": "Resume failed",
     "pauseFailed": "Pause failed",
-    "deadNoAction": "This agent has ended; no actions available"
+    "deadNoAction": "This agent has ended; no actions available",
+    "sheetDesc": "PTY terminal / recordings / messages / context for agent {{id}}",
+    "notifyReply": "{{from}} replied to you"
   },
   "wizard": {
     "title": "Create workspace",
@@ -814,7 +850,8 @@
     "enterAnyway": "Enter room now",
     "pathNotADirectory": "That path is a file, not a folder — enter the folder your project lives in.",
     "pathPermissionDenied": "You don't have permission to access that directory — pick one you can read, or grant access in your system settings.",
-    "attachedErrorCount": "{{count}} attached directories have problems — expand to fix"
+    "attachedErrorCount": "{{count}} attached directories have problems — expand to fix",
+    "pickFolderTitle": "Choose project folder"
   },
   "messages": {
     "filter": "Filter by sender / receiver / body",
@@ -859,7 +896,8 @@
       "stepCheckedThread": "Compared this round with existing progress to avoid duplication or gaps",
       "stepPlanning": "Planning the execution path and next action",
       "stepExecuting": "Executing, waiting on tool results, or shaping the reply",
-      "stepAnswered": "Turned the work into the final user-facing reply"
+      "stepAnswered": "Turned the work into the final user-facing reply",
+      "toolComplete": "Finished tool: {{label}}"
     },
     "you": "You",
     "broadcast": "Everyone",
@@ -955,7 +993,8 @@
     "browseAllWarning": "Removes workspace isolation — lets you browse the whole machine. Use with care.",
     "previewCapped": "Preview limited to first {{size}}",
     "noWorkspace": "Select a workspace to start browsing",
-    "emptyDir": "This directory is empty"
+    "emptyDir": "This directory is empty",
+    "workspacesLoadFailedShort": "Failed to load workspaces"
   },
   "tasks": {
     "title": "Task board",
@@ -1108,7 +1147,9 @@
     "backendDown": "Can't reach the backend (127.0.0.1:7777), so the terminal can't open. Make sure the flockmux service is running.",
     "disconnected": "Disconnected",
     "reconnect": "Reconnect",
-    "unavailable": "Backend not connected"
+    "unavailable": "Backend not connected",
+    "connError": "Connection error",
+    "notConnectedInputDropped": "Not connected — input not sent"
   },
   "model": {
     "label": "Model",
@@ -1201,7 +1242,46 @@
     "deleteConfirmDesc": "\"{{path}}\" will be removed from the shared board. This cannot be undone.",
     "deleteConfirmAction": "Delete file",
     "versionPreviewArea": "Historical version content (read-only)",
-    "editorArea": "File content editor"
+    "editorArea": "File content editor",
+    "connectFail": "Can't reach the local service (127.0.0.1:7777). Make sure flockmux is running.",
+    "discardConfirmTitle": "Discard unsaved changes?",
+    "discardConfirmDesc": "“{{path}}” has unsaved content; {{target}} will discard these changes.",
+    "discardConfirmAction": "Discard changes",
+    "switchTo": "switching to “{{path}}”",
+    "viewHistoryVersion": "viewing a past version",
+    "savedInfo": "Saved {{path}}",
+    "openLabel": "opening “{{path}}”",
+    "alreadyExists": "“{{path}}” already exists — opened it for you (not overwritten)",
+    "createLabel": "creating “{{path}}”",
+    "approvedInfo": "Wrote approval marker design.approved · waiting for the agent to act on it",
+    "rejectedInfo": "Wrote rejection marker design.rejected · waiting for the architect to act on it",
+    "diskChangedWarn": "⚠ {{path}} changed on disk (op={{op}}) — you have unsaved changes",
+    "refreshedInfo": "Refreshed from {{op}}",
+    "newPathPlaceholder": "New file path (e.g. tasks.md)",
+    "createTitle": "Create",
+    "refreshTitle": "Refresh",
+    "emptyFiles": "No files yet",
+    "unsavedTag": "(unsaved)",
+    "approveTitle": "Approve this design — writes design.approved, wakes frontend and backend",
+    "approveBtn": "✓ Approve",
+    "rejectTitle": "Request a redo — writes design.rejected with a reason; the architect will redraft",
+    "rejectBtn": "✗ Reject",
+    "historyLabel": "History ({{count}}{{loading}})",
+    "deleteFileTitle": "Delete this file",
+    "deleteShort": "Delete",
+    "rejectReasonPlaceholder": "Rejection reason (one line) — the architect reads this and revises",
+    "sendReject": "Send rejection",
+    "cancel": "Cancel",
+    "emptyHistory": "No history yet",
+    "externalSource": "external",
+    "viewingVersion": "Viewing version {{sha}}… ({{source}} · {{time}})",
+    "close": "Close",
+    "contentNotLoaded": "(content not loaded)",
+    "selectFileHint": "Select a file on the left",
+    "relJustNow": "just now",
+    "relMinutes": "{{n}} min ago",
+    "relHours": "{{n}} h ago",
+    "relDays": "{{n}} d ago"
   },
   "debug": {
     "wakeAgent": "Wake agent",
@@ -1211,7 +1291,21 @@
     "killAgent": "Kill agent",
     "cliNotDetected": "CLI not detected",
     "spawnFailed": "Launch failed",
-    "killFailed": "Terminate failed"
+    "killFailed": "Terminate failed",
+    "localSingleUser": "Local single-user · loopback only",
+    "agentCount": "{{total}} agents · {{visible}} shown",
+    "pluginsLoadFailed": "Failed to load plugins: {{error}}",
+    "launchBinary": "Launch {{binary}}",
+    "toggleSwarmPanel": "Toggle collaboration panel",
+    "hidePanel": "Hide panel",
+    "showPanel": "Show panel",
+    "noAgentsHint": "No agents yet — enter a task above and click ✨ Auto, or launch a single CLI",
+    "wakeSent": "Wake-up sent",
+    "wakeFailed": "Wake-up failed",
+    "wakeAgentHint": "Wake manually (click this when an agent is stuck — sends it a system message to continue)",
+    "kill": "Kill",
+    "minimizedLabel": "Minimized:",
+    "restoreAgent": "Restore {{id}}"
   },
   "ledger": {
     "agoSeconds": "{{n}}s ago",
@@ -1246,5 +1340,59 @@
     "loadingWorkspaces": "Loading workspaces…",
     "backendUnreachable": "Cannot reach the backend service",
     "backendUnreachableDesc": "The flockmux backend (127.0.0.1:7777) is not responding, so your workspaces could not be loaded. Make sure the service is running, then retry."
+  },
+  "recordings": {
+    "downloadFailed": "Failed to download recording",
+    "filterPlaceholder": "Filter by agent_id",
+    "refresh": "Refresh",
+    "loading": "Loading…",
+    "loadFailed": "Failed to load recordings",
+    "retrying": "Retrying…",
+    "retry": "Retry",
+    "empty": "No recordings yet",
+    "badgeLive": "● Live",
+    "badgeDone": "○ Finished",
+    "startedAt": "Started {{time}}",
+    "playTitleLive": "Live recordings can be replayed, but only up to the bytes already written",
+    "playTitleDone": "Replay this recording (fullscreen)",
+    "play": "▶ Play",
+    "rawCast": "Raw .cast",
+    "download": "Download",
+    "closeEsc": "Close (Esc)",
+    "close": "× Close",
+    "liveTruncatedHint": "● Still recording — incomplete: playback only goes up to the bytes flushed so far and may cut off abruptly at the end. Reopen after it finalizes to see the full recording.",
+    "shortcutsLabel": "Shortcuts: ",
+    "keySpace": "Space",
+    "shortcutPlayPause": "play/pause",
+    "shortcutFullscreen": "fullscreen",
+    "shortcutClose": "close"
+  },
+  "spells": {
+    "loadFailed": "Failed to load spell list: {{msg}}",
+    "needWorkspaceToRun": "Use this inside a workspace: a spell needs a workspace context to run.",
+    "needWorkspaceShort": "Use this inside a workspace: a spell needs a workspace context.",
+    "launchedSummary": "Launched {{count}} agent(s) via {{name}}: {{agents}}",
+    "agentSeparator": ", ",
+    "runFailed": "Run failed: {{msg}}",
+    "taskPlaceholder": "What do you want to do? e.g. build a simple password-strength checker",
+    "autoTitle": "Auto: the planner reads your task and picks a spell for you. The shared workspace config below is ignored — the planner picks one itself.",
+    "thinking": "Thinking…",
+    "auto": "✨ Auto",
+    "or": "or",
+    "runTitle": "Run the spell selected in the dropdown",
+    "run": "Run",
+    "advancedTitle": "Expand/collapse shared workspace config (only fullstack-style spells need it)",
+    "advancedExpanded": "Advanced ▾",
+    "advancedCollapsed": "Advanced ▸",
+    "workspaceDirPlaceholder": "Shared workspace absolute path (fullstack-style spells only)",
+    "workspaceDirTitle": "Absolute path. Only takes effect when the spell manifest declares shared_workspace=true. Leave empty to let the server assign one automatically."
+  },
+  "swarm": {
+    "tabs": {
+      "messages": "Messages",
+      "blackboard": "Shared",
+      "recordings": "Recordings"
+    },
+    "wsStatus": "Swarm WS: {{status}}"
   }
 }

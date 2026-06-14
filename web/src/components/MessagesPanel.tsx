@@ -341,7 +341,10 @@ export function MessagesPanel({
           .filter((a) => trace.completed_at == null || a.at <= trace.completed_at + BACKFILL_GRACE_MS)
           .map((a) => ({
             phase: a.phase === "error" ? "tool_error" : "tool_ok",
-            label: `完成工具: ${a.label}`,
+            label: t("messages.reasoning.toolComplete", {
+              label: a.label,
+              defaultValue: "完成工具: {{label}}",
+            }),
             source: "agent",
             at: a.at,
           }));

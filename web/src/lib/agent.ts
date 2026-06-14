@@ -12,6 +12,7 @@
  */
 
 import type { AgentInfo, AgentLiveState, SwarmAgentState } from "../api/types";
+import i18n from "@/i18n";
 
 export const ROLE_COLOR_CLASS: Record<string, string> = {
   planner: "bg-agent-planner",
@@ -199,9 +200,9 @@ export function inferAgentStatus(
 export function agentStatusLabel(s: AgentSemanticStatus): string {
   switch (s) {
     case "exited":
-      return "已结束";
+      return i18n.t("agent.status.ended", { defaultValue: "已结束" });
     case "paused":
-      return "已暂停";
+      return i18n.t("agent.status.paused", { defaultValue: "已暂停" });
     case "responding":
     case "awaiting_user":
     case "working":

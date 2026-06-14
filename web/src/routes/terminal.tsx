@@ -140,7 +140,9 @@ export default function TerminalRoute() {
       else term.write(new Uint8Array(e.data as ArrayBuffer));
     };
     ws.onerror = () => {
-      term.write("\r\n\x1b[31m[连接出错]\x1b[0m\r\n");
+      term.write(
+        `\r\n\x1b[31m[${t("terminal.connError", { defaultValue: "连接出错" })}]\x1b[0m\r\n`,
+      );
       setConnPhase("disconnected");
       setWsClosed(true);
     };
@@ -156,7 +158,9 @@ export default function TerminalRoute() {
         ws.send(enc.encode(d));
       } else {
         // Don't silently swallow keystrokes — tell the user nothing was sent.
-        term.write("\r\n\x1b[33m[未连接，输入未发送]\x1b[0m\r\n");
+        term.write(
+          `\r\n\x1b[33m[${t("terminal.notConnectedInputDropped", { defaultValue: "未连接，输入未发送" })}]\x1b[0m\r\n`,
+        );
         setConnPhase("disconnected");
         setWsClosed(true);
       }

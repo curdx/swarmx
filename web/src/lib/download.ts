@@ -1,5 +1,6 @@
 import { api } from "@/api/http";
 import { toast } from "@/lib/toast";
+import i18n from "@/i18n";
 
 /**
  * Download a recording's asciicast as a real file.
@@ -28,6 +29,8 @@ export async function downloadRecordingCast(id: string): Promise<void> {
     // Revoke after a tick so the download has a chance to grab the blob.
     window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
   } catch (e) {
-    toast.error("下载录像失败", { description: (e as Error)?.message });
+    toast.error(i18n.t("recordings.downloadFailed", { defaultValue: "下载录像失败" }), {
+      description: (e as Error)?.message,
+    });
   }
 }

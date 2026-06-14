@@ -51,6 +51,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import i18n from "@/i18n";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -81,7 +82,9 @@ async function pickDirectoryViaTauri(): Promise<string | null> {
     const result = await open({
       directory: true,
       multiple: false,
-      title: "选择项目文件夹",
+      title: i18n.t("wizard.pickFolderTitle", {
+        defaultValue: "选择项目文件夹",
+      }),
     });
     if (typeof result === "string") return result;
     return null;

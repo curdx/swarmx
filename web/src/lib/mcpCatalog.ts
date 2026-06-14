@@ -36,7 +36,7 @@ export type McpTransport = "stdio" | "http" | "sse";
 export interface CatalogServer {
   id: string;
   name: string;
-  /** 一句话用途。 */
+  /** 一句话用途的 i18n key(在消费端用 t() 解析,defaultValue 兜底中文原文)。 */
   purpose: string;
   transport: McpTransport;
   /** stdio 启动命令。 */
@@ -60,7 +60,7 @@ export const MCP_CATALOG: CatalogServer[] = [
   {
     id: "filesystem",
     name: "Filesystem",
-    purpose: "在白名单目录内读写文件",
+    purpose: "mcp.catalogPurpose.filesystem",
     transport: "stdio",
     command: "npx",
     args: ["-y", "@modelcontextprotocol/server-filesystem", "<目录绝对路径>"],
@@ -72,7 +72,7 @@ export const MCP_CATALOG: CatalogServer[] = [
   {
     id: "git",
     name: "Git",
-    purpose: "读 / 搜 / 改本地 Git 仓库",
+    purpose: "mcp.catalogPurpose.git",
     transport: "stdio",
     command: "uvx",
     args: ["mcp-server-git", "--repository", "<仓库绝对路径>"],
@@ -84,7 +84,7 @@ export const MCP_CATALOG: CatalogServer[] = [
   {
     id: "github",
     name: "GitHub",
-    purpose: "仓库 / issue / PR / Actions / 代码扫描",
+    purpose: "mcp.catalogPurpose.github",
     transport: "http",
     url: "https://api.githubcopilot.com/mcp",
     env: ["GITHUB_PERSONAL_ACCESS_TOKEN"],
@@ -95,7 +95,7 @@ export const MCP_CATALOG: CatalogServer[] = [
   {
     id: "context7",
     name: "Context7",
-    purpose: "把最新库 / 框架文档注入 prompt",
+    purpose: "mcp.catalogPurpose.context7",
     transport: "stdio",
     command: "npx",
     args: ["-y", "@upstash/context7-mcp"],
@@ -107,7 +107,7 @@ export const MCP_CATALOG: CatalogServer[] = [
   {
     id: "playwright",
     name: "Playwright",
-    purpose: "基于无障碍树的浏览器自动化",
+    purpose: "mcp.catalogPurpose.playwright",
     transport: "stdio",
     command: "npx",
     args: ["-y", "@playwright/mcp@latest"],
@@ -118,7 +118,7 @@ export const MCP_CATALOG: CatalogServer[] = [
   {
     id: "chrome-devtools",
     name: "Chrome DevTools",
-    purpose: "驱动 / 检查实时 Chrome、性能、网络",
+    purpose: "mcp.catalogPurpose.chrome-devtools",
     transport: "stdio",
     command: "npx",
     args: ["-y", "chrome-devtools-mcp@latest"],
@@ -129,7 +129,7 @@ export const MCP_CATALOG: CatalogServer[] = [
   {
     id: "fetch",
     name: "Fetch",
-    purpose: "抓取 URL 并转 markdown",
+    purpose: "mcp.catalogPurpose.fetch",
     transport: "stdio",
     command: "uvx",
     args: ["mcp-server-fetch"],
@@ -141,7 +141,7 @@ export const MCP_CATALOG: CatalogServer[] = [
   {
     id: "postgres",
     name: "Postgres MCP Pro",
-    purpose: "Postgres + 健康检查 / 索引调优 / EXPLAIN",
+    purpose: "mcp.catalogPurpose.postgres",
     transport: "stdio",
     command: "postgres-mcp",
     args: [],
@@ -153,7 +153,7 @@ export const MCP_CATALOG: CatalogServer[] = [
   {
     id: "sentry",
     name: "Sentry",
-    purpose: "查错误 / issue / trace / 性能",
+    purpose: "mcp.catalogPurpose.sentry",
     transport: "http",
     url: "https://mcp.sentry.dev/mcp",
     oauth: true,
@@ -164,7 +164,7 @@ export const MCP_CATALOG: CatalogServer[] = [
   {
     id: "linear",
     name: "Linear",
-    purpose: "issue / 项目 / 评论",
+    purpose: "mcp.catalogPurpose.linear",
     transport: "http",
     url: "https://mcp.linear.app/mcp",
     oauth: true,
@@ -175,7 +175,7 @@ export const MCP_CATALOG: CatalogServer[] = [
   {
     id: "stripe",
     name: "Stripe",
-    purpose: "支付 API + 文档",
+    purpose: "mcp.catalogPurpose.stripe",
     transport: "http",
     url: "https://mcp.stripe.com",
     oauth: true,
@@ -186,7 +186,7 @@ export const MCP_CATALOG: CatalogServer[] = [
   {
     id: "figma",
     name: "Figma",
-    purpose: "拉设计上下文做 design-to-code",
+    purpose: "mcp.catalogPurpose.figma",
     transport: "http",
     url: "https://mcp.figma.com/mcp",
     oauth: true,
@@ -197,7 +197,7 @@ export const MCP_CATALOG: CatalogServer[] = [
   {
     id: "brave-search",
     name: "Brave Search",
-    purpose: "网页 / 本地 / 图片 / 新闻搜索",
+    purpose: "mcp.catalogPurpose.brave-search",
     transport: "stdio",
     command: "npx",
     args: ["-y", "@brave/brave-search-mcp-server"],
@@ -209,7 +209,7 @@ export const MCP_CATALOG: CatalogServer[] = [
   {
     id: "sequential-thinking",
     name: "Sequential Thinking",
-    purpose: "结构化分步推理脚手架",
+    purpose: "mcp.catalogPurpose.sequential-thinking",
     transport: "stdio",
     command: "npx",
     args: ["-y", "@modelcontextprotocol/server-sequential-thinking"],
@@ -221,7 +221,7 @@ export const MCP_CATALOG: CatalogServer[] = [
   {
     id: "aws",
     name: "AWS (awslabs)",
-    purpose: "AWS API / 文档 / EKS / ECS / IaC",
+    purpose: "mcp.catalogPurpose.aws",
     transport: "stdio",
     command: "uvx",
     args: ["awslabs.aws-api-mcp-server@latest"],

@@ -33,7 +33,7 @@ export function SystemCard({
 
   // ── delivery card: a worker finished its task (farewell / completion) ──
   if (subtype === "completion") {
-    const role = fromRole ?? "成员";
+    const role = fromRole ?? t("chat.role.member", { defaultValue: "成员" });
     const agent = message.from_agent;
     const clickable = onOpenAgent != null;
     const body = message.body?.trim();
@@ -81,7 +81,7 @@ export function SystemCard({
   }
 
   if (subtype === "dispatch") {
-    const childRole = message.meta?.child_role ?? "成员";
+    const childRole = message.meta?.child_role ?? t("chat.role.member", { defaultValue: "成员" });
     const childAgent = message.meta?.child_agent ?? null;
     const clickable = childAgent != null && onOpenAgent != null;
     return (

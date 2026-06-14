@@ -9,6 +9,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import i18n from "@/i18n";
 import { api, ApiError } from "../api/http";
 import { HTTP_BASE } from "../lib/apiBase";
 import type { BlackboardEntry, BlackboardHistoryEntry } from "../api/types";
@@ -27,8 +28,9 @@ async function deleteBlackboard(path: string): Promise<void> {
   try {
     res = await fetch(url, { method: "DELETE" });
   } catch (e) {
-    const friendly =
-      "连接不上本地服务（127.0.0.1:7777），请确认 flockmux 正在运行";
+    const friendly = i18n.t("blackboard.connectFail", {
+      defaultValue: "连接不上本地服务（127.0.0.1:7777），请确认 flockmux 正在运行",
+    });
     throw new ApiError(0, friendly, `${friendly}（DELETE ${url}：${(e as Error)?.message ?? e}）`);
   }
   if (!res.ok) {
@@ -169,9 +171,17 @@ export function BlackboardPanel({ liveChange }: Props) {
   const guardDirty = (targetLabel: string, action: () => void) => {
     if (isDirty && selected) {
       setDiscardConfirm({
-        title: "放弃未保存的修改？",
-        description: `“${selected}”还有未保存内容，${targetLabel}会丢弃这些修改。`,
-        confirmLabel: "放弃修改",
+        title: t("blackboard.discardConfirmTitle", {
+          defaultValue: "放弃未保存的修改？",
+        }),
+        description: t("blackboard.discardConfirmDesc", {
+          defaultValue: "“{{path}}”还有未保存内容，{{target}}会丢弃这些修改。",
+          path: selected,
+          target: targetLabel,
+        }),
+        confirmLabel: t("blackboard.discardConfirmAction", {
+          defaultValue: "放弃修改",
+        }),
         variant: "destructive",
         onConfirm: action,
       });
@@ -185,11 +195,14 @@ export function BlackboardPanel({ liveChange }: Props) {
       void loadPath(path);
       return;
     }
-    guardDirty(`切换到“${path}”`, () => void loadPath(path));
+    guardDirty(
+      t("blackboard.switchTo", { defaultValue: "切换到“{{path}}”", path }),
+      () => void loadPath(path),
+    );
   };
 
   const openVersion = (entry: BlackboardHistoryEntry) => {
-    guardDirty("查看历史版本", () => {
+    guardDirty(t("blackboard.viewHistoryVersion", { defaultValue: "查看历史版本" }), () => {
       // The list call strips content by default; fetch the full row for the
       // selected version. We re-query the same endpoint with include_content
       // so each click is at most one byte-heavy request.
@@ -210,7 +223,7 @@ export function BlackboardPanel({ liveChange }: Props) {
     try {
       await api.writeBlackboard(selected, { content });
       setOriginalContent(content);
-      showInfo(`已保存 ${selected}`);
+      showInfo(t("blackboard.savedInfo", { defaultValue: "已保存 {{path}}", path: selected }));
       await refreshList();
       setError(null);
     } catch (e) {
@@ -230,16 +243,21 @@ export function BlackboardPanel({ liveChange }: Props) {
     if (entries.some((e) => e.path === path)) {
       // Opening an existing file replaces the editor → route through the
       // dirty guard like any other switch (P2-3).
-      guardDirty(`打开“${path}”`, () => {
+      guardDirty(t("blackboard.openLabel", { defaultValue: "打开“{{path}}”", path }), () => {
         setNewPath("");
         void loadPath(path).then(() => {
-          setError(`「${path}」已存在，已为你打开（未覆盖）`);
+          setError(
+            t("blackboard.alreadyExists", {
+              defaultValue: "「{{path}}」已存在，已为你打开（未覆盖）",
+              path,
+            }),
+          );
         });
       });
       return;
     }
     // Creating also replaces the editor with the fresh empty file (P2-3).
-    guardDirty(`新建“${path}”`, () => {
+    guardDirty(t("blackboard.createLabel", { defaultValue: "新建“{{path}}”", path }), () => {
       void (async () => {
         try {
           await api.writeBlackboard(path, { content: "" });
@@ -264,7 +282,7 @@ export function BlackboardPanel({ liveChange }: Props) {
     setDeleteConfirm({
       title: t("blackboard.deleteConfirmTitle", { defaultValue: "删除该文件？" }),
       description: t("blackboard.deleteConfirmDesc", {
-        defaultValue: `“${path}”将从共享区移除，此操作无法撤销。`,
+        defaultValue: "“{{path}}”将从共享区移除，此操作无法撤销。",
         path,
       }),
       confirmLabel: t("blackboard.deleteConfirmAction", { defaultValue: "删除文件" }),
@@ -309,7 +327,11 @@ export function BlackboardPanel({ liveChange }: Props) {
       // claimed before the round-trip). P1-30: state only the written fact —
       // whether agents actually wake depends on wake.rs/subscriptions, so don't
       // package that future as a done deal.
-      showInfo("已写入通过标记 design.approved · 等待 agent 据此推进");
+      showInfo(
+        t("blackboard.approvedInfo", {
+          defaultValue: "已写入通过标记 design.approved · 等待 agent 据此推进",
+        }),
+      );
     } catch (e) {
       setError(errText(e));
     } finally {
@@ -338,7 +360,11 @@ export function BlackboardPanel({ liveChange }: Props) {
       // persistence that hadn't been verified). P1-30: state only the written
       // fact — whether the architect actually revises depends on wake.rs/its
       // subscription, so don't promise that future as already happened.
-      showInfo("已写入拒绝标记 design.rejected · 等待 architect 据此推进");
+      showInfo(
+        t("blackboard.rejectedInfo", {
+          defaultValue: "已写入拒绝标记 design.rejected · 等待 architect 据此推进",
+        }),
+      );
     } catch (e) {
       setError(errText(e));
     } finally {
@@ -359,7 +385,11 @@ export function BlackboardPanel({ liveChange }: Props) {
         // Sticky: this warns the user their unsaved edits now diverge from
         // disk — it must persist until they act, not vanish on a timer.
         showInfo(
-          `⚠ ${liveChange.path} 在磁盘上发生变化 (op=${liveChange.op}) — 你有未保存的修改`,
+          t("blackboard.diskChangedWarn", {
+            defaultValue: "⚠ {{path}} 在磁盘上发生变化 (op={{op}}) — 你有未保存的修改",
+            path: liveChange.path,
+            op: liveChange.op,
+          }),
           { sticky: true },
         );
       } else {
@@ -369,7 +399,12 @@ export function BlackboardPanel({ liveChange }: Props) {
           .then((snap) => {
             setContent(snap.content);
             setOriginalContent(snap.content);
-            showInfo(`已根据 ${liveChange.op} 刷新`);
+            showInfo(
+              t("blackboard.refreshedInfo", {
+                defaultValue: "已根据 {{op}} 刷新",
+                op: liveChange.op,
+              }),
+            );
           })
           .catch(() => {
             /* ignore */
@@ -388,7 +423,9 @@ export function BlackboardPanel({ liveChange }: Props) {
             name="blackboard-new-path"
             value={newPath}
             onChange={(e) => setNewPath(e.target.value)}
-            placeholder="新文件路径（如 tasks.md）"
+            placeholder={t("blackboard.newPathPlaceholder", {
+              defaultValue: "新文件路径（如 tasks.md）",
+            })}
             style={{ ...input, flex: 1 }}
             onKeyDown={(e) => {
               if (e.key === "Enter") createNew();
@@ -397,21 +434,25 @@ export function BlackboardPanel({ liveChange }: Props) {
           <button
             onClick={createNew}
             disabled={!newPath.trim()}
-            title="创建"
+            title={t("blackboard.createTitle", { defaultValue: "创建" })}
             aria-label={t("blackboard.createFile", { defaultValue: "新建文件" })}
           >
             +
           </button>
           <button
             onClick={refreshList}
-            title="刷新"
+            title={t("blackboard.refreshTitle", { defaultValue: "刷新" })}
             aria-label={t("blackboard.refresh", { defaultValue: "刷新列表" })}
           >
             ↻
           </button>
         </div>
         <div style={pathList}>
-          {entries.length === 0 && <div style={emptyHint}>暂无文件</div>}
+          {entries.length === 0 && (
+            <div style={emptyHint}>
+              {t("blackboard.emptyFiles", { defaultValue: "暂无文件" })}
+            </div>
+          )}
           {entries.map((e) => (
             <button
               key={e.path}
@@ -433,54 +474,67 @@ export function BlackboardPanel({ liveChange }: Props) {
           <>
             <div style={headerRow}>
               <span style={{ flex: 1, fontSize: 12, color: "#cbd5f5" }}>
-                {selected} {isDirty && <em style={{ color: "#fbbf24" }}>(未保存)</em>}
+                {selected}{" "}
+                {isDirty && (
+                  <em style={{ color: "#fbbf24" }}>
+                    {t("blackboard.unsavedTag", { defaultValue: "(未保存)" })}
+                  </em>
+                )}
               </span>
               {selected === "design.md" && (
                 <>
                   <button
                     onClick={approveDesign}
                     disabled={gateBusy}
-                    title="批准该设计 — 写入 design.approved，唤醒前后端"
+                    title={t("blackboard.approveTitle", {
+                      defaultValue: "批准该设计 — 写入 design.approved，唤醒前后端",
+                    })}
                     aria-label={t("blackboard.approveDesign", { defaultValue: "批准设计" })}
                     style={approveBtn}
                   >
-                    ✓ 通过
+                    {t("blackboard.approveBtn", { defaultValue: "✓ 通过" })}
                   </button>
                   <button
                     onClick={() => setRejectOpen((v) => !v)}
                     disabled={gateBusy}
-                    title="要求重做 — 写入 design.rejected 并附原因；architect 会重新起稿"
+                    title={t("blackboard.rejectTitle", {
+                      defaultValue: "要求重做 — 写入 design.rejected 并附原因；architect 会重新起稿",
+                    })}
                     aria-label={t("blackboard.rejectDesign", { defaultValue: "驳回设计" })}
                     style={rejectBtn}
                   >
-                    ✗ 驳回
+                    {t("blackboard.rejectBtn", { defaultValue: "✗ 驳回" })}
                   </button>
                 </>
               )}
               <button
                 onClick={() => setHistoryOpen((v) => !v)}
-                title="查看写入历史"
+                title={t("blackboard.viewHistory", { defaultValue: "查看写入历史" })}
                 aria-label={t("blackboard.viewHistory", { defaultValue: "查看写入历史" })}
                 style={historyToggle}
               >
-                历史 ({history.length >= HISTORY_LIMIT ? `${HISTORY_LIMIT}+` : history.length}
-                {historyLoading ? "…" : ""})
+                {t("blackboard.historyLabel", {
+                  defaultValue: "历史 ({{count}}{{loading}})",
+                  count: history.length >= HISTORY_LIMIT ? `${HISTORY_LIMIT}+` : history.length,
+                  loading: historyLoading ? "…" : "",
+                  interpolation: { escapeValue: false },
+                })}
               </button>
               <button
                 onClick={save}
                 disabled={saving || !isDirty}
                 aria-label={t("blackboard.save", { defaultValue: "保存" })}
               >
-                保存
+                {t("blackboard.save", { defaultValue: "保存" })}
               </button>
               <button
                 onClick={removeSelected}
                 disabled={deleting}
-                title="删除该文件"
+                title={t("blackboard.deleteFileTitle", { defaultValue: "删除该文件" })}
                 aria-label={t("blackboard.deleteFile", { defaultValue: "删除文件" })}
                 style={deleteBtn}
               >
-                删除
+                {t("blackboard.deleteShort", { defaultValue: "删除" })}
               </button>
             </div>
             {selected === "design.md" && rejectOpen && (
@@ -498,7 +552,9 @@ export function BlackboardPanel({ liveChange }: Props) {
                       setRejectReason("");
                     }
                   }}
-                  placeholder="驳回原因（一句话）— architect 会读这条并改稿"
+                  placeholder={t("blackboard.rejectReasonPlaceholder", {
+                    defaultValue: "驳回原因（一句话）— architect 会读这条并改稿",
+                  })}
                   style={rejectInput}
                   autoFocus
                 />
@@ -507,7 +563,7 @@ export function BlackboardPanel({ liveChange }: Props) {
                   disabled={gateBusy || !rejectReason.trim()}
                   style={rejectConfirmBtn}
                 >
-                  发送驳回
+                  {t("blackboard.sendReject", { defaultValue: "发送驳回" })}
                 </button>
                 <button
                   onClick={() => {
@@ -516,14 +572,16 @@ export function BlackboardPanel({ liveChange }: Props) {
                   }}
                   style={historyToggle}
                 >
-                  取消
+                  {t("blackboard.cancel", { defaultValue: "取消" })}
                 </button>
               </div>
             )}
             {historyOpen && (
               <div style={historyDrawer}>
                 {history.length === 0 && (
-                  <div style={{ ...emptyHint, marginTop: 4 }}>暂无历史</div>
+                  <div style={{ ...emptyHint, marginTop: 4 }}>
+                    {t("blackboard.emptyHistory", { defaultValue: "暂无历史" })}
+                  </div>
                 )}
                 {history.map((h) => {
                   const isPreview = versionPreview?.id === h.id;
@@ -541,7 +599,8 @@ export function BlackboardPanel({ liveChange }: Props) {
                         {h.sha256.slice(0, 12)}
                       </span>
                       <span style={{ color: "#94a3b8", marginLeft: 6 }}>
-                        {h.agent_id ?? "外部"}
+                        {h.agent_id ??
+                          t("blackboard.externalSource", { defaultValue: "外部" })}
                       </span>
                       <span style={{ color: "#64748b", marginLeft: 6 }}>
                         {h.op}
@@ -559,16 +618,25 @@ export function BlackboardPanel({ liveChange }: Props) {
               <>
                 <div style={versionHeader}>
                   <span style={{ flex: 1 }}>
-                    正在查看版本 {versionPreview.sha256.slice(0, 12)}…
-                    （{versionPreview.agent_id ?? "外部"} · {" "}
-                    {new Date(versionPreview.at).toLocaleString()}）
+                    {t("blackboard.viewingVersion", {
+                      defaultValue: "正在查看版本 {{sha}}…（{{source}} · {{time}}）",
+                      sha: versionPreview.sha256.slice(0, 12),
+                      source:
+                        versionPreview.agent_id ??
+                        t("blackboard.externalSource", { defaultValue: "外部" }),
+                      time: new Date(versionPreview.at).toLocaleString(),
+                      interpolation: { escapeValue: false },
+                    })}
                   </span>
                   <button onClick={() => setVersionPreview(null)}>
-                    关闭
+                    {t("blackboard.close", { defaultValue: "关闭" })}
                   </button>
                 </div>
                 <textarea
-                  value={versionPreview.content ?? "(尚未加载内容)"}
+                  value={
+                    versionPreview.content ??
+                    t("blackboard.contentNotLoaded", { defaultValue: "(尚未加载内容)" })
+                  }
                   readOnly
                   aria-label={t("blackboard.versionPreviewArea", {
                     defaultValue: "历史版本内容（只读）",
@@ -595,7 +663,11 @@ export function BlackboardPanel({ liveChange }: Props) {
             )}
           </>
         ) : (
-          <div style={emptyHint}>请在左侧选择一个文件</div>
+          <div style={emptyHint}>
+            {t("blackboard.selectFileHint", {
+              defaultValue: "请在左侧选择一个文件",
+            })}
+          </div>
         )}
         {error && <div style={errorRow}>{error}</div>}
       </div>
@@ -618,10 +690,21 @@ export function BlackboardPanel({ liveChange }: Props) {
 
 function formatRelative(ms: number): string {
   const diff = Date.now() - ms;
-  if (diff < 60_000) return "刚刚";
-  if (diff < 3600_000) return `${Math.floor(diff / 60_000)} 分钟前`;
-  if (diff < 86400_000) return `${Math.floor(diff / 3600_000)} 小时前`;
-  return `${Math.floor(diff / 86400_000)} 天前`;
+  if (diff < 60_000) return i18n.t("blackboard.relJustNow", { defaultValue: "刚刚" });
+  if (diff < 3600_000)
+    return i18n.t("blackboard.relMinutes", {
+      defaultValue: "{{n}} 分钟前",
+      n: Math.floor(diff / 60_000),
+    });
+  if (diff < 86400_000)
+    return i18n.t("blackboard.relHours", {
+      defaultValue: "{{n}} 小时前",
+      n: Math.floor(diff / 3600_000),
+    });
+  return i18n.t("blackboard.relDays", {
+    defaultValue: "{{n}} 天前",
+    n: Math.floor(diff / 86400_000),
+  });
 }
 
 function formatTime(ms: number): string {

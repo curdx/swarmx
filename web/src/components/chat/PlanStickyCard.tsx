@@ -7,6 +7,7 @@
  */
 import { useTranslation } from "react-i18next";
 import { Circle, CircleCheck, CircleDot, Pin, TriangleAlert } from "lucide-react";
+import i18n from "@/i18n";
 import { cn } from "@/lib/cn";
 import { roleColorClass as roleColor } from "@/lib/agent";
 import type { ParsedPlan, PlanStatus } from "@/lib/parsePlan";
@@ -17,7 +18,10 @@ function ownerLabel(
   if (!owner) return null;
   const o = owner.trim().toLowerCase();
   if (["self", "orchestrator", "captain", "me", "队长"].includes(o)) {
-    return { name: "队长", isCaptain: true };
+    return {
+      name: i18n.t("chat.role.captain", { defaultValue: "队长" }),
+      isCaptain: true,
+    };
   }
   return { name: owner, isCaptain: false };
 }
