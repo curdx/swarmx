@@ -1183,5 +1183,13 @@
     "breadcrumbsCount": "{{n}} 个 worker",
     "breadcrumbsEmpty": "还没有 worker 写过心跳。派出去的 worker 完成里程碑(install / build / 写代码 等)时会在这里出现一行。",
     "readFailed": "读取失败: {{msg}}"
+  },
+  "home": {
+    "deleteFailed": "删除工作空间失败",
+    "workspaces": "工作空间",
+    "workspaceCount": "{{count}} 个工作空间",
+    "loadingWorkspaces": "正在读取工作空间…",
+    "backendUnreachable": "连接不上后端服务",
+    "backendUnreachableDesc": "flockmux 后端 (127.0.0.1:7777) 没有响应，所以读不到你的工作空间。请确认服务在运行，然后重试。"
   }
 }

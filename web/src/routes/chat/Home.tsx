@@ -9,6 +9,7 @@
  */
 
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 import { FolderOpen } from "lucide-react";
 import { api } from "../../api/http";
@@ -42,6 +43,7 @@ function splitWorkspacePath(path: string): { name: string; parent: string } {
 }
 
 export default function ChatHome() {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [workspaceRows, setWorkspaceRows] = useState<Workspace[]>([]);
@@ -165,7 +167,7 @@ export default function ChatHome() {
     } catch (err) {
       // 删除是「失败即安全」：后端没删成功 = 数据没丢。我们从不乐观删除列表，
       // 所以失败时只要不动列表即可，但必须让用户看到失败而不是静默吞掉。
-      toast.error("删除工作空间失败", {
+      toast.error(t("home.deleteFailed", { defaultValue: "删除工作空间失败" }), {
         description: (err as Error)?.message,
       });
       return;
@@ -196,25 +198,35 @@ export default function ChatHome() {
               className="gap-2"
             >
               <FolderOpen className="size-4" />
-              工作空间
+              {t("home.workspaces", { defaultValue: "工作空间" })}
             </Button>
             <span className="font-caption text-[11px] text-foreground-tertiary">
               {workspacesLoaded
-                ? `${workspaces.length} 个工作空间`
-                : "正在读取工作空间…"}
+                ? t("home.workspaceCount", {
+                    count: workspaces.length,
+                    defaultValue: "{{count}} 个工作空间",
+                  })
+                : t("home.loadingWorkspaces", { defaultValue: "正在读取工作空间…" })}
             </span>
           </div>
           {!workspacesLoaded ? (
             <section className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 bg-surface-primary text-foreground-tertiary">
               <FolderOpen className="size-10 opacity-40" />
-              <p className="font-caption text-sm">加载工作空间中…</p>
+              <p className="font-caption text-sm">
+                {t("home.loadingWorkspaces", { defaultValue: "正在读取工作空间…" })}
+              </p>
             </section>
           ) : workspacesError && workspaceRows.length === 0 ? (
             <section className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 bg-surface-primary px-6 text-center">
               <FolderOpen className="size-10 text-state-danger opacity-60" />
-              <p className="font-heading text-sm text-foreground-primary">连接不上后端服务</p>
+              <p className="font-heading text-sm text-foreground-primary">
+                {t("home.backendUnreachable", { defaultValue: "连接不上后端服务" })}
+              </p>
               <p className="max-w-sm font-caption text-xs text-foreground-tertiary">
-                flockmux 后端 (127.0.0.1:7777) 没有响应，所以读不到你的工作空间。请确认服务在运行，然后重试。
+                {t("home.backendUnreachableDesc", {
+                  defaultValue:
+                    "flockmux 后端 (127.0.0.1:7777) 没有响应，所以读不到你的工作空间。请确认服务在运行，然后重试。",
+                })}
               </p>
               <Button
                 variant="secondary"
@@ -223,7 +235,7 @@ export default function ChatHome() {
                   refreshWorkspaces();
                 }}
               >
-                重试
+                {t("common.retry")}
               </Button>
             </section>
           ) : (
@@ -233,7 +245,7 @@ export default function ChatHome() {
         <Sheet open={mobileNavOpen} onOpenChange={setMobileNavOpen}>
           <SheetContent side="left" className="w-full max-w-none p-0 sm:max-w-none">
             <SheetHeader className="border-b border-border-subtle">
-              <SheetTitle>工作空间</SheetTitle>
+              <SheetTitle>{t("home.workspaces", { defaultValue: "工作空间" })}</SheetTitle>
             </SheetHeader>
             <WorkspaceList
               mobile
