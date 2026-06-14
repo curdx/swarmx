@@ -924,15 +924,19 @@ impl Store {
     }
 
     /// Set (or clear, with `None`) the human task-status override on a worker.
-    pub async fn set_task_status(&self, agent_id: String, status: Option<String>) -> Result<()> {
+    ///
+    /// Returns `true` if a matching worker row was updated, `false` if the
+    /// `agent_id` does not exist (so callers can answer 404 instead of lying
+    /// about success).
+    pub async fn set_task_status(&self, agent_id: String, status: Option<String>) -> Result<bool> {
         let pool = self.pool.clone();
         tokio::task::spawn_blocking(move || {
-            with_busy_retry(&pool, |conn| -> rusqlite::Result<()> {
-                conn.execute(
+            with_busy_retry(&pool, |conn| -> rusqlite::Result<bool> {
+                let affected = conn.execute(
                     "UPDATE workers SET task_status = ?2 WHERE agent_id = ?1",
                     params![agent_id, status],
                 )?;
-                Ok(())
+                Ok(affected > 0)
             })
         })
         .await

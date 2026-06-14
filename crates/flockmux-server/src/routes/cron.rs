@@ -25,6 +25,27 @@ fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
+/// Real UTC offsets span -12:00 (-720 min) to +14:00 (+840 min). Anything
+/// outside that is a malformed client value (or a deliberate one) that would
+/// shift the scheduler's wall-clock matching by a nonsense amount. Returns
+/// `Some(400 response)` when out of range, `None` when acceptable.
+fn validate_tz_offset(offset: i32) -> Option<axum::response::Response> {
+    if !(-720..=840).contains(&offset) {
+        return Some(
+            (
+                StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "error": format!(
+                        "tz_offset_minutes {offset} out of range (-720..=840)"
+                    )
+                })),
+            )
+                .into_response(),
+        );
+    }
+    None
+}
+
 pub async fn list_cron(State(state): State<AppState>) -> impl IntoResponse {
     let jobs = state.store.list_cron_jobs().await.unwrap_or_default();
     let now_secs = now_ms() / 1000;
@@ -111,6 +132,33 @@ pub async fn create_cron(
         )
             .into_response();
     }
+    if let Some(resp) = validate_tz_offset(req.tz_offset_minutes) {
+        return resp;
+    }
+    // A job pointing at a non-existent workspace can never fire usefully — the
+    // scheduler would just retry `revive_orchestrator` every minute, failing on
+    // "workspace not found" and spamming the log. Reject at creation time.
+    match state
+        .store
+        .get_workspace_by_id(req.workspace_id.clone())
+        .await
+    {
+        Ok(Some(_)) => {}
+        Ok(None) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": format!("unknown workspace_id: {}", req.workspace_id) })),
+            )
+                .into_response();
+        }
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("workspace lookup failed: {e}") })),
+            )
+                .into_response();
+        }
+    }
     let rec = CronJobRecord {
         id: uuid::Uuid::new_v4().to_string(),
         workspace_id: req.workspace_id,
@@ -166,6 +214,32 @@ pub async fn update_cron(
             Json(json!({ "error": "workspace_id and prompt are required" })),
         )
             .into_response();
+    }
+    if let Some(resp) = validate_tz_offset(req.tz_offset_minutes) {
+        return resp;
+    }
+    // Same rationale as create: don't let an edit repoint a job at a workspace
+    // that doesn't exist, which would make every scheduler tick fail to revive.
+    match state
+        .store
+        .get_workspace_by_id(req.workspace_id.clone())
+        .await
+    {
+        Ok(Some(_)) => {}
+        Ok(None) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": format!("unknown workspace_id: {}", req.workspace_id) })),
+            )
+                .into_response();
+        }
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("workspace lookup failed: {e}") })),
+            )
+                .into_response();
+        }
     }
     let name = if req.name.trim().is_empty() {
         req.cron_expr.clone()
@@ -237,6 +311,20 @@ pub async fn run_cron(State(state): State<AppState>, Path(id): Path<String>) -> 
         )
             .into_response();
     };
+    // Dedup against the scheduler: if this job already fired in the current
+    // minute (whether by the 30s scheduler tick or a prior manual click), a
+    // second delivery this minute would double-post the prompt to the
+    // orchestrator. `run_job` stamps `last_run_at` on success, so the same
+    // minute-bucket comparison the scheduler uses (cron.rs:301) is the source
+    // of truth here too. Report it explicitly rather than silently no-op'ing.
+    let cur_min = now_ms() / 60_000;
+    if job.last_run_at.map(|l| l / 60_000) == Some(cur_min) {
+        return (
+            StatusCode::OK,
+            Json(json!({ "ok": true, "skipped": "already ran this minute" })),
+        )
+            .into_response();
+    }
     match crate::cron::run_job(&state, &job).await {
         Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))).into_response(),
         // P1-33: run_job has no "skip" path — when there's no live orchestrator it

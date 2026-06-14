@@ -162,6 +162,16 @@ pub struct ResolvedAgent {
     /// override > role default > empty). Drives the M6b WakeCoordinator
     /// subscription table. De-duplicated, order-preserved.
     pub depends_on: Vec<String>,
+    /// Blackboard key this agent PRODUCES on completion — the `handoff_signal`
+    /// of the referenced role, or empty for a truly inline agent whose symbolic
+    /// `role` names no registered role. Resolved HERE (where the `role_ref` →
+    /// `Role` mapping is unambiguous) rather than re-looked-up by `role` name in
+    /// `run_spell`: a spell that renames a role (`role = "fe"`, `role_ref =
+    /// "frontend"`) would make a `roles.get("fe")` miss, dropping this agent's
+    /// produced key from the cycle graph and the wake exit-key registration — a
+    /// blind spot where a role↔role loop through the renamed producer goes
+    /// undetected. Carrying the value off the resolved template closes that gap.
+    pub handoff_signal: String,
 }
 
 /// Merge a [`SpellAgentManifest`] with its referenced [`Role`] (if any)
@@ -229,11 +239,19 @@ pub fn resolve_agent(agent: &SpellAgentManifest, roles: &RoleRegistry) -> Result
     };
     let depends_on = dedup_preserve_order(depends_on_raw);
 
+    // Producer key, taken off the role template by `role_ref` (the unambiguous
+    // mapping) — NOT re-derived from the symbolic `role` name later. Inline-only
+    // agents (no role_ref) declare no handoff_signal and so produce nothing.
+    let handoff_signal = role_template
+        .map(|rt| rt.manifest.handoff_signal.clone())
+        .unwrap_or_default();
+
     Ok(ResolvedAgent {
         role,
         cli,
         system_prompt,
         depends_on,
+        handoff_signal,
     })
 }
 
@@ -504,6 +522,39 @@ pub fn render_prompt(
     out
 }
 
+/// Strip terminal-control / ANSI-escape bytes from text about to be PTY-injected
+/// as a "paste" into an agent's TUI.
+///
+/// SECURITY (prompt-injection + terminal-escape injection): a bootstrap prompt is
+/// machine-rendered from spell manifests, role templates and — for ad-hoc workers
+/// — the orchestrator-supplied `system_prompt`. None of that is guaranteed free of
+/// ESC / CSI / OSC / DCS sequences or other control bytes. If such bytes reach the
+/// PTY verbatim they are interpreted by (a) the child CLI's TUI and (b) the user's
+/// terminal renderer, enabling cursor/clear/title manipulation, OSC tricks, and —
+/// most dangerously — *invisible* prompt injection: escape sequences that hide or
+/// overwrite on-screen text so a human reviewing the pane cannot see what the model
+/// was actually told. Call this on every prompt before it is written to a PTY.
+///
+/// We drop every C0 control char (0x00–0x1F) and DEL (0x7F) and the 8-bit C1 range
+/// (U+0080–U+009F), with two deliberate exceptions that the paste protocol relies
+/// on and that carry no escape semantics:
+///   - `\n` (line feed) — prompt bodies are multi-line; the paste→settle→submit
+///     split depends on newlines, and the standalone submit `\r` is sent separately.
+///   - `\t` (tab) — benign indentation whitespace.
+/// In particular `\r` (carriage return) IS stripped from the body: a stray `\r`
+/// would prematurely submit the paste, and it has no place inside a prompt body.
+/// Dropping the lone ESC defuses any sequence (residual ASCII such as `[2J` renders
+/// as inert literal text rather than firing); we never delete spans of author-
+/// intended visible text. All printable Unicode (incl. CJK) is preserved verbatim.
+pub fn sanitize_pty_inject(input: &str) -> String {
+    input
+        .chars()
+        .filter(|&c| {
+            c == '\n' || c == '\t' || !(c.is_control() || ('\u{80}'..='\u{9f}').contains(&c))
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -750,6 +801,59 @@ cli = "claude"
         assert_eq!(resolved.cli, "claude");
         assert_eq!(resolved.system_prompt, "hello");
         assert!(resolved.depends_on.is_empty());
+        // A truly inline agent (no role_ref) produces no handoff key.
+        assert_eq!(resolved.handoff_signal, "");
+    }
+
+    #[test]
+    fn resolve_agent_carries_handoff_signal_from_role() {
+        let dir = tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("backend.md"),
+            "+++\nid=\"backend\"\ndefault_cli=\"claude\"\nhandoff_signal=\"backend.done\"\nsystem_prompt_template=\"x\"\n+++",
+        )
+        .unwrap();
+        let roles = RoleRegistry::load_dir(dir.path()).unwrap();
+        let agent = SpellAgentManifest {
+            role: None,
+            cli: None,
+            system_prompt: String::new(),
+            role_ref: Some("backend".to_string()),
+            depends_on: None,
+            system_prompt_prefix: String::new(),
+        };
+        let resolved = resolve_agent(&agent, &roles).unwrap();
+        assert_eq!(resolved.role, "backend");
+        assert_eq!(resolved.handoff_signal, "backend.done");
+    }
+
+    #[test]
+    fn resolve_agent_carries_handoff_signal_when_role_is_renamed() {
+        // BLIND-SPOT REGRESSION: a spell renames a role (`role = "be"`,
+        // `role_ref = "backend"`). The resolved `role` is "be", which does NOT
+        // exist in the registry — so the old `state.roles.get(&resolved.role)`
+        // lookup in run_spell missed and dropped this producer's key from the
+        // cycle graph + exit-key registration. Carrying it off the resolved
+        // template (via role_ref) keeps it intact.
+        let dir = tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("backend.md"),
+            "+++\nid=\"backend\"\ndefault_cli=\"claude\"\nhandoff_signal=\"backend.done\"\nsystem_prompt_template=\"x\"\n+++",
+        )
+        .unwrap();
+        let roles = RoleRegistry::load_dir(dir.path()).unwrap();
+        let agent = SpellAgentManifest {
+            role: Some("be".to_string()),
+            cli: None,
+            system_prompt: String::new(),
+            role_ref: Some("backend".to_string()),
+            depends_on: None,
+            system_prompt_prefix: String::new(),
+        };
+        let resolved = resolve_agent(&agent, &roles).unwrap();
+        // Symbolic role is the rename; handoff is still the registry role's key.
+        assert_eq!(resolved.role, "be");
+        assert_eq!(resolved.handoff_signal, "backend.done");
     }
 
     #[test]
@@ -1078,5 +1182,47 @@ cli = "claude"
         // We deliberately don't strip unknown {…_id} substrings — silent
         // dropping would hide spell author bugs.
         assert!(out.contains("{unknown_id}"));
+    }
+
+    #[test]
+    fn sanitize_pty_inject_keeps_visible_text_and_newlines_tabs() {
+        // Plain multi-line text with CJK + tabs is preserved byte-for-byte.
+        let s = "第一行\n\tindented\nplain ascii line";
+        assert_eq!(sanitize_pty_inject(s), s);
+    }
+
+    #[test]
+    fn sanitize_pty_inject_strips_esc_and_csi_osc_sequences() {
+        // ESC is dropped; the residual ASCII (e.g. `[2J`, `]0;title`) survives as
+        // INERT literal text — it can no longer fire because the ESC is gone.
+        let clear = "before\x1b[2Jafter";
+        assert_eq!(sanitize_pty_inject(clear), "before[2Jafter");
+        // OSC: ESC ] 0 ; title BEL  → ESC and BEL both stripped.
+        let osc = "x\x1b]0;evil\x07y";
+        assert_eq!(sanitize_pty_inject(osc), "x]0;evily");
+        // No ESC byte survives anywhere.
+        assert!(!sanitize_pty_inject(clear).contains('\x1b'));
+        assert!(!sanitize_pty_inject(osc).contains('\x1b'));
+    }
+
+    #[test]
+    fn sanitize_pty_inject_strips_carriage_return_and_bel_and_nul() {
+        // CR would prematurely submit the paste; BEL/NUL/backspace are control
+        // noise. All gone; the surrounding visible text stays.
+        let s = "a\rb\x07c\x00d\x08e";
+        assert_eq!(sanitize_pty_inject(s), "abcde");
+    }
+
+    #[test]
+    fn sanitize_pty_inject_strips_c1_eight_bit_controls() {
+        // U+0080–U+009F (8-bit C1, incl. the single-byte CSI U+009B) are control
+        // codes a terminal can act on; strip them while keeping adjacent text.
+        let s = "p\u{9b}2Jq\u{85}r"; // CSI (8-bit) and NEL
+        assert_eq!(sanitize_pty_inject(s), "p2Jqr");
+    }
+
+    #[test]
+    fn sanitize_pty_inject_empty_is_empty() {
+        assert_eq!(sanitize_pty_inject(""), "");
     }
 }

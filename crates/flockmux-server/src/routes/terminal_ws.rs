@@ -19,6 +19,29 @@
 //! request and carries an Origin). The shell inherits the same env allowlist as
 //! workers (flockmux-pty `env_clear` + the vars we set), so it doesn't leak the
 //! server's ambient secrets.
+//!
+//! ## SECURITY: the `session` id is a bearer capability for a full `$SHELL`
+//!
+//! Whoever presents a given `?session=<id>` attaches to *that* shell — full
+//! keystroke injection and scrollback (which may hold secrets the user typed).
+//! The id is client-chosen and the server does NOT bind it to any identity, so
+//! it is effectively an unauthenticated capability token. Two things keep this
+//! safe TODAY, and a change to either reopens the hole:
+//!
+//!   1. `require_local_origin` makes this endpoint reachable only from a
+//!      loopback origin — i.e. the single local user's own browser/native
+//!      client. There is no remote attacker who can present a guessed id.
+//!   2. The id space is large/opaque in practice (the client uses a UUID, or a
+//!      per-tab/per-workspace random string in sessionStorage), so even sibling
+//!      tabs of the same user don't accidentally collide onto one shell.
+//!
+//! We do NOT server-generate-and-pin the id, because the whole point is that a
+//! reload/reattach with the SAME id resumes the SAME shell (scrollback replay).
+//! What we DO enforce here is shape validation (`valid_session_id`): a junk or
+//! oversized id never becomes a registry key and never attaches to a foreign
+//! session — it falls back to a fresh ephemeral shell. If this endpoint ever
+//! becomes reachable cross-origin or multi-user, this id MUST be replaced with
+//! (or wrapped by) a server-issued, identity-scoped token.
 
 use crate::AppState;
 use axum::{
@@ -31,10 +54,28 @@ use flockmux_pty::{PtyBridge, PtyHandles, SpawnOpts};
 use futures::{SinkExt, StreamExt};
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 use tokio::sync::broadcast;
 use tracing::{debug, warn};
+
+/// Lock a `std::sync::Mutex`, recovering from poisoning instead of propagating
+/// it. A poisoned mutex means *some other* task panicked while holding the lock;
+/// `.lock().unwrap()` would then panic in turn, and because these are
+/// process-wide statics (the session registry and each session's scrollback
+/// ring) the poison is permanent — one stray panic would brick the ENTIRE
+/// terminal subsystem for every session until the server restarts.
+///
+/// The data these locks guard is plain bookkeeping (a `HashMap` of sessions, a
+/// scrollback `VecDeque`); a panic mid-mutation can at worst leave a half-pushed
+/// chunk, never an unsafe invariant. So we recover the guard and carry on rather
+/// than weaponising one panic into a total outage.
+fn lock_recover<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|poisoned| {
+        warn!("terminal: recovering from poisoned mutex (a prior task panicked)");
+        poisoned.into_inner()
+    })
+}
 
 /// Bytes of raw PTY output kept for replay on reattach. Visual state (cursor,
 /// colours, alt-screen) is reconstructed by feeding the escape-sequence stream
@@ -79,7 +120,7 @@ fn spawn_reaper() {
         loop {
             tick.tick().await;
             let now = Instant::now();
-            let mut reg = registry().lock().unwrap();
+            let mut reg = lock_recover(registry());
             reg.retain(|sid, s| {
                 let stale = s.attached == 0
                     && s.detached_at
@@ -133,14 +174,38 @@ pub struct TermQuery {
     workspace_id: Option<String>,
 }
 
+/// Longest client session id we'll use as a registry key. The legit client
+/// sends a UUID (36 chars) or a short per-workspace token; anything past this is
+/// junk (or an attempt to bloat the keyspace), so we don't honour it.
+const MAX_SESSION_ID_LEN: usize = 128;
+
+/// Shape check for a client-supplied `?session=<id>` before it becomes a
+/// registry key (and thus a capability handle onto a live `$SHELL` — see the
+/// module-level SECURITY note). We accept only a bounded, opaque token charset
+/// (the UUIDs / random per-tab strings legit clients actually send): ASCII
+/// alphanumerics plus `-` and `_`. A failing id is NOT rejected with an error
+/// (that would needlessly break the shell for a quirky-but-harmless client);
+/// the caller instead falls back to a fresh server-generated ephemeral id, so a
+/// junk value can never attach to — or squat — a foreign session's registry key.
+fn valid_session_id(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= MAX_SESSION_ID_LEN
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
 pub async fn terminal_ws(
     State(state): State<AppState>,
     ws: WebSocketUpgrade,
     Query(q): Query<TermQuery>,
 ) -> impl IntoResponse {
+    // Only a well-formed id may become a registry key (= a capability handle on
+    // a live shell). A junk/oversized id is dropped here and replaced by a fresh
+    // server-generated one, so it gets its own throwaway shell instead of
+    // squatting or hijacking another session's key. See the module SECURITY note.
     let sid = q
         .session
-        .filter(|s| !s.is_empty())
+        .filter(|s| valid_session_id(s))
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     // Resolve the workspace cwd server-side (don't trust a raw client path).
     let cwd = match q.workspace_id.as_deref().filter(|s| !s.is_empty()) {
@@ -162,11 +227,11 @@ async fn handle_terminal(socket: WebSocket, sid: String, cwd: Option<PathBuf>) {
     // under the same lock) so the pump can't slip a chunk between them — no
     // duplicate and no gap at the replay→live boundary.
     let (bridge, mut rx, replay) = {
-        let mut reg = registry().lock().unwrap();
+        let mut reg = lock_recover(registry());
         if let Some(s) = reg.get_mut(&sid) {
             s.attached += 1;
             s.detached_at = None;
-            let guard = s.ring.lock().unwrap();
+            let guard = lock_recover(&s.ring);
             let rx = s.bcast.subscribe();
             let replay: Vec<u8> = guard.0.iter().flat_map(|b| b.iter().copied()).collect();
             drop(guard);
@@ -194,7 +259,7 @@ async fn handle_terminal(socket: WebSocket, sid: String, cwd: Option<PathBuf>) {
                 let sid = sid.clone();
                 tokio::spawn(async move {
                     while let Some(chunk) = output_rx.recv().await {
-                        let mut g = ring.lock().unwrap();
+                        let mut g = lock_recover(&ring);
                         g.1 += chunk.len();
                         g.0.push_back(chunk.clone());
                         while g.1 > SCROLLBACK_CAP {
@@ -209,7 +274,7 @@ async fn handle_terminal(socket: WebSocket, sid: String, cwd: Option<PathBuf>) {
                     }
                     // PTY EOF (shell exited) → drop the session so a later
                     // attach with the same id starts a fresh shell.
-                    registry().lock().unwrap().remove(&sid);
+                    lock_recover(registry()).remove(&sid);
                     debug!(%sid, "terminal: shell exited, session removed");
                 });
             }
@@ -284,7 +349,7 @@ async fn handle_terminal(socket: WebSocket, sid: String, cwd: Option<PathBuf>) {
     // no-op then.
     writer.abort();
     {
-        let mut reg = registry().lock().unwrap();
+        let mut reg = lock_recover(registry());
         if let Some(s) = reg.get_mut(&sid) {
             s.attached = s.attached.saturating_sub(1);
             if s.attached == 0 {
