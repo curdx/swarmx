@@ -40,11 +40,15 @@ export function useScrollMarkRead(opts: {
 }): void {
   const { listRef, rowRefs, items, setItems, revision } = opts;
   const pendingReadRef = useRef<Set<number>>(new Set());
+  // Ids currently on screen. P1-06: a fast scroll-PAST (intersected then left
+  // before the debounce fires) must NOT count as "read" — only messages still
+  // visible at flush time are. This keeps "opened ≠ a human actually read it".
+  const visibleRef = useRef<Set<number>>(new Set());
   const flushTimerRef = useRef<number | null>(null);
 
   const flushAutoRead = useCallback(() => {
     flushTimerRef.current = null;
-    const ids = [...pendingReadRef.current];
+    const ids = [...pendingReadRef.current].filter((id) => visibleRef.current.has(id));
     pendingReadRef.current.clear();
     if (ids.length === 0) return;
     // All collected ids are to_agent === "user" (see the observer filter).
@@ -70,11 +74,17 @@ export function useScrollMarkRead(opts: {
         if (document.visibilityState !== "visible") return;
         let added = false;
         for (const e of entries) {
-          if (!e.isIntersecting) continue;
           const id = elToId.get(e.target);
           if (id == null) continue;
-          pendingReadRef.current.add(id);
-          added = true;
+          if (e.isIntersecting) {
+            visibleRef.current.add(id);
+            pendingReadRef.current.add(id);
+            added = true;
+          } else {
+            // Left the viewport before the debounce — drop it from the
+            // "still visible" set so flush won't mark a scrolled-past bubble.
+            visibleRef.current.delete(id);
+          }
         }
         if (added && flushTimerRef.current == null) {
           flushTimerRef.current = window.setTimeout(flushAutoRead, 400);

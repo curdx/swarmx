@@ -181,6 +181,7 @@ async fn thought_trace_roundtrips_on_response_message() {
         .list_messages(ListMessagesOpts {
             to_agent: None,
             from_agent: None,
+            thread_id: None,
             only_undelivered: false,
             limit: 10,
         })

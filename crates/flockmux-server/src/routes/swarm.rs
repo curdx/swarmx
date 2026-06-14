@@ -22,6 +22,9 @@ pub struct ListMessagesQuery {
     pub from: Option<String>,
     pub q: Option<String>,
     pub limit: Option<i64>,
+    /// Scope history to one direction (thread) so a quiet thread's older
+    /// messages aren't pushed out of the global `limit` window. P1-04.
+    pub thread_id: Option<String>,
     #[serde(default)]
     pub only_undelivered: bool,
 }
@@ -42,6 +45,7 @@ pub async fn list_messages(
             .list_messages(ListMessagesOpts {
                 to_agent: q.to,
                 from_agent: q.from,
+                thread_id: q.thread_id,
                 only_undelivered: q.only_undelivered,
                 limit: q.limit.unwrap_or(200),
             })

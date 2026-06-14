@@ -13,6 +13,7 @@ interface MessageListParams {
   from?: string;
   q?: string;
   limit?: number;
+  thread_id?: string;
   only_undelivered?: boolean;
 }
 
@@ -115,6 +116,7 @@ export const apiRoutes = {
       from: params.from,
       q: params.q,
       limit: params.limit,
+      thread_id: params.thread_id,
       only_undelivered: params.only_undelivered,
     })}`),
     send: () => endpoint("messages.send", "POST", "/api/message"),

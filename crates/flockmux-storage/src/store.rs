@@ -1697,6 +1697,13 @@ impl Store {
                     wheres.push("from_agent = ?");
                     bound.push(from.clone().into());
                 }
+                if let Some(thread) = &opts.thread_id {
+                    // Scope to one direction: that thread's rows + legacy/main
+                    // null-thread rows (the UI folds those into every view, so
+                    // keep them visible rather than orphan old history). P1-04.
+                    wheres.push("(m.thread_id = ? OR m.thread_id IS NULL)");
+                    bound.push(thread.clone().into());
+                }
                 if opts.only_undelivered {
                     wheres.push("delivered_at IS NULL");
                 }
