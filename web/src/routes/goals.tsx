@@ -35,12 +35,25 @@ const STATUSES: Array<{ key: GoalStatus; icon: typeof Flag; tone: string }> = [
   { key: "archived", icon: Archive, tone: "text-foreground-tertiary" },
 ];
 const MAIN_THREAD_VALUE = "__main__";
+// P2: token budget is an i64 on the backend; a digit string longer than that
+// makes serde reject the body with a 500 before our route can validate it, and
+// anything above Number.MAX_SAFE_INTEGER loses precision in JS. Cap well below
+// both (1 trillion tokens is already absurd for a budget) and refuse to submit.
+const MAX_BUDGET_TOKENS = 1_000_000_000_000;
 
 function parseCriteria(input: string): string[] {
-  return input
-    .split("\n")
-    .map((s) => s.replace(/^[-*]\s+/, "").trim())
-    .filter(Boolean);
+  // P2: dedupe so identical lines don't collide as React keys (which silently
+  // drops the duplicate rows from the rendered list).
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const line of input.split("\n")) {
+    const c = line.replace(/^[-*]\s+/, "").trim();
+    if (c && !seen.has(c)) {
+      seen.add(c);
+      out.push(c);
+    }
+  }
+  return out;
 }
 
 function formatBudget(n: number | null): string {
@@ -67,6 +80,18 @@ export default function GoalsRoute() {
     () => workspaces.find((w) => w.id === wsId) ?? null,
     [workspaces, wsId],
   );
+  // P2: validate the token budget before it can reach the backend i64.
+  const budgetError = useMemo(() => {
+    const raw = budget.trim();
+    if (!raw) return null;
+    const n = Number(raw);
+    if (!Number.isSafeInteger(n) || n > MAX_BUDGET_TOKENS) {
+      return t("goals.budgetTooLarge", {
+        defaultValue: "预算过大，请输入不超过 1 万亿的整数",
+      });
+    }
+    return null;
+  }, [budget, t]);
   // P1-16: backend list failed (wsError) or goal fetch failed (err) — either
   // way an empty list is a CONNECTION problem, not "you have no goals yet".
   const hasError = Boolean(wsError || err);
@@ -108,7 +133,7 @@ export default function GoalsRoute() {
   }, [load, ready]);
 
   const create = async () => {
-    if (!wsId || !objective.trim()) return;
+    if (!wsId || !objective.trim() || budgetError) return;
     setCreating(true);
     setErr(null);
     try {
@@ -242,14 +267,21 @@ export default function GoalsRoute() {
                 value={budget}
                 onChange={(e) => setBudget(e.target.value.replace(/[^\d]/g, ""))}
                 inputMode="numeric"
-                className="rounded border border-border-subtle bg-surface-primary px-2 py-1.5 font-mono text-[13px]"
+                aria-invalid={budgetError ? true : undefined}
+                className={cn(
+                  "rounded border bg-surface-primary px-2 py-1.5 font-mono text-[13px]",
+                  budgetError ? "border-status-danger" : "border-border-subtle",
+                )}
                 placeholder="200000"
               />
+              {budgetError && (
+                <span className="font-caption text-[11px] text-status-danger">{budgetError}</span>
+              )}
             </label>
             <button
               type="button"
               onClick={create}
-              disabled={creating || !wsId || !objective.trim()}
+              disabled={creating || !wsId || !objective.trim() || Boolean(budgetError)}
               className="inline-flex items-center justify-center gap-1.5 rounded-md bg-accent-primary px-3 py-1.5 text-[13px] text-foreground-on-accent disabled:opacity-50"
             >
               {creating && <Loader2 className="size-3.5 animate-spin" />}
@@ -407,8 +439,10 @@ function GoalCard({
 
       {goal.success_criteria.length > 0 && (
         <ul className="mt-3 flex flex-col gap-1">
-          {goal.success_criteria.map((c) => (
-            <li key={c} className="flex gap-2 text-[12px] text-foreground-secondary">
+          {goal.success_criteria.map((c, i) => (
+            // P2: index-prefixed key — identical criteria text would otherwise
+            // collide and silently drop the duplicate rows from the list.
+            <li key={`${i}-${c}`} className="flex gap-2 text-[12px] text-foreground-secondary">
               <span className="mt-1 size-1.5 shrink-0 rounded-full bg-accent-primary" />
               <span>{c}</span>
             </li>

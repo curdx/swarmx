@@ -161,6 +161,7 @@
   },
   "common": {
     "save": "Save",
+    "saving": "Saving…",
     "cancel": "Cancel",
     "delete": "Delete",
     "edit": "Edit",
@@ -170,6 +171,7 @@
     "send": "Send",
     "sending": "Sending…",
     "loading": "Loading…",
+    "retry": "Retry",
     "noMatch": "No match",
     "all": "All",
     "allWorkspaces": "All workspaces",
@@ -337,7 +339,13 @@
       "effortHint": "Default reasoning depth for this CLI's agents (Claude --effort / Codex reasoning effort); override per direction in chat.",
       "effortCodexNote": "Codex caps at “xhigh”; picking “max” auto-downgrades to xhigh.",
       "save": "Save",
-      "saved": "Saved"
+      "saved": "Saved",
+      "saveFailed": "Save failed: {{error}}",
+      "loadError": "Load failed: {{error}}",
+      "unsaved": "Unsaved changes",
+      "unsavedLeaveTitle": "Discard unsaved changes?",
+      "unsavedLeaveDesc": "You changed the model config but haven't saved. Leaving will discard these changes.",
+      "unsavedLeaveConfirm": "Discard changes"
     }
   },
   "chat": {
@@ -551,7 +559,10 @@
     "recording": "▶ recording…",
     "ready": "✓ ready to replay",
     "play": "Play",
-    "download": "Download"
+    "download": "Download",
+    "loadFailed": "Failed to load recordings",
+    "unscoped": "Unscoped",
+    "unscopedHint": "This recording's agent has no workspace (e.g. launched directly via MCP, or the agent row was cleaned up)."
   },
   "player": {
     "loading": "Loading…",
@@ -570,7 +581,8 @@
       "skip": "skip 5s",
       "frame": "frame",
       "back": "back to library"
-    }
+    },
+    "liveTruncatedHint": "Still recording — incomplete: playback only goes up to the bytes flushed so far and may cut off abruptly at the end. Reopen after it finalizes to see the full recording."
   },
   "context": {
     "title": "Context board",
@@ -858,7 +870,10 @@
     "save": "Save",
     "saving": "Saving…",
     "savedOk": "Saved",
-    "orphaned": "Workspace deleted"
+    "orphaned": "Workspace deleted",
+    "loadFailed": "Failed to load scheduled jobs",
+    "previewFailed": "Couldn't validate the expression (preview unavailable) — you can still try to save.",
+    "submitFailed": "Save failed, please retry"
   },
   "files": {
     "title": "File browser",
@@ -866,7 +881,8 @@
     "binary": "Binary file — no preview",
     "truncated": "truncated",
     "browseAll": "Browse whole filesystem",
-    "jailBlocked": "Outside this workspace — turn on \"Browse whole filesystem\" to view."
+    "jailBlocked": "Outside this workspace — turn on \"Browse whole filesystem\" to view.",
+    "readFailed": "Failed to load file"
   },
   "tasks": {
     "title": "Task board",
@@ -964,12 +980,16 @@
     "updatedAt": "Updated {{time}}",
     "events": "Calls",
     "byDay": "Daily trend",
+    "byDayUtc": "bucketed by UTC day",
     "byModel": "By model",
     "byAgent": "By agent",
     "model": "Model",
     "agent": "Agent",
     "estimated": "estimate",
     "partialPrice": "some models unpriced (tokens only)",
+    "costAtLeast": "some models unpriced — real cost is at least this much",
+    "stale": "data may be stale",
+    "refreshFailed": "Refresh failed",
     "tokensOnly": "tokens only",
     "pricingTitle": "Pricing table",
     "pricingMeta": "{{unit}} · {{source}} · {{path}}",
@@ -1021,6 +1041,7 @@
   },
   "cmdk": {
     "placeholder": "Search commands, jumps, wake agents…",
+    "listLoadFailed": "Failed to load workspaces / agents",
     "groups": {
       "frequent": "Frequent",
       "nav": "Navigate",

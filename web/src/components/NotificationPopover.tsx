@@ -155,7 +155,10 @@ export function NotificationPopover({ hasUnseen, onSeen }: Props) {
             t,
           );
           return {
-            id: `bb-${e.path}-${e.at}`,
+            // Stable id = path (no `at`), mirroring the full /notifications
+            // page: a rewrite of the same key is the same entry refreshed, not
+            // a new one. The live handler below updates it in place.
+            id: `bb-${e.path}`,
             kind: "blackboard" as const,
             title,
             body: context,
@@ -196,7 +199,9 @@ export function NotificationPopover({ hasUnseen, onSeen }: Props) {
         if (ev.path.endsWith(".progress.md")) return; // skip heartbeats
         const { title, context } = humanizeBlackboard(ev.path, workspaces, t);
         next = {
-          id: `bb-${ev.path}-${ev.at}`,
+          // Stable id = path; a rewrite refreshes the existing row in place
+          // (see update below) rather than minting a new one.
+          id: `bb-${ev.path}`,
           kind: "blackboard",
           title,
           body: context,
@@ -204,11 +209,14 @@ export function NotificationPopover({ hasUnseen, onSeen }: Props) {
         };
       }
       if (!next) return;
-      setItems((prev) =>
-        prev.some((p) => p.id === next!.id)
-          ? prev
-          : [next!, ...prev].slice(0, MAX_ITEMS),
-      );
+      const fresh = next;
+      setItems((prev) => {
+        // Update-in-place on id match (a re-sent message or a rewritten
+        // blackboard key) so the newest `at`/`body` wins and re-sorts to the
+        // top, instead of dropping the update as a stale duplicate.
+        const without = prev.filter((p) => p.id !== fresh.id);
+        return [fresh, ...without].slice(0, MAX_ITEMS);
+      });
     },
   });
 

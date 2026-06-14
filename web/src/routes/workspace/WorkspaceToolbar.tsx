@@ -8,7 +8,7 @@
  */
 
 import { type ReactNode, useState } from "react";
-import { NavLink, useLocation } from "react-router-dom";
+import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import {
   ClipboardList,
@@ -76,6 +76,14 @@ export function WorkspaceToolbar({
   const { t } = useTranslation();
   const tabs = buildTabs(workspace.id, threadSlug);
   const platform = getClientPlatformInfo();
+  const location = useLocation();
+  const navigate = useNavigate();
+  // "跳转未读" only does anything on the chat tab (only MessagesPanel scrolls).
+  // The chat tab is tabs[0] (the direction base, no `/dag|/ledger|/replays`
+  // suffix). On the other tabs the button was dead — clicking it did nothing.
+  // Detect we're on chat by an exact path match against the chat tab's target.
+  const chatTo = tabs[0].to;
+  const onChatTab = location.pathname === chatTo;
   // M4: bind the "LIVE" badge to the REAL socket connection, not just the
   // member count. After the WS drops (network blip / server restart) the REST
   // member snapshot lingers, so a count-only badge kept claiming "LIVE" over a
@@ -225,7 +233,14 @@ export function WorkspaceToolbar({
         {totalUnread > 0 && (
         <button
           type="button"
-          onClick={onJumpUnread}
+          onClick={() => {
+            // On dag/ledger/replays there's no message list to scroll, so the
+            // jump was a no-op. Switch back to the chat tab first; the bumped
+            // tick survives the Outlet swap and MessagesPanel mounts already
+            // scrolled to the first unread.
+            if (!onChatTab) navigate(chatTo);
+            onJumpUnread();
+          }}
           title={t("chat.jumpUnread")}
           className="flex shrink-0 cursor-pointer items-center"
         >

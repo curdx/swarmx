@@ -7,9 +7,9 @@
  * filesystem" toggle lifts the jail (sends `all=1`) for peeking at sibling
  * repos / config / logs. Binary / oversized files are flagged, not dumped.
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Folder, FileText, ArrowUp, Loader2 } from "lucide-react";
+import { Folder, FileText, ArrowUp, Loader2, RefreshCw } from "lucide-react";
 import { api, ApiError } from "@/api/http";
 import type { FileListResp, FileReadResp } from "@/api/types";
 import { cn } from "@/lib/cn";
@@ -19,6 +19,9 @@ import { ChatMarkdown } from "@/components/ChatMarkdown";
 import { isImagePath, fileUrl } from "@/lib/imagePaths";
 
 function fmtSize(n: number): string {
+  // 2**N (not bitwise 1<<N): JS bitwise is 32-bit signed, so 1<<40 wraps.
+  if (n >= 2 ** 40) return `${(n / 2 ** 40).toFixed(1)}T`;
+  if (n >= 2 ** 30) return `${(n / 2 ** 30).toFixed(1)}G`;
   if (n >= 1 << 20) return `${(n / (1 << 20)).toFixed(1)}M`;
   if (n >= 1 << 10) return `${(n / (1 << 10)).toFixed(1)}K`;
   return `${n}B`;
@@ -61,6 +64,10 @@ export default function FilesRoute() {
   const [preview, setPreview] = useState<FileReadResp | null>(null);
   const [previewPath, setPreviewPath] = useState<string | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewErr, setPreviewErr] = useState<string | null>(null);
+  // Monotonic id guarding against stale reads: when you click file B while A is
+  // still in flight, A's response must not overwrite B's pane.
+  const previewReqId = useRef(0);
 
   const open = useCallback(
     async (dir?: string, all = false) => {
@@ -68,9 +75,11 @@ export default function FilesRoute() {
       setErr(null);
       // Reset the preview pane — otherwise the previously-selected file's content
       // lingers on the right while you browse into an unrelated directory.
+      previewReqId.current++;
       setPreview(null);
       setPreviewPath(null);
       setPreviewLoading(false);
+      setPreviewErr(null);
       if (!all && !wsId) {
         setList(null);
         setLoading(false);
@@ -106,8 +115,10 @@ export default function FilesRoute() {
 
   const openFile = useCallback(
     async (path: string, all = false) => {
+      const req = ++previewReqId.current;
       setPreviewPath(path);
       setPreview(null);
+      setPreviewErr(null);
       // Images render via the <img> /api/file endpoint — no text read needed.
       if (isImagePath(path)) {
         setPreviewLoading(false);
@@ -115,12 +126,23 @@ export default function FilesRoute() {
       }
       setPreviewLoading(true);
       try {
-        setPreview(await api.filesRead(path, wsId || undefined, all));
+        const resp = await api.filesRead(path, wsId || undefined, all);
+        // Stale guard: a newer file was clicked while this read was in flight.
+        if (req !== previewReqId.current) return;
+        setPreview(resp);
       } catch (e) {
-        const msg = e instanceof ApiError && e.status === 403 ? t("files.jailBlocked") : (e as Error).message;
-        setPreview({ path, binary: false, size: 0, content: `(${msg})`, truncated: false });
+        if (req !== previewReqId.current) return;
+        // A failed read is an error state, NOT file content — keep it out of
+        // `preview.content` so we never render the message as if it were the file.
+        setPreviewErr(
+          e instanceof ApiError && e.status === 403
+            ? t("files.jailBlocked")
+            : e instanceof ApiError
+              ? e.detail
+              : (e as Error).message,
+        );
       } finally {
-        setPreviewLoading(false);
+        if (req === previewReqId.current) setPreviewLoading(false);
       }
     },
     [wsId, t],
@@ -129,7 +151,10 @@ export default function FilesRoute() {
   const toggleBrowseAll = () => {
     const next = !browseAll;
     setBrowseAll(next);
-    open(list?.dir, next);
+    // Turning the jail back ON: the current dir may be outside the workspace
+    // (browsed there while unjailed), so reusing it would 403. Pass undefined so
+    // the backend defaults to the workspace cwd. Turning OFF: keep current dir.
+    open(next ? list?.dir : undefined, next);
   };
 
   const join = (dir: string, name: string) => (dir.endsWith("/") ? dir + name : `${dir}/${name}`);
@@ -256,12 +281,32 @@ export default function FilesRoute() {
               </div>
             </div>
           )}
-          {!previewLoading && !preview && !imgPath && (
+          {/* Read failed — show the error + retry, never a blank "previewHint". */}
+          {!previewLoading && previewErr && !imgPath && (
+            <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
+              <p className="font-caption text-sm text-status-danger">
+                {t("files.readFailed", { defaultValue: "文件加载失败" })}
+              </p>
+              <p className="max-w-full truncate font-mono text-[11px] text-foreground-tertiary" title={previewErr}>
+                {previewErr}
+              </p>
+              {previewPath && (
+                <button
+                  type="button"
+                  onClick={() => openFile(previewPath, browseAll)}
+                  className="flex items-center gap-1.5 rounded-md border border-border-subtle px-3 py-1.5 font-caption text-xs text-foreground-secondary hover:bg-surface-tertiary"
+                >
+                  <RefreshCw className="size-3.5" /> {t("common.retry", { defaultValue: "重试" })}
+                </button>
+              )}
+            </div>
+          )}
+          {!previewLoading && !previewErr && !preview && !imgPath && (
             <div className="flex flex-1 items-center justify-center px-6 text-center font-caption text-sm text-foreground-tertiary">
               {t("files.previewHint")}
             </div>
           )}
-          {!previewLoading && preview && !imgPath && (
+          {!previewLoading && !previewErr && preview && !imgPath && (
             <div className="flex min-h-0 flex-1 flex-col">
               <div className="flex items-center gap-2 border-b border-border-subtle px-4 py-2 font-mono text-[11px] text-foreground-tertiary">
                 <span className="min-w-0 flex-1 truncate" title={preview.path}>

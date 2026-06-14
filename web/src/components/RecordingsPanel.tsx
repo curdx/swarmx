@@ -8,8 +8,8 @@
  * disposes the player's WASM/canvas resources via the wrapper's cleanup.
  */
 
-import { useEffect, useState } from "react";
-import { api } from "../api/http";
+import { useEffect, useRef, useState } from "react";
+import { api, ApiError } from "../api/http";
 import { downloadRecordingCast } from "@/lib/download";
 import type { RecordingInfo } from "../api/types";
 import { AsciicastPlayer } from "./AsciicastPlayer";
@@ -25,25 +25,51 @@ export function RecordingsPanel({ refreshTick }: Props) {
   const [items, setItems] = useState<RecordingInfo[]>([]);
   const [filter, setFilter] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   // M6e: 录像现在弹全屏 modal 播放（而不是在 360px 侧栏里展开成
   // 蚂蚁字大小）。playingId = 当前要全屏播放的录像 id；null = 关闭。
   // 单实例：每个 player 拿一个 WASM context，开多个浪费资源。
   const [playingId, setPlayingId] = useState<string | null>(null);
+  // 防重 + 陈旧响应守卫：refresh 在飞时不再发第二次；setState 前校验仍是最新。
+  const inFlightRef = useRef(false);
+  const reqIdRef = useRef(0);
+  // 最新 filter 给 refresh 闭包读（手动「↻」要用当前过滤词，但不想把 filter
+  // 进 refresh 的依赖否则每次输入都重建函数）。
+  const filterRef = useRef(filter);
+  filterRef.current = filter;
 
   const refresh = async () => {
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
+    const reqId = ++reqIdRef.current;
+    setRefreshing(true);
     try {
-      const rows = await api.listRecordings(
-        filter.trim() ? filter.trim() : undefined,
-      );
+      const q = filterRef.current.trim();
+      const rows = await api.listRecordings(q ? q : undefined);
+      if (reqId !== reqIdRef.current) return;
       setItems(rows);
       setError(null);
     } catch (e) {
-      setError((e as Error).message);
+      if (reqId !== reqIdRef.current) return;
+      setError(e instanceof ApiError ? e.detail : (e as Error).message);
+    } finally {
+      if (reqId === reqIdRef.current) {
+        setLoading(false);
+        setRefreshing(false);
+      }
+      inFlightRef.current = false;
     }
   };
 
+  // refreshTick 来自父组件：每个 agent_state=exited 都 +1，一次 orchestrator
+  // 收尾连发多条会把 tick 连跳几次。这里去抖 250ms 合并成一次拉取，避免重复
+  // 打 /api/recordings。
   useEffect(() => {
-    refresh();
+    const h = window.setTimeout(() => {
+      refresh();
+    }, 250);
+    return () => window.clearTimeout(h);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshTick]);
 
@@ -72,14 +98,36 @@ export function RecordingsPanel({ refreshTick }: Props) {
             if (e.key === "Enter") refresh();
           }}
         />
-        <button onClick={refresh} title="刷新">
-          ↻
+        <button
+          onClick={refresh}
+          title="刷新"
+          disabled={refreshing}
+          style={refreshing ? { ...refreshBtn, ...refreshBtnBusy } : refreshBtn}
+        >
+          <span
+            className={refreshing ? "animate-spin" : undefined}
+            style={{ display: "inline-block" }}
+          >
+            ↻
+          </span>
         </button>
       </div>
-      {error && <div style={errorRow}>{error}</div>}
+      {/* 三态分流：error 时只显示「加载失败 + 重试」，不再叠「暂无录像」自相矛盾。*/}
       <div style={listStyle}>
-        {items.length === 0 && <div style={emptyHint}>暂无录像</div>}
-        {items.map((r) => {
+        {loading && items.length === 0 ? (
+          <div style={emptyHint}>加载中…</div>
+        ) : error ? (
+          <div style={errorBlock}>
+            <div style={errorTitle}>加载录像失败</div>
+            <div style={errorDetail}>{error}</div>
+            <button onClick={refresh} disabled={refreshing} style={retryBtn}>
+              {refreshing ? "重试中…" : "重试"}
+            </button>
+          </div>
+        ) : items.length === 0 ? (
+          <div style={emptyHint}>暂无录像</div>
+        ) : (
+          items.map((r) => {
           const live = r.finalized_at == null;
           return (
             <div key={r.id} style={row}>
@@ -134,7 +182,8 @@ export function RecordingsPanel({ refreshTick }: Props) {
               </div>
             </div>
           );
-        })}
+          })
+        )}
       </div>
       {/* M6e: 全屏 modal 播放器。塞在 360px 侧栏里 120 列文字会变成蚂蚁，
           点 ▶ 播放后改成铺满主区域的 overlay；按 Esc 或点右上 × 关掉。 */}
@@ -161,6 +210,13 @@ export function RecordingsPanel({ refreshTick }: Props) {
                 × 关闭
               </button>
             </div>
+            {playing.finalized_at == null && (
+              // P2-3：live 录像还在写，回放只能播到「打开时已落盘的字节」为止，
+              // 到尾部会无预兆截断。提前提示「录制中 / 内容不完整」。
+              <div style={liveTruncatedHint}>
+                ● 录制中，内容不完整：回放只到当前已落盘的部分，结尾可能突然截断。完结后重新打开可看到完整录像。
+              </div>
+            )}
             <div style={modalPlayerHost}>
               <AsciicastPlayer
                 src={api.recordingCastUrl(playing.id)}
@@ -234,18 +290,62 @@ const linkButton: React.CSSProperties = {
   textDecoration: "none",
 };
 
-const errorRow: React.CSSProperties = {
-  color: "#fca5a5",
-  fontSize: 11,
-  padding: "4px 8px",
-  background: "#1f2937",
-};
-
 const emptyHint: React.CSSProperties = {
   color: "#64748b",
   fontSize: 12,
   textAlign: "center",
   marginTop: 16,
+};
+
+// P2-4：错误态独立成块（标题 + 详情 + 重试），不和「暂无录像」空态共存。
+const errorBlock: React.CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "center",
+  gap: 8,
+  marginTop: 24,
+  padding: "0 12px",
+  textAlign: "center",
+};
+
+const errorTitle: React.CSSProperties = {
+  color: "#fca5a5",
+  fontSize: 13,
+};
+
+const errorDetail: React.CSSProperties = {
+  color: "#94a3b8",
+  fontSize: 11,
+  wordBreak: "break-word",
+};
+
+const retryBtn: React.CSSProperties = {
+  fontSize: 12,
+  padding: "4px 12px",
+  background: "#1f2937",
+  color: "#cbd5f5",
+  border: "1px solid #374151",
+  borderRadius: 4,
+  cursor: "pointer",
+};
+
+const refreshBtn: React.CSSProperties = {
+  cursor: "pointer",
+};
+
+const refreshBtnBusy: React.CSSProperties = {
+  cursor: "default",
+  opacity: 0.6,
+};
+
+// P2-3：live 录像回放截断提示条（modal 内，header 下方）。
+const liveTruncatedHint: React.CSSProperties = {
+  fontSize: 11,
+  lineHeight: 1.5,
+  color: "#fbbf24",
+  padding: "6px 14px",
+  background: "rgba(251, 191, 36, 0.08)",
+  borderBottom: "1px solid #374151",
 };
 
 // M6e: 全屏播放 modal 的 backdrop —— position: fixed 覆盖整个 viewport，

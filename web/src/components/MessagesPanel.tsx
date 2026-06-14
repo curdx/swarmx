@@ -48,7 +48,8 @@ import {
   Undo2,
   X,
 } from "lucide-react";
-import { api } from "../api/http";
+import { api, ApiError } from "../api/http";
+import { toast } from "@/lib/toast";
 import type {
   AgentActivity,
   AgentInfo,
@@ -258,6 +259,24 @@ export function MessagesPanel({
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const [highlightId, setHighlightId] = useState<number | null>(null);
 
+  // P2: guard setState after unmount / fast room-switch. The 「优化」/「重新发送」
+  // requests can resolve after the component is gone (or the user已切房间);
+  // committing their result then warns "setState on unmounted" and可能写串房间。
+  // mountedRef gates every post-await setState; optimizeAbortRef aborts the
+  // in-flight optimize so a stale response never lands at all.
+  const mountedRef = useRef(true);
+  const optimizeAbortRef = useRef<AbortController | null>(null);
+  // P2: a jump target hidden only by the text filter — clear the filter, then
+  // this effect re-fires the scroll once idToIndex rebuilds with the row in it.
+  const pendingJumpRef = useRef<number | null>(null);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      optimizeAbortRef.current?.abort();
+    };
+  }, []);
+
   // agent_id → role lookup covering exited agents too, so historical messages
   // render with the right avatar colour even after agents die.
   const roleLookup = useRoleLookup(activeMembers);
@@ -287,16 +306,39 @@ export function MessagesPanel({
 
   useEffect(() => {
     if (!agentActivityById) return;
+    // P2: only backfill late tool events into a turn that is still in-flight or
+    // only JUST settled. A trace that finalized a while ago (terminal status, or
+    // completed_at older than the grace window) has been read by the user — a
+    // silent rewrite of its summary would change a finished, displayed message
+    // out from under them. So we leave finalized turns untouched and only patch
+    // the active / freshly-completed one (the legitimate case: a tool event that
+    // arrived a beat after the reply landed). Conservative by design.
+    const now = Date.now();
+    const BACKFILL_GRACE_MS = 30_000;
     setItems((prev) => {
       let changed = false;
       const next = prev.map((m) => {
         const trace = m.thought_trace;
         if (!trace || m.to_agent !== USER_SENDER) return m;
+        const terminalStatus =
+          trace.status === "done" ||
+          trace.status === "expired" ||
+          trace.status === "error";
+        // A trace is "finalized" once it has a terminal status OR a completed_at.
+        // Use completed_at as the settle time, falling back to updated_at for a
+        // terminal status that never stamped completed_at. Only the in-flight
+        // turn (no terminal status, no completed_at) and a turn that settled
+        // within the grace window stay open to backfill.
+        const isFinalized = terminalStatus || trace.completed_at != null;
+        const settledAt = trace.completed_at ?? trace.updated_at;
+        if (isFinalized && now - settledAt > BACKFILL_GRACE_MS) {
+          return m;
+        }
         const activities = agentActivityById[m.from_agent] ?? [];
         const lateSteps: ThoughtTraceStep[] = activities
           .filter((a) => a.phase === "ok" || a.phase === "error")
           .filter((a) => a.at >= trace.started_at)
-          .filter((a) => trace.completed_at == null || a.at <= trace.completed_at + 30_000)
+          .filter((a) => trace.completed_at == null || a.at <= trace.completed_at + BACKFILL_GRACE_MS)
           .map((a) => ({
             phase: a.phase === "error" ? "tool_error" : "tool_ok",
             label: `完成工具: ${a.label}`,
@@ -363,9 +405,14 @@ export function MessagesPanel({
     () => (workspaceAgentIds ? new Set(workspaceAgentIds) : null),
     [workspaceAgentIds],
   );
-  const visible = useMemo(() => {
-    const f = filter.toLowerCase();
-    return items.filter((m) => {
+  // Room/thread scope gate, WITHOUT the text filter. A message passing this is
+  // structurally part of THIS chat (right room + direction, not internal noise).
+  // Extracted so jump-to-parent / jump-to-unread can tell "hidden by the text
+  // filter" (recoverable — clear it and the target re-appears) apart from
+  // "hidden by room/thread scope" (not jumpable from here) instead of silently
+  // no-op'ing when idToIndex misses (P2).
+  const passesScope = useCallback(
+    (m: MessageRecord): boolean => {
       // 内部协调噪音 — 这些消息是给 LLM 看的 prompt,英文,普通用户看到
       // 一堆 "manual wake from operator —" / "blackboard X updated; please
       // check" 很乱。activity panel ≠ chat thread (业界 2026 共识):chat
@@ -374,10 +421,7 @@ export function MessagesPanel({
       //   - from=system + body 提 blackboard updated  — swarm watcher 推的黑板通知
       // farewell (worker 临别) 不算噪音,保留;普通 note/reply 全保留。
       if (m.kind === "wake") return false;
-      if (
-        m.from_agent === "system" &&
-        m.body.startsWith("blackboard ")
-      ) {
+      if (m.from_agent === "system" && m.body.startsWith("blackboard ")) {
         return false;
       }
       // 用户消息(from=user)走 to=scout(concierge),命中 wsSet。
@@ -388,10 +432,7 @@ export function MessagesPanel({
         if (workspaceSlug && targetSlug !== workspaceSlug) {
           return false;
         }
-      } else if (
-        wsSet &&
-        !(wsSet.has(m.from_agent) || wsSet.has(m.to_agent))
-      ) {
+      } else if (wsSet && !(wsSet.has(m.from_agent) || wsSet.has(m.to_agent))) {
         return false;
       }
       // Hard thread gate (defense-in-depth over the agent-set scope above):
@@ -407,6 +448,14 @@ export function MessagesPanel({
       ) {
         return false;
       }
+      return true;
+    },
+    [wsSet, workspaceSlug, activeThreadId],
+  );
+  const visible = useMemo(() => {
+    const f = filter.toLowerCase();
+    return items.filter((m) => {
+      if (!passesScope(m)) return false;
       if (!f) return true;
       return (
         m.from_agent.toLowerCase().includes(f) ||
@@ -414,7 +463,7 @@ export function MessagesPanel({
         m.body.toLowerCase().includes(f)
       );
     });
-  }, [items, filter, wsSet, workspaceSlug, activeThreadId]);
+  }, [items, filter, passesScope]);
   const rows = useMemo(() => buildRows(visible), [visible]);
 
   // ── virtualization (P2-3) ─────────────────────────────────────────────
@@ -710,29 +759,36 @@ export function MessagesPanel({
   const resend = async (text: string) => {
     const trimmed = text.trim();
     if (!trimmed || sending) return;
+    // P2: capture the recipient up-front so an unmount mid-flight doesn't read a
+    // stale ref, and guard every post-await setState with mountedRef — the
+    // send can resolve after the panel is gone / the user已切房间.
+    const recipient = defaultRecipient;
     setSending(true);
     try {
-      if (!defaultRecipient) {
+      if (!recipient) {
         if (onSend) await onSend(trimmed);
       } else {
         const rec = await api.sendMessage({
           from: USER_SENDER,
-          to: defaultRecipient.agent_id,
+          to: recipient.agent_id,
           kind: KIND_DEFAULT,
           body: trimmed,
         });
+        if (!mountedRef.current) return;
         setItems((prev) =>
           prev.some((m) => m.id === rec.id) ? prev : [...prev, rec],
         );
-        api.wakeAgent(defaultRecipient.agent_id).catch(() => {
+        api.wakeAgent(recipient.agent_id).catch(() => {
           /* swallow */
         });
       }
-      setError(null);
+      if (mountedRef.current) setError(null);
     } catch (e) {
-      setError((e as Error).message);
+      if (mountedRef.current) {
+        setError(e instanceof ApiError ? e.detail : (e as Error).message);
+      }
     } finally {
-      setSending(false);
+      if (mountedRef.current) setSending(false);
     }
   };
 
@@ -743,11 +799,17 @@ export function MessagesPanel({
   const optimize = async () => {
     const trimmed = body.trim();
     if (!trimmed || optimizing || sending) return;
+    // P2: abort any prior in-flight rewrite, then bind a fresh controller so an
+    // unmount / room-switch cancels this one (and guards the setState below).
+    optimizeAbortRef.current?.abort();
+    const controller = new AbortController();
+    optimizeAbortRef.current = controller;
     setOptimizing(true);
     setError(null);
     setOptimizeNote(null);
     try {
-      const res = await api.optimizePrompt(trimmed);
+      const res = await api.optimizePrompt(trimmed, controller.signal);
+      if (!mountedRef.current || controller.signal.aborted) return;
       if (res.changed && res.optimized && res.optimized !== body) {
         setPreOptimize(body);
         setBody(res.optimized);
@@ -755,13 +817,19 @@ export function MessagesPanel({
       } else {
         // Already clear — tell the user nothing changed (don't fake an edit).
         setOptimizeNote(t("messages.optimizeNoChange"));
-        window.setTimeout(() => setOptimizeNote(null), 2600);
+        window.setTimeout(() => {
+          if (mountedRef.current) setOptimizeNote(null);
+        }, 2600);
       }
       composerRef.current?.focus();
     } catch (e) {
-      setError((e as Error).message);
+      // A deliberate abort (unmount / re-fire) isn't an error to surface.
+      if (controller.signal.aborted || (e as Error).name === "AbortError") return;
+      if (!mountedRef.current) return;
+      setError(e instanceof ApiError ? e.detail : (e as Error).message);
     } finally {
-      setOptimizing(false);
+      if (optimizeAbortRef.current === controller) optimizeAbortRef.current = null;
+      if (mountedRef.current) setOptimizing(false);
     }
   };
 
@@ -893,33 +961,82 @@ export function MessagesPanel({
     }
   };
 
-  const jumpToParent = (parentId: number) => {
-    const idx = idToIndex.get(parentId);
+  // Scroll a row into view + flash it. Centralizes the "is the target actually
+  // reachable in the current view?" decision so a jump never silently no-ops
+  // (P2). idToIndex covers only the filtered+scoped rows, so a miss means the
+  // target is either filtered out by the search box (recoverable: clear it and
+  // retry) or outside this room/direction (not reachable from here: tell the
+  // user instead of doing nothing).
+  const scrollToVisibleIndex = useCallback(
+    (idx: number, id: number) => {
+      virtualizer.scrollToIndex(idx, { align: "center", behavior: "smooth" });
+      setHighlightId(id);
+      window.setTimeout(
+        () => setHighlightId((cur) => (cur === id ? null : cur)),
+        1200,
+      );
+    },
+    [virtualizer],
+  );
+  const jumpToMessage = useCallback(
+    (id: number) => {
+      const idx = idToIndex.get(id);
+      if (idx != null) {
+        scrollToVisibleIndex(idx, id);
+        return;
+      }
+      // Not in the rendered rows. If it's in this room/direction and just hidden
+      // by the active text filter, clear the filter and let the deferred-jump
+      // effect re-fire once the row re-materializes.
+      const target = items.find((m) => m.id === id);
+      if (target && filter && passesScope(target)) {
+        pendingJumpRef.current = id;
+        setFilter("");
+        return;
+      }
+      // Genuinely不在当前视图(别的房间/方向,或已被裁出 200 行窗口)。别静默,
+      // 明确告诉用户。
+      toast.message(
+        t("messages.jumpNotVisible", {
+          id,
+          defaultValue: "#{{id}} 不在当前对话里(可能属于别的房间/方向或已滚出范围)",
+        }),
+      );
+    },
+    [idToIndex, items, filter, passesScope, scrollToVisibleIndex, t],
+  );
+  const jumpToParent = jumpToMessage;
+
+  // Deferred jump: after clearing the filter, idToIndex rebuilds — fire the
+  // pending scroll once the target row exists. Guarded so a stale pending id
+  // (target slipped out of the window) is dropped instead of looping.
+  useEffect(() => {
+    const id = pendingJumpRef.current;
+    if (id == null) return;
+    const idx = idToIndex.get(id);
     if (idx == null) return;
-    virtualizer.scrollToIndex(idx, { align: "center", behavior: "smooth" });
-    setHighlightId(parentId);
-    window.setTimeout(
-      () => setHighlightId((cur) => (cur === parentId ? null : cur)),
-      1200,
-    );
-  };
+    pendingJumpRef.current = null;
+    scrollToVisibleIndex(idx, id);
+  }, [idToIndex, scrollToVisibleIndex]);
 
   // 用户点顶栏 "N 未读" badge → bump jumpUnreadTick → 滚到第一条未读
-  // 并闪一下高亮。初始 0 不触发 (依赖数组改变才进 effect)。
+  // 并闪一下高亮。初始 0 不触发 (依赖数组改变才进 effect)。第一条未读可能被
+  // 文字过滤藏住 — jumpToMessage 会清掉过滤再跳,不再静默无反应 (P2)。
   useEffect(() => {
     if (!jumpUnreadTick) return;
     const firstUnread = items.find(
-      (m) => m.read_at === null && m.to_agent === USER_SENDER,
+      (m) =>
+        m.read_at === null && m.to_agent === USER_SENDER && passesScope(m),
     );
-    if (!firstUnread) return;
-    const idx = idToIndex.get(firstUnread.id);
-    if (idx == null) return;
-    virtualizer.scrollToIndex(idx, { align: "center", behavior: "smooth" });
-    setHighlightId(firstUnread.id);
-    window.setTimeout(
-      () => setHighlightId((cur) => (cur === firstUnread.id ? null : cur)),
-      1200,
-    );
+    if (!firstUnread) {
+      toast.message(
+        t("messages.jumpUnreadNone", {
+          defaultValue: "当前对话里没有未读消息了",
+        }),
+      );
+      return;
+    }
+    jumpToMessage(firstUnread.id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jumpUnreadTick]);
 

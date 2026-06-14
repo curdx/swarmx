@@ -11,9 +11,10 @@
  * yet — a deliberate scope line; poll is cheap and correct). Mutations refetch
  * immediately so the operator sees their action land.
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { api } from "@/api/http";
+import { Loader2 } from "lucide-react";
+import { api, ApiError } from "@/api/http";
 import type { TaskRow } from "@/api/types";
 import { cn } from "@/lib/cn";
 import { relTime } from "@/lib/relTime";
@@ -30,8 +31,13 @@ const COLUMN_CAP = 12;
 
 // Column order + the dot color per status. Derived statuses + operator-set ones
 // share this map so a human "blocked" lands in the same column as a derived one.
+// Kept in lockstep with the backend VALID_STATUSES (triage/todo/ready/running/
+// blocked/done/archived); a missing column would silently drop cards whose
+// effective_status is `triage`/`ready` into nowhere.
 const COLUMNS: { key: string; dot: string }[] = [
+  { key: "triage", dot: "bg-state-idle" },
   { key: "todo", dot: "bg-state-idle" },
+  { key: "ready", dot: "bg-accent-primary" },
   { key: "running", dot: "bg-accent-primary" },
   { key: "blocked", dot: "bg-status-danger" },
   { key: "done", dot: "bg-status-success" },
@@ -45,25 +51,55 @@ export default function TasksRoute() {
   const [err, setErr] = useState(false);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [confirm, setConfirm] = useState<ConfirmActionState | null>(null);
+  // P2-1: agent_ids with an in-flight status write — drives the per-card spinner
+  // and blocks a second click landing on the same card mid-request.
+  const [inFlight, setInFlight] = useState<Set<string>>(() => new Set());
+  const inFlightRef = useRef(inFlight);
+  inFlightRef.current = inFlight;
+  // Stale-response guard: a poll/refetch that resolves after a newer one (or
+  // after the workspace switched) must not clobber fresh state.
+  const reqIdRef = useRef(0);
 
   const load = useCallback(async () => {
+    const reqId = ++reqIdRef.current;
     try {
       const res = await api.listTasks(wsId || undefined);
+      if (reqId !== reqIdRef.current) return; // a newer load already won
       setTasks(res.tasks);
       setErr(false);
     } catch {
+      if (reqId !== reqIdRef.current) return;
       setErr(true);
     }
   }, [wsId]);
 
   useEffect(() => {
     load();
-    const id = window.setInterval(load, 4000);
-    return () => window.clearInterval(id);
+    // P2-3: don't keep polling a hidden tab — skip the fetch while
+    // document.hidden, and fire one immediate load when it comes back so the
+    // board is fresh the moment the operator looks at it again.
+    const id = window.setInterval(() => {
+      if (!document.hidden) load();
+    }, 4000);
+    const onVisible = () => {
+      if (!document.hidden) load();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.clearInterval(id);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, [load]);
 
   const setStatus = useCallback(
     async (agentId: string, status: string | null) => {
+      // P2-1: ignore a repeat action while this card's write is still in flight.
+      if (inFlightRef.current.has(agentId)) return;
+      setInFlight((prev) => {
+        const next = new Set(prev);
+        next.add(agentId);
+        return next;
+      });
       // optimistic: reflect immediately, then refetch for ground truth
       const snapshot = tasks; // P0-1: keep the pre-change list so we can revert
       setTasks((prev) =>
@@ -84,7 +120,13 @@ export default function TasksRoute() {
         // optimistically "completed" while the backend never recorded it.
         setTasks(snapshot);
         toast.error(t("tasks.statusFailed", { defaultValue: "状态更新失败，请重试" }), {
-          description: (e as Error)?.message,
+          description: e instanceof ApiError ? e.detail : (e as Error)?.message,
+        });
+      } finally {
+        setInFlight((prev) => {
+          const next = new Set(prev);
+          next.delete(agentId);
+          return next;
         });
       }
     },
@@ -126,7 +168,16 @@ export default function TasksRoute() {
       </header>
 
       {err && (
-        <div className="px-6 py-3 font-caption text-sm text-status-danger">{t("tasks.loadError")}</div>
+        <div className="flex items-center gap-3 px-6 py-3 font-caption text-sm text-status-danger">
+          <span>{t("tasks.loadError")}</span>
+          <button
+            type="button"
+            onClick={() => load()}
+            className="rounded border border-border-subtle px-2 py-0.5 text-xs text-foreground-secondary transition-colors hover:bg-surface-tertiary hover:text-foreground-primary"
+          >
+            {t("error.retry", { defaultValue: "重试" })}
+          </button>
+        </div>
       )}
 
       {tasks && tasks.length === 0 && !err && (
@@ -152,7 +203,13 @@ export default function TasksRoute() {
                 </div>
                 <div className="flex flex-col gap-2">
                   {shown.map((tk) => (
-                    <TaskCard key={tk.agent_id} task={tk} onSet={requestStatus} t={t} />
+                    <TaskCard
+                      key={tk.agent_id}
+                      task={tk}
+                      onSet={requestStatus}
+                      busy={inFlight.has(tk.agent_id)}
+                      t={t}
+                    />
                   ))}
                   {items.length > COLUMN_CAP && (
                     <button
@@ -182,10 +239,13 @@ export default function TasksRoute() {
 function TaskCard({
   task,
   onSet,
+  busy,
   t,
 }: {
   task: TaskRow;
   onSet: (task: TaskRow, status: string | null) => void;
+  /** A status write for this card is in flight — disable its buttons + spin. */
+  busy: boolean;
   t: (k: string, o?: Record<string, unknown>) => string;
 }) {
   return (
@@ -222,30 +282,50 @@ function TaskCard({
           {relTime(task.last_activity_at ?? task.spawned_at, t)}
         </span>
       </div>
-      <div className="flex flex-wrap gap-1">
+      <div className="flex flex-wrap items-center gap-1">
+        {busy && (
+          <Loader2 className="size-3 shrink-0 animate-spin text-foreground-tertiary" />
+        )}
         {task.status !== "blocked" && (
-          <CardBtn onClick={() => onSet(task, "blocked")}>{t("tasks.action.block")}</CardBtn>
+          <CardBtn onClick={() => onSet(task, "blocked")} disabled={busy}>
+            {t("tasks.action.block")}
+          </CardBtn>
         )}
         {task.status !== "done" && (
-          <CardBtn onClick={() => onSet(task, "done")}>{t("tasks.action.done")}</CardBtn>
+          <CardBtn onClick={() => onSet(task, "done")} disabled={busy}>
+            {t("tasks.action.done")}
+          </CardBtn>
         )}
         {task.status !== "archived" && (
-          <CardBtn onClick={() => onSet(task, "archived")}>{t("tasks.action.archive")}</CardBtn>
+          <CardBtn onClick={() => onSet(task, "archived")} disabled={busy}>
+            {t("tasks.action.archive")}
+          </CardBtn>
         )}
         {task.overridden && (
-          <CardBtn onClick={() => onSet(task, null)}>{t("tasks.action.reopen")}</CardBtn>
+          <CardBtn onClick={() => onSet(task, null)} disabled={busy}>
+            {t("tasks.action.reopen")}
+          </CardBtn>
         )}
       </div>
     </div>
   );
 }
 
-function CardBtn({ onClick, children }: { onClick: () => void; children: React.ReactNode }) {
+function CardBtn({
+  onClick,
+  disabled,
+  children,
+}: {
+  onClick: () => void;
+  disabled?: boolean;
+  children: React.ReactNode;
+}) {
   return (
     <button
       type="button"
       onClick={onClick}
-      className="rounded border border-border-subtle px-1.5 py-0.5 font-caption text-[10px] text-foreground-secondary transition-colors hover:bg-surface-tertiary hover:text-foreground-primary"
+      disabled={disabled}
+      className="rounded border border-border-subtle px-1.5 py-0.5 font-caption text-[10px] text-foreground-secondary transition-colors hover:bg-surface-tertiary hover:text-foreground-primary disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent disabled:hover:text-foreground-secondary"
     >
       {children}
     </button>

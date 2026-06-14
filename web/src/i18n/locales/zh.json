@@ -161,6 +161,7 @@
   },
   "common": {
     "save": "保存",
+    "saving": "保存中…",
     "cancel": "取消",
     "delete": "删除",
     "edit": "编辑",
@@ -170,6 +171,7 @@
     "send": "发送",
     "sending": "发送中…",
     "loading": "加载中…",
+    "retry": "重试",
     "noMatch": "没有匹配",
     "all": "全部",
     "allWorkspaces": "全部工作空间",
@@ -337,7 +339,13 @@
       "effortHint": "这个 CLI 的 agent 默认想多深（Claude --effort / Codex reasoning effort）；聊天里可按方向单独覆盖。",
       "effortCodexNote": "Codex 封顶到「极高」；选「最大」会自动降到极高。",
       "save": "保存",
-      "saved": "已保存"
+      "saved": "已保存",
+      "saveFailed": "保存失败：{{error}}",
+      "loadError": "加载失败：{{error}}",
+      "unsaved": "有未保存的改动",
+      "unsavedLeaveTitle": "放弃未保存的改动？",
+      "unsavedLeaveDesc": "你在「模型」里改了配置但还没保存，离开会丢弃这些改动。",
+      "unsavedLeaveConfirm": "放弃改动"
     }
   },
   "chat": {
@@ -551,7 +559,10 @@
     "recording": "▶ recording…",
     "ready": "✓ ready to replay",
     "play": "播放",
-    "download": "下载"
+    "download": "下载",
+    "loadFailed": "加载录像失败",
+    "unscoped": "未归属",
+    "unscopedHint": "该录像的 agent 没有归属工作空间（可能由 MCP 直接拉起，或 agent 行已被清理）"
   },
   "player": {
     "loading": "加载中…",
@@ -570,7 +581,8 @@
       "skip": "快进/快退 5s",
       "frame": "单帧",
       "back": "返回库"
-    }
+    },
+    "liveTruncatedHint": "录制中，内容不完整：回放只到当前已落盘的部分，结尾可能突然截断。完结后重新打开可看到完整录像。"
   },
   "context": {
     "title": "上下文",
@@ -858,7 +870,10 @@
     "save": "保存",
     "saving": "保存中…",
     "savedOk": "已保存",
-    "orphaned": "工作空间已删除"
+    "orphaned": "工作空间已删除",
+    "loadFailed": "定时任务加载失败",
+    "previewFailed": "无法校验表达式（预览接口未响应），可仍尝试保存。",
+    "submitFailed": "保存失败，请重试"
   },
   "files": {
     "title": "文件浏览器",
@@ -866,7 +881,8 @@
     "binary": "二进制文件，不预览",
     "truncated": "已截断",
     "browseAll": "浏览整个文件系统",
-    "jailBlocked": "超出当前工作空间范围 — 打开「浏览整个文件系统」以查看。"
+    "jailBlocked": "超出当前工作空间范围 — 打开「浏览整个文件系统」以查看。",
+    "readFailed": "文件加载失败"
   },
   "tasks": {
     "title": "任务看板",
@@ -964,12 +980,16 @@
     "updatedAt": "更新于 {{time}}",
     "events": "调用次数",
     "byDay": "每日趋势",
+    "byDayUtc": "按 UTC 日切分",
     "byModel": "按模型",
     "byAgent": "按 agent",
     "model": "模型",
     "agent": "Agent",
     "estimated": "估算值",
     "partialPrice": "部分模型无价目，仅 token",
+    "costAtLeast": "部分模型未定价，实际成本不低于此值",
+    "stale": "数据可能已过期",
+    "refreshFailed": "刷新失败",
     "tokensOnly": "仅 token",
     "pricingTitle": "价目表",
     "pricingMeta": "{{unit}} · {{source}} · {{path}}",
@@ -1021,6 +1041,7 @@
   },
   "cmdk": {
     "placeholder": "搜索命令、跳转、唤醒 agent…",
+    "listLoadFailed": "工作区 / agent 列表加载失败",
     "groups": {
       "frequent": "常用",
       "nav": "导航",

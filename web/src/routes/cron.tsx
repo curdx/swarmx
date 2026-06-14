@@ -9,10 +9,10 @@
  * row shows when it next fires, can be edited in place, and "Run now" fires
  * immediately via /api/cron/:id/run.
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Play, Trash2, Loader2, Check, X, Pencil } from "lucide-react";
-import { api } from "@/api/http";
+import { api, ApiError } from "@/api/http";
 import type { CronJob, Workspace } from "@/api/types";
 import { cn } from "@/lib/cn";
 import { toast } from "@/lib/toast";
@@ -44,6 +44,26 @@ type FormValues = {
 
 type TFn = ReturnType<typeof useTranslation>["t"];
 
+/** Unwrap an error to user-facing copy: ApiError carries the server's friendly
+ *  `{ error }` detail (not the raw "POST /api/cron → 400:" dev string). */
+function errMsg(e: unknown): string {
+  return e instanceof ApiError ? e.detail : (e as Error).message;
+}
+
+/**
+ * A `Date.now()` snapshot that re-renders every `intervalMs` so relative-time
+ * copy ("约 3 小时后") stays fresh instead of freezing at first paint. The timer
+ * is cleared on unmount.
+ */
+function useNowTick(intervalMs = 30_000): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), intervalMs);
+    return () => clearInterval(id);
+  }, [intervalMs]);
+  return now;
+}
+
 /** "今天 09:00 · 约 3 小时后" — a UTC instant rendered in a fixed offset. */
 function formatRun(utcMs: number, offsetMin: number, now: number, t: TFn, lang: string): string {
   const w = wallClock(utcMs, offsetMin, now);
@@ -57,6 +77,10 @@ function formatRun(utcMs: number, offsetMin: number, now: number, t: TFn, lang: 
           : fmtDate(w);
   return `${day} ${fmtTime(w)} · ${relativeFromNow(utcMs, now, lang)}`;
 }
+
+/** Server preview verdict, or `null` when we have none, or `"error"` when the
+ *  preview request itself failed (distinct from a server "invalid" verdict). */
+type PreviewState = { valid: boolean; next_run: number | null } | null | "error";
 
 /**
  * Shared create/edit form. `tzOffset` is the offset the expression is authored
@@ -94,7 +118,10 @@ function CronJobForm({
   const [prompt, setPrompt] = useState(initial.prompt);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [exprPreview, setExprPreview] = useState<{ valid: boolean; next_run: number | null } | null>(null);
+  // `null` = not yet previewed (empty expr); `"error"` = the preview request
+  // failed (distinct from a server verdict of invalid). Keeping them apart lets
+  // canSubmit refuse to gate on a verdict we never actually got.
+  const [exprPreview, setExprPreview] = useState<PreviewState>(null);
   const describe = useMemo(() => describeCron(expr, lang), [expr, lang]);
 
   // Fill an empty workspace once the list arrives (create mode mounts before
@@ -120,7 +147,9 @@ function CronJobForm({
           if (!cancelled) setExprPreview(r);
         })
         .catch(() => {
-          if (!cancelled) setExprPreview(null);
+          // A failed preview is NOT "no verdict yet" — mark it distinctly so
+          // canSubmit won't wave the expr through as if it had been validated.
+          if (!cancelled) setExprPreview("error");
         });
     }, 300);
     return () => {
@@ -129,8 +158,20 @@ function CronJobForm({
     };
   }, [expr, tzOffset]);
 
-  const now = Date.now();
-  const canSubmit = !busy && !!wsId && !!expr.trim() && !!prompt.trim() && exprPreview?.valid !== false;
+  // Ticking clock so the preview's "下次 … · 约 3 小时后" doesn't freeze.
+  const now = useNowTick();
+  // Resolve the union into plain values the JSX can branch on without
+  // re-narrowing inline: `verdict` is the server's actual response (or null when
+  // we have none / it failed), `previewFailed` flags the failed probe.
+  const previewFailed = exprPreview === "error";
+  const verdict = exprPreview === "error" ? null : exprPreview;
+  // A still-pending / empty preview (`null`) is NOT a green light — only an
+  // affirmative `valid === true` is. A failed preview leaves the server as the
+  // final arbiter (don't dead-lock the form on a flaky probe), surfaced below.
+  const previewOk = verdict !== null && verdict.valid;
+  const previewInvalid = verdict !== null && !verdict.valid;
+  const canSubmit =
+    !busy && !!wsId && !!expr.trim() && !!prompt.trim() && (previewOk || previewFailed);
 
   const submit = async () => {
     setBusy(true);
@@ -144,7 +185,7 @@ function CronJobForm({
         tz_offset_minutes: tzOffset,
       });
       if (!res.ok) {
-        setErr(res.error ?? "failed");
+        setErr(res.error ?? t("cron.submitFailed", { defaultValue: "保存失败，请重试" }));
       } else {
         if (resetAfterSubmit) {
           setName("");
@@ -153,7 +194,9 @@ function CronJobForm({
         onDone(describe);
       }
     } catch (e) {
-      setErr((e as Error).message);
+      // ApiError → the server's friendly `{ error }` detail, not the raw
+      // "POST /api/cron → 400:" dev string.
+      setErr(errMsg(e));
     } finally {
       setBusy(false);
     }
@@ -190,10 +233,10 @@ function CronJobForm({
             onChange={(e) => setExpr(e.target.value)}
             placeholder="0 9 * * 1-5"
             spellCheck={false}
-            aria-invalid={exprPreview?.valid === false}
+            aria-invalid={previewInvalid}
             className={cn(
               "min-h-8 rounded border bg-surface-primary px-2 py-1 font-mono text-[13px]",
-              exprPreview && !exprPreview.valid ? "border-status-danger" : "border-border-subtle",
+              previewInvalid ? "border-status-danger" : "border-border-subtle",
             )}
           />
         </label>
@@ -222,14 +265,22 @@ function CronJobForm({
 
       {/* human-readable description + validity / next-run */}
       <div className="min-h-[16px] font-caption text-[11px]">
-        {exprPreview?.valid === false ? (
+        {previewFailed ? (
+          // Preview couldn't be reached — say so honestly instead of silently
+          // showing the expr as if it had been validated. Submit stays allowed
+          // (server is the final arbiter), so this is a warning, not a block.
+          <span className="text-state-warning">
+            {describe ? `${describe} · ` : ""}
+            {t("cron.previewFailed", { defaultValue: "无法校验表达式（预览接口未响应），可仍尝试保存。" })}
+          </span>
+        ) : previewInvalid ? (
           <span className="text-status-danger">{t("cron.invalidExpr")}</span>
         ) : describe ? (
           <span className="text-foreground-secondary">
             {describe}
-            {exprPreview?.next_run
-              ? ` · ${t("cron.nextLabel")} ${formatRun(exprPreview.next_run, tzOffset, now, t, lang)}`
-              : exprPreview && exprPreview.next_run === null && exprPreview.valid
+            {previewOk && verdict && verdict.next_run !== null
+              ? ` · ${t("cron.nextLabel")} ${formatRun(verdict.next_run, tzOffset, now, t, lang)}`
+              : previewOk && verdict && verdict.next_run === null
                 ? ` · ${t("cron.noUpcoming")}`
                 : ""}
           </span>
@@ -299,8 +350,13 @@ export default function CronRoute() {
   const [notice, setNotice] = useState<string | null>(null);
   const [runResult, setRunResult] = useState<{ id: string; ok: boolean; msg: string } | null>(null);
   const [runningId, setRunningId] = useState<string | null>(null);
+  const [togglingId, setTogglingId] = useState<string | null>(null);
   const [confirmDel, setConfirmDel] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
+  // In-flight guard for the enable/disable switch: blocks a second flip while
+  // the first request is still resolving (a fast double-click could otherwise
+  // fire two opposite toggles and land on the wrong state).
+  const togglingRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!notice) return;
@@ -325,7 +381,7 @@ export default function CronRoute() {
       setWorkspaces(ws);
       setErr(null);
     } catch (e) {
-      setErr((e as Error).message);
+      setErr(errMsg(e));
     } finally {
       setLoading(false);
     }
@@ -335,20 +391,32 @@ export default function CronRoute() {
     load();
   }, [load]);
 
-  const toggle = async (j: CronJob) => {
-    // Optimistic: flip immediately, reconcile on the response.
+  const toggle = async (id: string) => {
+    // 防重:同一行的切换在途时丢弃后续点击,避免两个相反的请求竞态。
+    if (togglingRef.current === id) return;
+    // Read the CURRENT enabled from the latest list (not a stale captured prop),
+    // so the target is always the negation of what's actually on screen.
     const snap = jobs; // P1-21: keep the pre-toggle list so we can revert
-    setJobs((prev) => prev.map((x) => (x.id === j.id ? { ...x, enabled: !x.enabled } : x)));
+    const cur = snap.find((x) => x.id === id);
+    if (!cur) return;
+    const target = !cur.enabled;
+    togglingRef.current = id;
+    setTogglingId(id);
+    // Optimistic: flip immediately, reconcile on the response.
+    setJobs((prev) => prev.map((x) => (x.id === id ? { ...x, enabled: target } : x)));
     try {
-      await api.toggleCron(j.id, !j.enabled);
+      await api.toggleCron(id, target);
       load();
     } catch (e) {
       // A failed toggle must NOT leave the switch optimistically flipped while the
       // backend never recorded it. Roll the switch back and surface the error.
       setJobs(snap);
       toast.error(t("cron.toggleFailed", { defaultValue: "切换启用状态失败，请重试" }), {
-        description: (e as Error)?.message,
+        description: errMsg(e),
       });
+    } finally {
+      togglingRef.current = null;
+      setTogglingId(null);
     }
   };
 
@@ -360,7 +428,7 @@ export default function CronRoute() {
       if (!r.ok && r.skipped) setRunResult({ id: j.id, ok: false, msg: r.skipped });
       else setRunResult({ id: j.id, ok: true, msg: t("cron.ranOk") });
     } catch (e) {
-      setRunResult({ id: j.id, ok: false, msg: (e as Error).message });
+      setRunResult({ id: j.id, ok: false, msg: errMsg(e) });
     } finally {
       setRunningId(null);
       load();
@@ -380,13 +448,15 @@ export default function CronRoute() {
       setJobs(snap);
       load();
       toast.error(t("cron.deleteFailed", { defaultValue: "删除任务失败，请重试" }), {
-        description: (e as Error)?.message,
+        description: errMsg(e),
       });
     }
   };
 
   const wsName = (id: string) => workspaces.find((w) => w.id === id)?.name ?? id.slice(0, 8);
-  const now = Date.now();
+  // Ticking clock so each row's "下次 … · 约 3 小时后" stays accurate the longer
+  // the page sits open, instead of freezing at the first-render snapshot.
+  const now = useNowTick();
 
   return (
     <div className="h-full overflow-y-auto">
@@ -416,13 +486,31 @@ export default function CronRoute() {
           />
         </section>
 
-        {err && <div className="font-caption text-sm text-status-danger">{err}</div>}
         {notice && <div className="font-caption text-sm text-status-success">{notice}</div>}
 
         {/* job list */}
         {loading ? (
           <div className="flex items-center gap-2 font-caption text-xs text-foreground-tertiary">
             <Loader2 className="size-3.5 animate-spin" /> {t("common.loading")}
+          </div>
+        ) : err ? (
+          // A failed fetch is NOT "no jobs yet" — show the failure + a retry so an
+          // empty list can't masquerade as a real empty state.
+          <div className="flex flex-col items-center gap-2 rounded-lg border border-status-danger/30 bg-surface-secondary px-4 py-6 text-center">
+            <span className="font-caption text-sm text-status-danger">
+              {t("cron.loadFailed", { defaultValue: "定时任务加载失败" })}
+            </span>
+            <span className="font-caption text-[11px] text-foreground-tertiary">{err}</span>
+            <button
+              type="button"
+              onClick={() => {
+                setLoading(true);
+                load();
+              }}
+              className="mt-1 min-h-8 rounded-md border border-border-subtle px-3 py-1.5 font-caption text-[12px] text-foreground-secondary hover:bg-surface-tertiary"
+            >
+              {t("common.retry", { defaultValue: "重试" })}
+            </button>
           </div>
         ) : jobs.length === 0 ? (
           <div className="rounded-lg border border-border-subtle bg-surface-secondary px-4 py-6 text-center font-caption text-sm text-foreground-tertiary">
@@ -472,10 +560,11 @@ export default function CronRoute() {
                         role="switch"
                         aria-checked={j.enabled}
                         aria-label={j.enabled ? t("cron.disable") : t("cron.enable")}
-                        onClick={() => toggle(j)}
+                        disabled={togglingId === j.id}
+                        onClick={() => toggle(j.id)}
                         title={j.enabled ? t("cron.disable") : t("cron.enable")}
                         className={cn(
-                          "size-8 shrink-0 rounded-full border border-transparent p-0 hover:border-border-subtle hover:bg-surface-tertiary after:mx-auto after:block after:size-2.5 after:rounded-full",
+                          "size-8 shrink-0 rounded-full border border-transparent p-0 hover:border-border-subtle hover:bg-surface-tertiary after:mx-auto after:block after:size-2.5 after:rounded-full disabled:opacity-60",
                           j.enabled ? "after:bg-status-success" : "after:bg-foreground-tertiary",
                         )}
                       />

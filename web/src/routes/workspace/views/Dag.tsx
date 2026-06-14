@@ -393,6 +393,17 @@ export default function DagView() {
     return ["all", ...Array.from(s).sort()];
   }, [liveAgents]);
 
+  // P2: 过滤器指向的角色消失时(该 role 的 agent 全死)自动重置为 all。
+  // 否则 pill 行(roles.length > 2 才渲染)可能整行隐藏,留下一个指向已消失
+  // 角色的 roleFilter,filteredAgents 永远空,列表/画布卡死且无控件可重置。
+  // 等首批 agent 真正加载完(roles 至少含 "all" 之外的项)再判断,避免
+  // 初次拉取前把用户从 URL 带来的合法 filter 误清掉。
+  useEffect(() => {
+    if (roleFilter !== "all" && roles.length > 1 && !roles.includes(roleFilter)) {
+      setRoleFilter("all");
+    }
+  }, [roleFilter, roles, setRoleFilter]);
+
   // 成员列表 / role filter 都只关心还活着的 agent — DAG canvas 也只画
   // alive 节点,两边语义一致避免列表里灰着的 agent 让人误以为"画里少了"。
   // 历史死亡 agent 走 Recordings 视图复盘,不该在 live 操作面板里干扰视线。
@@ -461,20 +472,26 @@ export default function DagView() {
     if (paused.length === 0) return;
     setBusy(true);
     try {
-      await Promise.all(
-        paused.map((a) =>
-          api.resumeAgent(a.agent_id).catch((e) => {
-            // Soft-fail per agent — don't abort the batch.
-            // eslint-disable-next-line no-console
-            console.warn("resume failed", a.agent_id, e);
-          }),
-        ),
+      // Per-agent soft-fail so one bad agent doesn't abort the batch — but
+      // P2: surface the failures. Was console.warn-only, so a whole-batch
+      // failure looked like nothing happened (界面撒谎).
+      const results = await Promise.allSettled(
+        paused.map((a) => api.resumeAgent(a.agent_id)),
       );
+      const failed = results.filter((r) => r.status === "rejected").length;
+      if (failed > 0) {
+        toast.error(
+          t("dag.resumeAll.partialFail", {
+            n: failed,
+            defaultValue: "{{n}} 个 agent 恢复失败，请重试",
+          }),
+        );
+      }
       await refresh();
     } finally {
       setBusy(false);
     }
-  }, [busy, liveAgents, refresh]);
+  }, [busy, liveAgents, refresh, t]);
 
   const onTogglePauseSelected = useCallback(async () => {
     if (!selected || busy) return;
@@ -740,11 +757,14 @@ export default function DagView() {
         ) : (
           <ReactFlowProvider>
             <Canvas
-              agents={agents}
+              // P2: role 过滤同时作用于画布,与左侧成员列表语义一致 ——
+              // 过去只过列表、画布照画全部,看起来像过滤器坏了。filteredAgents
+              // 已是 live-only + 按 role 过滤的集合。
+              agents={filteredAgents}
               bbAt={bbAt}
               selectedId={selectedId}
               onSelect={setSelectedId}
-              showMinimap={liveAgents.length > 4}
+              showMinimap={filteredAgents.length > 4}
             />
           </ReactFlowProvider>
         )}

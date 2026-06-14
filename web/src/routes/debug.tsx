@@ -16,7 +16,9 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api } from "../api/http";
+import { useTranslation } from "react-i18next";
+import { Loader2 } from "lucide-react";
+import { api, ApiError } from "../api/http";
 import type { CliPluginInfo, SpawnAgentResponse, SwarmEvent } from "../api/types";
 import { XtermPane } from "../components/XtermPane";
 import { SwarmPanel } from "../components/SwarmPanel";
@@ -32,7 +34,41 @@ import {
 const MAX_COLS = 6;
 const SWARM_PANEL_KEY = "flockmux:swarmPanelOpen";
 
+// Module-level single-flight: two quick spawns (or a remount mid-create) must
+// not race and create duplicate "debug-scratch" workspaces. The first caller's
+// promise is shared; if it rejects we clear the cache so a later spawn retries.
+let debugWorkspacePromise: Promise<string> | null = null;
+
+// Step 3 of the workspace refactor makes spawnAgent require a workspace_id.
+// The legacy /debug dashboard isn't workspace-aware, so we lazily ensure a
+// "debug-scratch" workspace exists and pin every spawn to it. Production users
+// go through the main UI's CreateWizard.
+//
+// cwd is fixed to "/tmp": the old `window.__FLOCKMUX_HOME` was never injected,
+// so this always resolved to "/tmp" anyway, and the backend requires cwd to be
+// an existing directory ("/tmp" reliably is on macOS/Linux).
+async function ensureDebugWorkspace(): Promise<string> {
+  if (debugWorkspacePromise) return debugWorkspacePromise;
+  debugWorkspacePromise = (async () => {
+    const all = await api.listWorkspaces();
+    const found = all.find((w) => w.name === "debug-scratch");
+    if (found) return found.id;
+    const created = await api.createWorkspace({
+      name: "debug-scratch",
+      cwd: "/tmp",
+      accent: "peach",
+    });
+    return created.id;
+  })();
+  debugWorkspacePromise.catch(() => {
+    // Allow a later spawn to retry after a transient failure.
+    debugWorkspacePromise = null;
+  });
+  return debugWorkspacePromise;
+}
+
 export default function DebugRoute() {
+  const { t } = useTranslation();
   const isTauri = isTauriOverlayWindow();
   const [plugins, setPlugins] = useState<CliPluginInfo[]>([]);
   const [pluginsError, setPluginsError] = useState<string | null>(null);
@@ -40,6 +76,7 @@ export default function DebugRoute() {
   const [spawning, setSpawning] = useState(false);
   const [maximized, setMaximized] = useState<string | null>(null);
   const [minimized, setMinimized] = useState<Set<string>>(new Set());
+  const [killing, setKilling] = useState<Set<string>>(new Set());
   const [swarmOpen, setSwarmOpen] = useState<boolean>(() => {
     try {
       return window.localStorage.getItem(SWARM_PANEL_KEY) === "1";
@@ -105,53 +142,61 @@ export default function DebugRoute() {
     onReconnect: scheduleRefresh,
   });
 
-  // Step 3 of the workspace refactor makes spawnAgent require a
-  // workspace_id. The legacy /debug dashboard isn't workspace-aware, so
-  // we lazily ensure a "debug-scratch" workspace exists and pin every
-  // spawn to it. Production users go through the main UI's CreateWizard.
-  const ensureDebugWorkspace = async (): Promise<string> => {
-    const all = await api.listWorkspaces();
-    const found = all.find((w) => w.name === "debug-scratch");
-    if (found) return found.id;
-    const cwd =
-      (window as { __FLOCKMUX_HOME?: string }).__FLOCKMUX_HOME ?? "/tmp";
-    const created = await api.createWorkspace({
-      name: "debug-scratch",
-      cwd,
-      accent: "peach",
-    });
-    return created.id;
-  };
-
   const spawn = async (cli: string) => {
     setSpawning(true);
     try {
       const workspace_id = await ensureDebugWorkspace();
       const agent = await api.spawnAgent({ cli, workspace_id });
-      setAgents((prev) => [...prev, agent]);
+      // De-dup against the WS-driven refreshAgents that may have already
+      // inserted this agent_id (agent_state event lands before this resolves).
+      setAgents((prev) =>
+        prev.some((a) => a.agent_id === agent.agent_id)
+          ? prev
+          : [...prev, agent],
+      );
     } catch (err) {
-      // eslint-disable-next-line no-alert
-      alert(`Spawn failed: ${(err as Error).message}`);
+      toast.error(
+        t("debug.spawnFailed", { defaultValue: "启动失败" }),
+        {
+          description:
+            err instanceof ApiError ? err.detail : (err as Error).message,
+        },
+      );
     } finally {
       setSpawning(false);
     }
   };
 
   const kill = async (agentId: string) => {
+    // In-flight guard: ignore repeat clicks while the kill is pending.
+    if (killing.has(agentId)) return;
+    setKilling((prev) => new Set(prev).add(agentId));
     try {
+      // Remove from the UI only AFTER the backend confirms the kill. Removing
+      // optimistically can "lie" (the kill may have failed) and the agent would
+      // get resurrected by the next WS-driven refreshAgents.
       await api.killAgent(agentId);
+      setAgents((prev) => prev.filter((a) => a.agent_id !== agentId));
+      setMinimized((prev) => {
+        if (!prev.has(agentId)) return prev;
+        const next = new Set(prev);
+        next.delete(agentId);
+        return next;
+      });
+      setMaximized((cur) => (cur === agentId ? null : cur));
     } catch (err) {
-      // eslint-disable-next-line no-console
-      console.warn("kill failed", err);
+      toast.error(t("debug.killFailed", { defaultValue: "终止失败" }), {
+        description:
+          err instanceof ApiError ? err.detail : (err as Error).message,
+      });
+    } finally {
+      setKilling((prev) => {
+        if (!prev.has(agentId)) return prev;
+        const next = new Set(prev);
+        next.delete(agentId);
+        return next;
+      });
     }
-    setAgents((prev) => prev.filter((a) => a.agent_id !== agentId));
-    setMinimized((prev) => {
-      if (!prev.has(agentId)) return prev;
-      const next = new Set(prev);
-      next.delete(agentId);
-      return next;
-    });
-    setMaximized((cur) => (cur === agentId ? null : cur));
   };
 
   const wakeAgent = async (agentId: string) => {
@@ -355,8 +400,16 @@ export default function DebugRoute() {
                   >
                     {isMaximized ? "❐" : "□"}
                   </button>
-                  <button onClick={() => kill(agent.agent_id)} title="终止">
-                    ×
+                  <button
+                    onClick={() => kill(agent.agent_id)}
+                    disabled={killing.has(agent.agent_id)}
+                    title="终止"
+                  >
+                    {killing.has(agent.agent_id) ? (
+                      <Loader2 size={11} className="animate-spin" />
+                    ) : (
+                      "×"
+                    )}
                   </button>
                 </span>
               </div>
