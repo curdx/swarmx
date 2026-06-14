@@ -1183,5 +1183,14 @@
     "breadcrumbsCount": "{{n}} worker(s)",
     "breadcrumbsEmpty": "No worker heartbeats yet. A line appears here when a dispatched worker hits a milestone (install / build / writing code, etc.).",
     "readFailed": "Read failed: {{msg}}"
+  },
+  "home": {
+    "deleteFailed": "Failed to delete workspace",
+    "workspaces": "Workspaces",
+    "workspaceCount_one": "{{count}} workspace",
+    "workspaceCount_other": "{{count}} workspaces",
+    "loadingWorkspaces": "Loading workspaces…",
+    "backendUnreachable": "Cannot reach the backend service",
+    "backendUnreachableDesc": "The flockmux backend (127.0.0.1:7777) is not responding, so your workspaces could not be loaded. Make sure the service is running, then retry."
   }
 }
