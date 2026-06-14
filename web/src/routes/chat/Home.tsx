@@ -185,7 +185,10 @@ export default function ChatHome() {
           onRootsChanged={refreshWorkspaces}
         />
         <div className="flex min-w-0 flex-1 flex-col">
-          <div className="flex items-center justify-between gap-3 border-b border-border-subtle px-4 py-3 md:hidden">
+          {/* lg:hidden (not md:) to mirror the sidebar rail's lg:flex — otherwise
+              768–1023px is a dead zone where neither the rail nor this toggle
+              shows and the workspace list is unreachable. */}
+          <div className="flex items-center justify-between gap-3 border-b border-border-subtle px-4 py-3 lg:hidden">
             <Button
               variant="outline"
               size="sm"

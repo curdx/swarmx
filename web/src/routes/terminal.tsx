@@ -129,6 +129,9 @@ export default function TerminalRoute() {
 
     ws.onopen = () => {
       setConnPhase("connected");
+      // Clear any stale "disconnected" banner a prior socket's late onclose may
+      // have set — a live open connection is the ground truth.
+      setWsClosed(false);
       term.focus();
       sendResize();
     };
@@ -165,6 +168,13 @@ export default function TerminalRoute() {
     return () => {
       ro.disconnect();
       dataDisp.dispose();
+      // Detach handlers BEFORE closing. A WebSocket close event dispatches
+      // asynchronously, so without this a torn-down socket's onclose/onerror
+      // could fire after the next socket is already open and write a FALSE
+      // "disconnected" into connPhase — which now drives a role=status live
+      // region, so a screen reader would announce a connection-lost over a
+      // healthy terminal. (Same guard XtermPane uses via its `disposed` flag.)
+      ws.onopen = ws.onmessage = ws.onerror = ws.onclose = null;
       ws.close();
       term.dispose();
     };

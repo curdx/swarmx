@@ -127,10 +127,15 @@ export default function UsageRoute() {
         // showing older numbers, so a silent failure looks like "nothing happened".
         if (interactive) toast.error(t("usage.refreshFailed"), { description: errMsg(e) });
       } finally {
-        // The spinner flag belongs to "the latest load", so only clear it if
-        // we're still it (a superseding request clears its own). The interactive
-        // flag belongs to THIS click, so always release it.
-        if (showSpinner && reqId === reqIdRef.current) setLoading(false);
+        // Clear loading when WE are the latest request — NOT only if we were the
+        // spinner load. Gating on `showSpinner` here stranded the page on a
+        // permanent "Loading…" whenever a spinner load got superseded by a
+        // non-spinner poll (e.g. opening /usage in a background tab, then
+        // foregrounding): the spinner load bailed as stale and the superseding
+        // poll never owned the spinner, so nobody cleared it. Whoever finishes
+        // last and is still current owns the clear. The interactive flag belongs
+        // to THIS click, so always release it.
+        if (reqId === reqIdRef.current) setLoading(false);
         if (interactive) {
           refreshingRef.current = false;
           setRefreshing(false);

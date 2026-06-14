@@ -496,7 +496,21 @@ export default function NotificationsRoute() {
   }, []);
 
   useEffect(() => {
-    seed();
+    let alive = true;
+    // AppShell.markSeen() writes session-seen ids into READ_KEY from a parent
+    // effect that fires AFTER this child effect (effects run child→parent), so
+    // the initial useState(loadRead) snapshot misses them on a direct nav to
+    // /notifications — the bell badge cleared but the center still rendered those
+    // items unread until a reload. Re-sync from storage once seed settles (well
+    // after the parent effect) so both views agree. saveRead keeps storage
+    // authoritative on every markRead, so this only ever ADDS seen ids — it can
+    // never drop a user-marked read.
+    seed().finally(() => {
+      if (alive) setRead(loadRead());
+    });
+    return () => {
+      alive = false;
+    };
   }, [seed]);
 
   useSwarmFeed({

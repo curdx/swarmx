@@ -548,7 +548,9 @@
         "desc": "会逐个恢复当前方向内暂停的 agent，并让它们继续处理当前工作。",
         "confirm": "全恢复"
       }
-    }
+    },
+    "interruptAllPartialFail": "{{n}} 个 agent 暂停失败，请重试",
+    "resumeAllPartialFail": "{{n}} 个 agent 恢复失败，请重试"
   },
   "replays": {
     "title": "录像",
@@ -900,7 +902,9 @@
     "previewFailed": "无法校验表达式（预览接口未响应），可仍尝试保存。",
     "submitFailed": "保存失败，请重试",
     "noWorkspaces": "还没有工作空间。定时任务需要先有一个工作空间来接收提示词。",
-    "createWorkspace": "新建工作空间"
+    "createWorkspace": "新建工作空间",
+    "toggleFailed": "切换启用状态失败，请重试",
+    "deleteFailed": "删除任务失败，请重试"
   },
   "files": {
     "title": "文件浏览器",

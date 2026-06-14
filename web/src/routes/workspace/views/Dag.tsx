@@ -505,7 +505,7 @@ export default function DagView() {
       const failed = results.filter((r) => r.status === "rejected").length;
       if (failed > 0) {
         setError(
-          t("dag.interruptAll.partialFail", {
+          t("dag.interruptAllPartialFail", {
             n: failed,
             defaultValue: "{{n}} 个 agent 暂停失败，请重试",
           }),
@@ -535,7 +535,7 @@ export default function DagView() {
       const failed = results.filter((r) => r.status === "rejected").length;
       if (failed > 0) {
         toast.error(
-          t("dag.resumeAll.partialFail", {
+          t("dag.resumeAllPartialFail", {
             n: failed,
             defaultValue: "{{n}} 个 agent 恢复失败，请重试",
           }),

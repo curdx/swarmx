@@ -548,7 +548,9 @@
         "desc": "This resumes each paused agent in this direction and lets them continue working.",
         "confirm": "Resume all"
       }
-    }
+    },
+    "interruptAllPartialFail": "{{n}} agents failed to pause, please retry",
+    "resumeAllPartialFail": "{{n}} agents failed to resume, please retry"
   },
   "replays": {
     "title": "Replays",
@@ -900,7 +902,9 @@
     "previewFailed": "Couldn't validate the expression (preview unavailable) — you can still try to save.",
     "submitFailed": "Save failed, please retry",
     "noWorkspaces": "No workspaces yet. A scheduled job needs a workspace to deliver its prompt to.",
-    "createWorkspace": "Create a workspace"
+    "createWorkspace": "Create a workspace",
+    "toggleFailed": "Failed to toggle the schedule, please retry",
+    "deleteFailed": "Failed to delete the job, please retry"
   },
   "files": {
     "title": "File browser",
