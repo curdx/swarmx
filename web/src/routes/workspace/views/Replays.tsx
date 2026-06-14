@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import { api } from "../../../api/http";
 import { downloadRecordingCast } from "@/lib/download";
+import { getCachedCastPreview, loadCastPreview } from "@/lib/castPreview";
 import type { AgentInfo, RecordingInfo } from "../../../api/types";
 import { useSwarmFeed } from "../../../hooks/useSwarmFeed";
 import { Button } from "@/components/ui/button";
@@ -318,6 +319,54 @@ function CastThumb({
   live: boolean;
   t: (k: string, opts?: Record<string, unknown>) => string;
 }) {
+  // P1-11: render the recording's real first frames as the thumbnail (was: a
+  // static Play icon — castPreview.ts existed but was never wired). Streams ~16
+  // KB of the .cast, ANSI-strips it, caches by id. Falls back to the icon view
+  // while loading / when empty (e.g. a live cast with nothing written yet).
+  const [lines, setLines] = useState<string[] | null>(
+    () => getCachedCastPreview(r.id) ?? null,
+  );
+  useEffect(() => {
+    let alive = true;
+    loadCastPreview(api.recordingCastUrl(r.id), r.id)
+      .then((p) => {
+        if (alive && p.length > 0) setLines(p);
+      })
+      .catch(() => {
+        /* leave the icon fallback in place */
+      });
+    return () => {
+      alive = false;
+    };
+  }, [r.id]);
+
+  if (lines && lines.length > 0) {
+    return (
+      <div className="relative h-full overflow-hidden bg-[#0d0d0d]">
+        <pre className="h-full overflow-hidden whitespace-pre-wrap break-all px-3 py-2 font-mono text-[8px] leading-[1.4] text-term-dim">
+          {lines.join("\n")}
+        </pre>
+        <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-t from-[#0d0d0d] via-transparent">
+          <span
+            className={cn(
+              "flex size-10 items-center justify-center rounded-full backdrop-blur-sm",
+              live
+                ? "bg-status-running-soft/80 text-status-running"
+                : "bg-black/55 text-white",
+            )}
+          >
+            <Play className="size-5" />
+          </span>
+        </div>
+        <div className="absolute bottom-1 right-2 flex items-center gap-1 font-mono text-[9px] text-term-dim">
+          <Monitor className="size-2.5" />
+          <span>{r.cols}×{r.rows}</span>
+          {r.duration_ms != null && <span>· {formatDuration(r.duration_ms)}</span>}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex h-full flex-col items-center justify-center gap-2 px-4 py-3 text-term-fg">
       <div

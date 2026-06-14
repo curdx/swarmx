@@ -978,7 +978,11 @@ function PrivacyPanel() {
     const keys = flockmuxLocalStorageKeys();
     for (const k of keys) window.localStorage.removeItem(k);
     setToast(t("settings.privacy.cleared", { count: keys.length }));
-    window.setTimeout(() => setToast(null), 3000);
+    // P1-27: clearing localStorage alone is a half-truth — the live in-memory
+    // settings (theme/lang/toggles in SettingsRoute state) still hold the old
+    // values, and the next change writes them straight back. Reload so every
+    // bit of in-memory state re-initializes from the now-empty storage.
+    window.setTimeout(() => window.location.reload(), 600);
   };
 
   const clearAll = () => {
