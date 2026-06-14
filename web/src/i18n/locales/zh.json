@@ -68,7 +68,10 @@
       "empty": "mcpServers 是空的"
     },
     "nodeTooOld": "Node.js {{version}} 版本过低 — npx 类 MCP（含 chrome-devtools）需 Node {{min}}+（LTS），请升级后再启用。",
-    "notInstalled": "未安装"
+    "notInstalled": "未安装",
+    "opFailed": "操作失败",
+    "opOkRefreshFailed": "已操作成功，但状态刷新失败，显示的开关可能不是最新",
+    "loadFailed": "加载 MCP 配置失败"
   },
   "nav": {
     "chat": "对话",
@@ -180,7 +183,9 @@
     "system": "system",
     "live": "live",
     "off": "off",
-    "offline": "离线"
+    "offline": "离线",
+    "copied": "已复制",
+    "copy": "复制"
   },
   "workspace": {
     "picker": "工作空间"
@@ -394,7 +399,12 @@
       "titleRate": "队长暂时被限流",
       "titleCrash": "队长意外退出",
       "titleTimeout": "队长启动后没有响应",
-      "titleEscalated": "多次重试仍未成功，需要你处理"
+      "titleEscalated": "多次重试仍未成功，需要你处理",
+      "runInTerminal": "在终端运行",
+      "openTerminalLogin": "打开终端登录",
+      "openTerminal": "打开终端查看",
+      "retrying": "重试中…",
+      "retry": "重试"
     },
     "emptyState": {
       "greetingTitle": "把要做的事交给队长",
@@ -510,7 +520,24 @@
     "activity": {
       "running": "正在调用 {{label}}"
     },
-    "feedOffline": "实时连接已断开,下面是最后已知状态"
+    "feedOffline": "实时连接已断开,下面是最后已知状态",
+    "vanishedTurn": {
+      "body": "{{role}}本轮没有产出回复就退出了 —— 可能是登录失效、被重启或异常中断,你的上一条消息没能送达。",
+      "resend": "重新发送这条消息"
+    },
+    "plan": {
+      "allDone": "计划完成 · 全部 {{total}} 步已交付",
+      "title": "计划 · 队长维护 · {{done}}/{{total}}"
+    },
+    "newDirectionFailed": "新建方向失败",
+    "directionIsolationDegraded": "方向隔离失败,已改为与主线共用目录",
+    "newDirectionIncomplete": "方向创建未完成,请重试",
+    "deleteDirectionFailed": "删除方向失败",
+    "deleteWorkspaceFailed": "删除工作空间失败",
+    "workspaceStripPreparing": "正在准备 orchestrator…",
+    "workspaceStripFailed": "AI 启动失败",
+    "breadcrumbsTitle": "近况",
+    "paused": "已暂停"
   },
   "dag": {
     "title": "协作图",
@@ -660,7 +687,8 @@
     "typeBlackboard": "黑板",
     "typeState": "状态",
     "typeError": "异常",
-    "typeCompleted": "完成"
+    "typeCompleted": "完成",
+    "openFailed": "无法定位该消息所属的空间，已为你打开通知中心"
   },
   "agent": {
     "close": "关闭（Esc）",
@@ -725,8 +753,14 @@
       "ready": "READY",
       "starting": "STARTING",
       "exited": "EXITED",
-      "uptime": "已运行 {{delta}}"
-    }
+      "uptime": "已运行 {{delta}}",
+      "error": "出错·无法工作"
+    },
+    "wakeOk": "已唤醒 {{role}}",
+    "wakeFailed": "唤醒失败",
+    "resumeFailed": "恢复失败",
+    "pauseFailed": "暂停失败",
+    "deadNoAction": "该 agent 已结束,无法操作"
   },
   "wizard": {
     "title": "创建工作空间",
@@ -779,7 +813,8 @@
     "scanningFootHint": "通常 20-40 秒，可先进入房间等待",
     "enterAnyway": "直接进入房间",
     "pathNotADirectory": "这个路径是一个文件,不是文件夹 —— 请填项目所在的文件夹路径。",
-    "pathPermissionDenied": "没有访问该目录的权限 —— 换一个你有读取权限的目录,或在系统里授予访问权。"
+    "pathPermissionDenied": "没有访问该目录的权限 —— 换一个你有读取权限的目录,或在系统里授予访问权。",
+    "attachedErrorCount": "{{count}} 个附加目录有问题，展开修正"
   },
   "messages": {
     "filter": "过滤 发送方 / 接收方 / 正文",
@@ -850,7 +885,9 @@
     "attachImage": "添加图片",
     "removeImage": "移除",
     "previewError": "渲染失败",
-    "truncatedNotice": "内容过长，仅渲染前 {{n}} 字符"
+    "truncatedNotice": "内容过长，仅渲染前 {{n}} 字符",
+    "jumpNotVisible": "#{{id}} 不在当前对话里(可能属于别的房间/方向或已滚出范围)",
+    "jumpUnreadNone": "当前对话里没有未读消息了"
   },
   "cron": {
     "title": "定时任务",
@@ -916,7 +953,9 @@
     "readFailed": "文件加载失败",
     "workspacesLoadFailed": "工作区加载失败,请重试",
     "browseAllWarning": "解除工作区隔离,可浏览整台机器的文件 — 请谨慎使用。",
-    "previewCapped": "仅预览前 {{size}}"
+    "previewCapped": "仅预览前 {{size}}",
+    "noWorkspace": "选择一个工作区开始浏览",
+    "emptyDir": "此目录为空"
   },
   "tasks": {
     "title": "任务看板",
@@ -970,7 +1009,8 @@
         "desc": "复位后任务状态会重新跟随 agent 生命周期自动推导。",
         "confirm": "复位"
       }
-    }
+    },
+    "statusFailed": "状态更新失败，请重试"
   },
   "goals": {
     "title": "目标",
@@ -1007,7 +1047,13 @@
       "proof": "证明",
       "blocker": "阻塞"
     },
-    "evidenceKindHint": "类型：记录(note) 进展 · 证明(proof) 完成 · 阻塞(blocker) 标记障碍"
+    "evidenceKindHint": "类型：记录(note) 进展 · 证明(proof) 完成 · 阻塞(blocker) 标记障碍",
+    "budgetTooLarge": "预算过大，请输入不超过 1 万亿的整数",
+    "loadFailed": "加载目标失败，请重试",
+    "createFailed": "创建目标失败，请重试",
+    "statusFailed": "状态更新失败，请重试",
+    "evidenceLoadFailed": "加载证据失败，请重试",
+    "evidenceAddFailed": "添加证据失败，请重试"
   },
   "usage": {
     "title": "用量 / 成本",
@@ -1058,7 +1104,11 @@
     "statusConnecting": "正在连接终端…",
     "statusConnected": "终端已连接",
     "statusDisconnected": "终端连接已断开",
-    "statusFailed": "无法连接到后端"
+    "statusFailed": "无法连接到后端",
+    "backendDown": "连接不上后端 (127.0.0.1:7777)，无法打开终端。请确认 flockmux 服务在运行。",
+    "disconnected": "连接已断开",
+    "reconnect": "重新连接",
+    "unavailable": "后端未连接"
   },
   "model": {
     "label": "模型",
@@ -1135,7 +1185,9 @@
       "confirm": "确定",
       "close": "关闭",
       "openHint": "{{shortcut}} 随时呼出"
-    }
+    },
+    "wakeOk": "已唤醒 {{role}}",
+    "wakeFailed": "唤醒失败"
   },
   "blackboard": {
     "createFile": "新建文件",
@@ -1157,7 +1209,9 @@
     "maximize": "最大化",
     "restore": "还原",
     "killAgent": "终止 agent",
-    "cliNotDetected": "未检测到该 CLI"
+    "cliNotDetected": "未检测到该 CLI",
+    "spawnFailed": "启动失败",
+    "killFailed": "终止失败"
   },
   "ledger": {
     "agoSeconds": "{{n}}s 前",
