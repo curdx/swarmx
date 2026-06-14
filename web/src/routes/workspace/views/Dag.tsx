@@ -52,6 +52,7 @@ import {
   type ConfirmActionState,
 } from "@/components/ConfirmActionDialog";
 import { agentInThread, directionBase } from "@/lib/thread";
+import { toast } from "@/lib/toast";
 import { cn } from "@/lib/cn";
 import {
   roleColorClass as roleColor,
@@ -408,6 +409,11 @@ export default function DagView() {
     [agents, selectedId],
   );
 
+  // 选中 agent 已死(被 kill 或 shim 退出)时,wake/pause/resume 都无意义 ——
+  // 后端会拒绝,过去却让按钮可点 + 静默吞错,看起来像"点了没反应"。死按钮直接禁用。
+  const selectedDead =
+    !!selected && (selected.killed_at != null || selected.shim_exit != null);
+
   const pausedCount = useMemo(
     () => liveAgents.filter((a) => a.paused).length,
     [liveAgents],
@@ -530,7 +536,16 @@ export default function DagView() {
         "会向该 agent 投递一条手动唤醒消息，推动它继续读取 mailbox / blackboard。仅在它确实卡住或需要人工催促时使用。",
       ),
       confirmLabel: t("agent.wake"),
-      onConfirm: () => api.wakeAgent(selected.agent_id).catch(() => {}),
+      onConfirm: async () => {
+        try {
+          await api.wakeAgent(selected.agent_id);
+        } catch (e) {
+          toast.error(
+            t("agent.wake.fail", { defaultValue: "唤醒失败" }),
+            { description: (e as Error)?.message },
+          );
+        }
+      },
     });
   }, [selected, t]);
 
@@ -813,19 +828,38 @@ export default function DagView() {
               <div className="flex gap-2">
                 <button
                   onClick={requestWakeSelected}
-                  className="flex h-9 flex-1 items-center justify-center gap-1.5 rounded-md border border-border-subtle bg-surface-elevated text-xs text-foreground-secondary hover:bg-surface-tertiary"
+                  disabled={busy || selectedDead}
+                  className={cn(
+                    "flex h-9 flex-1 items-center justify-center gap-1.5 rounded-md border border-border-subtle bg-surface-elevated text-xs text-foreground-secondary hover:bg-surface-tertiary",
+                    "disabled:cursor-not-allowed disabled:opacity-50",
+                  )}
+                  title={
+                    selectedDead
+                      ? t("agent.deadNoAction", {
+                          defaultValue: "该 agent 已结束,无法操作",
+                        })
+                      : t("agent.wake")
+                  }
                 >
                   <Zap className="size-3.5" />
                   {t("agent.wake")}
                 </button>
                 <button
                   onClick={requestTogglePauseSelected}
-                  disabled={busy}
+                  disabled={busy || selectedDead}
                   className={cn(
                     "flex h-9 flex-1 items-center justify-center gap-1.5 rounded-md border border-border-subtle bg-surface-elevated text-xs text-foreground-secondary hover:bg-surface-tertiary",
                     "disabled:cursor-not-allowed disabled:opacity-50",
                   )}
-                  title={selected.paused ? t("agent.resume") : t("agent.pause")}
+                  title={
+                    selectedDead
+                      ? t("agent.deadNoAction", {
+                          defaultValue: "该 agent 已结束,无法操作",
+                        })
+                      : selected.paused
+                        ? t("agent.resume")
+                        : t("agent.pause")
+                  }
                 >
                   {selected.paused ? (
                     <>

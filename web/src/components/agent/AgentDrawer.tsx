@@ -77,6 +77,7 @@ import {
 } from "@/components/ui/sheet";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/cn";
+import { toast } from "@/lib/toast";
 import { roleColorClass as roleColor } from "@/lib/agent";
 import { directionBase, directionSlugFromKey } from "@/lib/thread";
 
@@ -235,22 +236,42 @@ export function AgentDrawer({ agentId, activities, onClose }: Props) {
         "会向该 agent 投递一条手动唤醒消息，推动它继续读取 mailbox / blackboard。仅在它确实卡住或需要人工催促时使用。",
       ),
       confirmLabel: t("agent.wake"),
-      onConfirm: () => api.wakeAgent(agentId).catch(() => {}),
+      onConfirm: async () => {
+        try {
+          await api.wakeAgent(agentId);
+          toast.success(
+            t("agent.wakeOk", {
+              role: info?.role ?? agentId.slice(0, 8),
+              defaultValue: "已唤醒 {{role}}",
+            }),
+          );
+        } catch (e) {
+          toast.error(
+            t("agent.wakeFailed", { defaultValue: "唤醒失败" }),
+            { description: (e as Error)?.message },
+          );
+        }
+      },
     });
   // Pause toggles between interrupt (active → paused) and resume
   // (paused → active). Both refresh the local AgentInfo so the button
   // label flips immediately without waiting for the swarm feed.
   const togglePause = async () => {
+    const wasPaused = !!info?.paused;
     try {
-      if (info?.paused) {
+      if (wasPaused) {
         await api.resumeAgent(agentId);
       } else {
         await api.interruptAgent(agentId);
       }
       await refreshInfo();
     } catch (e) {
-      // eslint-disable-next-line no-console
-      console.warn("toggle pause failed", e);
+      toast.error(
+        wasPaused
+          ? t("agent.resumeFailed", { defaultValue: "恢复失败" })
+          : t("agent.pauseFailed", { defaultValue: "暂停失败" }),
+        { description: (e as Error)?.message },
+      );
     }
   };
   const requestTogglePause = () => {

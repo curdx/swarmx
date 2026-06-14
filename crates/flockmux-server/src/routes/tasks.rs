@@ -68,7 +68,19 @@ pub async fn list_tasks(
     Query(q): Query<ListTasksQuery>,
 ) -> impl IntoResponse {
     let ws = q.workspace_id.filter(|s| !s.is_empty());
-    let rows = state.store.list_tasks(ws).await.unwrap_or_default();
+    // P1-36: don't unwrap_or_default() a DB error into an empty list — that
+    // renders "暂无任务" when the query actually failed. Surface a 500 so the
+    // board shows "加载失败" instead of a false "you have no tasks".
+    let rows = match state.store.list_tasks(ws).await {
+        Ok(r) => r,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": e.to_string() })),
+            )
+                .into_response()
+        }
+    };
     let views: Vec<TaskView> = rows
         .into_iter()
         .map(|t| TaskView {
@@ -77,7 +89,7 @@ pub async fn list_tasks(
             task: t,
         })
         .collect();
-    Json(json!({ "tasks": views }))
+    Json(json!({ "tasks": views })).into_response()
 }
 
 #[derive(Deserialize)]

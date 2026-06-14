@@ -251,6 +251,10 @@ export default function NotificationsRoute() {
   const [items, setItems] = useState<Notif[]>([]);
   const [read, setRead] = useState<Set<string>>(loadRead);
   const [tab, setTab] = useState<TabId>("all");
+  // 后端断连 / 拉取 500 与「真没通知」不能渲染成同一个空态——否则界面会
+  // 在加载失败时假装「该分类暂无通知」。seed() 失败时存住错误,渲染时
+  // error 优先显示「加载失败 + 重试」。
+  const [error, setError] = useState<Error | null>(null);
   const [confirm, setConfirm] = useState<ConfirmActionState | null>(null);
   // Workspaces + their directions resolve a blackboard key's `{ws-id}/{slug}`
   // prefix into "{workspace} · {direction}" instead of a raw 32-hex UUID. Held
@@ -301,8 +305,11 @@ export default function NotificationsRoute() {
         });
       const all = [...fromMsg, ...fromBb].sort((a, b) => b.at - a.at);
       setItems(all);
-    } catch {
-      /* best-effort */
+      setError(null);
+    } catch (e) {
+      // 别吞错:后端 500 / 断网时记录真实错误,渲染层据此显示「加载失败 +
+      // 重试」而不是谎报空态。
+      setError(e as Error);
     }
   }, []);
 
@@ -492,7 +499,26 @@ export default function NotificationsRoute() {
 
       {/* List */}
       <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
-        {filtered.length === 0 ? (
+        {error && filtered.length === 0 ? (
+          // 加载失败优先于空态:连不上后端 / 拉取 500 时显示「加载失败 +
+          // 重试」,绝不渲染成「该分类暂无通知」假装一切正常。只有在没有任何
+          // 可展示项时才接管——避免盖掉已经到达的实时通知。
+          <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center text-foreground-tertiary">
+            <AlertTriangle className="size-10 text-status-danger opacity-60" />
+            <p className="font-caption text-sm text-foreground-secondary">
+              {t("notifications.loadError", { defaultValue: "加载通知失败" })}
+            </p>
+            {error.message && (
+              <p className="max-w-md break-words font-caption text-[11px] text-foreground-tertiary">
+                {error.message}
+              </p>
+            )}
+            <Button variant="outline" size="sm" onClick={seed} className="h-8">
+              <RefreshCw className="size-3.5" />
+              {t("common.retry", { defaultValue: "重试" })}
+            </Button>
+          </div>
+        ) : filtered.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center gap-3 text-foreground-tertiary">
             <Bell className="size-10 opacity-40" />
             <p className="font-caption text-sm">{t("notifications.empty")}</p>

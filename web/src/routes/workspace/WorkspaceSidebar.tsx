@@ -35,6 +35,7 @@ import { splitWorkspacePath } from "../../lib/workspace";
 import { directionBase } from "../../lib/thread";
 import type { WorkspaceSummary } from "./types";
 import { Button } from "@/components/ui/button";
+import { toast } from "@/lib/toast";
 import { Input } from "@/components/ui/input";
 import {
   Dialog,
@@ -430,8 +431,9 @@ export function WorkspaceList({
   activeThreadSlug?: string;
   onOpenWizard: () => void;
   /** Soft-delete handler. Receives the full workspace UUID (NOT the slug)
-   *  so the parent can call `DELETE /api/workspaces/:id` directly. */
-  onDelete?: (workspaceId: string) => void;
+   *  so the parent can call `DELETE /api/workspaces/:id` directly. May be async
+   *  so a rejection can surface as a toast instead of an unhandled promise. */
+  onDelete?: (workspaceId: string) => void | Promise<unknown>;
   /** Called after attached roots are added/removed so the parent refetches
    *  workspaces (keeps the sidebar tree in sync). */
   onRootsChanged?: () => void;
@@ -865,7 +867,21 @@ export function WorkspaceList({
               onClick={() => {
                 const target = pendingDelete;
                 setPendingDelete(null);
-                if (target) onDelete?.(target.workspaceId);
+                // 删除是「失败即安全」,所以这里乐观关弹窗即可。但不能 fire-and-forget
+                // 吞掉拒绝:调用方(Shell/Home)失败时会自行 toast,这里再兜一层
+                // 兜底 catch,保证任何 onDelete 拒绝都能冒泡成 toast 而非静默。
+                if (target) {
+                  void Promise.resolve(onDelete?.(target.workspaceId)).catch(
+                    (e) => {
+                      toast.error(
+                        t("chat.deleteWorkspaceFailed", {
+                          defaultValue: "删除工作空间失败",
+                        }),
+                        { description: (e as Error)?.message },
+                      );
+                    },
+                  );
+                }
               }}
             >
               <Trash2 className="size-3.5" />

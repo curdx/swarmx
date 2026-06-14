@@ -15,6 +15,8 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
+import { toast } from "@/lib/toast";
 import { api } from "../../api/http";
 import type {
   AgentActivity,
@@ -116,6 +118,7 @@ export function useWorkspaceShellData(
   wsId: string | undefined,
   threadSlug: string | undefined,
 ): WorkspaceShellData {
+  const { t } = useTranslation();
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [workspaceRows, setWorkspaceRows] = useState<Workspace[]>([]);
   const [wsLoaded, setWsLoaded] = useState(false);
@@ -478,8 +481,15 @@ export function useWorkspaceShellData(
       try {
         await api.deleteWorkspace(workspaceId);
       } catch (err) {
-        // eslint-disable-next-line no-console
-        console.warn("deleteWorkspace failed", err);
+        // 「失败即安全」：后端没删成功 = 数据没丢,我们也没乐观删除列表。
+        // 但这个 null 与下面「删的不是当前空间(成功,无需导航)」共用同一返回值,
+        // 调用方无法区分 —— 所以失败必须在这里就地 toast,别让它被当成静默成功。
+        toast.error(
+          t("chat.deleteWorkspaceFailed", {
+            defaultValue: "删除工作空间失败",
+          }),
+          { description: (err as Error)?.message },
+        );
         return null;
       }
       // Optimistically drop it locally — the next listWorkspaces refresh would
@@ -493,7 +503,7 @@ export function useWorkspaceShellData(
       }
       return null;
     },
-    [workspaceRows, activeWs],
+    [workspaceRows, activeWs, t],
   );
 
   return {

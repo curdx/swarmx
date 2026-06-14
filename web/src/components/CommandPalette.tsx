@@ -48,6 +48,7 @@ import {
   type ConfirmActionState,
 } from "@/components/ConfirmActionDialog";
 import { setTheme, type ThemeMode } from "@/lib/theme";
+import { toast } from "@/lib/toast";
 import { directionBase } from "@/lib/thread";
 import { DEBUG_ENABLED } from "@/lib/debug";
 import { formatShortcutChord, getClientPlatformInfo } from "@/lib/platform";
@@ -305,7 +306,24 @@ export function CommandPalette() {
                         "会向该 agent 投递一条手动唤醒消息并推动它继续处理当前工作。仅在确认它确实需要人工唤醒时使用。",
                     }),
                     confirmLabel: t("cmdk.confirmWake", "唤醒"),
-                    onConfirm: () => api.wakeAgent(a.agent_id).catch(() => {}),
+                    onConfirm: async () => {
+                      try {
+                        await api.wakeAgent(a.agent_id);
+                        toast.success(
+                          t("cmdk.wakeOk", {
+                            role: a.role,
+                            defaultValue: "已唤醒 {{role}}",
+                          }),
+                        );
+                      } catch (e) {
+                        toast.error(
+                          t("cmdk.wakeFailed", {
+                            defaultValue: "唤醒失败",
+                          }),
+                          { description: (e as Error)?.message },
+                        );
+                      }
+                    },
                   });
                 }}
               >
