@@ -38,6 +38,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_notification::init())
         .manage(ServerSidecar(std::sync::Mutex::new(None)))
         .setup(|app| {
             if cfg!(debug_assertions) {
@@ -150,14 +151,16 @@ pub fn run() {
 
             Ok(())
         })
-        // Closing the main window quits the whole app. This is a single-window
-        // tool; "close" should mean "exit", not "leave a headless server +
-        // tray behind". macOS keeps apps alive on window-close by default, so
-        // we make the quit explicit — which then runs the RunEvent::Exit hook
-        // below and tears down the sidecar.
+        // P1-26: hide the window to the tray on close instead of quitting, so
+        // the app (+ its bundled sidecar) keeps running and stays reachable from
+        // the tray's "Show". Real quit is the tray's "Quit" item, which calls
+        // app.exit(0) → the RunEvent::Exit hook below tears down the sidecar.
+        // This makes the "open main window on launch" setting meaningful (the
+        // app can now live in the tray) instead of a no-op.
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { .. } = event {
-                window.app_handle().exit(0);
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let _ = window.hide();
             }
         })
         .build(tauri::generate_context!())
