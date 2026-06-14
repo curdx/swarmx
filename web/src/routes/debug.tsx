@@ -286,16 +286,25 @@ export default function DebugRoute() {
               插件加载失败：{pluginsError}
             </span>
           )}
-          {plugins.map((p) => (
-            <button
-              key={p.id}
-              onClick={() => spawn(p.id)}
-              disabled={spawning}
-              title={`启动 ${p.binary}`}
-            >
-              + {p.display_name}
-            </button>
-          ))}
+          {plugins.map((p) => {
+            const notInstalled = p.installed === false;
+            return (
+              <button
+                key={p.id}
+                onClick={() => spawn(p.id)}
+                disabled={spawning || notInstalled}
+                title={
+                  notInstalled
+                    ? t("debug.cliNotDetected", {
+                        defaultValue: "未检测到该 CLI",
+                      })
+                    : `启动 ${p.binary}`
+                }
+              >
+                + {p.display_name}
+              </button>
+            );
+          })}
           <button
             onClick={() => setSwarmOpen((v) => !v)}
             title="切换协作面板"
@@ -384,18 +393,27 @@ export default function DebugRoute() {
                 <span style={{ display: "flex", gap: 4 }}>
                   <button
                     onClick={() => wakeAgent(agent.agent_id)}
+                    aria-label={t("debug.wakeAgent", {
+                      defaultValue: "手动唤醒",
+                    })}
                     title="手动唤醒（agent 卡住时点这个 — 给它发一条系统消息让它继续）"
                   >
                     ⚡
                   </button>
                   <button
                     onClick={() => toggleMinimize(agent.agent_id)}
+                    aria-label={t("debug.minimize", { defaultValue: "最小化" })}
                     title="最小化"
                   >
                     _
                   </button>
                   <button
                     onClick={() => toggleMaximize(agent.agent_id)}
+                    aria-label={
+                      isMaximized
+                        ? t("debug.restore", { defaultValue: "还原" })
+                        : t("debug.maximize", { defaultValue: "最大化" })
+                    }
                     title={isMaximized ? "还原" : "最大化"}
                   >
                     {isMaximized ? "❐" : "□"}
@@ -403,6 +421,9 @@ export default function DebugRoute() {
                   <button
                     onClick={() => kill(agent.agent_id)}
                     disabled={killing.has(agent.agent_id)}
+                    aria-label={t("debug.killAgent", {
+                      defaultValue: "终止 agent",
+                    })}
                     title="终止"
                   >
                     {killing.has(agent.agent_id) ? (

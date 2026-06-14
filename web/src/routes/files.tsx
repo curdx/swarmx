@@ -27,6 +27,13 @@ function fmtSize(n: number): string {
   return `${n}B`;
 }
 
+/** Cap (chars) of file text fed into the markdown renderer. The backend already
+ *  truncates reads, but a ~512KB string still makes ChatMarkdown's fence/regex
+ *  scans and highlight.js chew through the whole thing on every render. Slice to
+ *  this BEFORE that work so the preview pane stays snappy; the notice tells the
+ *  user it's a partial view. */
+const PREVIEW_CAP = 100 * 1024;
+
 const MD_EXT = new Set(["md", "markdown", "mdx"]);
 /** File extension → highlight.js language for the preview's fenced code block.
  *  Unmapped extensions fall back to a plain (unhighlighted) block. */
@@ -173,7 +180,10 @@ export default function FilesRoute() {
         <div className="ml-auto flex flex-wrap items-center justify-end gap-3">
           <label
             htmlFor="browse-all-files"
-            className="flex min-h-8 items-center gap-1.5 font-caption text-[11px] text-foreground-tertiary"
+            title={t("files.browseAllWarning", {
+              defaultValue: "解除工作区隔离,可浏览整台机器的文件 — 请谨慎使用。",
+            })}
+            className="flex min-h-8 cursor-pointer items-center gap-1.5 px-1 font-caption text-[11px] text-foreground-tertiary"
           >
             <input
               id="browse-all-files"
@@ -182,7 +192,7 @@ export default function FilesRoute() {
               aria-label={t("files.browseAll")}
               checked={browseAll}
               onChange={toggleBrowseAll}
-              className="size-8"
+              className="size-4"
             />
             {t("files.browseAll")}
           </label>
@@ -314,19 +324,36 @@ export default function FilesRoute() {
                 </span>
                 <span>{fmtSize(preview.size)}</span>
                 {preview.truncated && <span className="text-status-warning">{t("files.truncated")}</span>}
+                {!preview.binary && (preview.content?.length ?? 0) > PREVIEW_CAP && (
+                  <span className="text-status-warning">
+                    {t("files.previewCapped", {
+                      defaultValue: "仅预览前 {{size}}",
+                      size: fmtSize(PREVIEW_CAP),
+                    })}
+                  </span>
+                )}
               </div>
               {preview.binary ? (
                 <div className="flex flex-1 items-center justify-center font-caption text-sm text-foreground-tertiary">
                   {t("files.binary")}
                 </div>
               ) : (
-                <div className="min-h-0 flex-1 overflow-auto px-4 py-3">
-                  {MD_EXT.has(extOf(preview.path)) ? (
-                    <ChatMarkdown content={preview.content ?? ""} />
-                  ) : (
-                    <ChatMarkdown content={fenceWrap(CODE_LANG[extOf(preview.path)] ?? "", preview.content ?? "")} />
-                  )}
-                </div>
+                // Cap the string BEFORE fenceWrap's regex / ChatMarkdown's scans —
+                // a multi-hundred-KB blob would otherwise be parsed in full on
+                // every render just to show a preview.
+                (() => {
+                  const raw = preview.content ?? "";
+                  const text = raw.length > PREVIEW_CAP ? raw.slice(0, PREVIEW_CAP) : raw;
+                  return (
+                    <div className="min-h-0 flex-1 overflow-auto px-4 py-3">
+                      {MD_EXT.has(extOf(preview.path)) ? (
+                        <ChatMarkdown content={text} />
+                      ) : (
+                        <ChatMarkdown content={fenceWrap(CODE_LANG[extOf(preview.path)] ?? "", text)} />
+                      )}
+                    </div>
+                  );
+                })()
               )}
             </div>
           )}

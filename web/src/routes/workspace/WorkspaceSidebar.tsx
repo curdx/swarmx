@@ -320,6 +320,7 @@ function RootTree({
                   onClick={() => toggle(nodeId)}
                   className="flex size-4 shrink-0 items-center justify-center text-foreground-tertiary hover:text-foreground-primary"
                   aria-label={open ? t("chat.collapse") : t("chat.expand")}
+                  aria-expanded={open}
                 >
                   {open ? (
                     <ChevronDown className="size-3" />
@@ -502,7 +503,7 @@ export function WorkspaceList({
     });
   const containerClass = mobile
     ? "flex h-full min-h-0 flex-col gap-3 bg-surface-secondary px-2 py-3"
-    : "hidden w-[264px] shrink-0 flex-col gap-3 border-r border-border-subtle bg-surface-secondary px-2 py-3 md:flex";
+    : "hidden w-[264px] shrink-0 flex-col gap-3 border-r border-border-subtle bg-surface-secondary px-2 py-3 lg:flex";
 
   return (
     <aside className={containerClass}>

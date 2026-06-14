@@ -18,6 +18,7 @@ import { useTranslation } from "react-i18next";
 import { ArrowLeft, Download, FileSearch, Share2, X } from "lucide-react";
 import { api } from "../../api/http";
 import { downloadRecordingCast } from "@/lib/download";
+import { toast } from "@/lib/toast";
 import type { AgentInfo, RecordingInfo } from "../../api/types";
 import { AsciicastPlayer } from "../../components/AsciicastPlayer";
 import { AgentChip } from "../../components/agent/AgentChip";
@@ -161,6 +162,27 @@ export default function ReplayPlayer() {
 
   const live = recording.finalized_at == null;
 
+  // Raw .cast 在打包版里是跨域的（webview 是 tauri.localhost，后端是
+  // 127.0.0.1:7777，且以 application/x-asciicast 无 Content-Disposition 返回）。
+  // 直接 <a target=_blank> 在 webview 里会原地导航/打不开。改成 fetch 成 blob
+  // 再用同源 blob: URL 在新窗口打开（同 ChatMarkdown.openExternal 的做法），
+  // 失败用 toast 显式告知，绝不静默。
+  const openRawCast = async () => {
+    try {
+      const res = await fetch(api.recordingCastUrl(recording.id));
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const w = window.open(url, "_blank", "noopener,noreferrer");
+      if (!w) throw new Error(t("player.popupBlocked", { defaultValue: "弹窗被拦截" }));
+      window.setTimeout(() => URL.revokeObjectURL(url), 30_000);
+    } catch (e) {
+      toast.error(t("replays.openRawFailed", { defaultValue: "打开原始 cast 失败" }), {
+        description: (e as Error)?.message,
+      });
+    }
+  };
+
   return (
     <div className="flex h-full flex-col bg-term-bg">
       {/* Header — Pencil kq4c9 */}
@@ -217,15 +239,15 @@ export default function ReplayPlayer() {
         >
           <Download className="size-4" />
         </button>
-        <a
-          href={api.recordingCastUrl(recording.id)}
-          target="_blank"
-          rel="noreferrer"
+        <button
+          type="button"
+          onClick={openRawCast}
           className="flex size-9 items-center justify-center rounded-md bg-[#1F1F1F] text-foreground-inverse-secondary hover:bg-[#262626] hover:text-foreground-inverse"
           title={t("player.rawCast")}
+          aria-label={t("player.rawCast")}
         >
           <Share2 className="size-4" />
-        </a>
+        </button>
         <button
           onClick={() => navigate(backTo)}
           className="flex size-9 items-center justify-center rounded-md bg-[#1F1F1F] text-foreground-inverse-secondary hover:bg-[#262626] hover:text-foreground-inverse"

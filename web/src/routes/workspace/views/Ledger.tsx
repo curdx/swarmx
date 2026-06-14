@@ -15,7 +15,7 @@
  * orchestrator 是唯一 writer,用户是 reader。
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useTranslation } from "react-i18next";
@@ -245,12 +245,6 @@ export default function LedgerView() {
     onReconnect: () => refresh(),
   });
 
-  const taskAgo = useMemo(() => fmtAgo(task.at, nowTick, t), [task.at, nowTick, t]);
-  const progressAgo = useMemo(
-    () => fmtAgo(progress.at, nowTick, t),
-    [progress.at, nowTick, t],
-  );
-
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-surface-primary">
       {/* 顶栏:刷新 + 简短说明 */}
@@ -289,7 +283,7 @@ export default function LedgerView() {
             variant="outline"
             size="sm"
             onClick={refresh}
-            disabled={refreshing}
+            disabled={refreshing || compacting}
             className="gap-1.5"
           >
             <RefreshCw className={cn("size-3.5", refreshing && "animate-spin")} />
@@ -305,7 +299,8 @@ export default function LedgerView() {
             icon={<ClipboardList className="size-4 text-accent-primary" />}
             title={t("ledger.taskTitle", "任务台账")}
             subtitle={t("ledger.taskSubtitle", "目标 · 假设 · 计划(DAG)")}
-            ago={taskAgo}
+            at={task.at}
+            nowTick={nowTick}
             snap={task}
             emptyHint={t(
               "ledger.taskEmpty",
@@ -319,7 +314,8 @@ export default function LedgerView() {
               "ledger.progressSubtitle",
               "当前步骤 · 派出去的活 · 卡点",
             )}
-            ago={progressAgo}
+            at={progress.at}
+            nowTick={nowTick}
             snap={progress}
             emptyHint={t(
               "ledger.progressEmpty",
@@ -401,21 +397,53 @@ function BreadcrumbsCard({
   );
 }
 
-function LedgerCard({
+/** Tiny isolated "XX 秒前" ticker. The whole page re-renders every second to
+ *  advance `nowTick`; keeping the tick consumer down here (instead of feeding a
+ *  per-second `ago` string into LedgerCard) means the memoized card body — and
+ *  its expensive ReactMarkdown re-parse — doesn't churn once a second. */
+function LedgerAgo({ at, nowTick }: { at: number | null; nowTick: number }) {
+  const { t } = useTranslation();
+  return (
+    <span className="shrink-0 font-caption text-[10px] text-foreground-tertiary">
+      {fmtAgo(at, nowTick, t)}
+    </span>
+  );
+}
+
+const LedgerCard = memo(function LedgerCard({
   icon,
   title,
   subtitle,
-  ago,
+  at,
+  nowTick,
   snap,
   emptyHint,
 }: {
   icon: React.ReactNode;
   title: string;
   subtitle: string;
-  ago: string;
+  at: number | null;
+  nowTick: number;
   snap: LedgerSnap;
   emptyHint: string;
 }) {
+  const { t } = useTranslation();
+  // Memo the markdown parse on the raw content. Without this the per-second
+  // page tick (nowTick) re-renders ReactMarkdown, which re-parses the entire
+  // (potentially large) ledger every second.
+  const body = useMemo(() => {
+    if (!snap.content) return null;
+    return (
+      <article className="prose prose-sm max-w-none font-body text-[13px] text-foreground-primary">
+        <ReactMarkdown
+          remarkPlugins={[remarkGfm]}
+          components={{ a: MarkdownLink, input: MarkdownInput }}
+        >
+          {stripLedgerHeading(snap.content)}
+        </ReactMarkdown>
+      </article>
+    );
+  }, [snap.content]);
   return (
     <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-border-subtle bg-surface-elevated">
       <div className="flex shrink-0 items-center gap-2 border-b border-border-subtle px-4 py-3">
@@ -428,24 +456,15 @@ function LedgerCard({
             {subtitle}
           </span>
         </div>
-        <span className="shrink-0 font-caption text-[10px] text-foreground-tertiary">
-          {ago}
-        </span>
+        <LedgerAgo at={at} nowTick={nowTick} />
       </div>
       <div className="min-h-0 flex-1 overflow-auto px-4 py-3">
         {snap.error ? (
           <p className="font-caption text-xs text-state-danger">
-            读取失败: {snap.error}
+            {t("ledger.readFailed", { msg: snap.error, defaultValue: "读取失败: {{msg}}" })}
           </p>
-        ) : snap.content ? (
-          <article className="prose prose-sm max-w-none font-body text-[13px] text-foreground-primary">
-            <ReactMarkdown
-              remarkPlugins={[remarkGfm]}
-              components={{ a: MarkdownLink, input: MarkdownInput }}
-            >
-              {stripLedgerHeading(snap.content)}
-            </ReactMarkdown>
-          </article>
+        ) : body ? (
+          body
         ) : (
           <p className="font-caption text-xs text-foreground-tertiary">
             {emptyHint}
@@ -454,4 +473,4 @@ function LedgerCard({
       </div>
     </div>
   );
-}
+});

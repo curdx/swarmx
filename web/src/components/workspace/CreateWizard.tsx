@@ -134,6 +134,47 @@ function baseName(p: string): string {
   return p.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || p;
 }
 
+/** Translate a raw server path-validation error into friendly localized text.
+ *  The backend emits plain English strings from a handful of distinct sources:
+ *    - `directory does not exist: <p>`        (workspaces.rs create / add-root)
+ *    - `<p>: No such file or directory`       (files.rs canonicalize on a gone path)
+ *    - `not a directory: <p>` / `... is not a directory` (a file, not a dir)
+ *    - `<p>: Permission denied` / `read_dir <p>: Permission denied (os error 13)`
+ *  Match case-insensitively on each known phrase (substring, not one brittle
+ *  regex) and fall back to the raw string only when nothing matches — never
+ *  swallow it. Order matters: "not a directory" is checked before the generic
+ *  missing-path phrases so a file-vs-dir mistake gets its own message. */
+function mapPathError(
+  raw: string,
+  t: (key: string, defaultValue: string) => string,
+): string {
+  const lower = raw.toLowerCase();
+  if (lower.includes("permission denied")) {
+    return t(
+      "wizard.pathPermissionDenied",
+      "没有访问该目录的权限 —— 换一个你有读取权限的目录,或在系统里授予访问权。",
+    );
+  }
+  if (lower.includes("not a directory")) {
+    return t(
+      "wizard.pathNotADirectory",
+      "这个路径是一个文件,不是文件夹 —— 请填项目所在的文件夹路径。",
+    );
+  }
+  if (
+    lower.includes("directory does not exist") ||
+    lower.includes("no such file") ||
+    lower.includes("not found") ||
+    lower.includes("no such")
+  ) {
+    return t(
+      "wizard.errDirMissing",
+      "该目录不存在 —— 请确认路径填写正确,且指向一个已存在的绝对路径。",
+    );
+  }
+  return raw;
+}
+
 export function CreateWizard({ open, onClose, onCreated }: Props) {
   const { t } = useTranslation();
   const [name, setName] = useState("");
@@ -254,15 +295,7 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
         return { state: "ok" };
       } catch (e) {
         const raw = e instanceof ApiError ? e.detail : (e as Error).message;
-        return {
-          state: "error",
-          message: /directory does not exist|not found|no such/i.test(raw)
-            ? t(
-                "wizard.errDirMissing",
-                "That directory doesn't exist — check the path is correct and points to an existing absolute path.",
-              )
-            : raw,
-        };
+        return { state: "error", message: mapPathError(raw, t) };
       }
     },
     [t],
@@ -413,17 +446,11 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
         api.deleteWorkspace(created.id).catch(() => {});
       }
       // Show the server's plain error string, not the `METHOD path → status`
-      // wrapper. Translate the common "directory does not exist" validation
-      // failure into Chinese (the server message is English; FAULT-007).
+      // wrapper. Translate the common path-validation failures (does-not-exist /
+      // not-a-directory / permission-denied) into Chinese (server messages are
+      // English; FAULT-007).
       const raw = e instanceof ApiError ? e.detail : (e as Error).message;
-      setError(
-        /directory does not exist/i.test(raw)
-          ? t(
-              "wizard.errDirMissing",
-              "That directory doesn't exist — check the path is correct and points to an existing absolute path.",
-            )
-          : raw,
-      );
+      setError(mapPathError(raw, t));
     } finally {
       // Release the guard. On success `scan` is set so the submit button is
       // swapped for "enter anyway" (no re-entry possible); on failure the

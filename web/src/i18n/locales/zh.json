@@ -66,7 +66,9 @@
       "json": "JSON 无法解析，请检查格式",
       "shape": "识别不到 server 配置，请检查结构",
       "empty": "mcpServers 是空的"
-    }
+    },
+    "nodeTooOld": "Node.js {{version}} 版本过低 — npx 类 MCP（含 chrome-devtools）需 Node {{min}}+（LTS），请升级后再启用。",
+    "notInstalled": "未安装"
   },
   "nav": {
     "chat": "对话",
@@ -177,7 +179,8 @@
     "allWorkspaces": "全部工作空间",
     "system": "system",
     "live": "live",
-    "off": "off"
+    "off": "off",
+    "offline": "离线"
   },
   "workspace": {
     "picker": "工作空间"
@@ -506,7 +509,8 @@
     },
     "activity": {
       "running": "正在调用 {{label}}"
-    }
+    },
+    "feedOffline": "实时连接已断开,下面是最后已知状态"
   },
   "dag": {
     "title": "协作图",
@@ -554,15 +558,16 @@
     "tagAll": "全部",
     "ratio": "{{shown}} / {{total}} 条",
     "empty": "没有匹配的录像",
-    "live": "● live",
-    "completed": "○ completed",
-    "recording": "▶ recording…",
-    "ready": "✓ ready to replay",
+    "live": "● 实时",
+    "completed": "○ 已完成",
+    "recording": "▶ 录制中…",
+    "ready": "✓ 可回放",
     "play": "播放",
     "download": "下载",
     "loadFailed": "加载录像失败",
     "unscoped": "未归属",
-    "unscopedHint": "该录像的 agent 没有归属工作空间（可能由 MCP 直接拉起，或 agent 行已被清理）"
+    "unscopedHint": "该录像的 agent 没有归属工作空间（可能由 MCP 直接拉起，或 agent 行已被清理）",
+    "openRawFailed": "打开原始 cast 失败"
   },
   "player": {
     "loading": "加载中…",
@@ -582,7 +587,8 @@
       "frame": "单帧",
       "back": "返回库"
     },
-    "liveTruncatedHint": "录制中，内容不完整：回放只到当前已落盘的部分，结尾可能突然截断。完结后重新打开可看到完整录像。"
+    "liveTruncatedHint": "录制中，内容不完整：回放只到当前已落盘的部分，结尾可能突然截断。完结后重新打开可看到完整录像。",
+    "popupBlocked": "弹窗被拦截"
   },
   "context": {
     "title": "上下文",
@@ -635,7 +641,24 @@
       "now": "刚刚",
       "minAgo": "{{n}}m 前",
       "hourAgo": "{{n}}h 前"
-    }
+    },
+    "subtitleUnread": "{{count}} 条未读",
+    "state": {
+      "spawning": "启动中",
+      "ready": "就绪",
+      "thinking": "思考中",
+      "idle": "空闲",
+      "exited": "已退出",
+      "waiting_dep": "等待依赖",
+      "error": "出错"
+    },
+    "cardAria": "{{type}}通知 · {{time}}{{unread}}",
+    "cardAriaUnread": " · 未读",
+    "typeMessage": "消息",
+    "typeBlackboard": "黑板",
+    "typeState": "状态",
+    "typeError": "异常",
+    "typeCompleted": "完成"
   },
   "agent": {
     "close": "关闭（Esc）",
@@ -752,7 +775,9 @@
     "scanningHint": "AI 会扫描你选择的项目目录，识别它的技术栈与项目类型。准备就绪后，会在聊天中与你打招呼并询问你的需求。",
     "scanningElapsed": "已等待 {{s}}s · 通常 20-40s",
     "scanningFootHint": "通常 20-40 秒，可先进入房间等待",
-    "enterAnyway": "直接进入房间"
+    "enterAnyway": "直接进入房间",
+    "pathNotADirectory": "这个路径是一个文件,不是文件夹 —— 请填项目所在的文件夹路径。",
+    "pathPermissionDenied": "没有访问该目录的权限 —— 换一个你有读取权限的目录,或在系统里授予访问权。"
   },
   "messages": {
     "filter": "过滤 发送方 / 接收方 / 正文",
@@ -873,7 +898,9 @@
     "orphaned": "工作空间已删除",
     "loadFailed": "定时任务加载失败",
     "previewFailed": "无法校验表达式（预览接口未响应），可仍尝试保存。",
-    "submitFailed": "保存失败，请重试"
+    "submitFailed": "保存失败，请重试",
+    "noWorkspaces": "还没有工作空间。定时任务需要先有一个工作空间来接收提示词。",
+    "createWorkspace": "新建工作空间"
   },
   "files": {
     "title": "文件浏览器",
@@ -882,7 +909,10 @@
     "truncated": "已截断",
     "browseAll": "浏览整个文件系统",
     "jailBlocked": "超出当前工作空间范围 — 打开「浏览整个文件系统」以查看。",
-    "readFailed": "文件加载失败"
+    "readFailed": "文件加载失败",
+    "workspacesLoadFailed": "工作区加载失败,请重试",
+    "browseAllWarning": "解除工作区隔离,可浏览整台机器的文件 — 请谨慎使用。",
+    "previewCapped": "仅预览前 {{size}}"
   },
   "tasks": {
     "title": "任务看板",
@@ -909,7 +939,11 @@
       "block": "阻塞",
       "done": "完成",
       "archive": "归档",
-      "reopen": "复位"
+      "reopen": "复位",
+      "blockAria": "标记阻塞 — {{role}}",
+      "doneAria": "标记完成 — {{role}}",
+      "archiveAria": "归档 — {{role}}",
+      "reopenAria": "重新打开 — {{role}}"
     },
     "confirm": {
       "blocked": {
@@ -963,7 +997,13 @@
       "blocked": "阻塞",
       "complete": "完成",
       "archived": "归档"
-    }
+    },
+    "evidenceKindLabel": {
+      "note": "记录",
+      "proof": "证明",
+      "blocker": "阻塞"
+    },
+    "evidenceKindHint": "类型：记录(note) 进展 · 证明(proof) 完成 · 阻塞(blocker) 标记障碍"
   },
   "usage": {
     "title": "用量 / 成本",
@@ -1002,12 +1042,19 @@
     "pricingRule": "规则",
     "pricingMatchers": "匹配",
     "empty": "暂无用量数据——派 worker 干活后这里会出现 token 与成本。",
-    "loadError": "用量数据加载失败"
+    "loadError": "用量数据加载失败",
+    "chartTableCaption": "每日 token 用量（按 UTC 日切分）",
+    "day": "日期"
   },
   "terminal": {
     "confirmTitle": "连接本机终端",
     "confirmDesc": "将为「{{workspace}}」打开一个真实 shell，会在该工作空间目录执行你输入的命令。",
-    "connect": "连接终端"
+    "connect": "连接终端",
+    "hostLabel": "终端",
+    "statusConnecting": "正在连接终端…",
+    "statusConnected": "终端已连接",
+    "statusDisconnected": "终端连接已断开",
+    "statusFailed": "无法连接到后端"
   },
   "model": {
     "label": "模型",
@@ -1085,5 +1132,52 @@
       "close": "关闭",
       "openHint": "{{shortcut}} 随时呼出"
     }
+  },
+  "blackboard": {
+    "createFile": "新建文件",
+    "refresh": "刷新列表",
+    "approveDesign": "批准设计",
+    "rejectDesign": "驳回设计",
+    "viewHistory": "查看写入历史",
+    "save": "保存",
+    "deleteFile": "删除文件",
+    "deleteConfirmTitle": "删除该文件？",
+    "deleteConfirmDesc": "“{{path}}”将从共享区移除，此操作无法撤销。",
+    "deleteConfirmAction": "删除文件",
+    "versionPreviewArea": "历史版本内容（只读）",
+    "editorArea": "文件内容编辑器"
+  },
+  "debug": {
+    "wakeAgent": "手动唤醒",
+    "minimize": "最小化",
+    "maximize": "最大化",
+    "restore": "还原",
+    "killAgent": "终止 agent",
+    "cliNotDetected": "未检测到该 CLI"
+  },
+  "ledger": {
+    "agoSeconds": "{{n}}s 前",
+    "agoMinutes": "{{n}}m 前",
+    "agoHours": "{{n}}h 前",
+    "title": "AI 工作台账",
+    "subtitle": "orchestrator 的思考过程都在这里。左侧是任务台账(目标 + 计划),右侧是进展状态。",
+    "compactHint": "用小模型把台账压缩(保留关键信息,旧版进 op-log 可恢复)",
+    "compacting": "压缩中…",
+    "compact": "压缩",
+    "compactFailed": "压缩失败：{{msg}}",
+    "compactSaved": "已压缩，省约 {{n}} tokens",
+    "compactNoop": "已是最简，无需压缩",
+    "refresh": "刷新",
+    "taskTitle": "任务台账",
+    "taskSubtitle": "目标 · 假设 · 计划(DAG)",
+    "taskEmpty": "还没写。orchestrator 第一次 wake 时会自动建立。",
+    "progressTitle": "进展状态",
+    "progressSubtitle": "当前步骤 · 派出去的活 · 卡点",
+    "progressEmpty": "还没写。orchestrator 派活时会实时更新。",
+    "breadcrumbsTitle": "近况",
+    "breadcrumbsSubtitle": "worker 们最近的心跳(每完成一步会自动写)",
+    "breadcrumbsCount": "{{n}} 个 worker",
+    "breadcrumbsEmpty": "还没有 worker 写过心跳。派出去的 worker 完成里程碑(install / build / 写代码 等)时会在这里出现一行。",
+    "readFailed": "读取失败: {{msg}}"
   }
 }

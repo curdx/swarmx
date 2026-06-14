@@ -12,7 +12,7 @@ use flockmux_protocol::rest::{
     WriteBlackboardRequest,
 };
 use flockmux_storage::{ListMessagesOpts, ThoughtTraceRecord as StoreThoughtTraceRecord};
-use flockmux_swarm::NewMessage;
+use flockmux_swarm::{path_safe, NewMessage, SwarmEvent};
 use serde::Deserialize;
 use serde_json::json;
 
@@ -276,6 +276,11 @@ pub async fn list_blackboard_paths(
     Ok(Json(
         latest
             .into_iter()
+            // Hide paths whose latest op is a `delete` tombstone: the file is
+            // gone from disk, so listing it would resurrect a ghost the user
+            // can't open. The op-log row is kept (history stays truthful) —
+            // `blackboard_history` still shows the delete.
+            .filter(|r| r.op != "delete")
             .map(|r| BlackboardEntry {
                 path: r.path,
                 sha256: r.sha256,
@@ -338,6 +343,65 @@ pub async fn write_blackboard(
         "sha256": record.sha256,
         "at": record.at,
     })))
+}
+
+/// `DELETE /api/blackboard/*path` — remove a single blackboard file and
+/// record a `delete` tombstone op so history stays truthful.
+///
+/// Path safety: this reuses the SAME jail the read handler uses
+/// (`path_safe::resolve_existing` against the swarm's blackboard root) — no
+/// weaker check. A missing/escaping path is rejected with 400 (consistent with
+/// `read_blackboard`'s `bad_request_err`), and a path that resolves outside the
+/// root can never reach `fs::remove_file`.
+pub async fn delete_blackboard(
+    State(state): State<AppState>,
+    Path(path): Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let root = state.swarm.blackboard_root().to_path_buf();
+    let target = path_safe::resolve_existing(&root, &path).map_err(bad_request_err)?;
+
+    // Remove the file off the runtime thread (same as the write path's fs work).
+    tokio::task::spawn_blocking(move || -> std::io::Result<()> {
+        match std::fs::remove_file(&target) {
+            Ok(()) => Ok(()),
+            // Already gone on disk is fine — we still want to record the
+            // tombstone + broadcast so the op-log and UI converge.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e),
+        }
+    })
+    .await
+    .map_err(|e| internal_err(anyhow::anyhow!("spawn_blocking remove_file: {e}")))?
+    .map_err(|e| internal_err(anyhow::anyhow!("remove blackboard file: {e}")))?;
+
+    let at = now_ms();
+    // Record the delete op (history). A failed op-log insert must NOT swallow
+    // the broadcast — the file IS gone, so dependents/UI still need to converge.
+    // Mirror write_blackboard's posture: log, broadcast with id=-1, return Ok.
+    let id = match state
+        .store
+        .record_blackboard_delete(None, path.clone(), at)
+        .await
+    {
+        Ok(record) => record.id,
+        Err(e) => {
+            tracing::warn!(
+                ?e,
+                path = %path,
+                "blackboard delete op-log insert failed; file IS removed — broadcasting anyway (id=-1)"
+            );
+            -1
+        }
+    };
+    state.swarm.publish_event(SwarmEvent::BlackboardChanged {
+        id,
+        agent_id: None,
+        op: "delete".into(),
+        path: path.clone(),
+        sha256: String::new(),
+        at,
+    });
+    Ok(Json(json!({ "ok": true, "path": path, "at": at })))
 }
 
 fn internal_err(e: anyhow::Error) -> (StatusCode, Json<serde_json::Value>) {

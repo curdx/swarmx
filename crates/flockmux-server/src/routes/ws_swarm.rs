@@ -5,7 +5,8 @@
 //! the WS for incremental updates.
 //!
 //! A slow subscriber that lags past the broadcast channel's capacity
-//! (256) is disconnected — the alternative is unbounded memory growth.
+//! (1024, see `Swarm::new` in `flockmux-swarm/src/swarm.rs`) is
+//! disconnected — the alternative is unbounded memory growth.
 
 use crate::AppState;
 use axum::{

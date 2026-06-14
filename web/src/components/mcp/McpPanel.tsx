@@ -313,7 +313,7 @@ export function McpManager() {
                             )}
                             <button
                               type="button"
-                              disabled={busy !== null}
+                              disabled={busy?.id === srv.id}
                               onClick={() =>
                                 setKeyDialog({ id: srv.id, name: meta?.name ?? srv.id, masked: keyState.masked })
                               }
@@ -337,14 +337,14 @@ export function McpManager() {
                     label="Claude"
                     on={inClaude}
                     pending={busy?.id === srv.id && busy?.cli === "claude"}
-                    disabled={!status || busy !== null || (!nodeOk && !inClaude)}
+                    disabled={!status || busy?.id === srv.id || (!nodeOk && !inClaude)}
                     onChange={(v) => onToggle("claude", v)}
                   />
                   <CliToggle
                     label="Codex"
                     on={inCodex}
                     pending={busy?.id === srv.id && busy?.cli === "codex"}
-                    disabled={!status || busy !== null || (!nodeOk && !inCodex)}
+                    disabled={!status || busy?.id === srv.id || (!nodeOk && !inCodex)}
                     onChange={(v) => onToggle("codex", v)}
                   />
                   {(busy?.id === srv.id && busy?.cli === undefined) && (
@@ -485,6 +485,7 @@ function RuntimeChip({
   info?: RuntimeInfo;
   required?: boolean;
 }) {
+  const { t } = useTranslation();
   const present = info?.present;
   const loading = info === undefined;
   // present but too old (node only) → not a clean ✓: amber, not green/red.
@@ -513,7 +514,7 @@ function RuntimeChip({
       {info?.version ? (
         <span className="opacity-80">{info.version}</span>
       ) : present === false ? (
-        <span>{required ? "未安装" : "—"}</span>
+        <span>{required ? t("mcp.notInstalled", { defaultValue: "未安装" }) : "—"}</span>
       ) : null}
     </span>
   );

@@ -71,7 +71,9 @@ pub fn router() -> Router<AppState> {
         .route("/api/blackboard", get(super::swarm::list_blackboard_paths))
         .route(
             "/api/blackboard/*path",
-            get(super::swarm::read_blackboard).put(super::swarm::write_blackboard),
+            get(super::swarm::read_blackboard)
+                .put(super::swarm::write_blackboard)
+                .delete(super::swarm::delete_blackboard),
         )
         .route(
             "/api/blackboard-history/*path",

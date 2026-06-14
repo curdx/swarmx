@@ -1908,6 +1908,29 @@ impl Store {
         .context("spawn_blocking insert_blackboard_op")?
     }
 
+    /// Record a single-file delete as a `delete` tombstone op, mirroring the
+    /// `insert_blackboard_op` write pattern so history stays truthful (the past
+    /// `write`/`external` rows remain; this just appends the latest fact —
+    /// "removed"). Content/sha are empty because a deleted file has none. The
+    /// fs removal itself is the route handler's job (it owns the blackboard
+    /// root); this is the storage half that keeps the op-log consistent.
+    pub async fn record_blackboard_delete(
+        &self,
+        agent_id: Option<String>,
+        path: String,
+        at: i64,
+    ) -> Result<BlackboardOpRecord> {
+        self.insert_blackboard_op(NewBlackboardOp {
+            agent_id,
+            op: "delete".into(),
+            path,
+            content: String::new(),
+            sha256: String::new(),
+            at,
+        })
+        .await
+    }
+
     /// Returns the latest op for each distinct path. If `path` is `Some`,
     /// only that path's history is returned (most-recent first).
     pub async fn list_blackboard_ops(

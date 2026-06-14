@@ -248,6 +248,9 @@ function TaskCard({
   busy: boolean;
   t: (k: string, o?: Record<string, unknown>) => string;
 }) {
+  // a11y: the same role label requestStatus uses, so an action's aria-label
+  // names which card it acts on (e.g. "Mark done — orchestrator").
+  const role = task.role_label || task.role_slug || task.agent_id.slice(0, 8);
   return (
     <div className="flex flex-col gap-2 rounded-lg border border-border-subtle bg-surface-secondary p-3">
       <div className="flex items-center justify-between gap-2">
@@ -287,22 +290,38 @@ function TaskCard({
           <Loader2 className="size-3 shrink-0 animate-spin text-foreground-tertiary" />
         )}
         {task.status !== "blocked" && (
-          <CardBtn onClick={() => onSet(task, "blocked")} disabled={busy}>
+          <CardBtn
+            onClick={() => onSet(task, "blocked")}
+            disabled={busy}
+            label={t("tasks.action.blockAria", { role, defaultValue: "标记阻塞 — {{role}}" })}
+          >
             {t("tasks.action.block")}
           </CardBtn>
         )}
         {task.status !== "done" && (
-          <CardBtn onClick={() => onSet(task, "done")} disabled={busy}>
+          <CardBtn
+            onClick={() => onSet(task, "done")}
+            disabled={busy}
+            label={t("tasks.action.doneAria", { role, defaultValue: "标记完成 — {{role}}" })}
+          >
             {t("tasks.action.done")}
           </CardBtn>
         )}
         {task.status !== "archived" && (
-          <CardBtn onClick={() => onSet(task, "archived")} disabled={busy}>
+          <CardBtn
+            onClick={() => onSet(task, "archived")}
+            disabled={busy}
+            label={t("tasks.action.archiveAria", { role, defaultValue: "归档 — {{role}}" })}
+          >
             {t("tasks.action.archive")}
           </CardBtn>
         )}
         {task.overridden && (
-          <CardBtn onClick={() => onSet(task, null)} disabled={busy}>
+          <CardBtn
+            onClick={() => onSet(task, null)}
+            disabled={busy}
+            label={t("tasks.action.reopenAria", { role, defaultValue: "重新打开 — {{role}}" })}
+          >
             {t("tasks.action.reopen")}
           </CardBtn>
         )}
@@ -314,10 +333,13 @@ function TaskCard({
 function CardBtn({
   onClick,
   disabled,
+  label,
   children,
 }: {
   onClick: () => void;
   disabled?: boolean;
+  /** a11y: full action+role description (the visible text alone is too terse). */
+  label: string;
   children: React.ReactNode;
 }) {
   return (
@@ -325,7 +347,9 @@ function CardBtn({
       type="button"
       onClick={onClick}
       disabled={disabled}
-      className="rounded border border-border-subtle px-1.5 py-0.5 font-caption text-[10px] text-foreground-secondary transition-colors hover:bg-surface-tertiary hover:text-foreground-primary disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent disabled:hover:text-foreground-secondary"
+      aria-label={label}
+      title={label}
+      className="inline-flex min-h-6 items-center rounded border border-border-subtle px-2 py-1 font-caption text-[10px] text-foreground-secondary transition-colors hover:bg-surface-tertiary hover:text-foreground-primary disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent disabled:hover:text-foreground-secondary"
     >
       {children}
     </button>

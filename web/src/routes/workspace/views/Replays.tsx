@@ -228,6 +228,7 @@ export default function ReplaysView() {
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
             placeholder={t("replays.search")}
+            aria-label={t("replays.search")}
             className="min-h-8 min-w-0 flex-1 bg-transparent text-xs text-foreground-primary placeholder:text-foreground-tertiary focus:outline-none"
           />
         </div>
@@ -237,6 +238,7 @@ export default function ReplaysView() {
           onClick={refresh}
           disabled={refreshing}
           title={t("common.refresh")}
+          aria-label={t("common.refresh")}
           className="size-8 shrink-0"
         >
           <RefreshCw className={cn("size-3.5", refreshing && "animate-spin")} />
@@ -334,18 +336,25 @@ export default function ReplaysView() {
                           ? "bg-status-running-soft text-status-running"
                           : "bg-surface-tertiary text-foreground-tertiary",
                       )}
-                      title={live ? t("replays.live") : t("replays.completed")}
+                      title={
+                        live
+                          ? t("replays.live", { defaultValue: "● 实时" })
+                          : t("replays.completed", { defaultValue: "○ 已完成" })
+                      }
                     >
-                      {live ? t("replays.live") : t("replays.completed")}
+                      {live
+                        ? t("replays.live", { defaultValue: "● 实时" })
+                        : t("replays.completed", { defaultValue: "○ 已完成" })}
                     </span>
                   </div>
 
                   <Link
                     to={`/chat/${workspace.id}/replays/${encodeURIComponent(r.id)}`}
-                    className="relative block h-32 overflow-hidden border-y border-[#1F1F1F] bg-term-bg"
+                    aria-label={`${t("replays.play")} · ${r.agent_id}`}
+                    className="group/thumb relative block h-32 overflow-hidden border-y border-[#1F1F1F] bg-term-bg"
                   >
                     <CastThumb recording={r} live={live} t={t} />
-                    <div className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 transition-opacity group-hover:opacity-100">
+                    <div className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within/thumb:opacity-100">
                       <span className="flex items-center gap-1.5 rounded-full bg-accent-primary px-4 py-2 text-xs font-medium text-foreground-on-accent">
                         <Play className="size-3.5" />
                         {t("replays.play")}
@@ -473,7 +482,9 @@ function CastThumb({
         )}
       </div>
       <div className="font-caption text-[10px] uppercase tracking-wider text-term-dim">
-        {live ? t("replays.recording") : t("replays.ready")}
+        {live
+          ? t("replays.recording", { defaultValue: "▶ 录制中…" })
+          : t("replays.ready", { defaultValue: "✓ 可回放" })}
       </div>
     </div>
   );

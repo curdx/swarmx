@@ -356,7 +356,15 @@ export default function UsageRoute() {
                     {t("usage.byDayUtc")}
                   </span>
                 </h2>
-                <div className="h-48 rounded-lg border border-border-subtle bg-surface-secondary p-3">
+                {/* The recharts bars are mouse-hover-only and not keyboard/SR
+                    reachable. Give assistive tech an equivalent, lossless data
+                    path: a visually-hidden per-day table that mirrors the chart
+                    (read without hovering). aria-hidden on the chart container
+                    avoids the SVG being announced as noise. */}
+                <div
+                  className="h-48 rounded-lg border border-border-subtle bg-surface-secondary p-3"
+                  aria-hidden="true"
+                >
                   <Suspense
                     fallback={
                       <div className="flex h-full items-center justify-center font-caption text-xs text-foreground-tertiary">
@@ -367,6 +375,33 @@ export default function UsageRoute() {
                     <UsageTrendChart data={chartData} />
                   </Suspense>
                 </div>
+                <table className="sr-only">
+                  <caption>
+                    {t("usage.chartTableCaption", {
+                      defaultValue: "每日 token 用量（按 UTC 日切分）",
+                    })}
+                  </caption>
+                  <thead>
+                    <tr>
+                      <th scope="col">{t("usage.day", { defaultValue: "日期" })}</th>
+                      <th scope="col">
+                        {t("usage.totalTokens", { defaultValue: "总 token" })}
+                      </th>
+                      <th scope="col">{t("usage.input")}</th>
+                      <th scope="col">{t("usage.output")}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {chartData.map((d) => (
+                      <tr key={d.day}>
+                        <th scope="row">{d.day}</th>
+                        <td>{fmtTokens(d.tokens)}</td>
+                        <td>{fmtTokens(d.input)}</td>
+                        <td>{fmtTokens(d.output)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </section>
             )}
 

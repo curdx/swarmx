@@ -66,7 +66,9 @@
       "json": "Couldn't parse JSON — check the format",
       "shape": "Couldn't find a server config — check the structure",
       "empty": "mcpServers is empty"
-    }
+    },
+    "nodeTooOld": "Node.js {{version}} is too old — npx-based MCP servers (incl. chrome-devtools) need Node {{min}}+ (LTS). Please upgrade before enabling.",
+    "notInstalled": "Not installed"
   },
   "nav": {
     "chat": "Chat",
@@ -177,7 +179,8 @@
     "allWorkspaces": "All workspaces",
     "system": "system",
     "live": "live",
-    "off": "off"
+    "off": "off",
+    "offline": "Offline"
   },
   "workspace": {
     "picker": "Workspace"
@@ -506,7 +509,8 @@
     },
     "activity": {
       "running": "Running {{label}}"
-    }
+    },
+    "feedOffline": "Live connection lost — showing last known state"
   },
   "dag": {
     "title": "Flow",
@@ -562,7 +566,8 @@
     "download": "Download",
     "loadFailed": "Failed to load recordings",
     "unscoped": "Unscoped",
-    "unscopedHint": "This recording's agent has no workspace (e.g. launched directly via MCP, or the agent row was cleaned up)."
+    "unscopedHint": "This recording's agent has no workspace (e.g. launched directly via MCP, or the agent row was cleaned up).",
+    "openRawFailed": "Failed to open raw cast"
   },
   "player": {
     "loading": "Loading…",
@@ -582,7 +587,8 @@
       "frame": "frame",
       "back": "back to library"
     },
-    "liveTruncatedHint": "Still recording — incomplete: playback only goes up to the bytes flushed so far and may cut off abruptly at the end. Reopen after it finalizes to see the full recording."
+    "liveTruncatedHint": "Still recording — incomplete: playback only goes up to the bytes flushed so far and may cut off abruptly at the end. Reopen after it finalizes to see the full recording.",
+    "popupBlocked": "Pop-up blocked"
   },
   "context": {
     "title": "Context board",
@@ -635,7 +641,24 @@
       "now": "now",
       "minAgo": "{{n}}m ago",
       "hourAgo": "{{n}}h ago"
-    }
+    },
+    "subtitleUnread": "{{count}} unread",
+    "state": {
+      "spawning": "Spawning",
+      "ready": "Ready",
+      "thinking": "Thinking",
+      "idle": "Idle",
+      "exited": "Exited",
+      "waiting_dep": "Waiting on dependency",
+      "error": "Error"
+    },
+    "cardAria": "{{type}} notification · {{time}}{{unread}}",
+    "cardAriaUnread": " · unread",
+    "typeMessage": "Message",
+    "typeBlackboard": "Blackboard",
+    "typeState": "State",
+    "typeError": "Error",
+    "typeCompleted": "Completed"
   },
   "agent": {
     "close": "Close (Esc)",
@@ -752,7 +775,9 @@
     "scanningHint": "AI is scanning the project directory you just picked to figure out the stack and project type. When it's done it'll greet you in chat and ask what you want done.",
     "scanningElapsed": "{{s}}s elapsed · usually 20-40s",
     "scanningFootHint": "Usually 20-40s — you can enter the room and wait",
-    "enterAnyway": "Enter room now"
+    "enterAnyway": "Enter room now",
+    "pathNotADirectory": "That path is a file, not a folder — enter the folder your project lives in.",
+    "pathPermissionDenied": "You don't have permission to access that directory — pick one you can read, or grant access in your system settings."
   },
   "messages": {
     "filter": "Filter by sender / receiver / body",
@@ -873,7 +898,9 @@
     "orphaned": "Workspace deleted",
     "loadFailed": "Failed to load scheduled jobs",
     "previewFailed": "Couldn't validate the expression (preview unavailable) — you can still try to save.",
-    "submitFailed": "Save failed, please retry"
+    "submitFailed": "Save failed, please retry",
+    "noWorkspaces": "No workspaces yet. A scheduled job needs a workspace to deliver its prompt to.",
+    "createWorkspace": "Create a workspace"
   },
   "files": {
     "title": "File browser",
@@ -882,7 +909,10 @@
     "truncated": "truncated",
     "browseAll": "Browse whole filesystem",
     "jailBlocked": "Outside this workspace — turn on \"Browse whole filesystem\" to view.",
-    "readFailed": "Failed to load file"
+    "readFailed": "Failed to load file",
+    "workspacesLoadFailed": "Failed to load workspaces — please retry",
+    "browseAllWarning": "Removes workspace isolation — lets you browse the whole machine. Use with care.",
+    "previewCapped": "Preview limited to first {{size}}"
   },
   "tasks": {
     "title": "Task board",
@@ -909,7 +939,11 @@
       "block": "Block",
       "done": "Done",
       "archive": "Archive",
-      "reopen": "Reopen"
+      "reopen": "Reopen",
+      "blockAria": "Mark blocked — {{role}}",
+      "doneAria": "Mark done — {{role}}",
+      "archiveAria": "Archive — {{role}}",
+      "reopenAria": "Reopen — {{role}}"
     },
     "confirm": {
       "blocked": {
@@ -963,7 +997,13 @@
       "blocked": "Blocked",
       "complete": "Complete",
       "archived": "Archived"
-    }
+    },
+    "evidenceKindLabel": {
+      "note": "Note",
+      "proof": "Proof",
+      "blocker": "Blocker"
+    },
+    "evidenceKindHint": "Kind: note for progress · proof of completion · blocker for obstacles"
   },
   "usage": {
     "title": "Usage / Cost",
@@ -1002,12 +1042,19 @@
     "pricingRule": "Rule",
     "pricingMatchers": "Match",
     "empty": "No usage yet — token counts and cost appear here once workers run.",
-    "loadError": "Failed to load usage data"
+    "loadError": "Failed to load usage data",
+    "chartTableCaption": "Daily token usage (bucketed by UTC day)",
+    "day": "Date"
   },
   "terminal": {
     "confirmTitle": "Connect local terminal",
     "confirmDesc": "This opens a real shell for \"{{workspace}}\" and runs commands you type in that workspace directory.",
-    "connect": "Connect terminal"
+    "connect": "Connect terminal",
+    "hostLabel": "Terminal",
+    "statusConnecting": "Connecting to terminal…",
+    "statusConnected": "Terminal connected",
+    "statusDisconnected": "Terminal connection lost",
+    "statusFailed": "Unable to reach the backend"
   },
   "model": {
     "label": "Model",
@@ -1085,5 +1132,52 @@
       "close": "close",
       "openHint": "{{shortcut}} to reopen"
     }
+  },
+  "blackboard": {
+    "createFile": "Create file",
+    "refresh": "Refresh list",
+    "approveDesign": "Approve design",
+    "rejectDesign": "Reject design",
+    "viewHistory": "View write history",
+    "save": "Save",
+    "deleteFile": "Delete file",
+    "deleteConfirmTitle": "Delete this file?",
+    "deleteConfirmDesc": "\"{{path}}\" will be removed from the shared board. This cannot be undone.",
+    "deleteConfirmAction": "Delete file",
+    "versionPreviewArea": "Historical version content (read-only)",
+    "editorArea": "File content editor"
+  },
+  "debug": {
+    "wakeAgent": "Wake agent",
+    "minimize": "Minimize",
+    "maximize": "Maximize",
+    "restore": "Restore",
+    "killAgent": "Kill agent",
+    "cliNotDetected": "CLI not detected"
+  },
+  "ledger": {
+    "agoSeconds": "{{n}}s ago",
+    "agoMinutes": "{{n}}m ago",
+    "agoHours": "{{n}}h ago",
+    "title": "AI Work Ledger",
+    "subtitle": "The orchestrator's thinking lives here. Task ledger (goals + plan) on the left, progress on the right.",
+    "compactHint": "Compact the ledger with a small model (keeps key info; the old version stays recoverable in the op-log)",
+    "compacting": "Compacting…",
+    "compact": "Compact",
+    "compactFailed": "Compaction failed: {{msg}}",
+    "compactSaved": "Compacted, saved about {{n}} tokens",
+    "compactNoop": "Already minimal, nothing to compact",
+    "refresh": "Refresh",
+    "taskTitle": "Task Ledger",
+    "taskSubtitle": "Goals · Assumptions · Plan (DAG)",
+    "taskEmpty": "Nothing yet. The orchestrator creates this on its first wake.",
+    "progressTitle": "Progress",
+    "progressSubtitle": "Current step · Assignments · Blockers",
+    "progressEmpty": "Nothing yet. The orchestrator updates this live as it assigns work.",
+    "breadcrumbsTitle": "Activity",
+    "breadcrumbsSubtitle": "Recent worker heartbeats (written automatically after each step)",
+    "breadcrumbsCount": "{{n}} worker(s)",
+    "breadcrumbsEmpty": "No worker heartbeats yet. A line appears here when a dispatched worker hits a milestone (install / build / writing code, etc.).",
+    "readFailed": "Read failed: {{msg}}"
   }
 }
