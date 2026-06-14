@@ -37,3 +37,5 @@ tauri-plugin-dialog = "2"
 # 软件自动更新：检测 / 下载 / 安装新版（plugin-process 提供安装后 relaunch）。
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
+# 桌面通知：新消息时弹系统通知（受设置页「新消息桌面通知」开关控制）。
+tauri-plugin-notification = "2"

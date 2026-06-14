@@ -30,6 +30,7 @@ import { McpActivityBar } from "@/components/mcp/McpActivityBar";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { NotificationPopover } from "@/components/NotificationPopover";
 import { useNotificationBadge } from "@/hooks/useNotificationBadge";
+import { useAppSettingsBehaviors } from "@/hooks/useAppSettingsBehaviors";
 import { api } from "@/api/http";
 import { primeInputPolicies } from "@/lib/cliInputPolicy";
 import { formatShortcutChord, getClientPlatformInfo } from "@/lib/platform";
@@ -49,6 +50,12 @@ export function AppShell() {
   const { t } = useTranslation();
   const location = useLocation();
   const { hasUnseen, markSeen } = useNotificationBadge();
+
+  // Wire the three behavioural Settings toggles (launch show/hide, desktop
+  // notifications, kill-others-on-fail) to real runtime effects. Mounted here
+  // because AppShell is the cross-route always-on host; behaviours read the
+  // latest persisted preference on each use, so no re-mount on a toggle change.
+  useAppSettingsBehaviors();
 
   // 进入 /notifications 时把 badge 标记 seen — 用户已经在看了，红点应该
   // 消失。其他路由变化不动 seenAt。

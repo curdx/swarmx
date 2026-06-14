@@ -19,6 +19,8 @@
     },
     "dialog:default",
     "updater:default",
-    "process:default"
+    "process:default",
+    "notification:default",
+    "core:window:allow-start-dragging"
   ]
 }
