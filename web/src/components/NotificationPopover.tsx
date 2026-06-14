@@ -35,6 +35,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { cn } from "@/lib/cn";
+import { toast } from "@/lib/toast";
 import { relTime } from "@/lib/relTime";
 import {
   friendlyAgent,
@@ -48,7 +49,11 @@ interface Item {
   id: string;
   kind: "message" | "blackboard" | "state";
   agent?: string;
-  workspace?: string;
+  /** FK into the workspaces table (`Workspace.id`), used to resolve the
+   *  `/chat/:slug` target reliably at click time. Was previously the raw disk
+   *  path with `.slice(-8)` taken as the slug — fragile and could open the
+   *  wrong workspace. Null when the agent has no resolvable workspace. */
+  workspaceId?: string;
   title: string;
   body?: string;
   at: number;
@@ -74,7 +79,7 @@ function itemFromMessage(
     "id" | "from_agent" | "to_agent" | "kind" | "body" | "sent_at"
   >,
   roleLookup: Map<string, string>,
-  workspace: string | undefined,
+  workspaceId: string | undefined,
   t: Tr,
 ): Item {
   const isPseudo = m.from_agent === "system" || m.from_agent === "user";
@@ -83,7 +88,7 @@ function itemFromMessage(
     id: `msg-${m.id}`,
     kind: isWake ? "state" : "message",
     agent: isPseudo ? undefined : m.from_agent,
-    workspace,
+    workspaceId,
     title: isWake
       ? t("notifications.kinds.wakeTitle", {
           from: friendlyAgent(m.from_agent, roleLookup, t),
@@ -108,8 +113,9 @@ export function NotificationPopover({ hasUnseen, onSeen }: Props) {
   const [roleLookup, setRoleLookup] = useState<Map<string, string>>(
     () => new Map(),
   );
-  // agent_id → workspace path 反查 (跳对应 ws chat 时要)。和 RoleLookup
-  // 一次 listAgents 就能拿到。
+  // agent_id → workspace_id (FK) 反查 (跳对应 ws chat 时要)。和 RoleLookup
+  // 一次 listAgents 就能拿到。存 workspace_id 而非磁盘路径 —— 点击时再用它
+  // 去 workspaces 列表查 slug，避免截磁盘路径末 8 字符跳错空间。
   const [agentWorkspaces, setAgentWorkspaces] = useState<Map<string, string>>(
     () => new Map(),
   );
@@ -128,7 +134,7 @@ export function NotificationPopover({ hasUnseen, onSeen }: Props) {
       ]);
       const wsM = new Map<string, string>();
       for (const a of agents as AgentInfo[]) {
-        if (a.workspace) wsM.set(a.agent_id, a.workspace);
+        if (a.workspace_id) wsM.set(a.agent_id, a.workspace_id);
       }
       setAgentWorkspaces(wsM);
       const rl = buildRoleLookup(agents as AgentInfo[]);
@@ -208,14 +214,30 @@ export function NotificationPopover({ hasUnseen, onSeen }: Props) {
 
   const handleItemClick = (item: Item) => {
     setOpen(false);
-    if (item.workspace) {
-      // 跳到对应 workspace 的 chat (wsId = path 末 8 字符)
-      const wsId = item.workspace.slice(-8);
+    // Resolve the workspace's URL slug from its id via the workspaces list —
+    // never derive it from a disk path. `Workspace.slug` is the first 8 chars
+    // of the id and is exactly what `/chat/:slug` routing expects; matching by
+    // id here means we either land in the correct space or don't jump at all.
+    const ws = item.workspaceId
+      ? workspaces.find((w) => w.id === item.workspaceId)
+      : undefined;
+    if (ws) {
       if (item.kind === "message" && item.agent) {
-        navigate(`/chat/${wsId}?agent=${encodeURIComponent(item.agent)}`);
+        navigate(`/chat/${ws.slug}?agent=${encodeURIComponent(item.agent)}`);
       } else {
-        navigate(`/chat/${wsId}/ledger`);
+        navigate(`/chat/${ws.slug}/ledger`);
       }
+    } else if (item.workspaceId) {
+      // We know which workspace this came from, but it's no longer in the
+      // fetched list (e.g. just archived/removed, or the list is stale).
+      // Don't guess a slug from the id — that could open the wrong space.
+      // Tell the user and route to the full center instead of jumping blind.
+      toast.error(
+        t("notifications.openFailed", {
+          defaultValue: "无法定位该消息所属的空间，已为你打开通知中心",
+        }),
+      );
+      navigate("/notifications");
     } else {
       // No resolvable workspace (e.g. a message from an agent that spawned
       // AFTER the popover last refreshed its agent→workspace map, or a

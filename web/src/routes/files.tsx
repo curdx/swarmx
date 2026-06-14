@@ -194,6 +194,20 @@ export default function FilesRoute() {
             </div>
           )}
           {err && <div className="px-4 py-3 font-caption text-xs text-status-danger">{err}</div>}
+          {/* No workspace chosen (and not browsing the whole filesystem): nothing
+              to list yet, so guide the user to pick one instead of a blank pane. */}
+          {!loading && !err && !list && (
+            <div className="flex flex-1 items-center justify-center px-6 text-center font-caption text-sm text-foreground-tertiary">
+              {t("files.noWorkspace", { defaultValue: "选择一个工作区开始浏览" })}
+            </div>
+          )}
+          {/* Directory loaded but has no (visible) entries — empty, or everything
+              in it was filtered out by the backend. */}
+          {!loading && !err && list && list.entries.length === 0 && (
+            <div className="flex flex-1 items-center justify-center px-6 text-center font-caption text-sm text-foreground-tertiary">
+              {t("files.emptyDir", { defaultValue: "此目录为空" })}
+            </div>
+          )}
           {list?.entries.map((e) => (
             <button
               key={e.name}

@@ -42,6 +42,7 @@ import {
   Boxes,
   FolderOpen,
   GitBranch,
+  Loader2,
   PlugZap,
   Radio,
   TriangleAlert,
@@ -258,6 +259,7 @@ function WorkspaceStatusStrip({
   reviving,
   onRevive,
   hasError = false,
+  preparing = false,
 }: {
   workspaceName: string;
   directionName: string;
@@ -271,6 +273,11 @@ function WorkspaceStatusStrip({
    *  watchdog). Keeps the strip's liveness dot honest — without it the strip
    *  would still say "1 个 AI 在线" directly above the failure card. */
   hasError?: boolean;
+  /** True while the direction is still bootstrapping (thread.state ===
+   *  "preparing") — the orchestrator is on its way up. Suppresses the
+   *  "唤起 orchestrator" button so the user can't double-spawn it in the
+   *  startup window. */
+  preparing?: boolean;
 }) {
   const { t } = useTranslation();
   // A member that exists but can't work is NOT "online". `hasError` overrides
@@ -364,6 +371,15 @@ function WorkspaceStatusStrip({
                 {t("chat.workspaceStripSetupCli")}
               </Link>
             </Button>
+          </div>
+        ) : !hasMembers && preparing ? (
+          // 方向正在 bootstrap（orchestrator 正在起来）——不渲染唤起按钮，
+          // 否则用户会在这个窗口里再点一次，spawn 出第二个 orchestrator。
+          <div className="flex items-center gap-2 sm:max-w-[430px]">
+            <Loader2 className="size-3.5 shrink-0 animate-spin text-foreground-tertiary" />
+            <p className="font-caption text-[11px] leading-5 text-foreground-tertiary">
+              {t("chat.workspaceStripPreparing", { defaultValue: "正在准备 orchestrator…" })}
+            </p>
           </div>
         ) : !hasMembers ? (
           <div className="flex flex-col gap-2 sm:max-w-[430px] sm:flex-row sm:items-center">
@@ -985,6 +1001,10 @@ export default function ChatView() {
           reviving={reviving}
           onRevive={reviveOrchestrator}
           hasError={orchestratorFailure != null}
+          // P1-08: while the direction is still bootstrapping the orchestrator
+          // is already on its way up — don't offer a revive button or the user
+          // double-spawns it in the startup window.
+          preparing={activeThread?.state === "preparing"}
         />
         {/* P2: the captain's structured plan, pinned above the conversation —
             accurate ✓/◐/○ from plan.json, not guessed from prose. */}

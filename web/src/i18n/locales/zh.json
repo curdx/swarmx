@@ -973,6 +973,7 @@
     "tokensOnly": "仅 token",
     "pricingTitle": "价目表",
     "pricingMeta": "{{unit}} · {{source}} · {{path}}",
+    "pricingFallback": "未列出的模型自动套用 LiteLLM 价格表兜底（覆盖 {{count}} 个模型）",
     "pricingDefault": "内置默认",
     "pricingUser": "用户配置",
     "pricingReset": "恢复默认",

@@ -48,10 +48,16 @@ export default function TerminalRoute() {
   const { workspaces, wsId, setWsId, ready, error } = useToolWorkspaces();
   const hostRef = useRef<HTMLDivElement>(null);
   const [armed, setArmed] = useState(false);
+  // Set true when the socket drops (onclose/onerror); drives the reconnect banner.
+  const [wsClosed, setWsClosed] = useState(false);
+  // Bumped by the reconnect button to re-run the connect effect even when
+  // `armed` is already true.
+  const [reconnectNonce, setReconnectNonce] = useState(0);
   const activeWs = workspaces.find((w) => w.id === wsId) ?? null;
 
   useEffect(() => {
     setArmed(false);
+    setWsClosed(false);
   }, [wsId]);
 
   useEffect(() => {
@@ -59,6 +65,7 @@ export default function TerminalRoute() {
     if (!ready || !armed) return;
     const host = hostRef.current;
     if (!host) return;
+    setWsClosed(false);
 
     const term = new XtermTerminal({
       fontSize: 13,
@@ -96,11 +103,24 @@ export default function TerminalRoute() {
       if (typeof e.data === "string") term.write(e.data);
       else term.write(new Uint8Array(e.data as ArrayBuffer));
     };
-    ws.onclose = () => term.write("\r\n\x1b[90m[session closed]\x1b[0m\r\n");
+    ws.onerror = () => {
+      term.write("\r\n\x1b[31m[连接出错]\x1b[0m\r\n");
+      setWsClosed(true);
+    };
+    ws.onclose = () => {
+      term.write("\r\n\x1b[90m[session closed]\x1b[0m\r\n");
+      setWsClosed(true);
+    };
 
     const enc = new TextEncoder();
     const dataDisp = term.onData((d) => {
-      if (ws.readyState === WebSocket.OPEN) ws.send(enc.encode(d));
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(enc.encode(d));
+      } else {
+        // Don't silently swallow keystrokes — tell the user nothing was sent.
+        term.write("\r\n\x1b[33m[未连接，输入未发送]\x1b[0m\r\n");
+        setWsClosed(true);
+      }
     });
 
     const ro = new ResizeObserver(() => sendResize());
@@ -112,7 +132,7 @@ export default function TerminalRoute() {
       ws.close();
       term.dispose();
     };
-  }, [wsId, ready, armed]);
+  }, [wsId, ready, armed, reconnectNonce]);
 
   return (
     <div className="flex h-full flex-col">
@@ -128,7 +148,28 @@ export default function TerminalRoute() {
         )}
       </header>
       {armed ? (
-        <div ref={hostRef} className="min-h-0 flex-1 overflow-hidden bg-[#0d0d0d] p-2" />
+        <div className="flex min-h-0 flex-1 flex-col">
+          {wsClosed && (
+            <div className="flex items-center gap-3 border-b border-border-subtle bg-status-warning-soft px-4 py-2">
+              <span className="font-caption text-xs text-status-warning">
+                {t("terminal.disconnected", { defaultValue: "连接已断开" })}
+              </span>
+              <Button
+                size="sm"
+                variant="outline"
+                className="ml-auto gap-1.5"
+                onClick={() => {
+                  setWsClosed(false);
+                  setReconnectNonce((n) => n + 1);
+                }}
+              >
+                <TerminalIcon className="size-3.5" />
+                {t("terminal.reconnect", { defaultValue: "重新连接" })}
+              </Button>
+            </div>
+          )}
+          <div ref={hostRef} className="min-h-0 flex-1 overflow-hidden bg-[#0d0d0d] p-2" />
+        </div>
       ) : (
         <div className="flex min-h-0 flex-1 items-center justify-center bg-surface-primary px-6">
           <section className="flex w-full max-w-lg flex-col gap-4 rounded-lg border border-border-subtle bg-surface-elevated p-5">

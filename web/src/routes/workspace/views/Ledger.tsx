@@ -19,6 +19,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import { ClipboardList, RefreshCw, Activity, Radio, Sparkles } from "lucide-react";
 import { api } from "../../../api/http";
 import type { BlackboardEntry, BlackboardSnapshot, SwarmEvent } from "../../../api/types";
@@ -28,14 +29,14 @@ import { cn } from "@/lib/cn";
 import { useWorkspaceContext } from "../Shell";
 import { MarkdownInput, MarkdownLink } from "@/lib/markdownLinks";
 
-function fmtAgo(at: number | null, nowTick: number): string {
+function fmtAgo(at: number | null, nowTick: number, t: TFunction): string {
   if (at == null) return "—";
   const sec = Math.max(0, Math.floor((nowTick - at) / 1000));
-  if (sec < 60) return `${sec}s 前`;
+  if (sec < 60) return t("ledger.agoSeconds", { n: sec, defaultValue: "{{n}}s 前" });
   const min = Math.floor(sec / 60);
-  if (min < 60) return `${min}m 前`;
+  if (min < 60) return t("ledger.agoMinutes", { n: min, defaultValue: "{{n}}m 前" });
   const hr = Math.floor(min / 60);
-  return `${hr}h 前`;
+  return t("ledger.agoHours", { n: hr, defaultValue: "{{n}}h 前" });
 }
 
 interface LedgerSnap {
@@ -244,10 +245,10 @@ export default function LedgerView() {
     onReconnect: () => refresh(),
   });
 
-  const taskAgo = useMemo(() => fmtAgo(task.at, nowTick), [task.at, nowTick]);
+  const taskAgo = useMemo(() => fmtAgo(task.at, nowTick, t), [task.at, nowTick, t]);
   const progressAgo = useMemo(
-    () => fmtAgo(progress.at, nowTick),
-    [progress.at, nowTick],
+    () => fmtAgo(progress.at, nowTick, t),
+    [progress.at, nowTick, t],
   );
 
   return (
@@ -344,27 +345,36 @@ function BreadcrumbsCard({
   rows: { role: string; content: string; at: number }[];
   nowTick: number;
 }) {
+  const { t } = useTranslation();
   return (
     <div className="flex shrink-0 flex-col overflow-hidden rounded-lg border border-border-subtle bg-surface-elevated">
       <div className="flex shrink-0 items-center gap-2 border-b border-border-subtle px-4 py-3">
         <Radio className="size-4 text-accent-primary" />
         <div className="flex min-w-0 flex-1 flex-col">
           <span className="font-heading text-sm font-semibold text-foreground-primary">
-            近况
+            {t("ledger.breadcrumbsTitle", "近况")}
           </span>
           <span className="font-caption text-[11px] text-foreground-tertiary">
-            worker 们最近的心跳(每完成一步会自动写)
+            {t(
+              "ledger.breadcrumbsSubtitle",
+              "worker 们最近的心跳(每完成一步会自动写)",
+            )}
           </span>
         </div>
         <span className="shrink-0 font-caption text-[10px] text-foreground-tertiary">
-          {rows.length} 个 worker
+          {t("ledger.breadcrumbsCount", {
+            n: rows.length,
+            defaultValue: "{{n}} 个 worker",
+          })}
         </span>
       </div>
       <div className="max-h-[40vh] overflow-auto px-4 py-3">
         {rows.length === 0 ? (
           <p className="font-caption text-xs text-foreground-tertiary">
-            还没有 worker 写过心跳。派出去的 worker 完成里程碑(install / build /
-            写代码 等)时会在这里出现一行。
+            {t(
+              "ledger.breadcrumbsEmpty",
+              "还没有 worker 写过心跳。派出去的 worker 完成里程碑(install / build / 写代码 等)时会在这里出现一行。",
+            )}
           </p>
         ) : (
           <ul className="flex flex-col gap-2">
@@ -380,7 +390,7 @@ function BreadcrumbsCard({
                   {r.content}
                 </span>
                 <span className="shrink-0 font-caption text-[10px] text-foreground-tertiary">
-                  {fmtAgo(r.at, nowTick)}
+                  {fmtAgo(r.at, nowTick, t)}
                 </span>
               </li>
             ))}

@@ -973,6 +973,7 @@
     "tokensOnly": "tokens only",
     "pricingTitle": "Pricing table",
     "pricingMeta": "{{unit}} · {{source}} · {{path}}",
+    "pricingFallback": "Models not listed fall back to the LiteLLM price table ({{count}} models covered)",
     "pricingDefault": "built-in default",
     "pricingUser": "user config",
     "pricingReset": "Reset default",
