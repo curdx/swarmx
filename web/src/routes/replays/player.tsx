@@ -117,12 +117,20 @@ export default function ReplayPlayer() {
   }, [id]);
 
   // Esc returns to library, matching legacy RecordingsPanel modal UX.
+  // P2-2：asciinema-player 自己在它的 wrapper 上绑了 keydown，命中 Escape 后
+  // 退出它内部的 fullscreen 态并 `e.stopPropagation()`，于是冒泡到 window 的
+  // 监听永远收不到 Esc —— 底部「Esc 返回库」就成了摆设。改用 **捕获阶段**
+  // 在 window 上监听：捕获自上而下先于到达 player 元素触发，player 在冒泡阶段
+  // 的 stopPropagation 拦不住它，Esc 真能返回库。
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") navigate(backTo);
+      if (e.key === "Escape") {
+        e.preventDefault();
+        navigate(backTo);
+      }
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
   }, [navigate, backTo]);
 
   if (loading) {
@@ -228,8 +236,20 @@ export default function ReplayPlayer() {
       </header>
 
       {/* Player body */}
-      <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto p-8">
+      <div className="flex min-h-0 flex-1 flex-col items-center justify-center overflow-auto p-8">
         <div className="w-full max-w-6xl">
+          {/* P2-3：live 录像还在写，回放只能播到「列出时已落盘的字节」为止，
+              到尾部会无预兆截断。提前告知「录制中 / 内容不完整」，避免用户以为
+              播放器坏了。 */}
+          {live && (
+            <div className="mb-3 flex items-center gap-2 rounded-md border border-status-running/30 bg-status-running-soft px-3 py-2 font-caption text-xs text-status-running">
+              <span className="inline-block size-2 animate-pulse rounded-full bg-status-running" />
+              {t("player.liveTruncatedHint", {
+                defaultValue:
+                  "录制中，内容不完整：回放只到当前已落盘的部分，结尾可能突然截断。完结后重新打开可看到完整录像。",
+              })}
+            </div>
+          )}
           <AsciicastPlayer
             src={api.recordingCastUrl(recording.id)}
             cols={recording.cols}

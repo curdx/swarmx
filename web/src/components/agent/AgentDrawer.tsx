@@ -33,7 +33,7 @@
  *   close enough to the design's intent without forking a new PTY-write path.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import {
   Activity,
@@ -49,7 +49,7 @@ import {
   Zap,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { api } from "../../api/http";
+import { api, ApiError } from "../../api/http";
 import { downloadRecordingCast } from "@/lib/download";
 import type {
   AgentActivity,
@@ -248,7 +248,7 @@ export function AgentDrawer({ agentId, activities, onClose }: Props) {
         } catch (e) {
           toast.error(
             t("agent.wakeFailed", { defaultValue: "唤醒失败" }),
-            { description: (e as Error)?.message },
+            { description: e instanceof ApiError ? e.detail : (e as Error)?.message },
           );
         }
       },
@@ -270,7 +270,7 @@ export function AgentDrawer({ agentId, activities, onClose }: Props) {
         wasPaused
           ? t("agent.resumeFailed", { defaultValue: "恢复失败" })
           : t("agent.pauseFailed", { defaultValue: "暂停失败" }),
-        { description: (e as Error)?.message },
+        { description: e instanceof ApiError ? e.detail : (e as Error)?.message },
       );
     }
   };
@@ -677,8 +677,19 @@ function MessagesTab({ agentId }: { agentId: string }) {
   const { t } = useTranslation();
   const [items, setItems] = useState<MessageRecord[]>([]);
   const [error, setError] = useState<string | null>(null);
+  // Stale-response guard: each refresh captures the req id live at call time,
+  // and only the latest one is allowed to setState. Without it, a slow pull for
+  // a previous agent could land after a fast pull for the current one and show
+  // the wrong agent's messages when the user clicks between agents quickly.
+  const reqIdRef = useRef(0);
+  // Debounce timer for swarm-triggered refreshes. Each inbound `message` event
+  // would otherwise fire TWO list requests (from + to) immediately — a burst of
+  // chatter to/from this agent meant a request storm. Coalesce into one refresh
+  // per quiet window.
+  const debounceRef = useRef<number | null>(null);
 
-  const refresh = async () => {
+  const refresh = useCallback(async () => {
+    const reqId = ++reqIdRef.current;
     try {
       // Two pulls, then merge in client. The server's listMessages doesn't
       // support "from=X OR to=X" in one query, so we cheat with two calls.
@@ -687,6 +698,7 @@ function MessagesTab({ agentId }: { agentId: string }) {
         api.listMessages({ from: agentId, limit: 100 }),
         api.listMessages({ to: agentId, limit: 100 }),
       ]);
+      if (reqId !== reqIdRef.current) return; // a newer refresh superseded us
       const merged = [...from, ...to];
       const seen = new Set<number>();
       const dedup: MessageRecord[] = [];
@@ -699,20 +711,33 @@ function MessagesTab({ agentId }: { agentId: string }) {
       setItems(dedup);
       setError(null);
     } catch (e) {
-      setError((e as Error).message);
+      if (reqId !== reqIdRef.current) return;
+      setError(e instanceof ApiError ? e.detail : (e as Error).message);
     }
-  };
+  }, [agentId]);
 
   useEffect(() => {
     refresh();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [agentId]);
+    // Cancel any pending debounced refresh when the agent changes/unmounts so a
+    // stale timer doesn't fire a pull for the previous agent.
+    return () => {
+      if (debounceRef.current != null) {
+        window.clearTimeout(debounceRef.current);
+        debounceRef.current = null;
+      }
+    };
+  }, [agentId, refresh]);
 
   useSwarmFeed({
     onEvent: (ev: SwarmEvent) => {
       if (ev.type !== "message") return;
       if (ev.from_agent !== agentId && ev.to_agent !== agentId) return;
-      refresh();
+      // 200ms de-bounce: collapse a burst of message events into one refresh.
+      if (debounceRef.current != null) window.clearTimeout(debounceRef.current);
+      debounceRef.current = window.setTimeout(() => {
+        debounceRef.current = null;
+        refresh();
+      }, 200);
     },
   });
 

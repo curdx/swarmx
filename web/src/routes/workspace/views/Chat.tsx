@@ -859,7 +859,13 @@ export default function ChatView() {
     const timers: number[] = [];
     for (const task of tasks) {
       if (task.status === "ready") {
-        const remaining = TASK_READY_DISMISS_MS - (now - task.startedAt);
+        // P2-4: count the auto-dismiss window from when the task became ready,
+        // not from the user message that triggered it. A slow spawn (e.g. 30s)
+        // used to land here with `now - startedAt` already past the 4s window,
+        // so the ready card flashed and vanished instantly. `readyAt` (stamped
+        // at the ready transition) gives the operator the full glimpse window.
+        const anchor = task.readyAt ?? task.startedAt;
+        const remaining = TASK_READY_DISMISS_MS - (now - anchor);
         timers.push(
           window.setTimeout(() => dismissTask(task.id), Math.max(0, remaining)),
         );
@@ -925,7 +931,12 @@ export default function ChatView() {
           // gates on the real health signal so the card never flips green over
           // an agent the watchdog will fail 45–300s later.
           const allReady = matching.every((a) => agentIsWorkable(a));
-          return allReady ? { ...tsk, status: "ready" as const } : tsk;
+          if (!allReady) return tsk;
+          // P2-4: stamp readyAt only on the actual flip (preserve any prior
+          // stamp). This effect re-runs on every roster change; re-stamping
+          // would keep pushing the auto-dismiss window forward and the card
+          // would never disappear.
+          return { ...tsk, status: "ready" as const, readyAt: tsk.readyAt ?? Date.now() };
         }),
       );
       return;
@@ -955,6 +966,10 @@ export default function ChatView() {
             ? {
                 ...tsk,
                 status: (allReady ? "ready" : "spawning") as TaskActivityT["status"],
+                // P2-4: stamp readyAt on the flip to ready, preserving any prior
+                // stamp; clear it if a freshly-appended role drops us back to
+                // spawning so the dismiss window restarts when ready returns.
+                readyAt: allReady ? tsk.readyAt ?? Date.now() : undefined,
                 spawnedRoles: [...tsk.spawnedRoles, ...fresh.map((a) => a.role)],
               }
             : tsk,
@@ -966,6 +981,8 @@ export default function ChatView() {
           id: taskId,
           startedAt: lastUser.at,
           status: (allReady ? "ready" : "spawning") as TaskActivityT["status"],
+          // P2-4: a task born already-ready gets its dismiss window from now.
+          readyAt: allReady ? Date.now() : undefined,
           trigger: lastUser.body,
           spawnedRoles: fresh.map((a) => a.role),
         },

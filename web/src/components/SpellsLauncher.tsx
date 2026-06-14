@@ -25,7 +25,7 @@
  */
 
 import { useEffect, useState } from "react";
-import { api } from "../api/http";
+import { api, ApiError } from "../api/http";
 import type { SpellInfo } from "../api/types";
 
 interface Props {
@@ -33,9 +33,22 @@ interface Props {
    *  refresh its agent list. The parent already polls /ws/swarm for
    *  `agent_state=spawning`, so this is belt-and-braces. */
   onSpellLaunched?: () => void;
+  /** Workspace context for the run. The server now REQUIRES a workspace_id
+   *  (or caller_agent_id) on /api/spells/run — without it every launch 400s
+   *  with "spell requires workspace context". A launcher mounted outside any
+   *  workspace (e.g. the legacy /debug dashboard) has none, so we disable the
+   *  run buttons there instead of firing a doomed request. */
+  workspaceId?: string | null;
+  /** Direction (thread) to run the spell in. Optional even with a workspace —
+   *  the server falls back to the workspace's main direction. */
+  threadId?: string | null;
 }
 
-export function SpellsLauncher({ onSpellLaunched }: Props) {
+export function SpellsLauncher({
+  onSpellLaunched,
+  workspaceId = null,
+  threadId = null,
+}: Props) {
   const [spells, setSpells] = useState<SpellInfo[]>([]);
   const [selected, setSelected] = useState<string>("");
   const [task, setTask] = useState("");
@@ -79,6 +92,12 @@ export function SpellsLauncher({ onSpellLaunched }: Props) {
   // "auto-dispatch", manual uses whatever the dropdown selected.
   const launch = async (name: string, includeWorkspace: boolean) => {
     if (!name || !task.trim()) return;
+    // Guard: the server rejects a context-less spell run with a 400. Don't fire
+    // a request we know will fail — block at the button and tell the user why.
+    if (!workspaceId) {
+      setError("请在工作区内使用：法术需要一个工作区上下文才能运行");
+      return;
+    }
     setBusy(true);
     setError(null);
     setLastRun(null);
@@ -87,6 +106,8 @@ export function SpellsLauncher({ onSpellLaunched }: Props) {
       const resp = await api.runSpell({
         name,
         task: task.trim(),
+        workspace_id: workspaceId,
+        ...(threadId ? { thread_id: threadId } : {}),
         ...(wd ? { workspace_dir: wd } : {}),
       });
       setLastRun(
@@ -97,7 +118,8 @@ export function SpellsLauncher({ onSpellLaunched }: Props) {
       setTask("");
       onSpellLaunched?.();
     } catch (e) {
-      setError(`运行失败：${(e as Error).message}`);
+      const msg = e instanceof ApiError ? e.detail : (e as Error).message;
+      setError(`运行失败：${msg}`);
     } finally {
       setBusy(false);
     }
@@ -105,6 +127,10 @@ export function SpellsLauncher({ onSpellLaunched }: Props) {
 
   const run = () => launch(selected, true);
   const runAuto = () => launch("auto-dispatch", false);
+
+  // No workspace context → every run 400s. Disable the run buttons and surface
+  // a single inline hint, rather than letting users click into a guaranteed error.
+  const noWorkspace = !workspaceId;
 
   const hasAutoDispatch = spells.some((s) => s.name === "auto-dispatch");
   const current = spells.find((s) => s.name === selected);
@@ -120,7 +146,7 @@ export function SpellsLauncher({ onSpellLaunched }: Props) {
           // task 输入框上按 Enter 触发主动作：有 auto-dispatch 就走 Auto，
           // 否则走 run。想用快捷键执行手动模式的话，可以聚焦下拉框或
           // workspace 输入框后按 Enter（那两个都转发到 run()）。
-          if (e.key === "Enter") {
+          if (e.key === "Enter" && !noWorkspace) {
             if (hasAutoDispatch) runAuto();
             else run();
           }
@@ -132,9 +158,13 @@ export function SpellsLauncher({ onSpellLaunched }: Props) {
       {hasAutoDispatch && (
         <button
           onClick={runAuto}
-          disabled={busy || !task.trim()}
+          disabled={busy || !task.trim() || noWorkspace}
           style={autoButton}
-          title="自动：planner 看你的任务自动挑法术。下方共享 workspace 配置会被忽略 — planner 自己挑一个。"
+          title={
+            noWorkspace
+              ? "请在工作区内使用：法术需要一个工作区上下文"
+              : "自动：planner 看你的任务自动挑法术。下方共享 workspace 配置会被忽略 — planner 自己挑一个。"
+          }
         >
           {busy ? "思考中…" : "✨ Auto"}
         </button>
@@ -155,8 +185,12 @@ export function SpellsLauncher({ onSpellLaunched }: Props) {
       </select>
       <button
         onClick={run}
-        disabled={busy || !task.trim()}
-        title="按下拉框里选中的法术运行"
+        disabled={busy || !task.trim() || noWorkspace}
+        title={
+          noWorkspace
+            ? "请在工作区内使用：法术需要一个工作区上下文"
+            : "按下拉框里选中的法术运行"
+        }
       >
         运行
       </button>
@@ -174,13 +208,18 @@ export function SpellsLauncher({ onSpellLaunched }: Props) {
           value={workspaceDir}
           onChange={(e) => setWorkspaceDir(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter") run();
+            if (e.key === "Enter" && !noWorkspace) run();
           }}
           placeholder="共享 workspace 绝对路径（仅 fullstack 类法术）"
           style={workspaceInput}
           disabled={busy}
           title="绝对路径。仅当法术 manifest 声明 shared_workspace=true 时才会生效。留空则由服务端自动分配。"
         />
+      )}
+      {/* Persistent hint when there's no workspace to run in — the run buttons
+          are disabled, so explain why rather than leaving them mysteriously dead. */}
+      {noWorkspace && !error && (
+        <span style={hintStyle}>请在工作区内使用：法术需要一个工作区上下文</span>
       )}
       {error && <span style={errStyle}>{error}</span>}
       {lastRun && <span style={okStyle}>{lastRun}</span>}
@@ -266,6 +305,12 @@ const divider: React.CSSProperties = {
 const errStyle: React.CSSProperties = {
   color: "#ef4444",
   fontSize: 11,
+};
+
+const hintStyle: React.CSSProperties = {
+  color: "#94a3b8",
+  fontSize: 11,
+  fontStyle: "italic",
 };
 
 const okStyle: React.CSSProperties = {

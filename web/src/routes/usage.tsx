@@ -14,13 +14,15 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
 import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { RefreshCw, RotateCcw, Save } from "lucide-react";
-import { api } from "@/api/http";
+import { Loader2, RefreshCw, RotateCcw, Save } from "lucide-react";
+import { api, ApiError } from "@/api/http";
+import { toast } from "@/lib/toast";
 import type {
   UsageAgentRow,
   UsagePricingResponse,
@@ -53,6 +55,17 @@ function fmtCtxPeak(peak: number, cap: number | null): string {
   if (!peak) return "—";
   return cap ? `${fmtTokens(peak)} / ${fmtTokens(cap)}` : fmtTokens(peak);
 }
+/** Collapse a `$HOME` prefix to `~` so the displayed pricing path doesn't leak
+ *  the user's home dir (e.g. `/Users/jane/.flockmux/...` → `~/.flockmux/...`).
+ *  The browser can't read $HOME, so we pattern-match the platform home roots. */
+function foldHome(path: string): string {
+  const m = path.match(/^(\/Users\/[^/]+|\/home\/[^/]+|[A-Za-z]:[\\/]Users[\\/][^\\/]+)/);
+  return m ? `~${path.slice(m[0].length)}` : path;
+}
+/** Friendly message from an ApiError (server `detail`) or any thrown error. */
+function errMsg(e: unknown): string {
+  return e instanceof ApiError ? e.detail : (e as Error).message;
+}
 /** "2026-06-07" → "6/7" for a compact x-axis tick. */
 type DayDatum = { day: string; tokens: number; input: number; output: number };
 const UsageTrendChart = lazy(() =>
@@ -79,7 +92,12 @@ export default function UsageRoute() {
   const [data, setData] = useState<UsageSummary | null>(null);
   const [err, setErr] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [updatedAt, setUpdatedAt] = useState<number | null>(null);
+  // Stale-response guard: bump on every load(); a slower in-flight request
+  // whose id no longer matches the latest must not clobber fresher state.
+  const reqIdRef = useRef(0);
+  const refreshingRef = useRef(false);
   const [pricing, setPricing] = useState<UsagePricingResponse | null>(null);
   const [pricingDraft, setPricingDraft] = useState<UsagePricingRule[]>([]);
   const [pricingSaving, setPricingSaving] = useState(false);
@@ -87,20 +105,39 @@ export default function UsageRoute() {
   const [confirm, setConfirm] = useState<ConfirmActionState | null>(null);
 
   const load = useCallback(
-    async (showSpinner = false) => {
+    async (showSpinner = false, interactive = false) => {
+      // Manual refresh: ignore re-clicks while one is already in flight.
+      if (interactive && refreshingRef.current) return;
+      const reqId = ++reqIdRef.current;
       if (showSpinner) setLoading(true);
+      if (interactive) {
+        refreshingRef.current = true;
+        setRefreshing(true);
+      }
       try {
         const d = await api.getUsage(wsId || undefined);
+        if (reqId !== reqIdRef.current) return; // a newer load() superseded us
         setData(d);
         setErr(false);
         setUpdatedAt(Date.now());
-      } catch {
+      } catch (e) {
+        if (reqId !== reqIdRef.current) return;
         setErr(true);
+        // A manual refresh that fails must be visible — the page may still be
+        // showing older numbers, so a silent failure looks like "nothing happened".
+        if (interactive) toast.error(t("usage.refreshFailed"), { description: errMsg(e) });
       } finally {
-        if (showSpinner) setLoading(false);
+        // The spinner flag belongs to "the latest load", so only clear it if
+        // we're still it (a superseding request clears its own). The interactive
+        // flag belongs to THIS click, so always release it.
+        if (showSpinner && reqId === reqIdRef.current) setLoading(false);
+        if (interactive) {
+          refreshingRef.current = false;
+          setRefreshing(false);
+        }
       }
     },
-    [wsId],
+    [wsId, t],
   );
 
   // Live-ish: first load (with spinner) on workspace change, then poll so the
@@ -143,7 +180,7 @@ export default function UsageRoute() {
       setPricingDraft(p.rules);
       setPricingError(null);
     } catch (e) {
-      setPricingError((e as Error).message);
+      setPricingError(errMsg(e));
     }
   }, []);
 
@@ -163,7 +200,7 @@ export default function UsageRoute() {
       setPricingDraft(p.rules);
       await load(false);
     } catch (e) {
-      setPricingError((e as Error).message);
+      setPricingError(errMsg(e));
     } finally {
       setPricingSaving(false);
     }
@@ -178,7 +215,7 @@ export default function UsageRoute() {
       setPricingDraft(p.rules);
       await load(false);
     } catch (e) {
-      setPricingError((e as Error).message);
+      setPricingError(errMsg(e));
     } finally {
       setPricingSaving(false);
     }
@@ -188,7 +225,7 @@ export default function UsageRoute() {
     setConfirm({
       title: t("usage.confirmResetTitle"),
       description: t("usage.confirmResetDesc", {
-        path: pricing?.path ?? "~/.flockmux/pricing.json",
+        path: pricing ? foldHome(pricing.path) : "~/.flockmux/pricing.json",
       }),
       confirmLabel: t("usage.pricingReset"),
       variant: "destructive",
@@ -225,12 +262,13 @@ export default function UsageRoute() {
             )}
             <button
               type="button"
-              onClick={() => load(false)}
+              onClick={() => load(false, true)}
+              disabled={refreshing}
               title={t("common.refresh")}
               aria-label={t("common.refresh")}
-              className="inline-flex size-8 items-center justify-center rounded border border-border-subtle text-foreground-tertiary hover:bg-surface-tertiary hover:text-foreground-secondary"
+              className="inline-flex size-8 items-center justify-center rounded border border-border-subtle text-foreground-tertiary hover:bg-surface-tertiary hover:text-foreground-secondary disabled:opacity-50"
             >
-              <RefreshCw className="size-3.5" />
+              <RefreshCw className={cn("size-3.5", refreshing && "animate-spin")} />
             </button>
             <WorkspacePicker workspaces={workspaces} value={wsId} onChange={setWsId} allowAll />
           </div>
@@ -239,9 +277,30 @@ export default function UsageRoute() {
         {loading && (
           <div className="font-caption text-sm text-foreground-tertiary">{t("common.loading")}</div>
         )}
-        {err && (
-          <div className="rounded-lg border border-border-subtle bg-surface-tertiary px-4 py-3 font-caption text-sm text-status-danger">
-            {t("usage.loadError")}
+        {/* Hard failure with nothing to show → "load failed + retry". */}
+        {err && !data && !loading && (
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border-subtle bg-surface-tertiary px-4 py-3 font-caption text-sm text-status-danger">
+            <span>{t("usage.loadError")}</span>
+            <button
+              type="button"
+              onClick={() => load(true, true)}
+              disabled={refreshing}
+              className="inline-flex min-h-7 items-center gap-1.5 rounded border border-border-subtle px-2 py-1 text-xs text-foreground-secondary hover:bg-surface-secondary disabled:opacity-50"
+            >
+              {refreshing ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : (
+                <RefreshCw className="size-3.5" />
+              )}
+              {t("common.retry")}
+            </button>
+          </div>
+        )}
+        {/* Poll failed but we still have older numbers → don't hide them, mark stale. */}
+        {err && data && (
+          <div className="flex flex-wrap items-center gap-1.5 rounded-lg border border-status-warning/40 bg-surface-tertiary px-4 py-2 font-caption text-xs text-status-warning">
+            <RefreshCw className="size-3.5" />
+            <span>{t("usage.stale")}</span>
           </div>
         )}
 
@@ -265,13 +324,17 @@ export default function UsageRoute() {
         )}
 
         {data && !loading && data.totals.events > 0 && (
-          <>
+          // Stale (last poll errored) → dim the whole block so the numbers read
+          // as "possibly outdated", in concert with the stale banner above.
+          <div className={cn("flex flex-col gap-6", err && "opacity-60")}>
             {/* headline cards */}
             <section className="grid grid-cols-2 gap-3 md:grid-cols-4">
               <StatCard
                 label={t("usage.totalCost")}
-                value={fmtCost(data.totals.cost_usd)}
-                hint={data.totals.priced ? t("usage.estimated") : t("usage.partialPrice")}
+                // Partially-priced totals undercount (unpriced models contribute
+                // tokens but $0), so the real spend is at least this much → "≥".
+                value={`${data.totals.priced ? "" : "≥ "}${fmtCost(data.totals.cost_usd)}`}
+                hint={data.totals.priced ? t("usage.estimated") : t("usage.costAtLeast")}
               />
               <StatCard
                 label={t("usage.input")}
@@ -285,8 +348,13 @@ export default function UsageRoute() {
             {/* per-day trend (recharts) */}
             {chartData.length > 0 && (
               <section className="flex flex-col gap-2">
-                <h2 className="font-caption text-xs uppercase tracking-wide text-foreground-tertiary">
+                <h2 className="flex flex-wrap items-baseline gap-x-2 font-caption text-xs uppercase tracking-wide text-foreground-tertiary">
                   {t("usage.byDay")}
+                  {/* Server buckets rows by UTC calendar day; say so so a user in
+                      a non-UTC zone doesn't read the day boundary as local. */}
+                  <span className="text-[10px] normal-case tracking-normal text-foreground-tertiary/80">
+                    {t("usage.byDayUtc")}
+                  </span>
                 </h2>
                 <div className="h-48 rounded-lg border border-border-subtle bg-surface-secondary p-3">
                   <Suspense
@@ -349,7 +417,7 @@ export default function UsageRoute() {
                 }))}
               />
             </section>
-          </>
+          </div>
         )}
       </div>
       <ConfirmActionDialog action={confirm} onOpenChange={(open) => !open && setConfirm(null)} />
@@ -455,7 +523,7 @@ function PricingEditor({
                 pricing.source === "user"
                   ? t("usage.pricingUser")
                   : t("usage.pricingDefault"),
-              path: pricing.path,
+              path: foldHome(pricing.path),
             })}
           </p>
           {pricing.fallback && pricing.fallback.models > 0 && (
@@ -484,8 +552,8 @@ function PricingEditor({
             disabled={saving || !dirty}
             className="inline-flex min-h-8 items-center gap-1.5 rounded border border-border-subtle bg-surface-primary px-2 py-1 font-caption text-xs text-foreground-primary hover:bg-surface-tertiary disabled:opacity-50"
           >
-            <Save className="size-3.5" />
-            {saving ? t("common.saving", "保存中…") : t("common.save", "保存")}
+            {saving ? <Loader2 className="size-3.5 animate-spin" /> : <Save className="size-3.5" />}
+            {saving ? t("common.saving") : t("common.save")}
           </button>
         </div>
       </div>

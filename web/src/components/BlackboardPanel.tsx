@@ -7,13 +7,21 @@
  * pull the new content; if dirty, we surface a warning instead of clobbering.
  */
 
-import { useEffect, useMemo, useState } from "react";
-import { api } from "../api/http";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { api, ApiError } from "../api/http";
 import type { BlackboardEntry, BlackboardHistoryEntry } from "../api/types";
 import {
   ConfirmActionDialog,
   type ConfirmActionState,
 } from "@/components/ConfirmActionDialog";
+
+// History list is fetched with this cap; when we hit it the true count is
+// unknown (could be more), so the badge shows "50+" rather than lying "50".
+const HISTORY_LIMIT = 50;
+
+function errText(e: unknown): string {
+  return e instanceof ApiError ? e.detail : (e as Error).message;
+}
 
 interface Props {
   /** Latest swarm `blackboard_changed` event observed by the parent. */
@@ -46,23 +54,56 @@ export function BlackboardPanel({ liveChange }: Props) {
 
   const isDirty = useMemo(() => content !== originalContent, [content, originalContent]);
 
+  // P2-1: the info banner must not linger forever or bleed across files.
+  // Success-class messages auto-clear after a few seconds; warnings (disk
+  // conflict with unsaved edits) stay put until the user acts. Any new
+  // showInfo / clearInfo cancels the previous timer so they never stack.
+  const infoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clearInfo = () => {
+    if (infoTimerRef.current) {
+      clearTimeout(infoTimerRef.current);
+      infoTimerRef.current = null;
+    }
+    setInfo(null);
+  };
+  const showInfo = (msg: string, opts?: { sticky?: boolean }) => {
+    if (infoTimerRef.current) {
+      clearTimeout(infoTimerRef.current);
+      infoTimerRef.current = null;
+    }
+    setInfo(msg);
+    if (!opts?.sticky) {
+      infoTimerRef.current = setTimeout(() => {
+        infoTimerRef.current = null;
+        setInfo(null);
+      }, 2500);
+    }
+  };
+  // Clear any pending timer on unmount so it can't fire into a dead component.
+  useEffect(
+    () => () => {
+      if (infoTimerRef.current) clearTimeout(infoTimerRef.current);
+    },
+    [],
+  );
+
   const refreshList = async () => {
     try {
       const rows = await api.listBlackboard();
       setEntries(rows);
       setError(null);
     } catch (e) {
-      setError((e as Error).message);
+      setError(errText(e));
     }
   };
 
   const refreshHistory = async (path: string) => {
     setHistoryLoading(true);
     try {
-      const rows = await api.listBlackboardHistory(path, 50, false);
+      const rows = await api.listBlackboardHistory(path, HISTORY_LIMIT, false);
       setHistory(rows);
     } catch (e) {
-      setError((e as Error).message);
+      setError(errText(e));
     } finally {
       setHistoryLoading(false);
     }
@@ -70,7 +111,7 @@ export function BlackboardPanel({ liveChange }: Props) {
 
   const loadPath = async (path: string) => {
     setSelected(path);
-    setInfo(null);
+    clearInfo();
     setVersionPreview(null);
     try {
       const snap = await api.readBlackboard(path);
@@ -78,7 +119,7 @@ export function BlackboardPanel({ liveChange }: Props) {
       setOriginalContent(snap.content);
       setError(null);
     } catch (e) {
-      setError((e as Error).message);
+      setError(errText(e));
       setContent("");
       setOriginalContent("");
     }
@@ -87,32 +128,48 @@ export function BlackboardPanel({ liveChange }: Props) {
     refreshHistory(path);
   };
 
-  const openPath = async (path: string) => {
-    if (isDirty && selected && selected !== path) {
+  // P2-3: a single dirty-check gate. Any flow that would replace what the
+  // editor shows (switching files, creating, previewing a past version)
+  // must route through this — previously only list-click was guarded, so
+  // create/history-preview silently discarded unsaved edits. `targetLabel`
+  // is what the confirm dialog says the user is moving to. When clean, or
+  // nothing is selected, the action runs immediately.
+  const guardDirty = (targetLabel: string, action: () => void) => {
+    if (isDirty && selected) {
       setDiscardConfirm({
         title: "放弃未保存的修改？",
-        description: `“${selected}”还有未保存内容，切换到“${path}”会丢弃这些修改。`,
+        description: `“${selected}”还有未保存内容，${targetLabel}会丢弃这些修改。`,
         confirmLabel: "放弃修改",
         variant: "destructive",
-        onConfirm: () => loadPath(path),
+        onConfirm: action,
       });
       return;
     }
-    await loadPath(path);
+    action();
   };
 
-  const openVersion = async (entry: BlackboardHistoryEntry) => {
-    // The list call strips content by default; fetch the full row for the
-    // selected version. We re-query the same endpoint with include_content
-    // so each click is at most one byte-heavy request.
-    setVersionPreview(entry);
-    try {
-      const rows = await api.listBlackboardHistory(entry.path, 200, true);
-      const full = rows.find((r) => r.id === entry.id);
-      if (full) setVersionPreview(full);
-    } catch (e) {
-      setError((e as Error).message);
+  const openPath = (path: string) => {
+    if (selected === path) {
+      void loadPath(path);
+      return;
     }
+    guardDirty(`切换到“${path}”`, () => void loadPath(path));
+  };
+
+  const openVersion = (entry: BlackboardHistoryEntry) => {
+    guardDirty("查看历史版本", () => {
+      // The list call strips content by default; fetch the full row for the
+      // selected version. We re-query the same endpoint with include_content
+      // so each click is at most one byte-heavy request.
+      setVersionPreview(entry);
+      api
+        .listBlackboardHistory(entry.path, 200, true)
+        .then((rows) => {
+          const full = rows.find((r) => r.id === entry.id);
+          if (full) setVersionPreview(full);
+        })
+        .catch((e) => setError(errText(e)));
+    });
   };
 
   const save = async () => {
@@ -121,11 +178,11 @@ export function BlackboardPanel({ liveChange }: Props) {
     try {
       await api.writeBlackboard(selected, { content });
       setOriginalContent(content);
-      setInfo(`已保存 ${selected}`);
+      showInfo(`已保存 ${selected}`);
       await refreshList();
       setError(null);
     } catch (e) {
-      setError((e as Error).message);
+      setError(errText(e));
     } finally {
       setSaving(false);
     }
@@ -139,20 +196,30 @@ export function BlackboardPanel({ liveChange }: Props) {
     // file other agents depend on (design.md, *.ledger.md). If it already
     // exists, just open it instead of writing empty content over it.
     if (entries.some((e) => e.path === path)) {
-      setNewPath("");
-      await openPath(path);
-      setError(`「${path}」已存在，已为你打开（未覆盖）`);
+      // Opening an existing file replaces the editor → route through the
+      // dirty guard like any other switch (P2-3).
+      guardDirty(`打开“${path}”`, () => {
+        setNewPath("");
+        void loadPath(path).then(() => {
+          setError(`「${path}」已存在，已为你打开（未覆盖）`);
+        });
+      });
       return;
     }
-    try {
-      await api.writeBlackboard(path, { content: "" });
-      setNewPath("");
-      await refreshList();
-      await openPath(path);
-      setError(null);
-    } catch (e) {
-      setError((e as Error).message);
-    }
+    // Creating also replaces the editor with the fresh empty file (P2-3).
+    guardDirty(`新建“${path}”`, () => {
+      void (async () => {
+        try {
+          await api.writeBlackboard(path, { content: "" });
+          setNewPath("");
+          await refreshList();
+          await loadPath(path);
+          setError(null);
+        } catch (e) {
+          setError(errText(e));
+        }
+      })();
+    });
   };
 
   // M6d-4: write the architect-approval companion to whatever the
@@ -167,13 +234,13 @@ export function BlackboardPanel({ liveChange }: Props) {
       });
       setError(null);
       await refreshList();
-      // setInfo only after refreshList confirms the write is visible (was:
+      // showInfo only after refreshList confirms the write is visible (was:
       // claimed before the round-trip). P1-30: state only the written fact —
       // whether agents actually wake depends on wake.rs/subscriptions, so don't
       // package that future as a done deal.
-      setInfo("已写入通过标记 design.approved · 等待 agent 据此推进");
+      showInfo("已写入通过标记 design.approved · 等待 agent 据此推进");
     } catch (e) {
-      setError((e as Error).message);
+      setError(errText(e));
     } finally {
       setGateBusy(false);
     }
@@ -200,9 +267,9 @@ export function BlackboardPanel({ liveChange }: Props) {
       // persistence that hadn't been verified). P1-30: state only the written
       // fact — whether the architect actually revises depends on wake.rs/its
       // subscription, so don't promise that future as already happened.
-      setInfo("已写入拒绝标记 design.rejected · 等待 architect 据此推进");
+      showInfo("已写入拒绝标记 design.rejected · 等待 architect 据此推进");
     } catch (e) {
-      setError((e as Error).message);
+      setError(errText(e));
     } finally {
       setGateBusy(false);
     }
@@ -218,8 +285,11 @@ export function BlackboardPanel({ liveChange }: Props) {
     if (selected && liveChange.path === selected) {
       refreshHistory(selected);
       if (isDirty) {
-        setInfo(
+        // Sticky: this warns the user their unsaved edits now diverge from
+        // disk — it must persist until they act, not vanish on a timer.
+        showInfo(
           `⚠ ${liveChange.path} 在磁盘上发生变化 (op=${liveChange.op}) — 你有未保存的修改`,
+          { sticky: true },
         );
       } else {
         // Silently refresh the buffer.
@@ -228,7 +298,7 @@ export function BlackboardPanel({ liveChange }: Props) {
           .then((snap) => {
             setContent(snap.content);
             setOriginalContent(snap.content);
-            setInfo(`已根据 ${liveChange.op} 刷新`);
+            showInfo(`已根据 ${liveChange.op} 刷新`);
           })
           .catch(() => {
             /* ignore */
@@ -310,7 +380,7 @@ export function BlackboardPanel({ liveChange }: Props) {
                 title="查看写入历史"
                 style={historyToggle}
               >
-                历史 ({history.length}
+                历史 ({history.length >= HISTORY_LIMIT ? `${HISTORY_LIMIT}+` : history.length}
                 {historyLoading ? "…" : ""})
               </button>
               <button onClick={save} disabled={saving || !isDirty}>
@@ -411,7 +481,12 @@ export function BlackboardPanel({ liveChange }: Props) {
             ) : (
               <textarea
                 value={content}
-                onChange={(e) => setContent(e.target.value)}
+                onChange={(e) => {
+                  // Editing invalidates any lingering success banner
+                  // ("已保存" / "已根据…刷新") so it can't claim a stale state.
+                  if (info) clearInfo();
+                  setContent(e.target.value);
+                }}
                 style={editor}
                 spellCheck={false}
               />

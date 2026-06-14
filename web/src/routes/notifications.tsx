@@ -127,23 +127,39 @@ function classifyMessage(
   t: TFunction,
   roleLookup: Map<string, string>,
 ): { kind: NotifKind; title: string } {
-  // Structured first: server-stamped `meta.subtype` is ground truth, so we
-  // never regex the prose body for messages the server controls (the
-  // worker-disband farewell). Agent free-text (meta absent) still falls back
-  // to the keyword heuristic below.
-  if (m.meta?.subtype === "completion") {
+  // Structured first: server-stamped `meta.subtype` is GROUND TRUTH. Any
+  // message the server itself generated carries a subtype, and we classify
+  // those purely from it — the brittle prose-keyword heuristic further down is
+  // a *fallback for agent free-text only* (meta absent). This stops, e.g., a
+  // `cron`/`dispatch` system message whose body happens to contain "失败"/
+  // "完成" from being mis-bucketed as 异常/完成 by the regex.
+  const subtype = m.meta?.subtype;
+  if (subtype === "completion") {
     return {
       kind: "completed",
       title: t("notifications.kinds.completedTitle"),
     };
   }
-  if (m.kind === "wake") {
+  // `wake` is the one subtype that historically keyed off `m.kind === "wake"`;
+  // accept either signal (meta.subtype or the legacy kind) so older rows still
+  // classify correctly.
+  if (subtype === "wake" || m.kind === "wake") {
     return {
       kind: "state",
       title: t("notifications.kinds.wakeTitle", {
         from: friendlyAgent(m.from_agent, roleLookup, t),
         to: friendlyAgent(m.to_agent, roleLookup, t),
       }),
+    };
+  }
+  // Any OTHER server subtype (cron / dispatch / model_changed / …) is a
+  // routine system notice, not an agent work-report — file it as a plain
+  // message and skip the error/completed prose heuristic entirely. New server
+  // subtypes land here safely instead of getting regex-graded.
+  if (subtype) {
+    return {
+      kind: "message",
+      title: `${friendlyAgent(m.from_agent, roleLookup, t)} → ${friendlyAgent(m.to_agent, roleLookup, t)}`,
     };
   }
   // Free-text the USER wrote is a request, not an agent work-report — never
@@ -255,6 +271,11 @@ export default function NotificationsRoute() {
   // 在加载失败时假装「该分类暂无通知」。seed() 失败时存住错误,渲染时
   // error 优先显示「加载失败 + 重试」。
   const [error, setError] = useState<Error | null>(null);
+  // 手动刷新按钮的 loading/防重:mutation 期间按钮 disabled + 图标 spin,
+  // 同时一个 in-flight ref 兜住「state 还没刷新就被连点」的竞态(setState
+  // 异步,光看 refreshing 挡不住同一 tick 的二次点击)。
+  const [refreshing, setRefreshing] = useState(false);
+  const refreshingRef = useRef(false);
   const [confirm, setConfirm] = useState<ConfirmActionState | null>(null);
   // Workspaces + their directions resolve a blackboard key's `{ws-id}/{slug}`
   // prefix into "{workspace} · {direction}" instead of a raw 32-hex UUID. Held
@@ -268,6 +289,11 @@ export default function NotificationsRoute() {
   const roleRef = useRef<Map<string, string>>(new Map());
 
   const seed = useCallback(async () => {
+    // In-flight guard: drop overlapping seeds (rapid clicks, or a reconnect
+    // racing the manual button) so two pulls can't clobber each other.
+    if (refreshingRef.current) return;
+    refreshingRef.current = true;
+    setRefreshing(true);
     try {
       const [msgs, bb, wss, agents] = await Promise.all([
         api.listMessages({ limit: 50 }),
@@ -295,7 +321,13 @@ export default function NotificationsRoute() {
         .map((e) => {
           const h = humanizeBlackboard(e.path, wss, t);
           return {
-            id: `bb-${e.path}-${e.at}`,
+            // Stable id = the blackboard PATH alone. The `at` timestamp used to
+            // be baked into the id, so every rewrite of the same key minted a
+            // fresh id and the read-state (keyed by id in localStorage) was lost
+            // on refresh — a notif you'd dismissed came back unread. The path is
+            // the durable identity of a blackboard entry; the latest `at`/`body`
+            // ride on top of it (see the live handler, which updates in place).
+            id: `bb-${e.path}`,
             kind: "blackboard" as const,
             agent: t("notifications.tabs.blackboard"),
             title: h.title,
@@ -310,6 +342,9 @@ export default function NotificationsRoute() {
       // 别吞错:后端 500 / 断网时记录真实错误,渲染层据此显示「加载失败 +
       // 重试」而不是谎报空态。
       setError(e as Error);
+    } finally {
+      refreshingRef.current = false;
+      setRefreshing(false);
     }
   }, []);
 
@@ -349,14 +384,21 @@ export default function NotificationsRoute() {
         } else if (ev.type === "blackboard_changed") {
           if (isNoisyBlackboard(ev.path)) return prev;
           const h = humanizeBlackboard(ev.path, wsRef.current, t);
-          next = {
-            id: `bb-${ev.path}-${ev.at}`,
+          // Stable id = path (matches seed). A rewrite of the same key is the
+          // SAME notification with a fresher timestamp/body, not a new one — so
+          // we update it in place (refreshing `at`/`body` and re-sorting to the
+          // top) instead of either dropping the update (stale) or minting a new
+          // id (would resurrect a dismissed notif as unread).
+          const updated: Notif = {
+            id: `bb-${ev.path}`,
             kind: "blackboard",
             agent: ev.agent_id ?? t("notifications.tabs.blackboard"),
             title: h.title,
             body: h.context ?? `sha256 ${ev.sha256.slice(0, 8)}`,
             at: ev.at,
           };
+          const without = prev.filter((p) => p.id !== updated.id);
+          return [updated, ...without].slice(0, 200);
         } else if (ev.type === "agent_state") {
           next = {
             id: `state-${ev.agent_id}-${ev.state}-${Date.now()}`,
@@ -456,10 +498,11 @@ export default function NotificationsRoute() {
           variant="ghost"
           size="icon"
           onClick={seed}
+          disabled={refreshing}
           title={t("common.refresh")}
           className="size-8"
         >
-          <RefreshCw className="size-4" />
+          <RefreshCw className={cn("size-4", refreshing && "animate-spin")} />
         </Button>
       </header>
 
@@ -513,8 +556,16 @@ export default function NotificationsRoute() {
                 {error.message}
               </p>
             )}
-            <Button variant="outline" size="sm" onClick={seed} className="h-8">
-              <RefreshCw className="size-3.5" />
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={seed}
+              disabled={refreshing}
+              className="h-8"
+            >
+              <RefreshCw
+                className={cn("size-3.5", refreshing && "animate-spin")}
+              />
               {t("common.retry", { defaultValue: "重试" })}
             </Button>
           </div>

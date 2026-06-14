@@ -13,6 +13,7 @@
  * live orchestrator so it takes effect immediately. The body sent is always the
  * complete desired state, so the parent merges the unchanged knob.
  */
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Check, ChevronDown, Cpu, Gauge, Loader2 } from "lucide-react";
 import {
@@ -45,6 +46,11 @@ export function ModelPicker({
   busy?: boolean;
 }) {
   const { t } = useTranslation();
+  // Controlled open state so we can close the floating menu the instant a knob
+  // is set (Radix Popover doesn't auto-close on an inner button click). Without
+  // this the panel stayed open after picking a model — the user had to click
+  // away, and could fire a second mutation mid-flight.
+  const [open, setOpen] = useState(false);
   const curTier = tier && tier.trim() ? tier.trim() : null;
   const curEffort = reasoning && reasoning.trim() ? reasoning.trim() : null;
   const modelLabel = curTier ? tierLabel(curTier) : t("model.default");
@@ -53,8 +59,15 @@ export function ModelPicker({
     ? `${modelLabel} · ${t(`model.effort.${curEffort}`)}`
     : modelLabel;
 
+  // Apply a knob, then close. The parent restarts the orchestrator (busy=true);
+  // closing immediately gives instant feedback and prevents a double-pick.
+  const choose = (cfg: { tier?: string | null; reasoning?: string | null }) => {
+    onSet(cfg);
+    setOpen(false);
+  };
+
   return (
-    <Popover>
+    <Popover open={open} onOpenChange={(next) => !busy && setOpen(next)}>
       <PopoverTrigger asChild>
         <button
           type="button"
@@ -78,7 +91,8 @@ export function ModelPicker({
           label={t("model.default")}
           hint={t("model.defaultHint")}
           active={curTier === null}
-          onClick={() => onSet({ tier: null })}
+          disabled={busy}
+          onClick={() => choose({ tier: null })}
         />
         {TIERS.map((tr) => (
           <MenuItem
@@ -86,7 +100,8 @@ export function ModelPicker({
             label={tierLabel(tr)}
             hint={t(`model.hint.${tr}`)}
             active={curTier === tr}
-            onClick={() => onSet({ tier: tr })}
+            disabled={busy}
+            onClick={() => choose({ tier: tr })}
           />
         ))}
 
@@ -104,7 +119,8 @@ export function ModelPicker({
           label={t("model.default")}
           hint={t("model.effortDefaultHint")}
           active={curEffort === null}
-          onClick={() => onSet({ reasoning: null })}
+          disabled={busy}
+          onClick={() => choose({ reasoning: null })}
         />
         {EFFORTS.map((ef) => (
           <MenuItem
@@ -112,7 +128,8 @@ export function ModelPicker({
             label={t(`model.effort.${ef}`)}
             hint={t(`model.effortHint.${ef}`)}
             active={curEffort === ef}
-            onClick={() => onSet({ reasoning: ef })}
+            disabled={busy}
+            onClick={() => choose({ reasoning: ef })}
           />
         ))}
       </PopoverContent>
@@ -133,19 +150,22 @@ function MenuItem({
   label,
   hint,
   active,
+  disabled = false,
   onClick,
 }: {
   label: string;
   hint?: string;
   active: boolean;
+  disabled?: boolean;
   onClick: () => void;
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
+      disabled={disabled}
       className={cn(
-        "flex min-h-8 w-full items-start gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors hover:bg-surface-tertiary",
+        "flex min-h-8 w-full items-start gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors hover:bg-surface-tertiary disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent",
         active && "bg-surface-tertiary",
       )}
     >

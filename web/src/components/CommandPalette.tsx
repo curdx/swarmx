@@ -22,6 +22,7 @@ import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import {
   Activity,
+  AlertTriangle,
   BarChart3,
   Bell,
   Boxes,
@@ -35,13 +36,14 @@ import {
   Moon,
   Play,
   Plus,
+  RefreshCw,
   Settings as SettingsIcon,
   Sun,
   SunMoon,
   Terminal as TerminalIcon,
   Zap,
 } from "lucide-react";
-import { api } from "../api/http";
+import { api, ApiError } from "../api/http";
 import type { AgentInfo, Workspace } from "../api/types";
 import {
   ConfirmActionDialog,
@@ -49,6 +51,7 @@ import {
 } from "@/components/ConfirmActionDialog";
 import { setTheme, type ThemeMode } from "@/lib/theme";
 import { toast } from "@/lib/toast";
+import { cn } from "@/lib/cn";
 import { directionBase } from "@/lib/thread";
 import { DEBUG_ENABLED } from "@/lib/debug";
 import { formatShortcutChord, getClientPlatformInfo } from "@/lib/platform";
@@ -130,6 +133,15 @@ export function CommandPalette() {
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [confirm, setConfirm] = useState<ConfirmActionState | null>(null);
+  // Lazy-load state for the agent + workspace lists. Previously both fetches
+  // swallowed errors with `.catch(() => {})`, so a backend 500 / dropped
+  // connection silently emptied the workspace + wake-agent groups — the palette
+  // looked like the user simply had nothing, with no way to tell or retry.
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  // Bumped each time we (re)load so a slow earlier fetch can't clobber a newer
+  // one (e.g. close + reopen quickly, or hit retry mid-flight).
+  const loadReqRef = useRef(0);
   const navigate = useNavigate();
 
   // Global ⌘K / Ctrl+K opens, Esc closes (handled by Dialog).
@@ -146,8 +158,33 @@ export function CommandPalette() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  // Refresh agents + 读取当前 URL 的 wsId — 都只在 dialog 打开瞬间发生，
-  // 不订阅 router state，避免 nav 流量轰炸 CommandPalette。
+  // Load the agent + workspace lists. Both fetches run in parallel; if EITHER
+  // fails we flag `loadError` and surface a retry banner instead of silently
+  // dropping the corresponding group. Canonical workspace list (server filters
+  // soft-deleted) — same source the sidebar uses, so the two never diverge.
+  const loadData = useCallback(async () => {
+    const reqId = ++loadReqRef.current;
+    setLoading(true);
+    setLoadError(null);
+    const [agentsRes, wsRes] = await Promise.allSettled([
+      api.listAgents(),
+      api.listWorkspaces(),
+    ]);
+    if (reqId !== loadReqRef.current) return; // superseded by a newer load
+    if (agentsRes.status === "fulfilled") setAgents(agentsRes.value);
+    if (wsRes.status === "fulfilled") setWorkspaces(wsRes.value);
+    const failed = [agentsRes, wsRes].find((r) => r.status === "rejected") as
+      | PromiseRejectedResult
+      | undefined;
+    if (failed) {
+      const e = failed.reason;
+      setLoadError(e instanceof ApiError ? e.detail : (e as Error)?.message ?? "");
+    }
+    setLoading(false);
+  }, []);
+
+  // 读取当前 URL 的 wsId + 拉列表 — 都只在 dialog 打开瞬间发生，不订阅
+  // router state，避免 nav 流量轰炸 CommandPalette。
   useEffect(() => {
     if (!open) return;
     const m = window.location.pathname.match(/^\/chat\/([^/]+)(?:\/t\/([^/]+))?/);
@@ -155,19 +192,8 @@ export function CommandPalette() {
     currentWsIdRef.current = ws;
     setCurrentWsId(ws);
     setCurrentThreadSlug(m && m[2] ? m[2] : null);
-    api
-      .listAgents()
-      .then(setAgents)
-      .catch(() => {});
-    // Canonical workspace list (server filters soft-deleted). Reverse-deriving
-    // workspaces from live agents — the old behaviour — surfaced orphan /
-    // cwd-missing workspaces of agents whose workspace was already deleted,
-    // diverging from the sidebar. Use the same source the sidebar does.
-    api
-      .listWorkspaces()
-      .then(setWorkspaces)
-      .catch(() => {});
-  }, [open]);
+    loadData();
+  }, [open, loadData]);
 
   const close = useCallback(() => setOpen(false), []);
   const go = useCallback(
@@ -207,6 +233,31 @@ export function CommandPalette() {
         <CommandInput placeholder={t("cmdk.placeholder")} />
         <CommandList>
           <CommandEmpty>{t("common.noMatch")}</CommandEmpty>
+
+          {/* List-load failure banner. The agent + workspace groups come from a
+              live fetch; on a 500 / dropped connection they'd otherwise just be
+              absent (indistinguishable from "you have none"). Tell the user and
+              offer a retry. Rendered outside cmdk's filtered item list so it
+              never gets hidden by a search query. */}
+          {loadError && (
+            <div className="flex items-center gap-2 px-3 py-2 text-xs text-status-danger">
+              <AlertTriangle className="size-3.5 shrink-0" />
+              <span className="flex-1">
+                {t("cmdk.listLoadFailed", {
+                  defaultValue: "工作区 / agent 列表加载失败",
+                })}
+              </span>
+              <button
+                type="button"
+                onClick={() => loadData()}
+                disabled={loading}
+                className="flex items-center gap-1 rounded px-1.5 py-0.5 text-foreground-secondary transition-colors hover:bg-surface-tertiary disabled:opacity-60"
+              >
+                <RefreshCw className={cn("size-3", loading && "animate-spin")} />
+                {t("common.retry", { defaultValue: "重试" })}
+              </button>
+            </div>
+          )}
 
           <CommandGroup heading={t("cmdk.groups.frequent", "常用")}>
             <CommandItem

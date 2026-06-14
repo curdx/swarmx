@@ -22,6 +22,13 @@ export type TaskStatus = "pending" | "spawning" | "ready";
 export interface TaskActivity {
   id: string;
   startedAt: number;
+  /**
+   * Epoch ms when the task FLIPPED to `ready`. Distinct from `startedAt` (the
+   * triggering user-message time): a spawn that takes 30s to go green still
+   * gets the full auto-dismiss window from this moment, not a window already
+   * burned down by the spawn latency. Unset until the task reaches `ready`.
+   */
+  readyAt?: number;
   status: TaskStatus;
   /** 触发本次 task 的用户消息片段（"帮我加个登录页…"），最多 32 字符。 */
   trigger?: string;

@@ -12,7 +12,7 @@
  * preference matrix.
  */
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import i18n from "@/i18n";
@@ -43,6 +43,8 @@ import {
   Sun,
   SunMoon,
 } from "lucide-react";
+import { toast } from "@/lib/toast";
+import { ApiError } from "@/api/http";
 import { Button } from "@/components/ui/button";
 import {
   checkForUpdate,
@@ -129,6 +131,20 @@ export default function SettingsRoute() {
   const activeId = (SECTIONS.find((s) => s.id === section)?.id ??
     "general") as SectionId;
 
+  // ModelsPanel keeps its dirty flag here so leaving the section (nav click or
+  // ⌘1..⌘6) can warn before silently dropping unsaved edits. A ref (not state)
+  // because the panel mutates it on every keystroke and we don't want re-renders.
+  const modelsDirtyRef = useRef(false);
+  const [pendingNav, setPendingNav] = useState<string | null>(null);
+
+  const guardedNavigate = (path: string) => {
+    if (activeId === "models" && modelsDirtyRef.current) {
+      setPendingNav(path);
+      return;
+    }
+    navigate(path);
+  };
+
   useEffect(() => {
     saveSettings(settings);
     // Runtime side-effects: theme flips data-theme; lang swaps i18n
@@ -148,11 +164,12 @@ export default function SettingsRoute() {
       const n = parseInt(e.key, 10);
       if (!Number.isFinite(n) || n < 1 || n > SECTIONS.length) return;
       e.preventDefault();
-      navigate(`/settings/${SECTIONS[n - 1].id}`);
+      guardedNavigate(`/settings/${SECTIONS[n - 1].id}`);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [navigate]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [guardedNavigate]);
 
   const update = <K extends keyof SettingsState>(k: K, v: SettingsState[K]) =>
     setSettings((prev) => ({ ...prev, [k]: v }));
@@ -184,7 +201,7 @@ export default function SettingsRoute() {
             return (
               <button
                 key={s.id}
-                onClick={() => navigate(`/settings/${s.id}`)}
+                onClick={() => guardedNavigate(`/settings/${s.id}`)}
                 className={cn(
                   "flex min-w-0 items-center gap-2.5 rounded-md px-3 py-2 text-left text-sm lg:w-full",
                   active
@@ -222,12 +239,36 @@ export default function SettingsRoute() {
             <AppearancePanel settings={settings} update={update} />
           )}
           {activeId === "shortcuts" && <ShortcutsPanel />}
-          {activeId === "models" && <ModelsPanel />}
+          {activeId === "models" && <ModelsPanel dirtyRef={modelsDirtyRef} />}
           {activeId === "plugins" && <PluginsPanel />}
           {activeId === "privacy" && <PrivacyPanel />}
           {activeId === "about" && <AboutPanel />}
         </section>
       </div>
+
+      {/* Leaving the Models section with unsaved edits — confirm before
+          dropping them (the panel unmounts on navigate, losing local state). */}
+      <ConfirmActionDialog
+        action={
+          pendingNav
+            ? {
+                title: t("settings.models.unsavedLeaveTitle"),
+                description: t("settings.models.unsavedLeaveDesc"),
+                confirmLabel: t("settings.models.unsavedLeaveConfirm", {
+                  defaultValue: "放弃改动",
+                }),
+                variant: "destructive",
+                onConfirm: () => {
+                  modelsDirtyRef.current = false;
+                  navigate(pendingNav);
+                },
+              }
+            : null
+        }
+        onOpenChange={(open) => {
+          if (!open) setPendingNav(null);
+        }}
+      />
     </div>
   );
 }
@@ -438,16 +479,28 @@ function formNamePart(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9_-]+/g, "-");
 }
 
-function ModelsPanel() {
+/** Friendly copy for an error: ApiError already carries server-unwrapped detail. */
+function errText(e: unknown): string {
+  return e instanceof ApiError ? e.detail : (e as Error).message;
+}
+
+function ModelsPanel({
+  dirtyRef,
+}: {
+  dirtyRef: React.MutableRefObject<boolean>;
+}) {
   const { t } = useTranslation();
   const [data, setData] = useState<ModelsResponse | null>(null);
   const [cfg, setCfg] = useState<ModelConfig | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
+    setLoadError(null);
     api
       .getModels()
       .then((r) => {
@@ -457,12 +510,38 @@ function ModelsPanel() {
         }
       })
       .catch((e) => {
-        if (!cancelled) setError((e as Error).message);
+        if (!cancelled) setLoadError(errText(e));
       });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [reloadKey]);
+
+  // Edits live only in `cfg`; the saved baseline is `data.config`. They diverge
+  // the moment the user types, and re-converge after a successful save (which
+  // refreshes both). Stringify is fine here — the shape is small + JSON-stable.
+  const dirty =
+    !!data && !!cfg && JSON.stringify(cfg) !== JSON.stringify(data.config);
+
+  // Surface the dirty flag to the parent so leaving the section can warn first.
+  useEffect(() => {
+    dirtyRef.current = dirty;
+    return () => {
+      dirtyRef.current = false;
+    };
+  }, [dirty, dirtyRef]);
+
+  // Closing the page/window mid-edit also drops the changes — let the browser's
+  // native "leave site?" prompt fire (same pattern as useComposerDraft).
+  useEffect(() => {
+    if (!dirty) return;
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [dirty]);
 
   const cliOf = (id: string) =>
     cfg?.clis[id] ?? { default: "", tiers: {}, effort: "" };
@@ -495,17 +574,22 @@ function ModelsPanel() {
     });
 
   const save = async () => {
-    if (!cfg) return;
+    // No diff vs. the saved baseline → nothing to PUT. Skip the round-trip but
+    // still confirm "saved" so the click never feels like a no-op.
+    if (!cfg || busy || !dirty) return;
     setBusy(true);
     setError(null);
     setSaved(false);
     try {
       const r = await api.putModels(cfg);
+      setData((prev) => (prev ? { ...prev, config: r.config } : prev));
       setCfg(r.config);
       setSaved(true);
       window.setTimeout(() => setSaved(false), 2500);
     } catch (e) {
-      setError((e as Error).message);
+      const msg = errText(e);
+      setError(msg);
+      toast.error(t("settings.models.saveFailed", { error: msg }));
     } finally {
       setBusy(false);
     }
@@ -517,15 +601,31 @@ function ModelsPanel() {
         title={t("settings.models.title")}
         hint={t("settings.models.hint")}
       />
-      {error && (
-        <div className="rounded-md border border-state-danger/40 bg-status-danger-soft px-3 py-2 text-xs text-state-danger">
-          {error}
+      {/* Load failure ≠ empty: show the error + a Retry, never the bare panel. */}
+      {loadError && !data && (
+        <div className="flex flex-col items-start gap-2 rounded-md border border-state-danger/40 bg-status-danger-soft px-3 py-2.5 text-xs text-state-danger">
+          <span>{t("settings.models.loadError", { error: loadError })}</span>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => setReloadKey((k) => k + 1)}
+          >
+            {t("common.retry")}
+          </Button>
         </div>
       )}
-      {!data && !error && (
+      {!data && !loadError && (
         <p className="font-caption text-sm text-foreground-tertiary">
           {t("common.loading")}
         </p>
+      )}
+      {/* Persistent unsaved-changes banner — so switching sections / closing
+          the page never silently drops in-flight edits without a heads-up. */}
+      {dirty && (
+        <div className="flex items-center gap-2 rounded-md border border-status-warning/45 bg-status-warning-soft px-3 py-2 text-xs text-status-warning">
+          <TriangleAlert className="size-3.5 shrink-0" />
+          {t("settings.models.unsaved")}
+        </div>
       )}
       {data &&
         cfg &&
@@ -599,13 +699,25 @@ function ModelsPanel() {
         ))}
 
       {data && cfg && (
-        <div className="flex items-center gap-3">
-          <Button onClick={save} disabled={busy} className="self-start">
+        <div className="flex flex-wrap items-center gap-3">
+          {/* Disabled when clean (no diff) or mid-save — no no-op requests. */}
+          <Button
+            onClick={save}
+            disabled={busy || !dirty}
+            className="self-start"
+          >
+            {busy && <RefreshCw className="size-3.5 animate-spin" />}
             {busy ? t("common.loading") : t("settings.models.save")}
           </Button>
           {saved && (
-            <span className="font-caption text-xs text-status-success">
+            <span className="flex items-center gap-1 font-caption text-xs text-status-success">
+              <Check className="size-3.5" />
               {t("settings.models.saved")}
+            </span>
+          )}
+          {error && !busy && (
+            <span className="font-caption text-xs text-state-danger">
+              {t("settings.models.saveFailed", { error })}
             </span>
           )}
         </div>

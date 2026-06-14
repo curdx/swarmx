@@ -11,7 +11,7 @@
  * because the player wants a fully dark, chrome-less surface.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import {
@@ -22,7 +22,7 @@ import {
   RefreshCw,
   Search,
 } from "lucide-react";
-import { api } from "../../../api/http";
+import { api, ApiError } from "../../../api/http";
 import { downloadRecordingCast } from "@/lib/download";
 import { getCachedCastPreview, loadCastPreview } from "@/lib/castPreview";
 import type { AgentInfo, RecordingInfo } from "../../../api/types";
@@ -105,13 +105,24 @@ export default function ReplaysView() {
     () => new Map(),
   );
   const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  // 防重：refresh 在飞时不再发第二次请求（手动连点 / swarm 事件叠加）。
+  const inFlightRef = useRef(false);
+  // 陈旧响应守卫：每次 refresh 自增，setState 前校验仍是最新一次。
+  const reqIdRef = useRef(0);
 
-  const refresh = async () => {
+  const refresh = useCallback(async () => {
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
+    const reqId = ++reqIdRef.current;
+    setRefreshing(true);
     try {
       const [rows, agents] = await Promise.all([
         api.listRecordings(),
         api.listAgents(),
       ]);
+      if (reqId !== reqIdRef.current) return;
       setItems(rows);
       const wsIdM = new Map<string, string>();
       const roleM = new Map<string, string>();
@@ -123,17 +134,41 @@ export default function ReplaysView() {
       setRoleLookup(roleM);
       setError(null);
     } catch (e) {
-      setError((e as Error).message);
+      if (reqId !== reqIdRef.current) return;
+      setError(e instanceof ApiError ? e.detail : (e as Error).message);
+    } finally {
+      if (reqId === reqIdRef.current) {
+        setLoading(false);
+        setRefreshing(false);
+      }
+      inFlightRef.current = false;
     }
-  };
+  }, []);
 
   useEffect(() => {
     refresh();
-  }, []);
+  }, [refresh]);
+
+  // swarm exited 事件触发的 refresh 去抖：一次 orchestrator 结束往往连发多个
+  // agent_state=exited，去抖合并成一次请求，避免 N 次重复拉列表。
+  const debounceRef = useRef<number | null>(null);
+  const debouncedRefresh = useCallback(() => {
+    if (debounceRef.current !== null) window.clearTimeout(debounceRef.current);
+    debounceRef.current = window.setTimeout(() => {
+      debounceRef.current = null;
+      refresh();
+    }, 250);
+  }, [refresh]);
+  useEffect(
+    () => () => {
+      if (debounceRef.current !== null) window.clearTimeout(debounceRef.current);
+    },
+    [],
+  );
 
   useSwarmFeed({
     onEvent: (ev) => {
-      if (ev.type === "agent_state" && ev.state === "exited") refresh();
+      if (ev.type === "agent_state" && ev.state === "exited") debouncedRefresh();
     },
     onReconnect: () => refresh(),
   });
@@ -141,9 +176,22 @@ export default function ReplaysView() {
   const scopedToWorkspace = useMemo(() => {
     return items.filter((r) => {
       const wsId = agentWsIdById.get(r.agent_id);
-      return wsId === workspace.workspaceId;
+      // P2-1：放宽过滤。属于本 workspace 的录像照常显示；agent 没有 ws 归属
+      // (workspace_id 为 NULL，例如 MCP swarm_run_spell 直接拉起的 agent，或
+      // agent 行已不在 listAgents 里) 的录像归到「未归属」，否则它们会从所有
+      // workspace 视图里彻底消失，用户再也找不到。
+      return wsId === workspace.workspaceId || wsId === undefined;
     });
   }, [items, workspace.workspaceId, agentWsIdById]);
+
+  // 未归属录像（agent 无 workspace_id）单独成组，避免和本 ws 录像混淆。
+  const unscopedIds = useMemo(() => {
+    const s = new Set<string>();
+    for (const r of items) {
+      if (agentWsIdById.get(r.agent_id) === undefined) s.add(r.id);
+    }
+    return s;
+  }, [items, agentWsIdById]);
 
   const tags = useMemo(() => {
     const set = new Set<string>();
@@ -187,10 +235,11 @@ export default function ReplaysView() {
           variant="ghost"
           size="icon"
           onClick={refresh}
+          disabled={refreshing}
           title={t("common.refresh")}
           className="size-8 shrink-0"
         >
-          <RefreshCw className="size-3.5" />
+          <RefreshCw className={cn("size-3.5", refreshing && "animate-spin")} />
         </Button>
         <span className="hidden flex-1 md:block" />
         <div className="-mx-1 flex w-full items-center gap-1 overflow-x-auto px-1 pb-1 md:mx-0 md:w-auto md:overflow-visible md:px-0 md:pb-0">
@@ -218,12 +267,35 @@ export default function ReplaysView() {
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto p-5">
-        {error && (
-          <div className="mb-3 rounded-md border border-state-danger/40 bg-status-danger-soft px-3 py-2 text-xs text-state-danger">
-            {error}
+        {/* P2-4：三态分流。loading / error+重试 / 真空，互斥渲染——
+            error 时只显示「加载失败 + 重试」，绝不再叠「暂无录像」自相矛盾。 */}
+        {loading && items.length === 0 ? (
+          <div className="flex h-full flex-col items-center justify-center gap-2 text-foreground-tertiary">
+            <RefreshCw className="size-6 animate-spin opacity-50" />
+            <p className="font-caption text-sm">{t("common.loading")}</p>
           </div>
-        )}
-        {filtered.length === 0 ? (
+        ) : error ? (
+          <div className="flex h-full flex-col items-center justify-center gap-3 text-foreground-tertiary">
+            <p className="max-w-md text-center font-caption text-sm text-state-danger">
+              {t("replays.loadFailed", { defaultValue: "加载录像失败" })}
+            </p>
+            <p className="max-w-md break-words text-center font-caption text-xs text-foreground-tertiary">
+              {error}
+            </p>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={refresh}
+              disabled={refreshing}
+              className="h-8"
+            >
+              <RefreshCw
+                className={cn("mr-1.5 size-3.5", refreshing && "animate-spin")}
+              />
+              {t("common.retry", { defaultValue: "重试" })}
+            </Button>
+          </div>
+        ) : filtered.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center gap-2 text-foreground-tertiary">
             <Play className="size-8 opacity-40" />
             <p className="font-caption text-sm">{t("replays.empty")}</p>
@@ -244,6 +316,17 @@ export default function ReplaysView() {
                       size="sm"
                       className="min-w-0 flex-1"
                     />
+                    {unscopedIds.has(r.id) && (
+                      <span
+                        className="rounded-full bg-surface-tertiary px-2 py-0.5 font-caption text-[10px] text-foreground-tertiary"
+                        title={t("replays.unscopedHint", {
+                          defaultValue:
+                            "该录像的 agent 没有归属工作空间（可能由 MCP 直接拉起，或 agent 行已被清理）",
+                        })}
+                      >
+                        {t("replays.unscoped", { defaultValue: "未归属" })}
+                      </span>
+                    )}
                     <span
                       className={cn(
                         "rounded-full px-2 py-0.5 font-caption text-[10px]",
