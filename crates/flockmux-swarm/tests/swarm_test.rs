@@ -420,6 +420,7 @@ async fn user_and_agent_messages_auto_attach_thought_trace() {
         .list_messages(ListMessagesOpts {
             to_agent: Some("user".into()),
             from_agent: None,
+            thread_id: None,
             only_undelivered: false,
             limit: 10,
         })

@@ -329,6 +329,9 @@ pub struct ThoughtTraceRecord {
 pub struct ListMessagesOpts {
     pub to_agent: Option<String>,
     pub from_agent: Option<String>,
+    /// Scope to one direction (thread). `Some(id)` returns that thread's
+    /// messages plus legacy/main null-thread rows; `None` returns all.
+    pub thread_id: Option<String>,
     pub only_undelivered: bool,
     pub limit: i64,
 }

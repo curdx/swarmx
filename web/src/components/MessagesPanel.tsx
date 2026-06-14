@@ -265,14 +265,21 @@ export function MessagesPanel({
   // ── data loaders ──────────────────────────────────────────────────────
   const refresh = useCallback(async () => {
     try {
-      const rows = await api.listMessages({ limit: 200 });
+      // P1-04: scope history to the active direction so a quiet thread's older
+      // messages aren't pushed out of the global 200-row window — and re-pull
+      // when the direction changes (activeThreadId in deps) instead of showing a
+      // stale/empty room after a switch.
+      const rows = await api.listMessages({
+        limit: 200,
+        thread_id: activeThreadId ?? undefined,
+      });
       // server orders DESC by id; reverse to chat-style chronological.
       setItems(rows.slice().reverse());
       setError(null);
     } catch (e) {
       setError((e as Error).message);
     }
-  }, []);
+  }, [activeThreadId]);
 
   useEffect(() => {
     refresh();
@@ -511,11 +518,34 @@ export function MessagesPanel({
   const { pendingResponders, vanishedTurns, markInterrupted } =
     usePendingResponders({ items, aliveForInference, agentLiveStateById });
 
+  // P1-05: only auto-scroll to the bottom when the user is already near it.
+  // Forcing it on every new row / stream chunk / pending bubble yanked the view
+  // down while the user was scrolled up reading history. Track "near bottom" on
+  // scroll and gate the auto-scroll on it — someone who just sent is at the
+  // bottom, so their own message still lands in view.
+  const isNearBottomRef = useRef(true);
+  useEffect(() => {
+    const el = listRef.current;
+    if (!el) return;
+    const onScroll = () => {
+      isNearBottomRef.current =
+        el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+    };
+    el.addEventListener("scroll", onScroll, { passive: true });
+    onScroll();
+    return () => el.removeEventListener("scroll", onScroll);
+  }, []);
+  // Reset to "stick to bottom" when switching direction so a fresh room opens at
+  // its latest message regardless of where you were scrolled in the last one.
+  useEffect(() => {
+    isNearBottomRef.current = true;
+  }, [activeThreadId]);
+
   // Auto-scroll to bottom on new items / live message / new pending bubble.
   // Virtualized: scroll the last row into view (align: end) rather than poking
   // scrollTop, so it lands against the measured total size, not an estimate.
   useLayoutEffect(() => {
-    if (rows.length > 0) {
+    if (rows.length > 0 && isNearBottomRef.current) {
       virtualizer.scrollToIndex(rows.length - 1, { align: "end" });
     }
   }, [rows.length, pendingResponders.length, vanishedTurns.length, virtualizer]);

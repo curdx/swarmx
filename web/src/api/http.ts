@@ -139,6 +139,7 @@ export interface ListMessagesQuery {
   from?: string;
   q?: string;
   limit?: number;
+  thread_id?: string;
   only_undelivered?: boolean;
 }
 
