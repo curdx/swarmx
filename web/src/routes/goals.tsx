@@ -6,7 +6,7 @@
  * what workers are doing now; goals show what the whole run is supposed to
  * achieve and whether it is still active, blocked, or complete.
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   Archive,
@@ -22,6 +22,13 @@ import {
 import { api } from "@/api/http";
 import type { GoalEvidenceRecord, GoalRecord, GoalStatus, ThreadInfo } from "@/api/types";
 import { WorkspacePicker } from "@/components/WorkspacePicker";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { cn } from "@/lib/cn";
 import { relTime } from "@/lib/relTime";
 import { toast } from "@/lib/toast";
@@ -35,6 +42,18 @@ const STATUSES: Array<{ key: GoalStatus; icon: typeof Flag; tone: string }> = [
   { key: "archived", icon: Archive, tone: "text-foreground-tertiary" },
 ];
 const MAIN_THREAD_VALUE = "__main__";
+// Radix Select forbids an empty-string item value, so the "all directions"
+// option needs its own sentinel (mirrors WorkspacePicker's __all_workspaces__).
+const ALL_DIRECTIONS_VALUE = "__all__";
+// Evidence kinds: a small, meaningful enum instead of a free-text box whose
+// semantics nobody could guess. `note` is the default neutral entry. Chinese
+// fallbacks live here so the dropdown never shows a raw enum token before the
+// locale merge lands.
+const EVIDENCE_KINDS: Array<{ key: string; zh: string }> = [
+  { key: "note", zh: "记录" },
+  { key: "proof", zh: "证明" },
+  { key: "blocker", zh: "阻塞" },
+];
 // P2: token budget is an i64 on the backend; a digit string longer than that
 // makes serde reject the body with a 500 before our route can validate it, and
 // anything above Number.MAX_SAFE_INTEGER loses precision in JS. Cap well below
@@ -75,6 +94,10 @@ export default function GoalsRoute() {
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // Guard against stale list responses: if the workspace/thread changes (or the
+  // button is spammed) while a slower fetch is in flight, only the newest one is
+  // allowed to write state.
+  const loadReqId = useRef(0);
 
   const activeWorkspace = useMemo(
     () => workspaces.find((w) => w.id === wsId) ?? null,
@@ -107,14 +130,17 @@ export default function GoalsRoute() {
       setLoading(false);
       return;
     }
+    const reqId = ++loadReqId.current;
     setLoading(true);
     try {
       const threadFilter =
         threadId === MAIN_THREAD_VALUE ? null : threadId || undefined;
       const res = await api.listGoals(wsId, threadFilter);
+      if (reqId !== loadReqId.current) return; // a newer load superseded this one
       setGoals(res.goals);
       setErr(null);
     } catch (e) {
+      if (reqId !== loadReqId.current) return;
       // P1-16/17: mark "load failed" so the list area can offer retry instead
       // of pretending you simply have no goals. Keep the raw detail off the
       // headline — surface it in a toast description.
@@ -123,7 +149,7 @@ export default function GoalsRoute() {
         description: (e as Error)?.message,
       });
     } finally {
-      setLoading(false);
+      if (reqId === loadReqId.current) setLoading(false);
     }
   }, [t, threadId, wsId]);
 
@@ -202,28 +228,34 @@ export default function GoalsRoute() {
             <button
               type="button"
               onClick={load}
+              disabled={loading}
               title={t("common.refresh")}
               aria-label={t("common.refresh")}
-              className="rounded border border-border-subtle p-1 text-foreground-tertiary hover:bg-surface-tertiary hover:text-foreground-secondary"
+              className="rounded border border-border-subtle p-1 text-foreground-tertiary hover:bg-surface-tertiary hover:text-foreground-secondary disabled:cursor-not-allowed disabled:opacity-50"
             >
-              <RefreshCw className="size-3.5" />
+              <RefreshCw className={cn("size-3.5", loading && "animate-spin")} />
             </button>
             <WorkspacePicker workspaces={workspaces} value={wsId} onChange={setWsId} />
-            <select
-              value={threadId}
-              onChange={(e) => setThreadId(e.target.value)}
+            <Select
+              value={threadId || ALL_DIRECTIONS_VALUE}
+              onValueChange={(next) =>
+                setThreadId(next === ALL_DIRECTIONS_VALUE ? "" : next)
+              }
               disabled={!wsId}
-              className="rounded border border-border-subtle bg-surface-primary px-2 py-1 text-[13px] text-foreground-primary disabled:opacity-50"
-              aria-label={t("goals.thread")}
             >
-              <option value="">{t("goals.allDirections")}</option>
-              <option value={MAIN_THREAD_VALUE}>{t("goals.mainDirection")}</option>
-              {threads.map((th) => (
-                <option key={th.id} value={th.id}>
-                  {th.name || th.slug}
-                </option>
-              ))}
-            </select>
+              <SelectTrigger aria-label={t("goals.thread")} className="min-w-[140px] text-[13px]">
+                <SelectValue placeholder={t("goals.allDirections")} />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={ALL_DIRECTIONS_VALUE}>{t("goals.allDirections")}</SelectItem>
+                <SelectItem value={MAIN_THREAD_VALUE}>{t("goals.mainDirection")}</SelectItem>
+                {threads.map((th) => (
+                  <SelectItem key={th.id} value={th.id}>
+                    {th.name || th.slug}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
         </header>
 
@@ -481,12 +513,23 @@ function GoalCard({
       {evidenceOpen && (
         <div className="mt-3 rounded-md border border-border-subtle bg-surface-primary p-3">
           <div className="grid gap-2 sm:grid-cols-[120px_1fr_auto]">
-            <input
-              value={evidenceKind}
-              onChange={(e) => setEvidenceKind(e.target.value)}
-              className="rounded border border-border-subtle bg-surface-secondary px-2 py-1 font-mono text-[12px]"
-              aria-label={t("goals.evidenceKind")}
-            />
+            <Select value={evidenceKind} onValueChange={setEvidenceKind}>
+              <SelectTrigger
+                aria-label={t("goals.evidenceKind")}
+                className="w-full text-[12px]"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {EVIDENCE_KINDS.map((kind) => (
+                  <SelectItem key={kind.key} value={kind.key}>
+                    {t(`goals.evidenceKindLabel.${kind.key}`, {
+                      defaultValue: kind.zh,
+                    })}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
             <input
               value={evidenceSummary}
               onChange={(e) => setEvidenceSummary(e.target.value)}
@@ -504,6 +547,11 @@ function GoalCard({
               {t("goals.addEvidence")}
             </button>
           </div>
+          <p className="mt-1.5 font-caption text-[10px] text-foreground-tertiary">
+            {t("goals.evidenceKindHint", {
+              defaultValue: "类型：note 记录进展 · proof 证明完成 · blocker 标记阻塞",
+            })}
+          </p>
           {evidenceErr && (
             <p className="mt-2 font-caption text-[11px] text-status-danger">{evidenceErr}</p>
           )}

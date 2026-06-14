@@ -38,6 +38,16 @@ fn normalize_optional(s: Option<String>) -> Option<String> {
     s.map(|v| v.trim().to_string()).filter(|v| !v.is_empty())
 }
 
+/// True if a storage error is a SQLite foreign-key violation — i.e. the row
+/// points at a workspace/thread/goal that doesn't exist. SQLite's message
+/// (`FOREIGN KEY constraint failed`) is stable across versions; we match on
+/// the full error chain (`{e:#}`) so a `.context(...)`-wrapped error still
+/// classifies. Lets the route return a friendly 404 instead of dumping the
+/// raw SQLite text in a 500.
+fn is_foreign_key_violation(e: &anyhow::Error) -> bool {
+    format!("{e:#}").contains("FOREIGN KEY constraint failed")
+}
+
 #[derive(Deserialize)]
 pub struct ListGoalsQuery {
     workspace_id: Option<String>,
@@ -140,6 +150,47 @@ pub async fn create_goal(
             .into_response();
     }
 
+    // Validate the FK parents up front (mirrors cron.rs) so a non-existent
+    // workspace/thread returns a friendly 404 instead of a raw SQLite
+    // "FOREIGN KEY constraint failed" 500 from the insert below.
+    match state.store.get_workspace_by_id(workspace_id.to_string()).await {
+        Ok(Some(_)) => {}
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": format!("unknown workspace_id: {workspace_id}") })),
+            )
+                .into_response();
+        }
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("workspace lookup failed: {e}") })),
+            )
+                .into_response();
+        }
+    }
+    let thread_id = req.thread_id.filter(|s| !s.trim().is_empty());
+    if let Some(tid) = thread_id.as_deref() {
+        match state.store.get_thread(tid.to_string()).await {
+            Ok(Some(_)) => {}
+            Ok(None) => {
+                return (
+                    StatusCode::NOT_FOUND,
+                    Json(json!({ "error": format!("unknown thread_id: {tid}") })),
+                )
+                    .into_response();
+            }
+            Err(e) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": format!("thread lookup failed: {e}") })),
+                )
+                    .into_response();
+            }
+        }
+    }
+
     let at = now_ms();
     let criteria: Vec<String> = req
         .success_criteria
@@ -160,7 +211,7 @@ pub async fn create_goal(
     let rec = NewGoal {
         id: uuid::Uuid::new_v4().to_string(),
         workspace_id: workspace_id.to_string(),
-        thread_id: req.thread_id.filter(|s| !s.trim().is_empty()),
+        thread_id,
         objective: objective.to_string(),
         success_criteria,
         status: status.clone(),
@@ -172,6 +223,14 @@ pub async fn create_goal(
     let id = rec.id.clone();
     match state.store.upsert_goal(rec).await {
         Ok(()) => (StatusCode::OK, Json(json!({ "ok": true, "id": id }))).into_response(),
+        // Belt-and-suspenders: the workspace/thread existed when we checked, but
+        // a concurrent delete could still trip the FK at insert time. Surface
+        // that as a friendly 404 rather than a raw SQLite 500.
+        Err(e) if is_foreign_key_violation(&e) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "workspace or thread no longer exists" })),
+        )
+            .into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": e.to_string() })),
@@ -287,6 +346,14 @@ pub async fn add_goal_evidence(
             Json(json!({ "ok": true, "id": evidence_id })),
         )
             .into_response(),
+        // The `goal_id` FK is the existence gate (there's no goal-lookup seam
+        // here): a missing goal trips `FOREIGN KEY constraint failed`. Return a
+        // friendly 404 instead of the raw SQLite text in a 500.
+        Err(e) if is_foreign_key_violation(&e) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "no such goal" })),
+        )
+            .into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": e.to_string() })),
@@ -321,5 +388,18 @@ mod tests {
         );
         assert_eq!(normalize_optional(Some("   ".into())), None);
         assert_eq!(normalize_optional(None), None);
+    }
+
+    #[test]
+    fn detects_foreign_key_violation_through_context_wrapping() {
+        // The storage layer wraps the rusqlite error with `.context(...)`, so the
+        // FK signature lives deeper in the chain — `{e:#}` must still classify it.
+        let inner = anyhow::anyhow!("FOREIGN KEY constraint failed");
+        let wrapped = inner.context("spawn_blocking add_goal_evidence");
+        assert!(is_foreign_key_violation(&wrapped));
+
+        // A generic error (e.g. disk I/O) must NOT be classified as a 404 case.
+        let other = anyhow::anyhow!("database is locked").context("spawn_blocking upsert_goal");
+        assert!(!is_foreign_key_violation(&other));
     }
 }

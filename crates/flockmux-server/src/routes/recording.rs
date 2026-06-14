@@ -52,10 +52,16 @@ pub async fn list_recordings(
     }
 }
 
-/// `GET /api/recording/:id` — streams the .cast file. Content-Type is
+/// `GET /api/recording/:id` — reads the whole .cast file into memory and
+/// returns it in one response (the recorder caps a single cast at
+/// `DEFAULT_MAX_CAST_BYTES` = 64 MiB, so this is bounded). Content-Type is
 /// `application/x-asciicast` (de facto for asciicast files); clients that
 /// don't know it can treat the body as JSON-lines since each line is valid
 /// JSON.
+///
+/// Follow-up: switch to true streaming (`ReaderStream` + `Body::from_stream`)
+/// to avoid buffering the whole cast; deferred because that loses the current
+/// "file missing → 404 JSON" path once headers are already on the wire.
 pub async fn get_recording(State(state): State<AppState>, Path(id): Path<String>) -> Response {
     let row = match state.store.get_recording(id.clone()).await {
         Ok(Some(r)) => r,

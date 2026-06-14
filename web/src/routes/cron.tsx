@@ -11,7 +11,8 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Play, Trash2, Loader2, Check, X, Pencil } from "lucide-react";
+import { Link } from "react-router-dom";
+import { Play, Trash2, Loader2, Check, X, Pencil, FolderPlus } from "lucide-react";
 import { api, ApiError } from "@/api/http";
 import type { CronJob, Workspace } from "@/api/types";
 import { cn } from "@/lib/cn";
@@ -201,6 +202,30 @@ function CronJobForm({
       setBusy(false);
     }
   };
+
+  // No workspaces yet → the form can't target anything (the dropdown would only
+  // show a dead "—"). Guide the user to create a workspace first instead of
+  // presenting an unusable form. Edit mode always has a workspace (initial.wsId),
+  // so this only ever shows in the create area.
+  if (workspaces.length === 0 && !initial.wsId) {
+    return (
+      <div className="flex flex-col items-center gap-3 px-4 py-6 text-center">
+        <FolderPlus className="size-6 text-foreground-tertiary" />
+        <p className="font-caption text-[13px] text-foreground-secondary">
+          {t("cron.noWorkspaces", {
+            defaultValue: "还没有工作空间。定时任务需要先有一个工作空间来接收提示词。",
+          })}
+        </p>
+        <Link
+          to="/chat"
+          className="inline-flex min-h-8 items-center gap-1.5 rounded-md bg-accent-primary px-3 py-1.5 text-[13px] text-foreground-on-accent hover:opacity-90"
+        >
+          <FolderPlus className="size-3.5" />
+          {t("cron.createWorkspace", { defaultValue: "新建工作空间" })}
+        </Link>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-2">

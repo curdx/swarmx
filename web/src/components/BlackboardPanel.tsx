@@ -8,12 +8,41 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { api, ApiError } from "../api/http";
+import { HTTP_BASE } from "../lib/apiBase";
 import type { BlackboardEntry, BlackboardHistoryEntry } from "../api/types";
 import {
   ConfirmActionDialog,
   type ConfirmActionState,
 } from "@/components/ConfirmActionDialog";
+
+// Single-file delete. The shared `api` client (../api/http) has no delete verb
+// for blackboard and that module isn't ours to extend here, so we issue the
+// DELETE directly while normalising failures into the SAME ApiError shape the
+// rest of this panel already surfaces via `errText` — never a silent catch.
+async function deleteBlackboard(path: string): Promise<void> {
+  const url = `${HTTP_BASE}/api/blackboard/${path.split("/").map(encodeURIComponent).join("/")}`;
+  let res: Response;
+  try {
+    res = await fetch(url, { method: "DELETE" });
+  } catch (e) {
+    const friendly =
+      "连接不上本地服务（127.0.0.1:7777），请确认 flockmux 正在运行";
+    throw new ApiError(0, friendly, `${friendly}（DELETE ${url}：${(e as Error)?.message ?? e}）`);
+  }
+  if (!res.ok) {
+    const raw = await res.text().catch(() => "");
+    let detail = raw;
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed.error === "string") detail = parsed.error;
+    } catch {
+      /* not JSON — keep raw text */
+    }
+    throw new ApiError(res.status, detail, `DELETE ${url} → ${res.status}: ${detail || res.statusText}`);
+  }
+}
 
 // History list is fetched with this cap; when we hit it the true count is
 // unknown (could be more), so the badge shows "50+" rather than lying "50".
@@ -29,6 +58,7 @@ interface Props {
 }
 
 export function BlackboardPanel({ liveChange }: Props) {
+  const { t } = useTranslation();
   const [entries, setEntries] = useState<BlackboardEntry[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [content, setContent] = useState("");
@@ -36,6 +66,7 @@ export function BlackboardPanel({ liveChange }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [newPath, setNewPath] = useState("");
   const [historyOpen, setHistoryOpen] = useState(false);
   const [history, setHistory] = useState<BlackboardHistoryEntry[]>([]);
@@ -51,6 +82,7 @@ export function BlackboardPanel({ liveChange }: Props) {
   const [rejectReason, setRejectReason] = useState("");
   const [gateBusy, setGateBusy] = useState(false);
   const [discardConfirm, setDiscardConfirm] = useState<ConfirmActionState | null>(null);
+  const [deleteConfirm, setDeleteConfirm] = useState<ConfirmActionState | null>(null);
 
   const isDirty = useMemo(() => content !== originalContent, [content, originalContent]);
 
@@ -222,6 +254,45 @@ export function BlackboardPanel({ liveChange }: Props) {
     });
   };
 
+  // Single-file delete, gated behind a second-confirm dialog (mistaken
+  // deletes are unrecoverable from the UI). On success we clear the editor
+  // and refresh the list; on failure we surface the ApiError via `error`
+  // (toast-equivalent inline banner) — never a silent catch.
+  const removeSelected = () => {
+    if (!selected || deleting) return;
+    const path = selected;
+    setDeleteConfirm({
+      title: t("blackboard.deleteConfirmTitle", { defaultValue: "删除该文件？" }),
+      description: t("blackboard.deleteConfirmDesc", {
+        defaultValue: `“${path}”将从共享区移除，此操作无法撤销。`,
+        path,
+      }),
+      confirmLabel: t("blackboard.deleteConfirmAction", { defaultValue: "删除文件" }),
+      variant: "destructive",
+      onConfirm: () => {
+        void (async () => {
+          setDeleting(true);
+          try {
+            await deleteBlackboard(path);
+            // Clear the editor for the now-gone file.
+            setSelected(null);
+            setContent("");
+            setOriginalContent("");
+            setHistory([]);
+            setVersionPreview(null);
+            clearInfo();
+            await refreshList();
+            setError(null);
+          } catch (e) {
+            setError(errText(e));
+          } finally {
+            setDeleting(false);
+          }
+        })();
+      },
+    });
+  };
+
   // M6d-4: write the architect-approval companion to whatever the
   // operator just read. Body is intentionally minimal — the gate
   // mechanism only cares that the key exists with non-empty content;
@@ -323,10 +394,19 @@ export function BlackboardPanel({ liveChange }: Props) {
               if (e.key === "Enter") createNew();
             }}
           />
-          <button onClick={createNew} disabled={!newPath.trim()} title="创建">
+          <button
+            onClick={createNew}
+            disabled={!newPath.trim()}
+            title="创建"
+            aria-label={t("blackboard.createFile", { defaultValue: "新建文件" })}
+          >
             +
           </button>
-          <button onClick={refreshList} title="刷新">
+          <button
+            onClick={refreshList}
+            title="刷新"
+            aria-label={t("blackboard.refresh", { defaultValue: "刷新列表" })}
+          >
             ↻
           </button>
         </div>
@@ -361,6 +441,7 @@ export function BlackboardPanel({ liveChange }: Props) {
                     onClick={approveDesign}
                     disabled={gateBusy}
                     title="批准该设计 — 写入 design.approved，唤醒前后端"
+                    aria-label={t("blackboard.approveDesign", { defaultValue: "批准设计" })}
                     style={approveBtn}
                   >
                     ✓ 通过
@@ -369,6 +450,7 @@ export function BlackboardPanel({ liveChange }: Props) {
                     onClick={() => setRejectOpen((v) => !v)}
                     disabled={gateBusy}
                     title="要求重做 — 写入 design.rejected 并附原因；architect 会重新起稿"
+                    aria-label={t("blackboard.rejectDesign", { defaultValue: "驳回设计" })}
                     style={rejectBtn}
                   >
                     ✗ 驳回
@@ -378,13 +460,27 @@ export function BlackboardPanel({ liveChange }: Props) {
               <button
                 onClick={() => setHistoryOpen((v) => !v)}
                 title="查看写入历史"
+                aria-label={t("blackboard.viewHistory", { defaultValue: "查看写入历史" })}
                 style={historyToggle}
               >
                 历史 ({history.length >= HISTORY_LIMIT ? `${HISTORY_LIMIT}+` : history.length}
                 {historyLoading ? "…" : ""})
               </button>
-              <button onClick={save} disabled={saving || !isDirty}>
+              <button
+                onClick={save}
+                disabled={saving || !isDirty}
+                aria-label={t("blackboard.save", { defaultValue: "保存" })}
+              >
                 保存
+              </button>
+              <button
+                onClick={removeSelected}
+                disabled={deleting}
+                title="删除该文件"
+                aria-label={t("blackboard.deleteFile", { defaultValue: "删除文件" })}
+                style={deleteBtn}
+              >
+                删除
               </button>
             </div>
             {selected === "design.md" && rejectOpen && (
@@ -474,6 +570,9 @@ export function BlackboardPanel({ liveChange }: Props) {
                 <textarea
                   value={versionPreview.content ?? "(尚未加载内容)"}
                   readOnly
+                  aria-label={t("blackboard.versionPreviewArea", {
+                    defaultValue: "历史版本内容（只读）",
+                  })}
                   style={{ ...editor, background: "#101a2f" }}
                   spellCheck={false}
                 />
@@ -487,6 +586,9 @@ export function BlackboardPanel({ liveChange }: Props) {
                   if (info) clearInfo();
                   setContent(e.target.value);
                 }}
+                aria-label={t("blackboard.editorArea", {
+                  defaultValue: "文件内容编辑器",
+                })}
                 style={editor}
                 spellCheck={false}
               />
@@ -502,6 +604,12 @@ export function BlackboardPanel({ liveChange }: Props) {
       action={discardConfirm}
       onOpenChange={(open) => {
         if (!open) setDiscardConfirm(null);
+      }}
+    />
+    <ConfirmActionDialog
+      action={deleteConfirm}
+      onOpenChange={(open) => {
+        if (!open) setDeleteConfirm(null);
       }}
     />
     </>
@@ -643,6 +751,19 @@ const rejectBtn: React.CSSProperties = {
   borderRadius: 4,
   fontSize: 11,
   fontWeight: 600,
+  padding: "2px 8px",
+  cursor: "pointer",
+};
+
+// Delete is a quiet red outline (not a loud filled button): it's a
+// secondary, destructive action gated behind a confirm dialog, so it
+// should read as "available but careful", matching rejectBtn's restraint.
+const deleteBtn: React.CSSProperties = {
+  background: "transparent",
+  color: "#f87171",
+  border: "1px solid #b91c1c",
+  borderRadius: 4,
+  fontSize: 11,
   padding: "2px 8px",
   cursor: "pointer",
 };

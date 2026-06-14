@@ -93,12 +93,22 @@ pub struct PreviewQuery {
 /// year (e.g. `0 0 30 2 *`). Reuses the scheduler's own matcher, evaluated in the
 /// supplied offset so the preview matches what the user means locally.
 pub async fn preview_cron(Query(q): Query<PreviewQuery>) -> impl IntoResponse {
-    let valid = crate::cron::is_valid(&q.expr);
-    let next_run = if valid {
-        crate::cron::next_after(&q.expr, now_ms() / 1000, q.offset).map(|s| s * 1000)
-    } else {
-        None
-    };
+    let now_secs = now_ms() / 1000;
+    // Same rationale as `list_cron`: `next_after` is a minute-by-minute scan that
+    // for a valid-but-never-firing expr walks the full ~366-day window — pure CPU.
+    // Run validation + scan on a blocking thread so a pathological live-preview
+    // keystroke can't stall the async executor handling other requests.
+    let (valid, next_run) = tokio::task::spawn_blocking(move || {
+        let valid = crate::cron::is_valid(&q.expr);
+        let next_run = if valid {
+            crate::cron::next_after(&q.expr, now_secs, q.offset).map(|s| s * 1000)
+        } else {
+            None
+        };
+        (valid, next_run)
+    })
+    .await
+    .unwrap_or((false, None));
     Json(json!({ "valid": valid, "next_run": next_run }))
 }
 

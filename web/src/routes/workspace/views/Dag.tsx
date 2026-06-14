@@ -160,9 +160,13 @@ interface CanvasProps {
   selectedId: string | null;
   onSelect: (id: string | null) => void;
   showMinimap: boolean;
+  // Bumped each time selection originates from the LEFT LIST (not a canvas
+  // click). On a bump we pan/zoom the viewport to the selected node so an
+  // off-canvas pick doesn't silently select something the user can't see.
+  focusNonce: number;
 }
 
-function Canvas({ agents, bbAt, selectedId, onSelect, showMinimap }: CanvasProps) {
+function Canvas({ agents, bbAt, selectedId, onSelect, showMinimap, focusNonce }: CanvasProps) {
   const live = useMemo(() => liveAgents(agents), [agents]);
 
   const edges = useMemo<Edge[]>(() => {
@@ -175,16 +179,24 @@ function Canvas({ agents, bbAt, selectedId, onSelect, showMinimap }: CanvasProps
       label: e.key,
       animated: !e.satisfied,
       style: {
-        stroke: e.satisfied ? "#2E8B57" : "#C77A1F",
+        // Theme vars (not hardcoded hex) so light/dark both stay legible —
+        // success/warning have dark-mode overrides in global.css.
+        stroke: e.satisfied
+          ? "var(--color-state-success)"
+          : "var(--color-state-warning)",
         strokeWidth: 1.75,
         strokeDasharray: e.satisfied ? undefined : "6 4",
       },
       labelStyle: {
-        fill: e.satisfied ? "#2E8B57" : "#C77A1F",
+        fill: e.satisfied
+          ? "var(--color-state-success)"
+          : "var(--color-state-warning)",
         fontSize: 10,
         fontFamily: "Geist Mono, ui-monospace, monospace",
       },
-      labelBgStyle: { fill: "#FAFAF7" },
+      // Elevated-surface bg (white in light, slate-800 in dark) so the label
+      // chip never sits as a harsh white block on the dark canvas.
+      labelBgStyle: { fill: "var(--color-surface-elevated)" },
     }));
     // Spawn edges render BEFORE handoff in the array — ReactFlow paints in
     // array order, so handoff arrows (the live signal) overlay parent
@@ -197,11 +209,15 @@ function Canvas({ agents, bbAt, selectedId, onSelect, showMinimap }: CanvasProps
       target: e.childId,
       // No animation, no label — spawn lineage is static context.
       style: {
-        stroke: "#94a3b8",
+        // idle slate, theme var so it tracks light/dark.
+        stroke: "var(--color-state-idle)",
         strokeWidth: 1.25,
         opacity: 0.55,
       },
-      markerEnd: { type: MarkerType.ArrowClosed, color: "#94a3b8" },
+      markerEnd: {
+        type: MarkerType.ArrowClosed,
+        color: "var(--color-state-idle)",
+      },
     }));
     return [...spawnEdges, ...handoffEdges];
   }, [live, bbAt]);
@@ -231,6 +247,30 @@ function Canvas({ agents, bbAt, selectedId, onSelect, showMinimap }: CanvasProps
     }, 50);
     return () => window.clearTimeout(t);
   }, [flow, nodes.length, edges.length]);
+
+  // Pan the viewport to a node selected from the left list so the selection
+  // and what's on screen stay in sync — an off-canvas pick should bring the
+  // node into view, not just highlight something the user can't see. Keyed on
+  // focusNonce (bumps on every list pick, incl. re-selecting the same node);
+  // canvas clicks leave the nonce untouched so they don't re-pan. `nodes`
+  // already carries dagre-laid-out positions, so center on the node's middle.
+  useEffect(() => {
+    if (focusNonce === 0 || !selectedId) return;
+    const n = nodes.find((node) => node.id === selectedId);
+    if (!n) return;
+    try {
+      flow.setCenter(n.position.x + NODE_W / 2, n.position.y + NODE_H / 2, {
+        duration: 400,
+        zoom: Math.max(flow.getZoom(), 1),
+      });
+    } catch {
+      /* setCenter can throw before the flow is mounted */
+    }
+    // Intentionally NOT depending on `nodes`/`selectedId` — only the nonce
+    // drives a re-pan, so a routine refresh (which rebuilds `nodes`) doesn't
+    // yank the viewport out from under the user.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusNonce, flow]);
 
   return (
     <ReactFlow
@@ -318,6 +358,20 @@ export default function DagView() {
       );
     },
     [setSearchParams],
+  );
+
+  // Selecting from the LEFT LIST bumps this nonce so the canvas pans to the
+  // (possibly off-screen) node; canvas clicks go through setSelectedId only
+  // and leave the nonce alone, so they don't trigger a re-pan. Lives in state
+  // (not the URL) — it's an ephemeral "focus now" pulse, not view state worth
+  // persisting across tab switches.
+  const [focusNonce, setFocusNonce] = useState(0);
+  const selectFromList = useCallback(
+    (id: string) => {
+      setSelectedId(id);
+      setFocusNonce((n) => n + 1);
+    },
+    [setSelectedId],
   );
 
   // Shell 拿到 allAliveAgents 是 cross-workspace 的，但我们要这个 workspace
@@ -604,7 +658,14 @@ export default function DagView() {
           <div className="flex flex-col gap-2 font-caption text-xs">
             <div className="flex items-center gap-2">
               <svg width="36" height="10">
-                <line x1="0" y1="5" x2="36" y2="5" stroke="#2E8B57" strokeWidth="1.75" />
+                <line
+                  x1="0"
+                  y1="5"
+                  x2="36"
+                  y2="5"
+                  stroke="var(--color-state-success)"
+                  strokeWidth="1.75"
+                />
               </svg>
               <span className="text-foreground-secondary">{t("dag.satisfied")}</span>
             </div>
@@ -615,7 +676,7 @@ export default function DagView() {
                   y1="5"
                   x2="36"
                   y2="5"
-                  stroke="#C77A1F"
+                  stroke="var(--color-state-warning)"
                   strokeWidth="1.75"
                   strokeDasharray="6 4"
                 />
@@ -629,7 +690,7 @@ export default function DagView() {
                   y1="5"
                   x2="36"
                   y2="5"
-                  stroke="#94a3b8"
+                  stroke="var(--color-state-idle)"
                   strokeWidth="1.25"
                   opacity="0.7"
                 />
@@ -670,7 +731,7 @@ export default function DagView() {
             {filteredAgents.map((a) => (
               <li key={a.agent_id}>
                 <button
-                  onClick={() => setSelectedId(a.agent_id)}
+                  onClick={() => selectFromList(a.agent_id)}
                   className={cn(
                     "flex w-full items-center gap-2 rounded px-2 py-1 text-left",
                     selectedId === a.agent_id
@@ -765,6 +826,7 @@ export default function DagView() {
               selectedId={selectedId}
               onSelect={setSelectedId}
               showMinimap={filteredAgents.length > 4}
+              focusNonce={focusNonce}
             />
           </ReactFlowProvider>
         )}

@@ -519,6 +519,21 @@ pub fn default_plugins_dir() -> PathBuf {
             return candidate;
         }
     }
+    // Last-resort bare-relative fallback. In the packaged app CWD is `/`, so this
+    // resolves to `/cli-plugins` — which does not exist — and `load_layered`
+    // overlays NOTHING onto the compiled-in builtins. Tolerable HERE only because
+    // claude/codex are embedded (`PluginRegistry::builtin()`), but a silent miss
+    // masks a broken install (env/manifest both failed to resolve). Warn ONCE so
+    // release self-checks catch it instead of debugging it live.
+    static WARN_ONCE: std::sync::Once = std::sync::Once::new();
+    WARN_ONCE.call_once(|| {
+        tracing::warn!(
+            "FLOCKMUX_CLI_PLUGINS_DIR unset and CARGO_MANIFEST_DIR-relative `cli-plugins/` not \
+             found; falling back to CWD-relative `cli-plugins` — unreliable under the installed \
+             app (CWD=/). Set FLOCKMUX_CLI_PLUGINS_DIR (Tauri sidecar) or rely on the embedded \
+             builtin plugins."
+        );
+    });
     PathBuf::from("cli-plugins")
 }
 

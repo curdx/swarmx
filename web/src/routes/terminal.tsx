@@ -26,6 +26,26 @@ import { Button } from "@/components/ui/button";
  *  back reattaches to the same server-side shell instead of spawning a fresh
  *  one — and each workspace keeps its own shell. */
 const SID_PREFIX = "flockmux.terminal.session:";
+
+/** Once the user confirms the "open a real shell" prompt, we remember it for the
+ *  whole tab session so switching workspaces just rebuilds the connection instead
+ *  of re-prompting every time. Honesty is preserved: the connect effect still
+ *  surfaces a real backend/PTY failure even when this flag is set. */
+const CONFIRMED_KEY = "flockmux.terminal.confirmed";
+function readConfirmed(): boolean {
+  try {
+    return sessionStorage.getItem(CONFIRMED_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+function persistConfirmed(): void {
+  try {
+    sessionStorage.setItem(CONFIRMED_KEY, "1");
+  } catch {
+    /* sessionStorage unavailable — fall back to in-memory state only */
+  }
+}
 function terminalSessionId(wsId: string): string {
   const key = SID_PREFIX + wsId;
   try {
@@ -47,22 +67,34 @@ export default function TerminalRoute() {
   const { t } = useTranslation();
   const { workspaces, wsId, setWsId, ready, error } = useToolWorkspaces();
   const hostRef = useRef<HTMLDivElement>(null);
-  const [armed, setArmed] = useState(false);
+  // Confirmed once per tab session: switching workspaces afterwards rebuilds the
+  // connection without re-prompting (see CONFIRMED_KEY).
+  const [armed, setArmed] = useState(readConfirmed);
   // Set true when the socket drops (onclose/onerror); drives the reconnect banner.
   const [wsClosed, setWsClosed] = useState(false);
+  // Connection phase mirrored into a role="status" live region so screen readers
+  // hear state changes (the xterm canvas is invisible to them).
+  const [connPhase, setConnPhase] = useState<"connecting" | "connected" | "disconnected">(
+    "connecting",
+  );
   // Bumped by the reconnect button to re-run the connect effect even when
   // `armed` is already true.
   const [reconnectNonce, setReconnectNonce] = useState(0);
   const activeWs = workspaces.find((w) => w.id === wsId) ?? null;
 
+  // Switching workspace just rebuilds the connection (the connect effect depends
+  // on `wsId`); don't re-prompt. We only clear the stale "disconnected" banner so
+  // the new shell starts from a clean status — a real failure re-sets it.
   useEffect(() => {
-    setArmed(false);
     setWsClosed(false);
+    setConnPhase("connecting");
   }, [wsId]);
 
   useEffect(() => {
     // Wait until the workspace list resolved so we attach to the right shell.
-    if (!ready || !armed) return;
+    // If the backend is known-down, don't open a doomed socket — the armed
+    // branch surfaces the backend-down banner honestly instead.
+    if (!ready || !armed || error) return;
     const host = hostRef.current;
     if (!host) return;
     setWsClosed(false);
@@ -96,6 +128,7 @@ export default function TerminalRoute() {
     };
 
     ws.onopen = () => {
+      setConnPhase("connected");
       term.focus();
       sendResize();
     };
@@ -105,10 +138,12 @@ export default function TerminalRoute() {
     };
     ws.onerror = () => {
       term.write("\r\n\x1b[31m[连接出错]\x1b[0m\r\n");
+      setConnPhase("disconnected");
       setWsClosed(true);
     };
     ws.onclose = () => {
       term.write("\r\n\x1b[90m[session closed]\x1b[0m\r\n");
+      setConnPhase("disconnected");
       setWsClosed(true);
     };
 
@@ -119,6 +154,7 @@ export default function TerminalRoute() {
       } else {
         // Don't silently swallow keystrokes — tell the user nothing was sent.
         term.write("\r\n\x1b[33m[未连接，输入未发送]\x1b[0m\r\n");
+        setConnPhase("disconnected");
         setWsClosed(true);
       }
     });
@@ -132,7 +168,7 @@ export default function TerminalRoute() {
       ws.close();
       term.dispose();
     };
-  }, [wsId, ready, armed, reconnectNonce]);
+  }, [wsId, ready, armed, error, reconnectNonce]);
 
   return (
     <div className="flex h-full flex-col">
@@ -149,17 +185,35 @@ export default function TerminalRoute() {
       </header>
       {armed ? (
         <div className="flex min-h-0 flex-1 flex-col">
-          {wsClosed && (
+          {/* Mirror connection state into an sr-only live region so screen readers
+              announce connect/disconnect — the xterm canvas is invisible to them. */}
+          <span role="status" aria-live="polite" className="sr-only">
+            {error
+              ? t("terminal.statusFailed", { defaultValue: "无法连接到后端" })
+              : connPhase === "connected"
+                ? t("terminal.statusConnected", { defaultValue: "终端已连接" })
+                : connPhase === "disconnected"
+                  ? t("terminal.statusDisconnected", { defaultValue: "终端连接已断开" })
+                  : t("terminal.statusConnecting", { defaultValue: "正在连接终端…" })}
+          </span>
+          {(wsClosed || error) && (
             <div className="flex items-center gap-3 border-b border-border-subtle bg-status-warning-soft px-4 py-2">
               <span className="font-caption text-xs text-status-warning">
-                {t("terminal.disconnected", { defaultValue: "连接已断开" })}
+                {error
+                  ? t("terminal.backendDown", {
+                      defaultValue:
+                        "连接不上后端 (127.0.0.1:7777)，无法打开终端。请确认 flockmux 服务在运行。",
+                    })
+                  : t("terminal.disconnected", { defaultValue: "连接已断开" })}
               </span>
               <Button
                 size="sm"
                 variant="outline"
                 className="ml-auto gap-1.5"
+                disabled={!!error}
                 onClick={() => {
                   setWsClosed(false);
+                  setConnPhase("connecting");
                   setReconnectNonce((n) => n + 1);
                 }}
               >
@@ -168,7 +222,12 @@ export default function TerminalRoute() {
               </Button>
             </div>
           )}
-          <div ref={hostRef} className="min-h-0 flex-1 overflow-hidden bg-[#0d0d0d] p-2" />
+          <div
+            ref={hostRef}
+            role="group"
+            aria-label={t("terminal.hostLabel", { defaultValue: "终端" })}
+            className="min-h-0 flex-1 overflow-hidden bg-[#0d0d0d] p-2"
+          />
         </div>
       ) : (
         <div className="flex min-h-0 flex-1 items-center justify-center bg-surface-primary px-6">
@@ -199,7 +258,12 @@ export default function TerminalRoute() {
             </div>
             <Button
               className="self-start gap-1.5"
-              onClick={() => ready && !error && setArmed(true)}
+              onClick={() => {
+                if (!ready || error) return;
+                persistConfirmed();
+                setConnPhase("connecting");
+                setArmed(true);
+              }}
               disabled={!ready || !!error}
             >
               <TerminalIcon className="size-3.5" />

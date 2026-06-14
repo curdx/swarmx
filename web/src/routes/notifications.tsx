@@ -13,7 +13,8 @@
  * batch of recent messages + blackboard entries to seed the list).
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import {
@@ -60,7 +61,29 @@ interface Notif {
   title: string;
   body?: string;
   at: number;
+  /** Workspace this notif belongs to (FK into the workspaces table), resolved
+   *  when the notif is built so a card click can deep-link `/chat/:slug`,
+   *  mirroring the bell popover. Absent when no workspace resolves (e.g. a
+   *  system message or an agent that spawned after the last refresh). */
+  workspaceId?: string;
 }
+
+// Hoisted out of render: these were rebuilt for every <li> on every render.
+// Static maps from notif kind → badge classes / lucide icon.
+const KIND_BG: Record<NotifKind, string> = {
+  message: "bg-state-info/15 text-state-info",
+  blackboard: "bg-accent-primary-soft text-accent-primary-deep",
+  state: "bg-state-wake/20 text-state-wake",
+  error: "bg-status-danger-soft text-status-danger",
+  completed: "bg-status-success-soft text-status-success",
+};
+const KIND_ICON: Record<NotifKind, typeof Bell> = {
+  message: MessageSquare,
+  blackboard: Inbox,
+  state: SettingsIcon,
+  error: CircleAlert,
+  completed: CheckCircle2,
+};
 
 const READ_KEY = "flockmux:notif:read:v1";
 
@@ -262,6 +285,116 @@ function msgIdOf(notifId: string): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+// notif kind → localized type word, for the card's screen-reader label.
+const KIND_ARIA_KEY: Record<NotifKind, string> = {
+  message: "notifications.typeMessage",
+  blackboard: "notifications.typeBlackboard",
+  state: "notifications.typeState",
+  error: "notifications.typeError",
+  completed: "notifications.typeCompleted",
+};
+
+/** One notification card. Memoized (the list re-renders on every live event /
+ *  read-state change; a stable card row skips re-rendering when its own props
+ *  didn't change). The whole card is a focusable, Enter/Space-activatable
+ *  button-role element that jumps to the originating workspace — previously
+ *  only the X button was reachable by keyboard. The X stays a nested control
+ *  (stops propagation so dismissing doesn't also navigate). */
+const NotifCard = memo(function NotifCard({
+  n,
+  isRead,
+  t,
+  onActivate,
+  onMarkRead,
+}: {
+  n: Notif;
+  isRead: boolean;
+  t: TFunction;
+  onActivate: (n: Notif) => void;
+  onMarkRead: (id: string) => void;
+}) {
+  const Icon = KIND_ICON[n.kind];
+  const timeLabel = resolveTime(fmtTime(n.at), t);
+  const ariaLabel = t("notifications.cardAria", {
+    type: t(KIND_ARIA_KEY[n.kind]),
+    time: timeLabel,
+    unread: isRead ? "" : t("notifications.cardAriaUnread"),
+    defaultValue: "{{type}}通知 · {{time}}{{unread}}",
+  });
+  return (
+    <li
+      className={cn(
+        "flex items-start rounded-lg border border-border-subtle bg-surface-elevated transition-colors",
+        // unread 之前用整张 bg-surface-accent-tint — light 下还
+        // 行，dark 下解析成 blue-900 整片蓝海，视觉太重。改成
+        // Slack / Mail / Notion 同款 "左侧 accent bar" 风：卡片
+        // 主背景保持 surface-elevated（跟 read 一致），unread 只
+        // 用左边 2px 蓝条标识 + 右上 dot，subtle 但能扫到。
+        !isRead && "border-l-2 border-l-accent-primary",
+      )}
+    >
+      {/* The card body itself is the focusable / Enter|Space-activatable
+          control that jumps to the workspace; the X dismiss is a SIBLING (not a
+          descendant) so we don't nest a button inside a button. */}
+      <div
+        role="button"
+        tabIndex={0}
+        aria-label={ariaLabel}
+        onClick={() => onActivate(n)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onActivate(n);
+          }
+        }}
+        className="flex min-w-0 flex-1 cursor-pointer items-start gap-3 rounded-lg px-3 py-2.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-primary hover:bg-surface-tertiary"
+      >
+        <span
+          className={cn(
+            "flex size-7 shrink-0 items-center justify-center rounded-md",
+            KIND_BG[n.kind],
+          )}
+        >
+          <Icon className="size-3.5" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <span className="truncate font-heading text-sm font-semibold text-foreground-primary">
+              {n.title}
+            </span>
+            <span className="ml-auto font-caption text-[10px] text-foreground-tertiary">
+              {timeLabel}
+            </span>
+          </div>
+          {n.body && (
+            <p className="mt-1 line-clamp-2 font-caption text-[11px] text-foreground-secondary">
+              {n.body}
+            </p>
+          )}
+          <div className="mt-1 flex items-center gap-2 font-caption text-[10px] text-foreground-tertiary">
+            <span className="font-mono">{n.agent}</span>
+            {!isRead && (
+              <span className="size-1.5 rounded-full bg-accent-primary" />
+            )}
+          </div>
+        </div>
+      </div>
+      {!isRead && (
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={() => onMarkRead(n.id)}
+          aria-label={t("notifications.markRead")}
+          title={t("notifications.markRead")}
+          className="mt-2 mr-1 size-8 shrink-0 text-foreground-tertiary hover:text-foreground-primary"
+        >
+          <X className="size-3" />
+        </Button>
+      )}
+    </li>
+  );
+});
+
 export default function NotificationsRoute() {
   const { t } = useTranslation();
   const [items, setItems] = useState<Notif[]>([]);
@@ -287,6 +420,11 @@ export default function NotificationsRoute() {
   // chips (covers exited agents too — /api/agent returns them). Same ref
   // pattern as wsRef so the live SwarmFeed closure sees the latest map.
   const roleRef = useRef<Map<string, string>>(new Map());
+  // agent_id → workspace_id (FK), so a card click can deep-link `/chat/:slug`
+  // for the originating agent — same resolution the bell popover does. Held in
+  // a ref so the live SwarmFeed closure sees the latest map without resubscribe.
+  const agentWsRef = useRef<Map<string, string>>(new Map());
+  const navigate = useNavigate();
 
   const seed = useCallback(async () => {
     // In-flight guard: drop overlapping seeds (rapid clicks, or a reconnect
@@ -303,6 +441,11 @@ export default function NotificationsRoute() {
       ]);
       wsRef.current = wss;
       roleRef.current = buildRoleLookup(agents);
+      const agentWs = new Map<string, string>();
+      for (const a of agents as AgentInfo[]) {
+        if (a.workspace_id) agentWs.set(a.agent_id, a.workspace_id);
+      }
+      agentWsRef.current = agentWs;
       const fromMsg: Notif[] = (msgs as MessageRecord[])
         .filter((m) => !isHiddenWake(m))
         .map((m) => {
@@ -314,6 +457,7 @@ export default function NotificationsRoute() {
             title: c.title,
             body: notifBody(m.kind, m.body, t),
             at: m.sent_at,
+            workspaceId: agentWs.get(m.from_agent),
           };
         });
       const fromBb: Notif[] = (bb as BlackboardEntry[])
@@ -333,6 +477,9 @@ export default function NotificationsRoute() {
             title: h.title,
             body: h.context ?? `sha256 ${e.sha256.slice(0, 8)}`,
             at: e.at,
+            // The blackboard key is `{ws-id}/{slug}/{file}` — the leading
+            // segment IS the workspace id, so a card click can jump to it.
+            workspaceId: e.path.split("/")[0] || undefined,
           };
         });
       const all = [...fromMsg, ...fromBb].sort((a, b) => b.at - a.at);
@@ -380,6 +527,7 @@ export default function NotificationsRoute() {
             title: c.title,
             body: notifBody(ev.kind, ev.body, t),
             at: ev.sent_at,
+            workspaceId: agentWsRef.current.get(ev.from_agent),
           };
         } else if (ev.type === "blackboard_changed") {
           if (isNoisyBlackboard(ev.path)) return prev;
@@ -396,6 +544,7 @@ export default function NotificationsRoute() {
             title: h.title,
             body: h.context ?? `sha256 ${ev.sha256.slice(0, 8)}`,
             at: ev.at,
+            workspaceId: ev.path.split("/")[0] || undefined,
           };
           const without = prev.filter((p) => p.id !== updated.id);
           return [updated, ...without].slice(0, 200);
@@ -403,9 +552,13 @@ export default function NotificationsRoute() {
           next = {
             id: `state-${ev.agent_id}-${ev.state}-${Date.now()}`,
             kind: ev.state === "exited" ? "completed" : "state",
-            agent: ev.agent_id,
-            title: `${ev.agent_id} → ${ev.state}`,
+            agent: friendlyAgent(ev.agent_id, roleRef.current, t),
+            title: `${friendlyAgent(ev.agent_id, roleRef.current, t)} → ${t(
+              "notifications.state." + ev.state,
+              { defaultValue: ev.state },
+            )}`,
             at: Date.now(),
+            workspaceId: agentWsRef.current.get(ev.agent_id),
           };
         }
         if (!next) return prev;
@@ -417,7 +570,7 @@ export default function NotificationsRoute() {
     onReconnect: () => seed(),
   });
 
-  const markRead = (id: string) => {
+  const markRead = useCallback((id: string) => {
     setRead((prev) => {
       const next = new Set(prev);
       next.add(id);
@@ -429,7 +582,22 @@ export default function NotificationsRoute() {
     // the ones chat counts; other ids no-op server-side). Best-effort.
     const mid = msgIdOf(id);
     if (mid != null) api.markMessagesRead("user", [mid]).catch(() => {});
-  };
+  }, []);
+
+  // Clicking a card jumps to the originating workspace's chat (mirrors the bell
+  // popover) and marks the notif read in the same gesture. Falls back to a
+  // no-op jump when no workspace resolves — the card is still keyboard-read via
+  // the X button, so a missing target degrades to "just mark read".
+  const handleCardClick = useCallback(
+    (n: Notif) => {
+      markRead(n.id);
+      const ws = n.workspaceId
+        ? wsRef.current.find((w) => w.id === n.workspaceId)
+        : undefined;
+      if (ws) navigate(`/chat/${ws.slug}/ledger`);
+    },
+    [markRead, navigate],
+  );
   const doMarkAllRead = () => {
     setRead((prev) => {
       const next = new Set(prev);
@@ -482,7 +650,10 @@ export default function NotificationsRoute() {
             {t("notifications.title")}
           </h1>
           <span className="font-caption text-[10px] text-foreground-tertiary">
-            {t("notifications.subtitle", { count: totalUnread })}
+            {t("notifications.subtitleUnread", {
+              count: totalUnread,
+              defaultValue: "{{count}} 条未读",
+            })}
           </span>
         </div>
         <span className="hidden flex-1 sm:block" />
@@ -576,80 +747,16 @@ export default function NotificationsRoute() {
           </div>
         ) : (
           <ul className="flex flex-col gap-1.5">
-            {filtered.map((n) => {
-              const isRead = read.has(n.id);
-              const kindBg: Record<NotifKind, string> = {
-                message: "bg-state-info/15 text-state-info",
-                blackboard: "bg-accent-primary-soft text-accent-primary-deep",
-                state: "bg-state-wake/20 text-state-wake",
-                error: "bg-status-danger-soft text-status-danger",
-                completed: "bg-status-success-soft text-status-success",
-              };
-              const kindIcon: Record<NotifKind, typeof Bell> = {
-                message: MessageSquare,
-                blackboard: Inbox,
-                state: SettingsIcon,
-                error: CircleAlert,
-                completed: CheckCircle2,
-              };
-              const Icon = kindIcon[n.kind];
-              return (
-                <li
-                  key={n.id}
-                  className={cn(
-                    "flex items-start gap-3 rounded-lg border border-border-subtle bg-surface-elevated px-3 py-2.5",
-                    // unread 之前用整张 bg-surface-accent-tint — light 下还
-                    // 行，dark 下解析成 blue-900 整片蓝海，视觉太重。改成
-                    // Slack / Mail / Notion 同款 "左侧 accent bar" 风：卡片
-                    // 主背景保持 surface-elevated（跟 read 一致），unread 只
-                    // 用左边 2px 蓝条标识 + 右上 dot，subtle 但能扫到。
-                    !isRead && "border-l-2 border-l-accent-primary",
-                  )}
-                >
-                  <span
-                    className={cn(
-                      "flex size-7 shrink-0 items-center justify-center rounded-md",
-                      kindBg[n.kind],
-                    )}
-                  >
-                    <Icon className="size-3.5" />
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <span className="truncate font-heading text-sm font-semibold text-foreground-primary">
-                        {n.title}
-                      </span>
-                      <span className="ml-auto font-caption text-[10px] text-foreground-tertiary">
-                        {resolveTime(fmtTime(n.at), t)}
-                      </span>
-                    </div>
-                    {n.body && (
-                      <p className="mt-1 line-clamp-2 font-caption text-[11px] text-foreground-secondary">
-                        {n.body}
-                      </p>
-                    )}
-                    <div className="mt-1 flex items-center gap-2 font-caption text-[10px] text-foreground-tertiary">
-                      <span className="font-mono">{n.agent}</span>
-                      {!isRead && (
-                        <span className="size-1.5 rounded-full bg-accent-primary" />
-                      )}
-                    </div>
-                  </div>
-                  {!isRead && (
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      onClick={() => markRead(n.id)}
-                      aria-label={t("notifications.markRead")}
-                      title={t("notifications.markRead")}
-                      className="size-8 text-foreground-tertiary hover:text-foreground-primary"
-                    >
-                      <X className="size-3" />
-                    </Button>
-                  )}
-                </li>
-              );
-            })}
+            {filtered.map((n) => (
+              <NotifCard
+                key={n.id}
+                n={n}
+                isRead={read.has(n.id)}
+                t={t}
+                onActivate={handleCardClick}
+                onMarkRead={markRead}
+              />
+            ))}
           </ul>
         )}
       </div>

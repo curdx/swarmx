@@ -388,6 +388,20 @@ pub fn default_spells_dir() -> PathBuf {
             return candidate;
         }
     }
+    // Last-resort bare-relative fallback. In the packaged app CWD is `/`, so this
+    // resolves to `/spells` — which does not exist — and the registry silently
+    // overlays NOTHING onto the compiled-in builtins. That's tolerable HERE only
+    // because the `init` spell is embedded (`SpellRegistry::builtin()`), but a
+    // silent miss masks a broken install (env/manifest both failed to resolve).
+    // Warn ONCE so release self-checks catch it instead of debugging it live.
+    static WARN_ONCE: std::sync::Once = std::sync::Once::new();
+    WARN_ONCE.call_once(|| {
+        tracing::warn!(
+            "FLOCKMUX_SPELLS_DIR unset and CARGO_MANIFEST_DIR-relative `spells/` not found; \
+             falling back to CWD-relative `spells` — unreliable under the installed app (CWD=/). \
+             Set FLOCKMUX_SPELLS_DIR (Tauri sidecar) or rely on the embedded builtin spells."
+        );
+    });
     PathBuf::from("spells")
 }
 

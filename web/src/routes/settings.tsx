@@ -159,6 +159,15 @@ export default function SettingsRoute() {
   // /settings is mounted. Skips ⌘K (palette) and modifier-only combos.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // Don't hijack number keys while typing in a field (e.g. model id).
+      const el = e.target as HTMLElement;
+      if (
+        el &&
+        (el.tagName === "INPUT" ||
+          el.tagName === "TEXTAREA" ||
+          el.isContentEditable)
+      )
+        return;
       const hasModifier = e.metaKey || e.ctrlKey;
       if (!hasModifier || e.shiftKey || e.altKey) return;
       const n = parseInt(e.key, 10);
