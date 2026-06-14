@@ -1372,6 +1372,14 @@ pub(crate) fn spawn_bootstrap_inject(
         }
 
         let input_tx = slot_lock.lock().input_tx.clone();
+        // SECURITY: strip ANSI / terminal-control bytes before they hit the PTY.
+        // The prompt is machine-rendered from spell/role/worker text that may carry
+        // ESC/CSI/OSC sequences or other control chars; injected verbatim they let
+        // the source manipulate the agent's TUI and the user's terminal (incl.
+        // INVISIBLE prompt injection that hides what the model was told). Keeps
+        // visible text + `\n`/`\t`; drops `\r` (would prematurely submit the paste)
+        // and all other control codes. See `spells::sanitize_pty_inject`.
+        let prompt = crate::spells::sanitize_pty_inject(&prompt);
         // Diagnostic: flag a surviving `{task}` / `{<role>_id}` placeholder
         // (computed before `prompt` is consumed by `into_bytes`).
         let has_unsubst = prompt.contains("{task}")
@@ -1473,6 +1481,37 @@ pub async fn spawn_worker(
                 Json(json!({"error": format!("unknown workspace_id: {}", req.workspace_id)})),
             )
         })?;
+
+    // SECURITY: authorize the caller. `caller_agent_id` is the context this
+    // spawn inherits (thread/cwd/blackboard namespace), so an unvalidated id
+    // would let a caller borrow ANY workspace/thread as context — a cross-
+    // workspace escalation. Require that the agent (a) exists and (b) belongs to
+    // the SAME workspace we're spawning into. `get_workspace_id_for_agent`
+    // returns `None` both when the row is absent and when its `workspace_id` is
+    // NULL; both are unauthorized here (an agent with no workspace cannot
+    // authorize a spawn into a specific one), so collapsing them is correct.
+    let caller_ws = state
+        .store
+        .get_workspace_id_for_agent(req.caller_agent_id.clone())
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": format!("caller agent lookup failed: {e}")})),
+            )
+        })?;
+    match caller_ws {
+        Some(ws_id) if ws_id == req.workspace_id => {}
+        // Don't leak whether the agent exists vs. lives elsewhere — same 403.
+        _ => {
+            return Err((
+                StatusCode::FORBIDDEN,
+                Json(json!({
+                    "error": "caller_agent_id is not a member of this workspace"
+                })),
+            ));
+        }
+    }
 
     // Inherit the caller's direction (thread): a worker runs in the same
     // thread — and thus the same worktree cwd — as the orchestrator/worker
@@ -2101,10 +2140,17 @@ pub async fn run_spell(
         let mut role_deps: HashMap<String, Vec<String>> = HashMap::new();
         for resolved in &resolved_agents {
             role_deps.insert(resolved.role.clone(), resolved.depends_on.clone());
-            // The role-registry holds the canonical handoff_signal; for
-            // inline-only agents (no role_ref) we leave it blank.
-            if let Some(r) = state.roles.get(&resolved.role) {
-                role_handoff.insert(resolved.role.clone(), r.manifest.handoff_signal.clone());
+            // Producer key comes off the RESOLVED agent, which carries the
+            // referenced role's `handoff_signal` (set in `resolve_agent` via
+            // `role_ref`). Re-deriving it here via `state.roles.get(&resolved.role)`
+            // — keyed on the SYMBOLIC role name — was the cycle-detection blind
+            // spot: a spell that renames a role (`role = "fe"`, `role_ref =
+            // "frontend"`) makes that name-lookup MISS, so the producer's key never
+            // entered the graph and a role↔role loop through it went undetected.
+            // Empty (a truly inline agent with no registered role) → no producer
+            // edge, which the detector already treats as terminal.
+            if !resolved.handoff_signal.is_empty() {
+                role_handoff.insert(resolved.role.clone(), resolved.handoff_signal.clone());
             }
         }
         // M6d-3: a spell can opt out of cycle detection if its prompts
@@ -2371,11 +2417,14 @@ pub async fn run_spell(
         // write from this run's agent" vs "stale leftover from a
         // previous run on the same blackboard". Empty signal (inline
         // role, planner) → register_exit_key is a no-op.
-        let handoff_signal = state
-            .roles
-            .get(&resolved.role)
-            .map(|r| r.manifest.handoff_signal.clone())
-            .unwrap_or_default();
+        //
+        // Use the RESOLVED agent's handoff_signal (same source as the cycle
+        // graph above) instead of re-looking-up by `resolved.role`: a renamed
+        // `role_ref` agent name-lookup-misses here, which used to register an
+        // EMPTY exit-key, so the producer's death never synthesized
+        // `<signal>.error` and dependents hung. Off the resolved template it's
+        // correct for both renamed and inline cases.
+        let handoff_signal = resolved.handoff_signal.clone();
         // Render the producer's signal the same way (F2) so a workspace-scoped
         // handoff_signal lines up with dependents' rendered depends_on.
         let handoff_signal = spells::render_prompt(
@@ -2484,6 +2533,56 @@ pub struct OptimizePromptResponse {
     pub changed: bool,
 }
 
+/// Per-stream cap (bytes) for an optimize/print child's stdout & stderr.
+/// `wait_with_output()` buffers to EOF unbounded — a runaway or malicious CLI
+/// emitting gigabytes would OOM the server. A correct rewrite is a few KB; 1 MiB
+/// is generous headroom while bounding worst-case memory to ~2 MiB (out+err).
+const OPTIMIZE_OUTPUT_CAP: u64 = 1024 * 1024;
+
+/// Drain a child's piped stdout & stderr concurrently with `wait()`, each read
+/// capped at `OPTIMIZE_OUTPUT_CAP` bytes. Replaces `child.wait_with_output()`,
+/// which has no size limit. Both pipes must be drained concurrently with the
+/// wait or a child filling one pipe past its OS buffer would deadlock; the two
+/// `.take(cap)` readers + the wait run on one task each via `tokio::join!`.
+/// Output past the cap is silently dropped (the child keeps running until exit;
+/// `kill_on_drop` / the surrounding timeout still bound its lifetime).
+async fn wait_with_capped_output(
+    mut child: tokio::process::Child,
+) -> std::io::Result<std::process::Output> {
+    use tokio::io::AsyncReadExt;
+
+    let mut stdout_pipe = child.stdout.take();
+    let mut stderr_pipe = child.stderr.take();
+
+    let read_capped = |pipe: Option<tokio::process::ChildStdout>| async move {
+        let mut buf = Vec::new();
+        if let Some(p) = pipe {
+            // `.take(cap)` stops at the limit even for an endless stream.
+            let _ = p.take(OPTIMIZE_OUTPUT_CAP).read_to_end(&mut buf).await;
+        }
+        buf
+    };
+    let read_capped_err = |pipe: Option<tokio::process::ChildStderr>| async move {
+        let mut buf = Vec::new();
+        if let Some(p) = pipe {
+            let _ = p.take(OPTIMIZE_OUTPUT_CAP).read_to_end(&mut buf).await;
+        }
+        buf
+    };
+
+    let (status, stdout, stderr) = tokio::join!(
+        child.wait(),
+        read_capped(stdout_pipe.take()),
+        read_capped_err(stderr_pipe.take()),
+    );
+
+    Ok(std::process::Output {
+        status: status?,
+        stdout,
+        stderr,
+    })
+}
+
 /// POST /api/prompt/optimize — one-shot, headless prompt rewrite for the chat
 /// composer's 「优化」 button.
 ///
@@ -2571,7 +2670,7 @@ pub async fn optimize_prompt(
     };
 
     let out =
-        match tokio::time::timeout(std::time::Duration::from_secs(45), child.wait_with_output())
+        match tokio::time::timeout(std::time::Duration::from_secs(45), wait_with_capped_output(child))
             .await
         {
             Ok(Ok(o)) => o,
@@ -2892,12 +2991,18 @@ pub struct FileQuery {
 /// referenced in a chat message / composer.
 ///
 /// SECURITY (loopback single-user, but still a real surface): Host must be
-/// loopback; `canonicalize` resolves `..`/symlinks and 404s on missing; an
-/// extension allowlist + magic-byte sniff means ONLY real image bytes ever ship
-/// (a renamed secret or a prompt-injected non-image path is rejected); 25 MB
-/// cap; `nosniff`; SVG gets a locked-down CSP. We deliberately do NOT confine to
-/// workspace roots — screenshots live anywhere (~/Desktop, /tmp) and images
-/// aren't secrets, so "serve real images only" is the right balance here.
+/// loopback; a hard credentials/keys denylist (`files::is_sensitive`) is enforced
+/// on the canonical path so SSH keys / `.env` / token files are never served even
+/// if they sniff as an image; `canonicalize` resolves `..`/symlinks and 404s on
+/// missing; an extension allowlist + magic-byte sniff means ONLY real image bytes
+/// ever ship (a renamed secret or a prompt-injected non-image path is rejected,
+/// so no *text* secret can leak through this endpoint at all); 25 MB cap;
+/// `nosniff`; SVG gets a locked-down CSP. We deliberately do NOT add the
+/// browser-`Origin` (`is_ui_request`) gate that `files::read_file` uses — this is
+/// loaded via a no-cors `<img src>` that sends no `Origin`, so the gate would
+/// break every thumbnail once bundled. Nor do we confine to workspace roots:
+/// screenshots live anywhere (~/Desktop, /tmp) and images aren't secrets, so
+/// "serve real, non-sensitive images from anywhere" is the right balance here.
 pub async fn serve_file(
     headers: axum::http::HeaderMap,
     Query(q): Query<FileQuery>,
@@ -2910,6 +3015,23 @@ pub async fn serve_file(
         Ok(c) => c,
         Err(_) => return (StatusCode::NOT_FOUND, "not found").into_response(),
     };
+    // Hard credentials/keys/histories denylist on the CANONICAL path — the same
+    // backstop `routes::files` enforces on every read, reused here so a local
+    // process can't coax `/api/file` into serving a sensitive file even on the
+    // off chance its bytes happen to sniff as an image (e.g. an image dropped at
+    // a `.pem` name, or an entry inside `~/.ssh`). NOTE: unlike `files::read_file`
+    // we deliberately do NOT add an `is_ui_request` (browser-`Origin`) gate here:
+    // this endpoint is loaded via a plain `<img src>` (ImageAttachments.tsx), and
+    // a no-cors image GET carries NO `Origin` header — gating on it would 403
+    // every real thumbnail in the bundled app (the classic "works in dev, broken
+    // once installed" trap). The surviving controls — loopback host, magic-byte
+    // image sniff (so no text secret like an `.env`/SSH key ever ships, since it
+    // won't sniff as an image), this denylist, the 25 MB cap, and `nosniff` —
+    // hold the exposure to "a non-sensitive image file anywhere on disk", which
+    // is the documented balance (screenshots live in ~/Desktop, /tmp, etc.).
+    if super::files::is_sensitive(&canon) {
+        return (StatusCode::FORBIDDEN, "not found").into_response();
+    }
     match std::fs::metadata(&canon) {
         Ok(m) if m.is_file() => {
             if m.len() > 25 * 1024 * 1024 {

@@ -112,8 +112,19 @@ pub async fn set_task_status(
                 .into_response();
         }
     }
+    // TODO(lifecycle): setting status to "archived"/"done" only writes the
+    // human override — it does NOT stop the worker's shim/agent process. A
+    // user archiving a task expects the underlying work to halt. Wiring this
+    // to actually terminate the worker is a larger semantic change (kill the
+    // process, reconcile derived vs. overridden status) and is intentionally
+    // out of scope here.
     match state.store.set_task_status(agent_id, req.status).await {
-        Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))).into_response(),
+        Ok(true) => (StatusCode::OK, Json(json!({ "ok": true }))).into_response(),
+        Ok(false) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "no such task" })),
+        )
+            .into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": e.to_string() })),

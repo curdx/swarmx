@@ -161,7 +161,7 @@ fn jail_denied() -> axum::response::Response {
 /// `/api/files/read` into a reader for SSH keys, cloud creds, or the OAuth
 /// token in `~/.claude.json`. Matched on the CANONICAL path (callers canon
 /// first), so `..` / symlink tricks can't dodge it.
-fn is_sensitive(path: &Path) -> bool {
+pub(crate) fn is_sensitive(path: &Path) -> bool {
     let home = home();
     // Credential directories — no legitimate "browse my code" reason to enter.
     const DIRS: &[&str] = &[
@@ -310,6 +310,17 @@ pub async fn list_dir(
     .into_response()
 }
 
+/// Heuristic binary sniff for the text preview: any NUL byte ⇒ binary, so we
+/// don't ship a non-text file back as mojibake. Scans the WHOLE preview slice
+/// (caller passes `bytes[..min(len, MAX_READ_BYTES)]`, i.e. up to 512 KB), NOT a
+/// fixed head window. The previous code only checked the first 8 KB, so a binary
+/// whose first NUL fell past that head — a long ASCII/text preamble ahead of the
+/// binary payload (PDF, many container formats), or simply NUL-free for >8 KB —
+/// slipped through and was returned as garbage "text".
+fn looks_binary(slice: &[u8]) -> bool {
+    slice.contains(&0)
+}
+
 #[derive(Deserialize)]
 pub struct ReadQuery {
     path: String,
@@ -367,8 +378,7 @@ pub async fn read_file(
     let total = bytes.len();
     let truncated = total > MAX_READ_BYTES;
     let slice = &bytes[..total.min(MAX_READ_BYTES)];
-    // Heuristic: a NUL in the head ⇒ binary; don't return garbage as text.
-    let binary = slice.iter().take(8192).any(|&b| b == 0);
+    let binary = looks_binary(slice);
     if binary {
         return Json(json!({
             "path": path.to_string_lossy(),
@@ -392,6 +402,23 @@ pub async fn read_file(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn looks_binary_scans_whole_slice_not_just_head() {
+        // Pure text ⇒ not binary.
+        assert!(!looks_binary(b"hello world, just text\n"));
+        // NUL in the head ⇒ binary (the case the old code already caught).
+        assert!(looks_binary(b"\0\x01\x02PNG"));
+        // Regression: a NUL *past* the old 8 KB head window must still be caught.
+        // 16 KB of ASCII, then a NUL — the old `take(8192)` check returned false.
+        let mut buf = vec![b'a'; 16 * 1024];
+        buf.push(0);
+        assert!(looks_binary(&buf));
+        // A long NUL-free ASCII run stays text (no false positive).
+        assert!(!looks_binary(&vec![b'a'; 32 * 1024]));
+        // Empty slice is text, not binary.
+        assert!(!looks_binary(b""));
+    }
 
     #[test]
     fn is_within_any_component_wise() {

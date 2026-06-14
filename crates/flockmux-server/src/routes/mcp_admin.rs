@@ -127,9 +127,14 @@ pub async fn mcp_env(State(_s): State<AppState>) -> impl IntoResponse {
 struct Known {
     command: &'static str,
     args: &'static [&'static str],
-    /// 需要 API key 时，key 以这个 flag 追加在 args 末尾(如 "--api-key")；
-    /// None = 无需 key。
-    api_key_flag: Option<&'static str>,
+    /// 需要 API key 时，key 以这个**环境变量名**传给子进程(如
+    /// "CONTEXT7_API_KEY")；None = 无需 key。
+    ///
+    /// 安全:用 env 传 key,**不**把 key 拼进命令行 argv —— 否则
+    /// `ps -ef` / `/proc/<pid>/cmdline` 任何同机进程都能读到明文 key。
+    /// `claude mcp add -e KEY=val …` / `codex mcp add --env KEY=val …`
+    /// 都原生支持,落盘后存在 `mcpServers.<name>.env` / `[mcp_servers.<name>.env]`。
+    api_key_env: Option<&'static str>,
 }
 
 fn known(name: &str) -> Option<Known> {
@@ -138,24 +143,31 @@ fn known(name: &str) -> Option<Known> {
         "chrome-devtools" => Some(Known {
             command: "npx",
             args: &["-y", "chrome-devtools-mcp@latest"],
-            api_key_flag: None,
+            api_key_env: None,
         }),
-        // context7 all-clients docs: `npx -y @upstash/context7-mcp --api-key KEY`。
+        // context7 docs:支持用 CONTEXT7_API_KEY 环境变量传 key(官方 all-clients
+        // 示例里给的就是 `"env": {"CONTEXT7_API_KEY": "…"}`),优先于 --api-key。
         "context7" => Some(Known {
             command: "npx",
             args: &["-y", "@upstash/context7-mcp"],
-            api_key_flag: Some("--api-key"),
+            api_key_env: Some("CONTEXT7_API_KEY"),
         }),
         _ => None,
     }
 }
 
 fn valid_name(name: &str) -> bool {
-    !name.is_empty()
-        && name.len() <= 64
-        && name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    // 安全：name 会被原样塞进 `claude/codex mcp add/remove <name> …` 的参数位。
+    // 若允许以 '-' 开头,name 会被 CLI 当成 flag 解析(参数注入),例如名字
+    // `--help` / `-s` 之类能改变命令语义。所以:非空、≤64、仅 [A-Za-z0-9_-]、
+    // 且**首字符必须是字母或数字**(不得以 '-' 或 '_' 开头)。
+    let mut chars = name.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    name.len() <= 64
+        && first.is_ascii_alphanumeric()
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
 // ── 读现有配置 ──────────────────────────────────────────────────────
@@ -228,8 +240,15 @@ pub async fn mcp_status(State(_s): State<AppState>) -> impl IntoResponse {
 
 // ── key 复用：claude / codex 共用同一把 key ──────────────────────────
 // 装需密钥的 server 时若前端没传 key，就从「已经配过这个 server 的那个 CLI」
-// 的配置里把 `--api-key <key>` 取出来复用 —— 用户只需填一次。
+// 的配置里把 key 取出来复用 —— 用户只需填一次。
+//
+// key 现在通过环境变量传/存(见 `Known.api_key_env`),所以读取点是:
+//   claude:  mcpServers.<name>.env.<ENV>
+//   codex:   [mcp_servers.<name>.env] 段里的 <ENV> = "…"
+// 仍兼容历史上以 `--api-key <key>` 写进 args 的旧条目(回退解析),这样老用户
+// 升级后第一次还能把旧 key 复用过来。
 
+/// 兼容旧格式:从 args token 里抠出 `--api-key` 后的值。
 fn extract_key_after_flag(tokens: &[String]) -> Option<String> {
     for (i, t) in tokens.iter().enumerate() {
         if t == "--api-key" {
@@ -244,16 +263,24 @@ fn extract_key_after_flag(tokens: &[String]) -> Option<String> {
     None
 }
 
-/// claude ~/.claude.json → mcpServers[name].args 里的 --api-key 值。
+/// claude ~/.claude.json → mcpServers[name].env.<ENV>(优先),回退旧 args 格式。
 fn claude_key(name: &str) -> Option<String> {
+    let env_name = known(name).and_then(|k| k.api_key_env)?;
     let h = home()?;
     let txt = std::fs::read_to_string(h.join(".claude.json")).ok()?;
     let v: Value = serde_json::from_str(&txt).ok()?;
-    let args = v
-        .get("mcpServers")
-        .and_then(|m| m.get(name))
-        .and_then(|s| s.get("args"))
-        .and_then(|a| a.as_array())?;
+    let entry = v.get("mcpServers").and_then(|m| m.get(name))?;
+    // 首选:env 段里的环境变量值。
+    if let Some(key) = entry
+        .get("env")
+        .and_then(|e| e.get(env_name))
+        .and_then(|k| k.as_str())
+        .filter(|s| !s.is_empty())
+    {
+        return Some(key.to_string());
+    }
+    // 回退:历史上写进 args 的 `--api-key <key>`。
+    let args = entry.get("args").and_then(|a| a.as_array())?;
     let toks: Vec<String> = args
         .iter()
         .filter_map(|a| a.as_str().map(String::from))
@@ -261,33 +288,51 @@ fn claude_key(name: &str) -> Option<String> {
     extract_key_after_flag(&toks)
 }
 
-/// codex ~/.codex/config.toml → [mcp_servers.<name>] 段 args 行里的 --api-key 值。
+/// codex ~/.codex/config.toml → [mcp_servers.<name>.env] 段的 <ENV>(优先),
+/// 回退旧的 args 行内 `--api-key` 格式。
 fn codex_key(name: &str) -> Option<String> {
+    let env_name = known(name).and_then(|k| k.api_key_env)?;
     let h = home()?;
     let txt = std::fs::read_to_string(h.join(".codex").join("config.toml")).ok()?;
-    let header = format!("[mcp_servers.{name}]");
-    let mut in_section = false;
+    let main_header = format!("[mcp_servers.{name}]");
+    let env_header = format!("[mcp_servers.{name}.env]");
+    let mut in_main = false;
+    let mut in_env = false;
+    let mut legacy: Option<String> = None;
     for line in txt.lines() {
         let l = line.trim();
         if l.starts_with('[') {
-            in_section = l == header;
+            in_main = l == main_header;
+            in_env = l == env_header;
             continue;
         }
-        if in_section && l.contains("--api-key") {
-            // 按引号切：`"--api-key"` 后的下一段引号内内容(i+2)即 key 值。
+        // 首选:env 段里 `<ENV> = "…"`。
+        if in_env {
+            if let Some(rest) = l.strip_prefix(env_name) {
+                let rest = rest.trim_start();
+                if let Some(val) = rest.strip_prefix('=') {
+                    let key = val.trim().trim_matches('"');
+                    if !key.is_empty() {
+                        return Some(key.to_string());
+                    }
+                }
+            }
+        }
+        // 回退:旧的 args 行里 `"--api-key"` 后(i+2)的引号段。
+        if in_main && legacy.is_none() && l.contains("--api-key") {
             let toks: Vec<String> = l.split('"').map(String::from).collect();
             for (i, tk) in toks.iter().enumerate() {
                 if tk == "--api-key" {
                     if let Some(v) = toks.get(i + 2) {
                         if !v.is_empty() {
-                            return Some(v.clone());
+                            legacy = Some(v.clone());
                         }
                     }
                 }
             }
         }
     }
-    None
+    legacy
 }
 
 /// 任一 CLI 已配的 key —— 装到另一个 CLI 时复用(claude/codex 共用一把 key)。
@@ -297,15 +342,27 @@ fn recover_api_key(name: &str) -> Option<String> {
 
 /// 末 4 位以外打码，用于回显「已设置」状态而不泄露完整 key。
 fn mask_key(k: &str) -> String {
+    // 按**字符**取尾 4 个,不能用字节切片:多字节 UTF-8 key 的 `k.len()-4`
+    // 可能落在某个字符的中间字节上,`&k[..]` 会 panic → /api/mcp/status 500。
     let n = k.chars().count();
     if n <= 4 {
         "••••".to_string()
     } else {
-        format!("••••{}", &k[k.len().saturating_sub(4)..])
+        let tail: String = k.chars().skip(n - 4).collect();
+        format!("••••{tail}")
     }
 }
 
 // ── 装 / 卸：调 CLI 自己的 `mcp` 子命令 ──────────────────────────────
+
+/// 串行化所有 MCP admin 写操作(install/uninstall)。
+///
+/// install 是「先 `mcp remove`(忽略不存在)再 `mcp add`」两步,中间不持锁会
+/// 与并发的 install/uninstall 撞车:两个并发 install 可能交错成 remove-A →
+/// remove-B → add-A → add-B,或一边 add、另一边把它 remove 掉,落到底层
+/// `~/.claude.json` / `~/.codex/config.toml` 上还会有读改写竞争。loopback
+/// 单用户场景并发概率低,但代价只是一把进程内锁,直接串行化最稳。
+static ADMIN_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[derive(Deserialize)]
 pub struct McpMutate {
@@ -371,9 +428,12 @@ pub async fn mcp_install(
     let svc_command = crate::runtime_path::resolve_executable(k.command)
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_else(|| k.command.to_string());
-    // server 命令的 args，需要 key 时把 `--api-key <key>` 追加在末尾。
-    let mut svc_args: Vec<String> = k.args.iter().map(|s| s.to_string()).collect();
-    if let Some(flag) = k.api_key_flag {
+    // server 命令进 `--` 之后的 args(原样,不含 key)。
+    let svc_args: Vec<String> = k.args.iter().map(|s| s.to_string()).collect();
+    // 需要 key 的 server:解析出 key,用**环境变量**传(不进 argv,见
+    // `Known.api_key_env` 的安全说明)。env 段是 KEY=VALUE 串,放在 `--` 之前。
+    let mut env_pair: Option<String> = None;
+    if let Some(env_name) = k.api_key_env {
         let mut key = req.api_key.as_deref().unwrap_or("").trim().to_string();
         if key.is_empty() {
             // claude / codex 共用一把 key：前端没传就复用另一处已配的(用户只填一次)。
@@ -386,37 +446,43 @@ pub async fn mcp_install(
             )
                 .into_response();
         }
-        svc_args.push(flag.to_string());
-        svc_args.push(key);
+        env_pair = Some(format!("{env_name}={key}"));
     }
-    // claude: `mcp add <name> --scope user -- <cmd> <args...>`
-    // codex:  `mcp add <name> -- <cmd> <args...>`
+    // claude: `mcp add <name> --scope user [-e KEY=val] -- <cmd> <args...>`
+    // codex:  `mcp add <name> [--env KEY=val] -- <cmd> <args...>`
+    // 注意:env flag 必须在 `--` 之前(CLI 选项在位置参数之前)。
     let (bin, mut a): (&str, Vec<String>) = match req.cli.as_str() {
-        "claude" => (
-            "claude",
-            vec![
+        "claude" => {
+            let mut v = vec![
                 "mcp".into(),
                 "add".into(),
                 req.name.clone(),
                 "--scope".into(),
                 "user".into(),
-                "--".into(),
-                svc_command.clone(),
-            ],
-        ),
-        "codex" => (
-            "codex",
-            vec![
-                "mcp".into(),
-                "add".into(),
-                req.name.clone(),
-                "--".into(),
-                svc_command,
-            ],
-        ),
+            ];
+            if let Some(pair) = &env_pair {
+                v.push("-e".into());
+                v.push(pair.clone());
+            }
+            v.push("--".into());
+            v.push(svc_command.clone());
+            ("claude", v)
+        }
+        "codex" => {
+            let mut v = vec!["mcp".into(), "add".into(), req.name.clone()];
+            if let Some(pair) = &env_pair {
+                v.push("--env".into());
+                v.push(pair.clone());
+            }
+            v.push("--".into());
+            v.push(svc_command);
+            ("codex", v)
+        }
         _ => return (StatusCode::BAD_REQUEST, Json(json!({"error": "未知 CLI"}))).into_response(),
     };
     a.extend(svc_args);
+    // 串行化整段 upsert(remove + add),避免与并发 admin 写竞争。
+    let _guard = ADMIN_LOCK.lock().await;
     // upsert：先 remove(忽略「不存在」的失败)，让「改 key / 重装」幂等 —— 不会
     // 撞上 `mcp add` 对已存在 name 的报错，也保证改 key 时旧条目被新值覆盖。
     let remove_args: Vec<String> = if bin == "claude" {
@@ -449,6 +515,19 @@ pub async fn mcp_uninstall(
         )
             .into_response();
     }
+    // 安全:卸载也只限**受管 allowlist** 内的 server。否则这个无 auth 的 loopback
+    // 接口能删用户在 ~/.claude.json / ~/.codex 里**任意手配**的 user-scope MCP
+    // (例如 sequential-thinking),等于给了任意删除别人配置的能力。这个页面只
+    // 负责自己装的那几个,卸载范围必须对称地收回到同一份 known() 清单。
+    if known(&req.name).is_none() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": format!("不受管 server，拒绝卸载: {}", req.name)})),
+        )
+            .into_response();
+    }
+    // 与 install 串行化(同一把锁),避免并发 add/remove 交错。
+    let _guard = ADMIN_LOCK.lock().await;
     let res = match req.cli.as_str() {
         "claude" => run("claude", &["mcp", "remove", &req.name, "--scope", "user"]).await,
         "codex" => run("codex", &["mcp", "remove", &req.name]).await,
@@ -473,5 +552,50 @@ mod tests {
         // The gate the UI relies on: v14 is below LTS, v18/v22 are not.
         assert!(node_major("v14.21.3").unwrap() < NODE_MIN_MAJOR);
         assert!(node_major("v18.20.8").unwrap() >= NODE_MIN_MAJOR);
+    }
+
+    #[test]
+    fn valid_name_rejects_flag_like_and_bad_chars() {
+        // 正常名字放行。
+        assert!(valid_name("chrome-devtools"));
+        assert!(valid_name("context7"));
+        assert!(valid_name("a"));
+        assert!(valid_name("a_b-c9"));
+        // 安全核心:不得以 '-' 开头(否则被 CLI 当 flag → 参数注入)。
+        assert!(!valid_name("-rf"));
+        assert!(!valid_name("--help"));
+        assert!(!valid_name("-s"));
+        // 也不得以 '_' 开头(首字符必须字母/数字)。
+        assert!(!valid_name("_x"));
+        // 空 / 超长 / 非法字符。
+        assert!(!valid_name(""));
+        assert!(!valid_name(&"a".repeat(65)));
+        assert!(!valid_name("a b"));
+        assert!(!valid_name("a;b"));
+        assert!(!valid_name("a/b"));
+    }
+
+    #[test]
+    fn mask_key_is_utf8_safe_and_hides_body() {
+        // 短 key 全打码。
+        assert_eq!(mask_key(""), "••••");
+        assert_eq!(mask_key("abcd"), "••••");
+        // ASCII:露末 4。
+        assert_eq!(mask_key("abcdef"), "••••cdef");
+        // 多字节 UTF-8:旧的字节切片在 `len()-4` 落到字符中间会 panic;
+        // 这里只要不 panic 且尾 4 个**字符**正确即可。"密钥🔑值末四" 末 4 字符是 "值末四"… 取按 char。
+        let k = "🔑🔑🔑🔑🔑🔑"; // 6 个 4-byte 字符
+        assert_eq!(mask_key(k), "••••🔑🔑🔑🔑");
+        // 混合多字节,确认不 panic。
+        let _ = mask_key(" key=值密钥末尾");
+    }
+
+    #[test]
+    fn uninstall_gate_uses_known_allowlist() {
+        // 卸载的 allowlist 与安装同源:受管的放行,任意手配的拒绝。
+        assert!(known("chrome-devtools").is_some());
+        assert!(known("context7").is_some());
+        assert!(known("sequential-thinking").is_none());
+        assert!(known("anything-else").is_none());
     }
 }
