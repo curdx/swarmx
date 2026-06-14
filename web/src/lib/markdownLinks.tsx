@@ -40,6 +40,24 @@ export function cleanMarkdownHref(href?: string): string | undefined {
   return splitMarkdownHref(href).href;
 }
 
+/** Defense-in-depth scheme whitelist. Only http/https/mailto (plus relative
+ *  paths and `#` anchors, which carry no scheme) are clickable. Anything with
+ *  another scheme — javascript:, data:, file:, vbscript:, … — is rejected so it
+ *  renders as inert text instead of an exploitable link. rehype-sanitize already
+ *  blocks these by default; this is a second, explicit gate. */
+const ALLOWED_SCHEMES = new Set(["http", "https", "mailto"]);
+const SCHEME_RE = /^([a-z][a-z0-9+.-]*):/i;
+
+function isSafeHref(href?: string): href is string {
+  if (!href) return false;
+  // Leading control chars/whitespace can disguise a scheme (e.g. "java\tscript:").
+  const trimmed = href.replace(/[\u0000-\u0020]+/g, "");
+  const match = SCHEME_RE.exec(trimmed);
+  // No scheme → relative path or `#` anchor → safe.
+  if (!match) return true;
+  return ALLOWED_SCHEMES.has(match[1].toLowerCase());
+}
+
 function textChild(children: ReactNode): string | null {
   if (typeof children === "string") return children;
   if (Array.isArray(children) && children.every((c) => typeof c === "string")) {
@@ -54,20 +72,29 @@ export function MarkdownLink({
   ...props
 }: ComponentPropsWithoutRef<"a">) {
   const { href: cleanHref, trailingText } = splitMarkdownHref(href);
+  const safe = isSafeHref(cleanHref);
   const text = textChild(children);
   if (trailingText && text) {
     const decodedText = safeDecodeUri(text);
     const linkedText = decodedText.endsWith(trailingText)
       ? decodedText.slice(0, -trailingText.length)
       : decodedText;
+    const label = linkedText || cleanHref;
     return (
       <Fragment>
-        <a {...props} href={cleanHref} target="_blank" rel="noopener noreferrer">
-          {linkedText || cleanHref}
-        </a>
+        {safe ? (
+          <a {...props} href={cleanHref} target="_blank" rel="noopener noreferrer">
+            {label}
+          </a>
+        ) : (
+          <span {...props}>{label}</span>
+        )}
         {trailingText}
       </Fragment>
     );
+  }
+  if (!safe) {
+    return <span {...props}>{children}</span>;
   }
   return (
     <a {...props} href={cleanHref} target="_blank" rel="noopener noreferrer">

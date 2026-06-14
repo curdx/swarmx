@@ -168,9 +168,10 @@ export function BlackboardPanel({ liveChange }: Props) {
       setError(null);
       await refreshList();
       // setInfo only after refreshList confirms the write is visible (was:
-      // claimed before the round-trip). Wake is the coordinator's real
-      // design.approved subscription, so the phrasing is honest.
-      setInfo("已写入 design.approved · 前后端 agent 会据此醒来开工");
+      // claimed before the round-trip). P1-30: state only the written fact —
+      // whether agents actually wake depends on wake.rs/subscriptions, so don't
+      // package that future as a done deal.
+      setInfo("已写入通过标记 design.approved · 等待 agent 据此推进");
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -196,10 +197,10 @@ export function BlackboardPanel({ liveChange }: Props) {
       await refreshList();
       // Claim success only AFTER refreshList confirms the write actually
       // landed (was: setInfo fired before the round-trip, asserting a
-      // persistence that hadn't been verified). The architect picks this up via
-      // the wake-coordinator's design.rejected subscription — a real mechanism,
-      // so the phrasing states what's now certain rather than a bare promise.
-      setInfo("已记录拒绝意见 · architect 会据此修订方案");
+      // persistence that hadn't been verified). P1-30: state only the written
+      // fact — whether the architect actually revises depends on wake.rs/its
+      // subscription, so don't promise that future as already happened.
+      setInfo("已写入拒绝标记 design.rejected · 等待 architect 据此推进");
     } catch (e) {
       setError((e as Error).message);
     } finally {

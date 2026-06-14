@@ -150,6 +150,13 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
   const [scan, setScan] = useState<ScanState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pathChecks, setPathChecks] = useState<Record<number, PathValidationState>>({});
+  // In-flight guard: submit() awaits validation + createWorkspace + runSpell
+  // before `scan` flips canSubmit false, so a double-click would fire two full
+  // create flows → two workspaces + two scouts. The ref blocks re-entry
+  // synchronously; isSubmitting drives the button disabled state. Mirrors
+  // Shell.tsx::creatingDirRef.
+  const submittingRef = useRef(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   // useSwarmFeed 必须无条件调用 — 但只在 scan 进行中才处理事件。
   // ref 让 onEvent 闭包永远拿到最新的 scan 引用，不重开 WS。
@@ -218,6 +225,13 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
   const invalidPath = cleanDirs.some((d) => pathChecks[d.id]?.state === "error");
   const checkingPath = cleanDirs.some((d) => pathChecks[d.id]?.state === "checking");
   const attachedCount = dirs.filter((d) => d.id !== 0 && d.path.trim()).length;
+  // Attached (non-primary) rows that fail validation. When 高级 is collapsed
+  // these rows aren't rendered, so their error span is hidden — yet they still
+  // pin canSubmit false. Surface a count on the collapsed header so the user
+  // knows to expand and fix, instead of staring at a greyed-out 创建 button.
+  const attachedErrorCount = dirs.filter(
+    (d) => d.id !== 0 && d.path.trim() && pathChecks[d.id]?.state === "error",
+  ).length;
   const canSubmit =
     name.trim().length > 0 && mainPath.length > 0 && !scan && !invalidPath && !checkingPath;
   const hasInitSpell = spells.some((s) => s.name === INIT_SPELL);
@@ -284,6 +298,12 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
 
   const submit = async () => {
     if (!canSubmit) return;
+    // Synchronous re-entry guard — a second click during the await window
+    // (validation → createWorkspace → runSpell) would otherwise spawn a second
+    // workspace + scout before `scan` flips canSubmit false.
+    if (submittingRef.current) return;
+    submittingRef.current = true;
+    setIsSubmitting(true);
     setError(null);
     // Client-side precheck: a relative/garbage path can't be a workspace cwd.
     // Catch it here with a clear hint instead of round-tripping for a 400
@@ -404,6 +424,12 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
             )
           : raw,
       );
+    } finally {
+      // Release the guard. On success `scan` is set so the submit button is
+      // swapped for "enter anyway" (no re-entry possible); on failure the
+      // button returns and must be clickable again.
+      submittingRef.current = false;
+      setIsSubmitting(false);
     }
   };
 
@@ -732,6 +758,17 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
                           {t("wizard.attachedCount", { count: attachedCount })}
                         </span>
                       )}
+                      {/* Collapsed + an attached dir is invalid: its error span is
+                       *  hidden, so flag it here (otherwise 创建 is greyed with no
+                       *  visible reason). Expand to see the per-row message. */}
+                      {!advancedOpen && attachedErrorCount > 0 && (
+                        <span className="rounded-full bg-status-danger-soft px-1.5 py-0.5 font-caption text-[10px] text-state-danger">
+                          {t("wizard.attachedErrorCount", {
+                            count: attachedErrorCount,
+                            defaultValue: "{{count}} 个附加目录有问题，展开修正",
+                          })}
+                        </span>
+                      )}
                     </span>
                     <span className="font-caption text-[11px] leading-relaxed text-foreground-tertiary">
                       {advancedOpen
@@ -794,8 +831,12 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
               <Button variant="outline" onClick={onClose}>
                 {t("wizard.cancel")}
               </Button>
-              <Button onClick={submit} disabled={!canSubmit}>
-                <Check className="size-3.5" />
+              <Button onClick={submit} disabled={!canSubmit || isSubmitting}>
+                {isSubmitting ? (
+                  <Loader2 className="size-3.5 animate-spin" />
+                ) : (
+                  <Check className="size-3.5" />
+                )}
                 {t("wizard.create")}
               </Button>
             </>
