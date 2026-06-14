@@ -25,6 +25,7 @@
  */
 
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { api, ApiError } from "../api/http";
 import type { SpellInfo } from "../api/types";
 
@@ -49,6 +50,7 @@ export function SpellsLauncher({
   workspaceId = null,
   threadId = null,
 }: Props) {
+  const { t } = useTranslation();
   const [spells, setSpells] = useState<SpellInfo[]>([]);
   const [selected, setSelected] = useState<string>("");
   const [task, setTask] = useState("");
@@ -73,7 +75,12 @@ export function SpellsLauncher({
       })
       .catch((e) => {
         if (cancelled) return;
-        setError(`法术列表加载失败：${(e as Error).message}`);
+        setError(
+          t("spells.loadFailed", {
+            defaultValue: "法术列表加载失败：{{msg}}",
+            msg: (e as Error).message,
+          }),
+        );
       });
     return () => {
       cancelled = true;
@@ -95,7 +102,11 @@ export function SpellsLauncher({
     // Guard: the server rejects a context-less spell run with a 400. Don't fire
     // a request we know will fail — block at the button and tell the user why.
     if (!workspaceId) {
-      setError("请在工作区内使用：法术需要一个工作区上下文才能运行");
+      setError(
+        t("spells.needWorkspaceToRun", {
+          defaultValue: "请在工作区内使用：法术需要一个工作区上下文才能运行",
+        }),
+      );
       return;
     }
     setBusy(true);
@@ -111,15 +122,27 @@ export function SpellsLauncher({
         ...(wd ? { workspace_dir: wd } : {}),
       });
       setLastRun(
-        `已通过 ${name} 启动 ${resp.agents.length} 个 agent：${resp.agents
-          .map((a) => `${a.role}=${a.agent_id}`)
-          .join("、")}`,
+        t("spells.launchedSummary", {
+          defaultValue: "已通过 {{name}} 启动 {{count}} 个 agent：{{agents}}",
+          name,
+          count: resp.agents.length,
+          agents: resp.agents
+            .map((a) => `${a.role}=${a.agent_id}`)
+            .join(
+              t("spells.agentSeparator", { defaultValue: "、" }),
+            ),
+        }),
       );
       setTask("");
       onSpellLaunched?.();
     } catch (e) {
       const msg = e instanceof ApiError ? e.detail : (e as Error).message;
-      setError(`运行失败：${msg}`);
+      setError(
+        t("spells.runFailed", {
+          defaultValue: "运行失败：{{msg}}",
+          msg,
+        }),
+      );
     } finally {
       setBusy(false);
     }
@@ -151,7 +174,9 @@ export function SpellsLauncher({
             else run();
           }
         }}
-        placeholder="想做什么？例如：做个简单的密码强度检测"
+        placeholder={t("spells.taskPlaceholder", {
+          defaultValue: "想做什么？例如：做个简单的密码强度检测",
+        })}
         style={input}
         disabled={busy}
       />
@@ -162,14 +187,21 @@ export function SpellsLauncher({
           style={autoButton}
           title={
             noWorkspace
-              ? "请在工作区内使用：法术需要一个工作区上下文"
-              : "自动：planner 看你的任务自动挑法术。下方共享 workspace 配置会被忽略 — planner 自己挑一个。"
+              ? t("spells.needWorkspaceShort", {
+                  defaultValue: "请在工作区内使用：法术需要一个工作区上下文",
+                })
+              : t("spells.autoTitle", {
+                  defaultValue:
+                    "自动：planner 看你的任务自动挑法术。下方共享 workspace 配置会被忽略 — planner 自己挑一个。",
+                })
           }
         >
-          {busy ? "思考中…" : "✨ Auto"}
+          {busy
+            ? t("spells.thinking", { defaultValue: "思考中…" })
+            : t("spells.auto", { defaultValue: "✨ Auto" })}
         </button>
       )}
-      <span style={divider}>或</span>
+      <span style={divider}>{t("spells.or", { defaultValue: "或" })}</span>
       <select
         value={selected}
         onChange={(e) => setSelected(e.target.value)}
@@ -188,18 +220,26 @@ export function SpellsLauncher({
         disabled={busy || !task.trim() || noWorkspace}
         title={
           noWorkspace
-            ? "请在工作区内使用：法术需要一个工作区上下文"
-            : "按下拉框里选中的法术运行"
+            ? t("spells.needWorkspaceShort", {
+                defaultValue: "请在工作区内使用：法术需要一个工作区上下文",
+              })
+            : t("spells.runTitle", {
+                defaultValue: "按下拉框里选中的法术运行",
+              })
         }
       >
-        运行
+        {t("spells.run", { defaultValue: "运行" })}
       </button>
       <button
         onClick={() => setShowAdvanced((v) => !v)}
-        title="展开/收起共享 workspace 配置（fullstack 类法术才需要）"
+        title={t("spells.advancedTitle", {
+          defaultValue: "展开/收起共享 workspace 配置（fullstack 类法术才需要）",
+        })}
         style={advancedToggle}
       >
-        {showAdvanced ? "高级 ▾" : "高级 ▸"}
+        {showAdvanced
+          ? t("spells.advancedExpanded", { defaultValue: "高级 ▾" })
+          : t("spells.advancedCollapsed", { defaultValue: "高级 ▸" })}
       </button>
       {showAdvanced && (
         <input
@@ -210,16 +250,25 @@ export function SpellsLauncher({
           onKeyDown={(e) => {
             if (e.key === "Enter" && !noWorkspace) run();
           }}
-          placeholder="共享 workspace 绝对路径（仅 fullstack 类法术）"
+          placeholder={t("spells.workspaceDirPlaceholder", {
+            defaultValue: "共享 workspace 绝对路径（仅 fullstack 类法术）",
+          })}
           style={workspaceInput}
           disabled={busy}
-          title="绝对路径。仅当法术 manifest 声明 shared_workspace=true 时才会生效。留空则由服务端自动分配。"
+          title={t("spells.workspaceDirTitle", {
+            defaultValue:
+              "绝对路径。仅当法术 manifest 声明 shared_workspace=true 时才会生效。留空则由服务端自动分配。",
+          })}
         />
       )}
       {/* Persistent hint when there's no workspace to run in — the run buttons
           are disabled, so explain why rather than leaving them mysteriously dead. */}
       {noWorkspace && !error && (
-        <span style={hintStyle}>请在工作区内使用：法术需要一个工作区上下文</span>
+        <span style={hintStyle}>
+          {t("spells.needWorkspaceShort", {
+            defaultValue: "请在工作区内使用：法术需要一个工作区上下文",
+          })}
+        </span>
       )}
       {error && <span style={errStyle}>{error}</span>}
       {lastRun && <span style={okStyle}>{lastRun}</span>}

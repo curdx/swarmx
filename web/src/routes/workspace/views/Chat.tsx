@@ -13,6 +13,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
+import i18n from "@/i18n";
 import { api } from "../../../api/http";
 import type { AgentInfo, CliPluginInfo } from "../../../api/types";
 import { MessagesPanel } from "../../../components/MessagesPanel";
@@ -164,11 +165,11 @@ function usePlan(prefix: string): ParsedPlan | null {
 
 function fmtBreadcrumbAgo(at: number, now: number): string {
   const sec = Math.max(0, Math.floor((now - at) / 1000));
-  if (sec < 60) return `${sec}s 前`;
+  if (sec < 60) return i18n.t("chat.ago.seconds", { defaultValue: "{{n}}s 前", n: sec });
   const min = Math.floor(sec / 60);
-  if (min < 60) return `${min}m 前`;
+  if (min < 60) return i18n.t("chat.ago.minutes", { defaultValue: "{{n}}m 前", n: min });
   const hr = Math.floor(min / 60);
-  return `${hr}h 前`;
+  return i18n.t("chat.ago.hours", { defaultValue: "{{n}}h 前", n: hr });
 }
 
 /** 成员列表一行的"AI 当前在干啥"视觉。优先真实 swarm state(`live`),缺失
@@ -221,11 +222,13 @@ function fmtActivityElapsed(ms: number): string {
 /** 三点 typing 动画 —— 跟微信"对方正在输入"风格一致。三个圆点错相位
  *  bounce,纯 CSS,不依赖外部库。 */
 function TypingDots() {
+  const { t } = useTranslation();
+  const typingLabel = t("chat.typingIndicator", { defaultValue: "AI 正在输入" });
   return (
     <span
       className="inline-flex items-center gap-0.5"
-      aria-label="AI 正在输入"
-      title="AI 正在输入"
+      aria-label={typingLabel}
+      title={typingLabel}
     >
       <span className="inline-block size-1.5 animate-bounce rounded-full bg-accent-primary [animation-delay:-0.3s]" />
       <span className="inline-block size-1.5 animate-bounce rounded-full bg-accent-primary [animation-delay:-0.15s]" />

@@ -11,6 +11,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useSwarmFeed } from "../hooks/useSwarmFeed";
 import { api } from "../api/http";
 import type { MessageRecord, SwarmEvent } from "../api/types";
@@ -24,15 +25,16 @@ import { RecordingsPanel } from "./RecordingsPanel";
 // lib/dagEdgeDerivation), so the two can no longer drift.
 type Tab = "messages" | "blackboard" | "recordings";
 
-// 中文显示名：tab 内部 key 仍用英文（避免改一堆 switch/比较），
-// 渲染时映射到中文。
-const TAB_LABELS: Record<Tab, string> = {
-  messages: "消息",
-  blackboard: "共享区",
-  recordings: "录像",
+// 显示名：tab 内部 key 仍用英文（避免改一堆 switch/比较），
+// 渲染时通过 i18n 映射到本地化文案，中文原文作为 zh 兜底。
+const TAB_LABELS: Record<Tab, { key: string; zh: string }> = {
+  messages: { key: "swarm.tabs.messages", zh: "消息" },
+  blackboard: { key: "swarm.tabs.blackboard", zh: "共享区" },
+  recordings: { key: "swarm.tabs.recordings", zh: "录像" },
 };
 
 export function SwarmPanel() {
+  const { t } = useTranslation();
   const [tab, setTab] = useState<Tab>("messages");
   const [liveMessage, setLiveMessage] = useState<MessageRecord | null>(null);
   const [liveRead, setLiveRead] = useState<{
@@ -145,23 +147,29 @@ export function SwarmPanel() {
   return (
     <aside style={container}>
       <div style={tabBar}>
-        {(["messages", "blackboard", "recordings"] as Tab[]).map((t) => (
+        {(["messages", "blackboard", "recordings"] as Tab[]).map((tabKey) => (
           <button
-            key={t}
-            onClick={() => setTab(t)}
+            key={tabKey}
+            onClick={() => setTab(tabKey)}
             style={{
               ...tabButton,
-              background: tab === t ? "#1e3a8a" : "transparent",
-              color: tab === t ? "#e2e8f0" : "#94a3b8",
+              background: tab === tabKey ? "#1e3a8a" : "transparent",
+              color: tab === tabKey ? "#e2e8f0" : "#94a3b8",
             }}
           >
-            {TAB_LABELS[t]}
-            {t === "messages" && totalUnread > 0 && (
+            {t(TAB_LABELS[tabKey].key, { defaultValue: TAB_LABELS[tabKey].zh })}
+            {tabKey === "messages" && totalUnread > 0 && (
               <span style={tabBadge}>{totalUnread}</span>
             )}
           </button>
         ))}
-        <span style={statusDot} title={`协作 WS：${status}`}>
+        <span
+          style={statusDot}
+          title={t("swarm.wsStatus", {
+            status,
+            defaultValue: "协作 WS：{{status}}",
+          })}
+        >
           <span
             style={{
               display: "inline-block",

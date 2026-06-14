@@ -9,6 +9,7 @@
  */
 
 import { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { api, ApiError } from "../api/http";
 import { downloadRecordingCast } from "@/lib/download";
 import type { RecordingInfo } from "../api/types";
@@ -22,6 +23,7 @@ interface Props {
 }
 
 export function RecordingsPanel({ refreshTick }: Props) {
+  const { t } = useTranslation();
   const [items, setItems] = useState<RecordingInfo[]>([]);
   const [filter, setFilter] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -92,7 +94,9 @@ export function RecordingsPanel({ refreshTick }: Props) {
           name="recording-agent-filter"
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
-          placeholder="按 agent_id 过滤"
+          placeholder={t("recordings.filterPlaceholder", {
+            defaultValue: "按 agent_id 过滤",
+          })}
           style={{ ...input, flex: 1 }}
           onKeyDown={(e) => {
             if (e.key === "Enter") refresh();
@@ -100,7 +104,7 @@ export function RecordingsPanel({ refreshTick }: Props) {
         />
         <button
           onClick={refresh}
-          title="刷新"
+          title={t("recordings.refresh", { defaultValue: "刷新" })}
           disabled={refreshing}
           style={refreshing ? { ...refreshBtn, ...refreshBtnBusy } : refreshBtn}
         >
@@ -115,17 +119,25 @@ export function RecordingsPanel({ refreshTick }: Props) {
       {/* 三态分流：error 时只显示「加载失败 + 重试」，不再叠「暂无录像」自相矛盾。*/}
       <div style={listStyle}>
         {loading && items.length === 0 ? (
-          <div style={emptyHint}>加载中…</div>
+          <div style={emptyHint}>
+            {t("recordings.loading", { defaultValue: "加载中…" })}
+          </div>
         ) : error ? (
           <div style={errorBlock}>
-            <div style={errorTitle}>加载录像失败</div>
+            <div style={errorTitle}>
+              {t("recordings.loadFailed", { defaultValue: "加载录像失败" })}
+            </div>
             <div style={errorDetail}>{error}</div>
             <button onClick={refresh} disabled={refreshing} style={retryBtn}>
-              {refreshing ? "重试中…" : "重试"}
+              {refreshing
+                ? t("recordings.retrying", { defaultValue: "重试中…" })
+                : t("recordings.retry", { defaultValue: "重试" })}
             </button>
           </div>
         ) : items.length === 0 ? (
-          <div style={emptyHint}>暂无录像</div>
+          <div style={emptyHint}>
+            {t("recordings.empty", { defaultValue: "暂无录像" })}
+          </div>
         ) : (
           items.map((r) => {
           const live = r.finalized_at == null;
@@ -142,11 +154,17 @@ export function RecordingsPanel({ refreshTick }: Props) {
                     color: live ? "#fbbf24" : "#86efac",
                   }}
                 >
-                  {live ? "● 实时" : "○ 已完结"}
+                  {live
+                    ? t("recordings.badgeLive", { defaultValue: "● 实时" })
+                    : t("recordings.badgeDone", { defaultValue: "○ 已完结" })}
                 </span>
               </div>
               <div style={{ fontSize: 10, color: "#94a3b8" }}>
-                开始于 {formatTime(r.started_at)} · {r.cols}×{r.rows}
+                {t("recordings.startedAt", {
+                  defaultValue: "开始于 {{time}}",
+                  time: formatTime(r.started_at),
+                })}{" "}
+                · {r.cols}×{r.rows}
                 {r.duration_ms != null && (
                   <> · {formatDuration(r.duration_ms)}</>
                 )}
@@ -158,11 +176,16 @@ export function RecordingsPanel({ refreshTick }: Props) {
                   style={linkButton}
                   title={
                     live
-                      ? "实时录像可以回放，但只能播到已写入的字节为止"
-                      : "回放这条录像（全屏）"
+                      ? t("recordings.playTitleLive", {
+                          defaultValue:
+                            "实时录像可以回放，但只能播到已写入的字节为止",
+                        })
+                      : t("recordings.playTitleDone", {
+                          defaultValue: "回放这条录像（全屏）",
+                        })
                   }
                 >
-                  ▶ 播放
+                  {t("recordings.play", { defaultValue: "▶ 播放" })}
                 </button>
                 <a
                   href={api.recordingCastUrl(r.id)}
@@ -170,14 +193,14 @@ export function RecordingsPanel({ refreshTick }: Props) {
                   rel="noreferrer"
                   style={linkButton}
                 >
-                  原始 .cast
+                  {t("recordings.rawCast", { defaultValue: "原始 .cast" })}
                 </a>
                 <button
                   type="button"
                   onClick={() => downloadRecordingCast(r.id)}
                   style={linkButton}
                 >
-                  下载
+                  {t("recordings.download", { defaultValue: "下载" })}
                 </button>
               </div>
             </div>
@@ -205,16 +228,19 @@ export function RecordingsPanel({ refreshTick }: Props) {
               <button
                 onClick={() => setPlayingId(null)}
                 style={modalCloseBtn}
-                title="关闭（Esc）"
+                title={t("recordings.closeEsc", { defaultValue: "关闭（Esc）" })}
               >
-                × 关闭
+                {t("recordings.close", { defaultValue: "× 关闭" })}
               </button>
             </div>
             {playing.finalized_at == null && (
               // P2-3：live 录像还在写，回放只能播到「打开时已落盘的字节」为止，
               // 到尾部会无预兆截断。提前提示「录制中 / 内容不完整」。
               <div style={liveTruncatedHint}>
-                ● 录制中，内容不完整：回放只到当前已落盘的部分，结尾可能突然截断。完结后重新打开可看到完整录像。
+                {t("recordings.liveTruncatedHint", {
+                  defaultValue:
+                    "● 录制中，内容不完整：回放只到当前已落盘的部分，结尾可能突然截断。完结后重新打开可看到完整录像。",
+                })}
               </div>
             )}
             <div style={modalPlayerHost}>
@@ -226,7 +252,13 @@ export function RecordingsPanel({ refreshTick }: Props) {
               />
             </div>
             <div style={modalFooterHint}>
-              快捷键：<kbd>空格</kbd> 播放/暂停 · <kbd>f</kbd> 全屏 · <kbd>Esc</kbd> 关闭
+              {t("recordings.shortcutsLabel", { defaultValue: "快捷键：" })}
+              <kbd>{t("recordings.keySpace", { defaultValue: "空格" })}</kbd>{" "}
+              {t("recordings.shortcutPlayPause", { defaultValue: "播放/暂停" })} ·{" "}
+              <kbd>f</kbd>{" "}
+              {t("recordings.shortcutFullscreen", { defaultValue: "全屏" })} ·{" "}
+              <kbd>Esc</kbd>{" "}
+              {t("recordings.shortcutClose", { defaultValue: "关闭" })}
             </div>
           </div>
         </div>

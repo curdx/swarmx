@@ -40,6 +40,7 @@ import type {
   WriteBlackboardRequest,
 } from "./types";
 
+import i18n from "@/i18n";
 import { HTTP_BASE } from "../lib/apiBase";
 import { dedupe } from "@/lib/requestDedupe";
 import { apiRoutes } from "./endpoints";
@@ -93,8 +94,9 @@ async function request<T>(
     // user-safe — the raw English TypeError is appended to `message` for dev logs.
     if (e instanceof DOMException && e.name === "AbortError") throw e;
     const original = (e as Error)?.message || String(e);
-    const friendly =
-      "连接不上本地服务（127.0.0.1:7777），请确认 flockmux 正在运行";
+    const friendly = i18n.t("common.networkError", {
+      defaultValue: "连接不上本地服务（127.0.0.1:7777），请确认 flockmux 正在运行",
+    });
     throw new ApiError(
       0,
       friendly,

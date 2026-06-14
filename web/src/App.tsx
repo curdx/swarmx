@@ -24,6 +24,7 @@
 
 import { lazy, Suspense, type ReactElement } from "react";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+import i18n from "@/i18n";
 import { AppShell } from "./layouts/AppShell";
 import { AppToaster } from "./components/ui/sonner";
 import ChatHome from "./routes/chat/Home";
@@ -60,7 +61,7 @@ function lazyView(el: ReactElement) {
       fallback={
         <div className="flex h-full min-h-0 flex-1 items-center justify-center">
           <span className="font-caption text-xs text-foreground-tertiary">
-            加载中…
+            {i18n.t("common.loading", { defaultValue: "加载中…" })}
           </span>
         </div>
       }

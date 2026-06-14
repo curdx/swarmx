@@ -231,10 +231,10 @@ export function AgentDrawer({ agentId, activities, onClose }: Props) {
         role: info?.role ?? agentId.slice(0, 8),
         defaultValue: "唤醒 agent？",
       }),
-      description: t(
-        "agent.confirm.wake.desc",
-        "会向该 agent 投递一条手动唤醒消息，推动它继续读取 mailbox / blackboard。仅在它确实卡住或需要人工催促时使用。",
-      ),
+      description: t("agent.confirm.wake.desc", {
+        defaultValue:
+          "会向该 agent 投递一条手动唤醒消息，推动它继续读取 mailbox / blackboard。仅在它确实卡住或需要人工催促时使用。",
+      }),
       confirmLabel: t("agent.wake"),
       onConfirm: async () => {
         try {
@@ -287,14 +287,14 @@ export function AgentDrawer({ agentId, activities, onClose }: Props) {
             defaultValue: "暂停 agent？",
           }),
       description: paused
-        ? t(
-            "agent.confirm.resume.desc",
-            "会恢复该 agent 的自动唤醒，并投递一次手动唤醒让它继续处理当前工作。",
-          )
-        : t(
-            "agent.confirm.pause.desc",
-            "会发送 Ctrl-C 中断当前 turn，并让自动唤醒跳过该 agent，直到你恢复它。",
-          ),
+        ? t("agent.confirm.resume.desc", {
+            defaultValue:
+              "会恢复该 agent 的自动唤醒，并投递一次手动唤醒让它继续处理当前工作。",
+          })
+        : t("agent.confirm.pause.desc", {
+            defaultValue:
+              "会发送 Ctrl-C 中断当前 turn，并让自动唤醒跳过该 agent，直到你恢复它。",
+          }),
       confirmLabel: paused ? t("agent.resume") : t("agent.pause"),
       variant: paused ? "default" : "destructive",
       onConfirm: togglePause,
@@ -334,7 +334,12 @@ export function AgentDrawer({ agentId, activities, onClose }: Props) {
       >
         <SheetHeader className="sr-only">
           <SheetTitle>{`Agent drawer · ${info?.role ?? agentId}`}</SheetTitle>
-          <SheetDescription>{`PTY 终端 / 录像 / 消息 / 上下文 for agent ${agentId}`}</SheetDescription>
+          <SheetDescription>
+            {t("agent.sheetDesc", {
+              id: agentId,
+              defaultValue: "PTY 终端 / 录像 / 消息 / 上下文 for agent {{id}}",
+            })}
+          </SheetDescription>
         </SheetHeader>
         <Header
           info={info}

@@ -34,10 +34,13 @@ import { MCP_CATALOG, FALLBACK_ICON } from "@/lib/mcpCatalog";
 
 type Cli = "claude" | "codex";
 
-/** 已接入(后端 allowlist 同步)的 server。 */
-const SERVERS: { id: string; needsKey: boolean; keyHint?: string }[] = [
+/**
+ * 已接入(后端 allowlist 同步)的 server。
+ * `keyHintKey` 是 i18n key,在 ApiKeyDialog 里用 t() 解析成本地化提示。
+ */
+const SERVERS: { id: string; needsKey: boolean; keyHintKey?: string }[] = [
   { id: "chrome-devtools", needsKey: false },
-  { id: "context7", needsKey: true, keyHint: "context7.com 免费申请" },
+  { id: "context7", needsKey: true, keyHintKey: "mcp.keyHintContext7" },
 ];
 
 type KeyDialogState = {
@@ -293,7 +296,7 @@ export function McpManager() {
                       </a>
                     </div>
                     <p className="mt-0.5 font-caption text-[11px] leading-snug text-foreground-tertiary">
-                      {meta?.purpose}
+                      {meta?.purpose ? t(meta.purpose) : null}
                     </p>
 
                     {/* 密钥行(共享一把,claude/codex 通用) */}
@@ -378,7 +381,7 @@ export function McpManager() {
       {/* API key 弹框(设首把 key / 改密钥) */}
       <ApiKeyDialog
         target={keyDialog}
-        hint={SERVERS.find((s) => s.id === keyDialog?.id)?.keyHint}
+        hintKey={SERVERS.find((s) => s.id === keyDialog?.id)?.keyHintKey}
         onCancel={() => setKeyDialog(null)}
         onConfirm={(key) => {
           if (!keyDialog) return;
@@ -553,16 +556,19 @@ function CliToggle({
 
 function ApiKeyDialog({
   target,
-  hint,
+  hintKey,
   onCancel,
   onConfirm,
 }: {
   target: KeyDialogState | null;
-  hint?: string;
+  hintKey?: string;
   onCancel: () => void;
   onConfirm: (key: string) => void;
 }) {
   const { t } = useTranslation();
+  const hint = hintKey
+    ? t(hintKey, { defaultValue: "context7.com 免费申请" })
+    : undefined;
   const [key, setKey] = useState("");
   useEffect(() => {
     setKey("");
@@ -594,7 +600,14 @@ function ApiKeyDialog({
             onKeyDown={(e) => {
               if (e.key === "Enter" && key.trim()) onConfirm(key.trim());
             }}
-            placeholder={editing && target?.masked ? `${target.masked}（输入新 key 覆盖）` : "ctx7sk-…"}
+            placeholder={
+              editing && target?.masked
+                ? t("mcp.keyOverridePlaceholder", {
+                    masked: target.masked,
+                    defaultValue: "{{masked}}（输入新 key 覆盖）",
+                  })
+                : "ctx7sk-…"
+            }
             className="font-mono text-xs"
             spellCheck={false}
           />

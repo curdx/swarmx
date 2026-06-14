@@ -9,6 +9,7 @@ import { useEffect, useState } from "react";
 import { api } from "@/api/http";
 import type { Workspace } from "@/api/types";
 import { getActiveWorkspaceId, pickDefaultWorkspace } from "@/lib/activeWorkspace";
+import i18n from "@/i18n";
 
 export function useToolWorkspaces() {
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
@@ -33,7 +34,10 @@ export function useToolWorkspaces() {
       })
       .catch((e) => {
         if (!alive) return;
-        setError((e as Error)?.message || "加载工作区失败");
+        setError(
+          (e as Error)?.message ||
+            i18n.t("files.workspacesLoadFailedShort", { defaultValue: "加载工作区失败" }),
+        );
         setReady(true); // resolved (with an error) — pages branch on `error`
       });
     return () => {

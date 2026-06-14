@@ -29,6 +29,7 @@ import { api } from "@/api/http";
 import { useSwarmFeed } from "@/hooks/useSwarmFeed";
 import { loadAppSettings } from "@/lib/appSettings";
 import { isTauriOverlayWindow } from "@/lib/tauriWindowChrome";
+import i18n from "@/i18n";
 
 /** A REST agent row counts as "failed" if it crashed (non-zero shim_exit) or the
  *  server flagged it alive-but-stuck (last_error set). A clean exit (shim_exit
@@ -62,7 +63,11 @@ async function notifyAgentReply(from: string): Promise<void> {
       await import("@tauri-apps/plugin-notification");
     let granted = await isPermissionGranted();
     if (!granted) granted = (await requestPermission()) === "granted";
-    if (granted) sendNotification({ title: "flockmux", body: `${from} 回复了你` });
+    if (granted)
+      sendNotification({
+        title: "flockmux",
+        body: i18n.t("agent.notifyReply", { from, defaultValue: "{{from}} 回复了你" }),
+      });
   } catch {
     /* not Tauri / plugin unavailable — no-op */
   }

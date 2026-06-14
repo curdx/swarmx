@@ -202,9 +202,13 @@ export default function DebugRoute() {
   const wakeAgent = async (agentId: string) => {
     try {
       await api.wakeAgent(agentId);
-      toast.success("已发送唤醒", { description: agentId });
+      toast.success(t("debug.wakeSent", { defaultValue: "已发送唤醒" }), {
+        description: agentId,
+      });
     } catch (err) {
-      toast.error("唤醒失败", { description: (err as Error)?.message });
+      toast.error(t("debug.wakeFailed", { defaultValue: "唤醒失败" }), {
+        description: (err as Error)?.message,
+      });
     }
   };
 
@@ -275,15 +279,24 @@ export default function DebugRoute() {
             flockmux M2 (debug)
           </strong>
           <span style={{ color: "#64748b", fontSize: 12 }} {...TAURI_DRAG_REGION}>
-            本地单用户 · 仅回环
+            {t("debug.localSingleUser", {
+              defaultValue: "本地单用户 · 仅回环",
+            })}
           </span>
           <span style={{ color: "#64748b", fontSize: 12 }} {...TAURI_DRAG_REGION}>
-            {agents.length} 个 agent · 显示 {visibleAgents.length}
+            {t("debug.agentCount", {
+              defaultValue: "{{total}} 个 agent · 显示 {{visible}}",
+              total: agents.length,
+              visible: visibleAgents.length,
+            })}
           </span>
           <div style={{ flex: 1, alignSelf: "stretch" }} {...TAURI_DRAG_REGION} />
           {pluginsError && (
             <span style={{ color: "#ef4444", fontSize: 12 }}>
-              插件加载失败：{pluginsError}
+              {t("debug.pluginsLoadFailed", {
+                defaultValue: "插件加载失败：{{error}}",
+                error: pluginsError,
+              })}
             </span>
           )}
           {plugins.map((p) => {
@@ -298,7 +311,10 @@ export default function DebugRoute() {
                     ? t("debug.cliNotDetected", {
                         defaultValue: "未检测到该 CLI",
                       })
-                    : `启动 ${p.binary}`
+                    : t("debug.launchBinary", {
+                        defaultValue: "启动 {{binary}}",
+                        binary: p.binary,
+                      })
                 }
               >
                 + {p.display_name}
@@ -307,7 +323,9 @@ export default function DebugRoute() {
           })}
           <button
             onClick={() => setSwarmOpen((v) => !v)}
-            title="切换协作面板"
+            title={t("debug.toggleSwarmPanel", {
+              defaultValue: "切换协作面板",
+            })}
             style={{
               background: swarmOpen ? "#1e3a8a" : "#1f2937",
               color: "#e2e8f0",
@@ -317,7 +335,9 @@ export default function DebugRoute() {
               fontSize: 12,
             }}
           >
-            {swarmOpen ? "隐藏面板" : "显示面板"}
+            {swarmOpen
+              ? t("debug.hidePanel", { defaultValue: "隐藏面板" })
+              : t("debug.showPanel", { defaultValue: "显示面板" })}
           </button>
         </div>
         <SpellsLauncher onSpellLaunched={refreshAgents} />
@@ -353,7 +373,10 @@ export default function DebugRoute() {
               borderRadius: 6,
             }}
           >
-            还没有 agent — 在上方输入任务点 ✨ Auto，或单独启动一个 CLI
+            {t("debug.noAgentsHint", {
+              defaultValue:
+                "还没有 agent — 在上方输入任务点 ✨ Auto，或单独启动一个 CLI",
+            })}
           </div>
         )}
         {agents.map((agent) => {
@@ -396,14 +419,17 @@ export default function DebugRoute() {
                     aria-label={t("debug.wakeAgent", {
                       defaultValue: "手动唤醒",
                     })}
-                    title="手动唤醒（agent 卡住时点这个 — 给它发一条系统消息让它继续）"
+                    title={t("debug.wakeAgentHint", {
+                      defaultValue:
+                        "手动唤醒（agent 卡住时点这个 — 给它发一条系统消息让它继续）",
+                    })}
                   >
                     ⚡
                   </button>
                   <button
                     onClick={() => toggleMinimize(agent.agent_id)}
                     aria-label={t("debug.minimize", { defaultValue: "最小化" })}
-                    title="最小化"
+                    title={t("debug.minimize", { defaultValue: "最小化" })}
                   >
                     _
                   </button>
@@ -414,7 +440,11 @@ export default function DebugRoute() {
                         ? t("debug.restore", { defaultValue: "还原" })
                         : t("debug.maximize", { defaultValue: "最大化" })
                     }
-                    title={isMaximized ? "还原" : "最大化"}
+                    title={
+                      isMaximized
+                        ? t("debug.restore", { defaultValue: "还原" })
+                        : t("debug.maximize", { defaultValue: "最大化" })
+                    }
                   >
                     {isMaximized ? "❐" : "□"}
                   </button>
@@ -424,7 +454,7 @@ export default function DebugRoute() {
                     aria-label={t("debug.killAgent", {
                       defaultValue: "终止 agent",
                     })}
-                    title="终止"
+                    title={t("debug.kill", { defaultValue: "终止" })}
                   >
                     {killing.has(agent.agent_id) ? (
                       <Loader2 size={11} className="animate-spin" />
@@ -457,13 +487,16 @@ export default function DebugRoute() {
           }}
         >
           <span style={{ color: "#64748b", alignSelf: "center" }}>
-            已最小化：
+            {t("debug.minimizedLabel", { defaultValue: "已最小化：" })}
           </span>
           {dockAgents.map((a) => (
             <button
               key={a.agent_id}
               onClick={() => toggleMinimize(a.agent_id)}
-              title={`还原 ${a.agent_id}`}
+              title={t("debug.restoreAgent", {
+                defaultValue: "还原 {{id}}",
+                id: a.agent_id,
+              })}
               style={{
                 background: "#1f2937",
                 color: "#cbd5f5",
