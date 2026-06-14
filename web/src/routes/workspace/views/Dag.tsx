@@ -612,7 +612,7 @@ export default function DagView() {
           await api.wakeAgent(selected.agent_id);
         } catch (e) {
           toast.error(
-            t("agent.wake.fail", { defaultValue: "唤醒失败" }),
+            t("agent.wakeFailed", { defaultValue: "唤醒失败" }),
             { description: (e as Error)?.message },
           );
         }

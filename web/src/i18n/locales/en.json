@@ -68,7 +68,10 @@
       "empty": "mcpServers is empty"
     },
     "nodeTooOld": "Node.js {{version}} is too old — npx-based MCP servers (incl. chrome-devtools) need Node {{min}}+ (LTS). Please upgrade before enabling.",
-    "notInstalled": "Not installed"
+    "notInstalled": "Not installed",
+    "opFailed": "Operation failed",
+    "opOkRefreshFailed": "Operation succeeded, but refreshing the status failed — the toggles shown may be out of date",
+    "loadFailed": "Failed to load MCP configuration"
   },
   "nav": {
     "chat": "Chat",
@@ -180,7 +183,9 @@
     "system": "system",
     "live": "live",
     "off": "off",
-    "offline": "Offline"
+    "offline": "Offline",
+    "copied": "Copied",
+    "copy": "Copy"
   },
   "workspace": {
     "picker": "Workspace"
@@ -394,7 +399,12 @@
       "titleRate": "The captain is rate-limited",
       "titleCrash": "The captain exited unexpectedly",
       "titleTimeout": "The captain started but didn't respond",
-      "titleEscalated": "Still failing after retries — needs you"
+      "titleEscalated": "Still failing after retries — needs you",
+      "runInTerminal": "Run in terminal",
+      "openTerminalLogin": "Open terminal to log in",
+      "openTerminal": "Open terminal to view",
+      "retrying": "Retrying…",
+      "retry": "Retry"
     },
     "emptyState": {
       "greetingTitle": "Hand a task to the captain",
@@ -510,7 +520,24 @@
     "activity": {
       "running": "Running {{label}}"
     },
-    "feedOffline": "Live connection lost — showing last known state"
+    "feedOffline": "Live connection lost — showing last known state",
+    "vanishedTurn": {
+      "body": "{{role}} exited this turn without producing a reply — possibly an expired login, a restart, or an abnormal interruption, so your last message wasn't delivered.",
+      "resend": "Resend this message"
+    },
+    "plan": {
+      "allDone": "Plan complete · all {{total}} steps delivered",
+      "title": "Plan · maintained by the captain · {{done}}/{{total}}"
+    },
+    "newDirectionFailed": "Failed to create direction",
+    "directionIsolationDegraded": "Direction isolation failed; fell back to sharing the main directory",
+    "newDirectionIncomplete": "Direction creation didn't finish, please retry",
+    "deleteDirectionFailed": "Failed to delete direction",
+    "deleteWorkspaceFailed": "Failed to delete workspace",
+    "workspaceStripPreparing": "Preparing orchestrator…",
+    "workspaceStripFailed": "AI failed to start",
+    "breadcrumbsTitle": "Recent",
+    "paused": "Paused"
   },
   "dag": {
     "title": "Flow",
@@ -660,7 +687,8 @@
     "typeBlackboard": "Blackboard",
     "typeState": "State",
     "typeError": "Error",
-    "typeCompleted": "Completed"
+    "typeCompleted": "Completed",
+    "openFailed": "Couldn't locate the space this message belongs to; opened the notification center instead"
   },
   "agent": {
     "close": "Close (Esc)",
@@ -725,8 +753,14 @@
       "ready": "READY",
       "starting": "STARTING",
       "exited": "EXITED",
-      "uptime": "up {{delta}}"
-    }
+      "uptime": "up {{delta}}",
+      "error": "Error · cannot work"
+    },
+    "wakeOk": "Woke {{role}}",
+    "wakeFailed": "Wake failed",
+    "resumeFailed": "Resume failed",
+    "pauseFailed": "Pause failed",
+    "deadNoAction": "This agent has ended; no actions available"
   },
   "wizard": {
     "title": "Create workspace",
@@ -779,7 +813,8 @@
     "scanningFootHint": "Usually 20-40s — you can enter the room and wait",
     "enterAnyway": "Enter room now",
     "pathNotADirectory": "That path is a file, not a folder — enter the folder your project lives in.",
-    "pathPermissionDenied": "You don't have permission to access that directory — pick one you can read, or grant access in your system settings."
+    "pathPermissionDenied": "You don't have permission to access that directory — pick one you can read, or grant access in your system settings.",
+    "attachedErrorCount": "{{count}} attached directories have problems — expand to fix"
   },
   "messages": {
     "filter": "Filter by sender / receiver / body",
@@ -850,7 +885,9 @@
     "attachImage": "Attach image",
     "removeImage": "Remove",
     "previewError": "Render failed",
-    "truncatedNotice": "Content too long — rendering the first {{n}} characters"
+    "truncatedNotice": "Content too long — rendering the first {{n}} characters",
+    "jumpNotVisible": "#{{id}} isn't in this conversation (it may belong to another room/direction, or has scrolled out of range)",
+    "jumpUnreadNone": "No more unread messages in this conversation"
   },
   "cron": {
     "title": "Scheduled jobs",
@@ -916,7 +953,9 @@
     "readFailed": "Failed to load file",
     "workspacesLoadFailed": "Failed to load workspaces — please retry",
     "browseAllWarning": "Removes workspace isolation — lets you browse the whole machine. Use with care.",
-    "previewCapped": "Preview limited to first {{size}}"
+    "previewCapped": "Preview limited to first {{size}}",
+    "noWorkspace": "Select a workspace to start browsing",
+    "emptyDir": "This directory is empty"
   },
   "tasks": {
     "title": "Task board",
@@ -970,7 +1009,8 @@
         "desc": "The task will return to lifecycle-derived status after this.",
         "confirm": "Reopen"
       }
-    }
+    },
+    "statusFailed": "Failed to update status, please retry"
   },
   "goals": {
     "title": "Goals",
@@ -1007,7 +1047,13 @@
       "proof": "Proof",
       "blocker": "Blocker"
     },
-    "evidenceKindHint": "Kind: note for progress · proof of completion · blocker for obstacles"
+    "evidenceKindHint": "Kind: note for progress · proof of completion · blocker for obstacles",
+    "budgetTooLarge": "Budget too large — enter an integer no greater than 1 trillion",
+    "loadFailed": "Failed to load goals, please retry",
+    "createFailed": "Failed to create goal, please retry",
+    "statusFailed": "Failed to update status, please retry",
+    "evidenceLoadFailed": "Failed to load evidence, please retry",
+    "evidenceAddFailed": "Failed to add evidence, please retry"
   },
   "usage": {
     "title": "Usage / Cost",
@@ -1058,7 +1104,11 @@
     "statusConnecting": "Connecting to terminal…",
     "statusConnected": "Terminal connected",
     "statusDisconnected": "Terminal connection lost",
-    "statusFailed": "Unable to reach the backend"
+    "statusFailed": "Unable to reach the backend",
+    "backendDown": "Can't reach the backend (127.0.0.1:7777), so the terminal can't open. Make sure the flockmux service is running.",
+    "disconnected": "Disconnected",
+    "reconnect": "Reconnect",
+    "unavailable": "Backend not connected"
   },
   "model": {
     "label": "Model",
@@ -1135,7 +1185,9 @@
       "confirm": "confirm",
       "close": "close",
       "openHint": "{{shortcut}} to reopen"
-    }
+    },
+    "wakeOk": "Woke {{role}}",
+    "wakeFailed": "Wake failed"
   },
   "blackboard": {
     "createFile": "Create file",
@@ -1157,7 +1209,9 @@
     "maximize": "Maximize",
     "restore": "Restore",
     "killAgent": "Kill agent",
-    "cliNotDetected": "CLI not detected"
+    "cliNotDetected": "CLI not detected",
+    "spawnFailed": "Launch failed",
+    "killFailed": "Terminate failed"
   },
   "ledger": {
     "agoSeconds": "{{n}}s ago",
