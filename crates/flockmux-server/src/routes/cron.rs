@@ -239,10 +239,13 @@ pub async fn run_cron(State(state): State<AppState>, Path(id): Path<String>) -> 
     };
     match crate::cron::run_job(&state, &job).await {
         Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))).into_response(),
-        // A "skipped" (no live orchestrator) is not a server error — report it.
-        Err(skip) => (
-            StatusCode::OK,
-            Json(json!({ "ok": false, "skipped": skip })),
+        // P1-33: run_job has no "skip" path — when there's no live orchestrator it
+        // revives one, so every Err here is a REAL failure (DB error, revive/spawn
+        // failure, message-send failure). Masking it as 200 {skipped} hid genuine
+        // breakage from the UI. Surface it as a 5xx with the real reason.
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "ok": false, "error": err })),
         )
             .into_response(),
     }

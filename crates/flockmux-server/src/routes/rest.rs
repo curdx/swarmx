@@ -2545,6 +2545,11 @@ pub async fn optimize_prompt(
 
     let mut cmd = tokio::process::Command::new(&binary);
     cmd.arg("-p").arg(&prompt);
+    // P1-40: ask for structured output so we can read `is_error` — an exit-0
+    // refusal/error from claude must NOT be injected into the composer as if it
+    // were the optimized prompt. (Older CLIs without this flag fall back to
+    // raw-stdout parsing below.)
+    cmd.arg("--output-format").arg("json");
     if let Some(m) = &model {
         cmd.arg("--model").arg(m);
     }
@@ -2601,8 +2606,32 @@ pub async fn optimize_prompt(
             .into_response();
     }
 
-    let raw = String::from_utf8_lossy(&out.stdout);
-    let cleaned = strip_code_fences(raw.trim());
+    // P1-40: `--output-format json` yields `{"is_error":bool,"result":"…",…}`.
+    // Parse it so an exit-0 refusal/error becomes a real 502 instead of being
+    // injected as the "optimized" prompt. Fall back to raw stdout if the CLI is
+    // old and didn't honor the flag (then it's just plain text as before).
+    let raw_stdout = String::from_utf8_lossy(&out.stdout);
+    let text: String = match serde_json::from_str::<serde_json::Value>(raw_stdout.trim()) {
+        Ok(v) => {
+            if v.get("is_error").and_then(|b| b.as_bool()).unwrap_or(false) {
+                let detail = v
+                    .get("result")
+                    .and_then(|r| r.as_str())
+                    .unwrap_or("claude 报告了错误");
+                return (
+                    StatusCode::BAD_GATEWAY,
+                    Json(json!({ "error": format!("优化失败：{detail}") })),
+                )
+                    .into_response();
+            }
+            v.get("result")
+                .and_then(|r| r.as_str())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| raw_stdout.to_string())
+        }
+        Err(_) => raw_stdout.to_string(),
+    };
+    let cleaned = strip_code_fences(text.trim());
     if cleaned.is_empty() {
         // Never hand back an empty composer — fall back to the original.
         return Json(OptimizePromptResponse {

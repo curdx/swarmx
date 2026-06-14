@@ -71,12 +71,36 @@ async function request<T>(
   // unmounts (pass an AbortController.signal). Components that don't care just
   // omit it and instead guard their setState with a mounted-ref. Aborting
   // rejects the fetch with an AbortError the caller can ignore.
-  const res = await fetch(HTTP_BASE + path, {
-    method,
-    headers: body ? { "content-type": "application/json" } : undefined,
-    body: body ? JSON.stringify(body) : undefined,
-    signal,
-  });
+  let res: Response;
+  try {
+    res = await fetch(HTTP_BASE + path, {
+      method,
+      headers: body ? { "content-type": "application/json" } : undefined,
+      body: body ? JSON.stringify(body) : undefined,
+      signal,
+    });
+  } catch (e) {
+    // An aborted fetch rejects with an AbortError — that's a caller-initiated
+    // cancellation, not a failure, so re-throw it untouched for the caller to
+    // ignore. Everything else here is a connection-layer failure (fetch rejects
+    // with a TypeError like "Failed to fetch" / "Load failed"): the request
+    // never reached the server, so there's no Response and the `!res.ok` →
+    // ApiError path below never runs. Without this, that bare English TypeError
+    // leaks all the way to the UI. Normalize it to a Chinese, beginner-friendly
+    // ApiError (status 0 = no HTTP response, distinct from any real status code).
+    // The friendly copy goes in BOTH `detail` and `message`: callers surface one
+    // or the other (some show `e.detail` directly to the user), so both must be
+    // user-safe — the raw English TypeError is appended to `message` for dev logs.
+    if (e instanceof DOMException && e.name === "AbortError") throw e;
+    const original = (e as Error)?.message || String(e);
+    const friendly =
+      "连接不上本地服务（127.0.0.1:7777），请确认 flockmux 正在运行";
+    throw new ApiError(
+      0,
+      friendly,
+      `${friendly}（${method} ${path}：${original}）`,
+    );
+  }
   if (!res.ok) {
     // Read the body stream EXACTLY ONCE. The old code did `res.json()` then
     // `res.text()` in the catch — but `res.json()` already consumes the

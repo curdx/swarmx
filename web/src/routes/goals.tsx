@@ -24,6 +24,7 @@ import type { GoalEvidenceRecord, GoalRecord, GoalStatus, ThreadInfo } from "@/a
 import { WorkspacePicker } from "@/components/WorkspacePicker";
 import { cn } from "@/lib/cn";
 import { relTime } from "@/lib/relTime";
+import { toast } from "@/lib/toast";
 import { useToolWorkspaces } from "@/lib/useToolWorkspaces";
 
 const STATUSES: Array<{ key: GoalStatus; icon: typeof Flag; tone: string }> = [
@@ -51,7 +52,7 @@ function formatBudget(n: number | null): string {
 
 export default function GoalsRoute() {
   const { t } = useTranslation();
-  const { workspaces, wsId, setWsId, ready } = useToolWorkspaces();
+  const { workspaces, wsId, setWsId, ready, error: wsError } = useToolWorkspaces();
   const [threadId, setThreadId] = useState<string>("");
   const [threads, setThreads] = useState<ThreadInfo[]>([]);
   const [goals, setGoals] = useState<GoalRecord[]>([]);
@@ -66,6 +67,9 @@ export default function GoalsRoute() {
     () => workspaces.find((w) => w.id === wsId) ?? null,
     [workspaces, wsId],
   );
+  // P1-16: backend list failed (wsError) or goal fetch failed (err) — either
+  // way an empty list is a CONNECTION problem, not "you have no goals yet".
+  const hasError = Boolean(wsError || err);
 
   useEffect(() => {
     setThreadId("");
@@ -86,11 +90,17 @@ export default function GoalsRoute() {
       setGoals(res.goals);
       setErr(null);
     } catch (e) {
-      setErr((e as Error).message);
+      // P1-16/17: mark "load failed" so the list area can offer retry instead
+      // of pretending you simply have no goals. Keep the raw detail off the
+      // headline — surface it in a toast description.
+      setErr((e as Error)?.message || "load-failed");
+      toast.error(t("goals.loadFailed", { defaultValue: "加载目标失败，请重试" }), {
+        description: (e as Error)?.message,
+      });
     } finally {
       setLoading(false);
     }
-  }, [threadId, wsId]);
+  }, [t, threadId, wsId]);
 
   useEffect(() => {
     if (!ready) return;
@@ -115,13 +125,20 @@ export default function GoalsRoute() {
       setBudget("");
       await load();
     } catch (e) {
-      setErr((e as Error).message);
+      // P1-17: don't dump "POST /api/... 500" into the UI as the headline.
+      toast.error(t("goals.createFailed", { defaultValue: "创建目标失败，请重试" }), {
+        description: (e as Error)?.message,
+      });
     } finally {
       setCreating(false);
     }
   };
 
   const setStatus = async (goal: GoalRecord, status: GoalStatus) => {
+    // P1-15: keep the pre-change list so a failed write can be rolled back
+    // instead of leaving the card optimistically in a status the backend
+    // never recorded.
+    const snap = goals;
     setGoals((prev) =>
       prev.map((g) =>
         g.id === goal.id
@@ -136,8 +153,15 @@ export default function GoalsRoute() {
     );
     try {
       await api.updateGoalStatus(goal.id, status);
-    } finally {
       load();
+    } catch (e) {
+      // P1-15: a failed write must NOT masquerade as success — roll back to
+      // the real state and tell the user, rather than refetching blindly in
+      // finally (which itself can fail and strand the optimistic status).
+      setGoals(snap);
+      toast.error(t("goals.statusFailed", { defaultValue: "状态更新失败，请重试" }), {
+        description: (e as Error)?.message,
+      });
     }
   };
 
@@ -234,14 +258,36 @@ export default function GoalsRoute() {
           </div>
 
           <div className="flex min-h-[360px] flex-col gap-3">
-            {err && (
-              <div className="rounded-lg border border-border-subtle bg-surface-secondary px-4 py-3 font-caption text-sm text-status-danger">
-                {err}
+            {/* P1-17: a transient refetch failure while a list is showing — a
+                friendly banner + retry, never the raw "GET /api/... 500". */}
+            {hasError && goals.length > 0 && (
+              <div className="flex items-center justify-between gap-3 rounded-lg border border-border-subtle bg-surface-secondary px-4 py-3 font-caption text-sm text-status-danger">
+                <span>{t("goals.loadFailed", { defaultValue: "加载目标失败，请重试" })}</span>
+                <button
+                  type="button"
+                  onClick={load}
+                  className="inline-flex shrink-0 items-center gap-1 rounded border border-border-subtle px-2 py-1 text-foreground-secondary hover:bg-surface-tertiary hover:text-foreground-primary"
+                >
+                  <RefreshCw className="size-3" /> {t("common.retry", { defaultValue: "重试" })}
+                </button>
               </div>
             )}
             {loading ? (
               <div className="flex items-center gap-2 rounded-lg border border-border-subtle bg-surface-secondary px-4 py-6 font-caption text-xs text-foreground-tertiary">
                 <Loader2 className="size-3.5 animate-spin" /> {t("common.loading")}
+              </div>
+            ) : goals.length === 0 && hasError ? (
+              /* P1-16: an empty list after a FAILED fetch is NOT "no goals" —
+                 say the backend couldn't be reached and offer retry. */
+              <div className="flex flex-1 flex-col items-center justify-center gap-3 rounded-lg border border-border-subtle bg-surface-secondary px-4 py-10 text-center font-caption text-sm text-status-danger">
+                <span>{t("goals.loadFailed", { defaultValue: "连不上后端，加载目标失败" })}</span>
+                <button
+                  type="button"
+                  onClick={load}
+                  className="inline-flex items-center gap-1 rounded border border-border-subtle px-2.5 py-1 text-foreground-secondary hover:bg-surface-tertiary hover:text-foreground-primary"
+                >
+                  <RefreshCw className="size-3" /> {t("common.retry", { defaultValue: "重试" })}
+                </button>
               </div>
             ) : goals.length === 0 ? (
               <div className="flex flex-1 items-center justify-center rounded-lg border border-border-subtle bg-surface-secondary px-4 py-10 text-center font-caption text-sm text-foreground-tertiary">
@@ -301,11 +347,15 @@ function GoalCard({
       setEvidence(res.evidence);
       setEvidenceErr(null);
     } catch (e) {
-      setEvidenceErr((e as Error).message);
+      // P1-17: friendly inline message; raw detail goes to the toast.
+      setEvidenceErr(t("goals.evidenceLoadFailed", { defaultValue: "加载证据失败，请重试" }));
+      toast.error(t("goals.evidenceLoadFailed", { defaultValue: "加载证据失败，请重试" }), {
+        description: (e as Error)?.message,
+      });
     } finally {
       setEvidenceLoading(false);
     }
-  }, [evidenceOpen, goal.id]);
+  }, [evidenceOpen, goal.id, t]);
 
   useEffect(() => {
     loadEvidence();
@@ -324,7 +374,11 @@ function GoalCard({
       await loadEvidence();
       onEvidenceAdded();
     } catch (e) {
-      setEvidenceErr((e as Error).message);
+      // P1-17: friendly inline message; raw "POST /api/... 500" goes to toast.
+      setEvidenceErr(t("goals.evidenceAddFailed", { defaultValue: "添加证据失败，请重试" }));
+      toast.error(t("goals.evidenceAddFailed", { defaultValue: "添加证据失败，请重试" }), {
+        description: (e as Error)?.message,
+      });
     } finally {
       setEvidenceLoading(false);
     }

@@ -22,6 +22,7 @@ import { XtermPane } from "../components/XtermPane";
 import { SwarmPanel } from "../components/SwarmPanel";
 import { SpellsLauncher } from "../components/SpellsLauncher";
 import { useSwarmFeed } from "../hooks/useSwarmFeed";
+import { toast } from "@/lib/toast";
 import {
   isTauriOverlayWindow,
   TAURI_DRAG_REGION,
@@ -156,9 +157,9 @@ export default function DebugRoute() {
   const wakeAgent = async (agentId: string) => {
     try {
       await api.wakeAgent(agentId);
+      toast.success("已发送唤醒", { description: agentId });
     } catch (err) {
-      // eslint-disable-next-line no-console
-      console.warn("manual wake failed", err);
+      toast.error("唤醒失败", { description: (err as Error)?.message });
     }
   };
 

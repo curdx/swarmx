@@ -770,13 +770,17 @@ impl Store {
                         })
                     }
                     let limit = days.max(1);
-                    let rows = if let Some(ws) = &ws {
+                    // Take the MOST RECENT `limit` days, not the earliest: order
+                    // DESC + LIMIT to grab the latest window, then reverse back to
+                    // ascending so the trend chart reads old→new. (Was ASC+LIMIT,
+                    // which pinned long-time users' charts to their first N days.)
+                    let mut rows = if let Some(ws) = &ws {
                         let mut stmt = conn.prepare(
                             "SELECT date(u.at/1000, 'unixepoch') AS day, \
                             SUM(u.input_tokens), SUM(u.output_tokens), \
                             SUM(u.cache_read_tokens), SUM(u.cache_write_tokens) \
                      FROM agent_usage u JOIN agents a ON a.id = u.agent_id \
-                     WHERE a.workspace_id = ?1 GROUP BY day ORDER BY day ASC LIMIT ?2",
+                     WHERE a.workspace_id = ?1 GROUP BY day ORDER BY day DESC LIMIT ?2",
                         )?;
                         let v = stmt
                             .query_map(params![ws, limit], map_row)?
@@ -787,13 +791,14 @@ impl Store {
                             "SELECT date(at/1000, 'unixepoch') AS day, \
                             SUM(input_tokens), SUM(output_tokens), \
                             SUM(cache_read_tokens), SUM(cache_write_tokens) \
-                     FROM agent_usage GROUP BY day ORDER BY day ASC LIMIT ?1",
+                     FROM agent_usage GROUP BY day ORDER BY day DESC LIMIT ?1",
                         )?;
                         let v = stmt
                             .query_map(params![limit], map_row)?
                             .collect::<rusqlite::Result<Vec<_>>>()?;
                         v
                     };
+                    rows.reverse();
                     Ok(rows)
                 },
             )

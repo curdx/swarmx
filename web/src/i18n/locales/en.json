@@ -603,6 +603,7 @@
       "completed": "Done"
     },
     "empty": "Nothing here yet",
+    "loadError": "Failed to load notifications",
     "viewAll": "View all",
     "markRead": "Mark read",
     "kinds": {

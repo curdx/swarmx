@@ -603,6 +603,7 @@
       "completed": "完成"
     },
     "empty": "该分类暂无通知",
+    "loadError": "加载通知失败",
     "viewAll": "查看全部",
     "markRead": "标为已读",
     "kinds": {

@@ -24,6 +24,7 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
+import { toast } from "@/lib/toast";
 import { WorkspaceList, type WorkspaceSummary } from "../workspace/Shell";
 
 const CreateWizard = lazy(() =>
@@ -162,8 +163,11 @@ export default function ChatHome() {
     try {
       await api.deleteWorkspace(workspaceId);
     } catch (err) {
-      // eslint-disable-next-line no-console
-      console.warn("deleteWorkspace failed", err);
+      // 删除是「失败即安全」：后端没删成功 = 数据没丢。我们从不乐观删除列表，
+      // 所以失败时只要不动列表即可，但必须让用户看到失败而不是静默吞掉。
+      toast.error("删除工作空间失败", {
+        description: (err as Error)?.message,
+      });
       return;
     }
     setWorkspaceRows((prev) => prev.filter((w) => w.id !== workspaceId));

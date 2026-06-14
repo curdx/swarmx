@@ -166,7 +166,11 @@ fn default_pricing_rules() -> Vec<PricingRule> {
 }
 
 fn pricing_config_path() -> PathBuf {
-    if let Ok(home) = std::env::var("HOME") {
+    // P1-39: HOME isn't set on Windows — fall back to USERPROFILE there so the
+    // installed app writes/reads `~/.flockmux/pricing.json` instead of a
+    // CWD-relative `.flockmux/pricing.json` (which, with CWD=`/` under the
+    // sidecar, would make save/reset silently fail).
+    if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
         return PathBuf::from(home).join(".flockmux").join("pricing.json");
     }
     PathBuf::from(".flockmux/pricing.json")
@@ -330,9 +334,28 @@ pub async fn usage_summary(
     let store = &state.store;
     let (pricing_rules, _) = load_pricing_rules();
     let ws = q.workspace_id.filter(|s| !s.is_empty());
-    let by_model = store.usage_by_model(ws.clone()).await.unwrap_or_default();
-    let by_day = store.usage_by_day(90, ws.clone()).await.unwrap_or_default();
-    let by_agent = store.usage_by_agent(ws).await.unwrap_or_default();
+    // P1-37: don't unwrap_or_default() DB errors into empty stats — that renders
+    // "你还没有用量" when the query actually failed. Surface a 500 so the page
+    // shows a load error instead of a false "no usage yet".
+    let usage_err = |e: anyhow::Error| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e.to_string() })),
+        )
+            .into_response()
+    };
+    let by_model = match store.usage_by_model(ws.clone()).await {
+        Ok(r) => r,
+        Err(e) => return usage_err(e),
+    };
+    let by_day = match store.usage_by_day(90, ws.clone()).await {
+        Ok(r) => r,
+        Err(e) => return usage_err(e),
+    };
+    let by_agent = match store.usage_by_agent(ws).await {
+        Ok(r) => r,
+        Err(e) => return usage_err(e),
+    };
 
     let mut models = Vec::with_capacity(by_model.len());
     let (mut t_in, mut t_out, mut t_cr, mut t_cw, mut t_ev, mut t_cost) =
@@ -389,6 +412,7 @@ pub async fn usage_summary(
         "by_day": by_day,
         "by_agent": by_agent,
     }))
+    .into_response()
 }
 
 pub async fn usage_pricing_get() -> impl IntoResponse {

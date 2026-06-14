@@ -15,6 +15,7 @@ import { Play, Trash2, Loader2, Check, X, Pencil } from "lucide-react";
 import { api } from "@/api/http";
 import type { CronJob, Workspace } from "@/api/types";
 import { cn } from "@/lib/cn";
+import { toast } from "@/lib/toast";
 import {
   describeCron,
   fmtDate,
@@ -336,11 +337,18 @@ export default function CronRoute() {
 
   const toggle = async (j: CronJob) => {
     // Optimistic: flip immediately, reconcile on the response.
+    const snap = jobs; // P1-21: keep the pre-toggle list so we can revert
     setJobs((prev) => prev.map((x) => (x.id === j.id ? { ...x, enabled: !x.enabled } : x)));
     try {
       await api.toggleCron(j.id, !j.enabled);
-    } finally {
       load();
+    } catch (e) {
+      // A failed toggle must NOT leave the switch optimistically flipped while the
+      // backend never recorded it. Roll the switch back and surface the error.
+      setJobs(snap);
+      toast.error(t("cron.toggleFailed", { defaultValue: "切换启用状态失败，请重试" }), {
+        description: (e as Error)?.message,
+      });
     }
   };
 
@@ -361,9 +369,20 @@ export default function CronRoute() {
 
   const remove = async (id: string) => {
     setConfirmDel(null);
+    const snap = jobs; // P1-22: keep the pre-delete list so we can revert
     setJobs((prev) => prev.filter((x) => x.id !== id)); // optimistic
-    await api.deleteCron(id);
-    load();
+    try {
+      await api.deleteCron(id);
+      load();
+    } catch (e) {
+      // A failed delete must NOT make the row silently vanish as if it succeeded.
+      // Pull it back (snapshot first, then reload for ground truth) and tell the user.
+      setJobs(snap);
+      load();
+      toast.error(t("cron.deleteFailed", { defaultValue: "删除任务失败，请重试" }), {
+        description: (e as Error)?.message,
+      });
+    }
   };
 
   const wsName = (id: string) => workspaces.find((w) => w.id === id)?.name ?? id.slice(0, 8);

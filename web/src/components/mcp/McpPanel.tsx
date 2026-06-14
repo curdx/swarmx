@@ -20,6 +20,7 @@ import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { toast } from "@/lib/toast";
 import {
   Dialog,
   DialogContent,
@@ -53,6 +54,9 @@ export function McpManager() {
   const [status, setStatus] = useState<McpStatus | null>(null);
   const [busy, setBusy] = useState<{ id: string; cli?: Cli } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // 初次加载(env+status)是否失败 —— 失败时渲染「连不上后端/加载失败 + 重试」，
+  // 而不是永久 spinner(P1-13)。
+  const [loadError, setLoadError] = useState(false);
   const [keyDialog, setKeyDialog] = useState<KeyDialogState | null>(null);
   // Disabling rewrites the user's real ~/.claude|~/.codex config and hits every
   // running agent immediately — gate it behind a confirm (FAULT-026).
@@ -72,16 +76,19 @@ export function McpManager() {
   // 其实也能 recover，这只是更快的本地路径)。
   const sessionKeys = useRef<Record<string, string>>({});
 
+  // 真实刷新 —— 任一请求失败就抛出，让调用方区分「初次加载失败(显示重试)」
+  // 和「操作后复查失败(保留已知 status,只提示刷新失败)」。成功才更新状态。
   const reload = useCallback(async () => {
-    const [e, s] = await Promise.all([
-      api.mcpEnv().catch(() => null),
-      api.mcpStatus().catch(() => null),
-    ]);
+    const [e, s] = await Promise.all([api.mcpEnv(), api.mcpStatus()]);
     setEnv(e);
     setStatus(s);
   }, []);
   useEffect(() => {
-    reload();
+    setLoadError(false);
+    reload().catch((err) => {
+      setLoadError(true);
+      setError((err as Error)?.message ?? String(err));
+    });
   }, [reload]);
 
   // node usable = present AND new enough. A present-but-too-old node (v14)
@@ -97,14 +104,32 @@ export function McpManager() {
       setError(null);
       try {
         await op();
+      } catch (err) {
+        const msg = (err as Error).message || String(err);
+        setError(msg);
+        toast.error(
+          t("mcp.opFailed", { defaultValue: "操作失败" }),
+          { description: msg },
+        );
+        setBusy(null);
+        return;
+      }
+      // 操作本身成功 —— 复查刷新若失败,绝不清空已知 status(否则会把刚装好的
+      // 开关显示成"未装"),只提示"已操作成功，但状态刷新失败"(P1-12)。
+      try {
         await reload();
       } catch (err) {
-        setError((err as Error).message || String(err));
+        toast.warning(
+          t("mcp.opOkRefreshFailed", {
+            defaultValue: "已操作成功，但状态刷新失败，显示的开关可能不是最新",
+          }),
+          { description: (err as Error)?.message },
+        );
       } finally {
         setBusy(null);
       }
     },
-    [reload],
+    [reload, t],
   );
 
   const enable = (id: string, cli: Cli, apiKey?: string) =>
@@ -139,6 +164,38 @@ export function McpManager() {
       if (status?.codex.includes(id)) clis.push("codex");
       for (const cli of clis) await api.mcpInstall(id, cli, key);
     });
+
+  const retry = () => {
+    setLoadError(false);
+    setError(null);
+    reload().catch((err) => {
+      setLoadError(true);
+      setError((err as Error)?.message ?? String(err));
+    });
+  };
+
+  // 初次加载失败:连不上后端 / 接口报错。绝不渲染"你还没装任何 MCP"的空态,
+  // 也不能永久卡 spinner —— 明确告知失败并给重试(P1-13)。
+  if (loadError && !status && !env) {
+    return (
+      <div className="mx-auto flex w-full max-w-3xl flex-col items-center gap-3 p-6 md:p-8">
+        <div className="flex flex-col items-center gap-3 rounded-lg border border-state-danger/40 bg-status-danger-soft px-6 py-8 text-center">
+          <TriangleAlert className="size-6 text-state-danger" />
+          <p className="font-heading text-sm font-semibold text-foreground-primary">
+            {t("mcp.loadFailed", "加载 MCP 配置失败")}
+          </p>
+          {error && (
+            <p className="max-w-md break-words font-caption text-xs text-foreground-tertiary">
+              {error}
+            </p>
+          )}
+          <Button variant="outline" onClick={retry}>
+            {t("common.retry", "重试")}
+          </Button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="mx-auto flex w-full max-w-3xl flex-col gap-7 p-6 md:p-8">
