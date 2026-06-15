@@ -1196,6 +1196,61 @@ pub async fn agent_activity(
     Json(by_seq.into_values().collect::<Vec<_>>())
 }
 
+/// Body for `POST /api/agent/:id/activity`.
+#[derive(Debug, serde::Deserialize)]
+pub struct AgentActivityIngress {
+    /// "running" (tool started) | "ok" (finished) | "error" (failed).
+    pub phase: String,
+    /// One-line tool label, e.g. `swarm_write_blackboard e2e/opencode-ok`.
+    pub label: String,
+    /// Per-turn sequence number pairing a `running` row with its later
+    /// `ok`/`error` (same seq space as the transcript tailer / live WS).
+    pub seq: u32,
+    /// Optional wall-clock duration (ms), set on the `ok`/`error` row.
+    #[serde(default)]
+    pub duration_ms: Option<u32>,
+}
+
+/// `POST /api/agent/:id/activity` — tool-activity ingress for engines that
+/// CANNOT be transcript-tailed. claude/codex write a single append-only JSONL
+/// session file the tailer byte-follows; opencode instead writes a tree of
+/// per-message/part JSON files (not tailable). So the flockmux opencode plugin
+/// (cli-plugins/opencode/flockmux-wake.js) POSTs each tool call's start/finish
+/// here, and we feed it into the SAME pipeline the tailer uses (ring + SQLite +
+/// thought-trace derivation + WS), so opencode tool steps show in the UI just
+/// like claude/codex. Always cheap + best-effort; an unknown agent → 404.
+pub async fn post_agent_activity(
+    State(state): State<AppState>,
+    Path(agent_id): Path<String>,
+    Json(body): Json<AgentActivityIngress>,
+) -> impl IntoResponse {
+    if state.registry.get(&agent_id).is_none() {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": format!("agent {agent_id} not found")})),
+        );
+    }
+    let phase = match body.phase.as_str() {
+        "running" | "ok" | "error" => body.phase,
+        other => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": format!("invalid phase '{other}' (running|ok|error)")})),
+            );
+        }
+    };
+    crate::transcript::emit_activity(
+        &state.swarm,
+        &agent_id,
+        &phase,
+        body.label,
+        body.seq,
+        body.duration_ms,
+        now_ms(),
+    );
+    (StatusCode::OK, Json(json!({"ok": true})))
+}
+
 // ────────────────────────────────────────────────────────────────────────
 // Spawn ad-hoc worker (Magentic-One 重构): orchestrator 通过 MCP
 // swarm_spawn_worker 拉一个临时 worker。绕过 spell + role,worker 的
