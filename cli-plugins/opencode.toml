@@ -41,11 +41,21 @@ auto_inject_mcp = true
 mcp_format = "opencode-json"
 
 # Wake: opencode has NO blocking Stop hook (its only turn-end signal is a
-# read-only `session.idle` event). So the wake loop runs as an opencode PLUGIN:
-# on `session.idle` it calls `flockmux-mcp wake-check` and, on a `block`
-# verdict, re-prompts its own session via the SDK client. The plugin path is
-# merged into the SAME per-agent config file. Format `opencode-plugin` →
-# pre_spawn::install_opencode_wake_plugin.
+# read-only `session.idle` event). So the wake loop runs as an opencode PLUGIN
+# (cli-plugins/opencode/flockmux-wake.js): on `session.idle` it POSTs flockmux's
+# `consume_wakes` endpoint and, when wakes are pending, re-prompts its own
+# session via the SDK client. This plugin is the opencode equivalent of the
+# claude/codex Stop hook. Merged into the SAME per-agent config file. Format
+# `opencode-plugin` → pre_spawn::install_opencode_wake_plugin.
+#
+# NOTE (verified live): the plugin pairs with flockmux's existing PTY wake-kick
+# exactly like the claude/codex Stop hook does — the kick is a SHORT nudge that
+# wakes an ALREADY-IDLE agent (the plugin only fires on the session.idle
+# *transition*, so it can't nudge an agent that already settled), and the plugin
+# then delivers the full wake reason via consume_wakes. Do NOT "dedupe" by
+# suppressing the kick for opencode: that would strand wakes for idle agents.
+# Confirmed end-to-end (idle agent + message + manual wake → woke + acted, single
+# clean blackboard write, no double-processing).
 auto_inject_stop_hook = true
 stop_hook_format = "opencode-plugin"
 
