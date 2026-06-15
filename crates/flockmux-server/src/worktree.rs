@@ -159,6 +159,34 @@ pub fn git_init_with_commit(dir: &Path) -> Result<()> {
     Ok(())
 }
 
+/// W1-2: capture a direction worktree's UNCOMMITTED work as a commit on its
+/// branch, so `merge_into_base` (which brings only COMMITTED content via
+/// `git merge`) doesn't silently drop it. Workers edit files in the isolated
+/// direction worktree but are never told to `git commit`; without this, merge
+/// reports success while merging an empty/stale branch — real data loss plus a
+/// lying "Merged" status (confirmed by deterministic repro). No-op when the
+/// worktree is clean. Returns `Ok(true)` if it created a commit.
+///
+/// Caller MUST only pass an ISOLATED direction worktree here (never the base /
+/// main project), since this does `git add -A`: the direction worktree is
+/// flockmux-managed and only holds worker output, whereas the base may carry the
+/// user's own uncommitted edits that we must never touch.
+pub fn commit_worktree_work(worktree_cwd: &Path, message: &str) -> Result<bool> {
+    if !working_dirty(worktree_cwd) {
+        return Ok(false);
+    }
+    let add = git(worktree_cwd, &["add", "-A"]).context("git add -A")?;
+    if !add.status_ok {
+        return Err(anyhow!("git add -A failed: {}", add.stderr.trim()));
+    }
+    let commit = git_with_flockmux_identity(worktree_cwd, &["commit", "-m", message])
+        .context("git commit")?;
+    if !commit.status_ok {
+        return Err(anyhow!("git commit failed: {}", commit.stderr.trim()));
+    }
+    Ok(true)
+}
+
 /// Sanitize a human/AI-suggested branch name into the dir suffix we append to
 /// the project basename. Git branch names are fairly permissive but a sibling
 /// DIRECTORY name should be filesystem-friendly: keep `[a-z0-9._-]`, collapse
