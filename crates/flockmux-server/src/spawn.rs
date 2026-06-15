@@ -330,6 +330,25 @@ pub fn spawn_agent(
         }
     }
 
+    // opencode: point the worker at its per-agent OPENCODE_CONFIG (written by
+    // pre_spawn) so it loads an ISOLATED config carrying ONLY flockmux-swarm +
+    // allow-all permission + the wake plugin. Setting OPENCODE_CONFIG makes
+    // opencode SKIP global+project config discovery (its --strict-mcp-config
+    // equivalent), so PerAgent and Shared workspace layouts both stay
+    // collision-free. Gated on the per-agent file existing (pre_spawn wrote it).
+    if plugin.mcp_format == crate::plugins::McpFormat::OpencodeJson && plugin.auto_inject_mcp {
+        if let Some(cfg) = crate::pre_spawn::opencode_per_agent_config_path(&agent_id) {
+            if cfg.is_file() {
+                env.insert("OPENCODE_CONFIG".into(), cfg.to_string_lossy().into_owned());
+                tracing::info!(
+                    agent = %agent_id,
+                    opencode_config = %cfg.display(),
+                    "opencode per-agent OPENCODE_CONFIG injected (isolated config: swarm MCP + allow + wake plugin)"
+                );
+            }
+        }
+    }
+
     // claude: force a known session id so the transcript tailer locates the
     // exact session JSONL (`<uuid>.jsonl`) instead of guessing the newest file
     // in the project dir — a stale prior session in the same workspace would

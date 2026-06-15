@@ -1,0 +1,87 @@
+# OpenCode CLI plugin (Model A — PTY transport).
+#
+# Spawned under flockmux-shim as an interactive TUI, like claude/codex. The
+# per-agent isolation here is CLEANER than codex's: instead of a global config
+# strip, flockmux writes a per-agent config file at
+# ~/.flockmux/opencode/<agent_id>.json and sets `OPENCODE_CONFIG=<that file>`
+# at spawn (spawn.rs). When OPENCODE_CONFIG is set, opencode SKIPS all global +
+# project config discovery and loads ONLY that file (verified in opencode
+# src/config/config.ts) — its equivalent of claude's `--strict-mcp-config`.
+# That file carries: the flockmux-swarm MCP server (per-agent identity in
+# `environment`), `permission = "allow"` (headless: no approval prompts),
+# `autoupdate = false`, and the flockmux wake plugin.
+#
+# Auth is SHARED (opencode stores creds at $XDG_DATA_HOME/opencode/auth.json),
+# so the user logs in once with `opencode auth login`; no per-agent auth.
+
+id = "opencode"
+display_name = "OpenCode"
+binary = "opencode"
+# Bare `opencode` launches the TUI ($0 [project]) in the PTY's cwd (the
+# workspace). No approval-skip flag exists (opencode has none); permissions are
+# granted via the per-agent config's `permission = "allow"` instead.
+default_args = []
+home_env = "HOME"
+# opencode authenticates per-provider via its own `opencode auth login`
+# (subscription logins like Anthropic/Copilot, or raw API keys). Treat it as a
+# CLI-account surface like codex; flockmux still can't meter subscription spend.
+billing_surface = "cli-account"
+requires_explicit_billing_opt_in = false
+
+# MCP: write the per-agent opencode.json (mcp + permission + autoupdate).
+# Format `opencode-json` → pre_spawn::write_opencode_per_agent_config.
+auto_inject_mcp = true
+mcp_format = "opencode-json"
+
+# Wake: opencode has NO blocking Stop hook (its only turn-end signal is a
+# read-only `session.idle` event). So the wake loop runs as an opencode PLUGIN:
+# on `session.idle` it calls `flockmux-mcp wake-check` and, on a `block`
+# verdict, re-prompts its own session via the SDK client. The plugin path is
+# merged into the SAME per-agent config file. Format `opencode-plugin` →
+# pre_spawn::install_opencode_wake_plugin.
+auto_inject_stop_hook = true
+stop_hook_format = "opencode-plugin"
+
+# No "do you trust this folder?" dialog in opencode (verified: zero hits in its
+# source), so no trust patch.
+auto_trust_workspace = false
+trust_format = "none"
+# The startup update is suppressed via `autoupdate = false` in the per-agent
+# config (written by the mcp writer), not codex's version.json dance.
+auto_dismiss_update = false
+
+# PTY transport for Model A. Model B (ACP) will flip this to "acp" once the ACP
+# session driver lands; the same manifest then drives `opencode acp` over stdio.
+transport = "pty"
+
+# Frontend keystroke-settle delay (ms) for the bootstrap-prompt inject into the
+# TUI input. UNVERIFIED for opencode (no live capture yet) — 300 mirrors codex's
+# ratatui poll; tune against a real opencode session. Wake does NOT use
+# keystrokes (it's the plugin), so this only affects the initial task inject.
+input_settle_ms = 300
+
+# Model overlay: opencode's TUI accepts `--model provider/model` (verified:
+# cli/cmd/tui.ts). {model} is substituted at spawn from the per-spawn model or
+# default_model. native_tiers = false: opencode is multi-provider (provider/
+# model ids), NOT claude's opus/sonnet/haiku vocabulary, so the 模型 page shows
+# its default model + effort rows only (same as codex).
+model_args = ["--model", "{model}"]
+native_tiers = false
+
+# Reasoning effort: opencode takes effort as a CONFIG-level provider option
+# (reasoningEffort in opencode.json), NOT a CLI flag — so no argv effort
+# overlay. (A future increment can write per-model reasoningEffort into the
+# per-agent config.) Left empty = the model's own default.
+effort_args = []
+
+# Health needles — "alive but can't work" PTY signatures (see claude.toml). None
+# yet: opencode's not-logged-in / quota banner text hasn't been captured in a
+# verified flockmux recording, and we don't ship guessed substrings (a wrong
+# needle stays silent — exactly the failure we're fixing). Until a real
+# recording confirms the exact text, opencode's auth/quota failures are still
+# surfaced by the first-response watchdog. Add verified entries here to upgrade
+# that to an instant failure card:
+# [[health_needles]]
+# needle = "<verified substring>"
+# reason = "OpenCode 未登录，请在终端运行 opencode auth login"
+# kind = "auth"

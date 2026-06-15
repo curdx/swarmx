@@ -36,6 +36,14 @@ pub enum McpFormat {
     /// codex: a single global `[mcp_servers.flockmux-swarm]` section in
     /// `~/.codex/config.toml`; per-spawn identity rides in via env.
     CodexGlobalToml,
+    /// opencode: a per-agent config file at `~/.flockmux/opencode/<agent_id>.json`
+    /// carrying `mcp.flockmux-swarm` (local stdio, per-agent identity in
+    /// `environment`) + `permission = "allow"` + `autoupdate = false`. spawn.rs
+    /// points opencode at it via `OPENCODE_CONFIG=<file>`, which makes opencode
+    /// load ONLY that file (skipping global+project config discovery — its
+    /// `--strict-mcp-config` equivalent), so PerAgent/Shared layouts don't
+    /// collide. The wake plugin is merged in separately by `OpencodePlugin`.
+    OpencodeJson,
 }
 
 /// Where/how the wake Stop-hook is materialized (the timeout-unit divergence —
@@ -50,6 +58,13 @@ pub enum StopHookFormat {
     ClaudeSettingsLocal,
     /// `<ws>/.codex/hooks.json` (`hooks.Stop[]`, timeout in seconds).
     CodexHooksJson,
+    /// opencode has NO blocking Stop hook, so "wake" is delivered as an opencode
+    /// PLUGIN instead: the flockmux wake plugin (`cli-plugins/opencode/
+    /// flockmux-wake.js`) is merged into `plugin[]` of the SAME per-agent config
+    /// file `OpencodeJson` writes. On `session.idle` the plugin calls flockmux's
+    /// `consume_wakes` endpoint and re-prompts the session when wakes are
+    /// pending — the opencode equivalent of the claude/codex Stop-hook wake.
+    OpencodePlugin,
 }
 
 /// How flockmux talks to this CLI's process (L4). `pty` (default) drives the
@@ -404,6 +419,10 @@ impl PluginRegistry {
                 include_str!("../../../cli-plugins/claude.toml"),
             ),
             ("codex.toml", include_str!("../../../cli-plugins/codex.toml")),
+            (
+                "opencode.toml",
+                include_str!("../../../cli-plugins/opencode.toml"),
+            ),
         ];
         let mut plugins: HashMap<String, CliPlugin> = HashMap::new();
         for (name, content) in BUILTIN {
@@ -572,6 +591,24 @@ mod tests {
         assert_eq!(codex.mcp_format, McpFormat::CodexGlobalToml);
         assert_eq!(codex.stop_hook_format, StopHookFormat::CodexHooksJson);
 
+        // opencode (Model A): per-agent opencode.json for MCP+permission, the
+        // wake plugin for the Stop-hook-equivalent, no trust gate, PTY transport.
+        let opencode = reg.get("opencode").expect("opencode plugin present");
+        assert_eq!(opencode.trust_format, TrustFormat::None);
+        assert_eq!(opencode.mcp_format, McpFormat::OpencodeJson);
+        assert_eq!(opencode.stop_hook_format, StopHookFormat::OpencodePlugin);
+        assert_eq!(opencode.transport, Transport::Pty);
+        assert!(opencode.auto_inject_mcp, "opencode injects swarm MCP");
+        assert!(
+            opencode.auto_inject_stop_hook,
+            "opencode injects the wake plugin"
+        );
+        assert!(
+            !opencode.native_tiers,
+            "opencode is provider/model, not opus/sonnet/haiku tiers"
+        );
+        assert_eq!(opencode.model_args, vec!["--model", "{model}"]);
+
         // The codex "Hooks need review" auto-answer migrated from the old
         // auto_answer_hooks_dialog bool into a data-driven ready_plan step.
         assert!(
@@ -662,6 +699,7 @@ mod tests {
         let reg = PluginRegistry::builtin();
         assert!(reg.get("claude").is_some(), "claude must be embedded");
         assert!(reg.get("codex").is_some(), "codex must be embedded");
+        assert!(reg.get("opencode").is_some(), "opencode must be embedded");
     }
 
     /// Simulate the user-machine condition: load_layered with only unreachable
@@ -671,6 +709,10 @@ mod tests {
         let reg = PluginRegistry::load_layered(&[PathBuf::from("/nonexistent/flockmux-no-such-dir")]);
         assert!(reg.get("claude").is_some(), "claude must survive empty layers");
         assert!(reg.get("codex").is_some(), "codex must survive empty layers");
+        assert!(
+            reg.get("opencode").is_some(),
+            "opencode must survive empty layers"
+        );
     }
 
     /// A new field with a kebab-case typo must FAIL parse (→ warn-skip at load),
@@ -754,8 +796,14 @@ binary="x"
         assert_eq!(reg.get("codex").unwrap().display_name, "Codex");
         // gemini added purely from the user layer.
         assert!(reg.get("gemini").is_some(), "user-only CLI added");
-        // broken.toml skipped, everyone else survived.
-        assert_eq!(reg.list().len(), 3, "claude + codex + gemini");
+        // broken.toml skipped, everyone else survived. opencode comes from the
+        // builtin floor (load_layered seeds builtins first), so it's present too.
+        assert!(reg.get("opencode").is_some(), "opencode from builtin floor");
+        assert_eq!(
+            reg.list().len(),
+            4,
+            "claude + codex + gemini + opencode(builtin)"
+        );
     }
 
     /// An entirely absent user layer is a no-op (the common case), and even
@@ -782,12 +830,18 @@ binary="x"
             "dir layer overrides builtin claude"
         );
         assert!(reg.get("codex").is_some(), "codex stays from builtins");
-        assert_eq!(reg.list().len(), 2, "claude(dir) + codex(builtin)");
+        assert!(reg.get("opencode").is_some(), "opencode stays from builtins");
+        assert_eq!(
+            reg.list().len(),
+            3,
+            "claude(dir) + codex(builtin) + opencode(builtin)"
+        );
 
         // All-absent layers → fall back to the builtin catalog, not empty.
         let only_builtins = PluginRegistry::load_layered(&[missing]);
         assert!(only_builtins.get("claude").is_some());
         assert!(only_builtins.get("codex").is_some());
-        assert_eq!(only_builtins.list().len(), 2, "builtins are the floor");
+        assert!(only_builtins.get("opencode").is_some());
+        assert_eq!(only_builtins.list().len(), 3, "builtins are the floor");
     }
 }
