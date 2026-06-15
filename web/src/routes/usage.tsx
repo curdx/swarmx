@@ -55,6 +55,16 @@ function fmtCtxPeak(peak: number, cap: number | null): string {
   if (!peak) return "—";
   return cap ? `${fmtTokens(peak)} / ${fmtTokens(cap)}` : fmtTokens(peak);
 }
+/** Prompt-cache hit rate = cache_read / (input + cache_read): the share of
+ *  read input tokens served from the (near-free) cache vs full-price fresh
+ *  input — the most direct "how much did caching save me" signal. Returns "—"
+ *  when there's no read input at all, so an empty window reads as "no data"
+ *  rather than a misleading 0%. */
+function fmtCacheHit(input: number, cacheRead: number): string {
+  const denom = input + cacheRead;
+  if (denom <= 0) return "—";
+  return `${Math.round((cacheRead / denom) * 100)}%`;
+}
 /** Collapse a `$HOME` prefix to `~` so the displayed pricing path doesn't leak
  *  the user's home dir (e.g. `/Users/jane/.flockmux/...` → `~/.flockmux/...`).
  *  The browser can't read $HOME, so we pattern-match the platform home roots. */
@@ -333,7 +343,7 @@ export default function UsageRoute() {
           // as "possibly outdated", in concert with the stale banner above.
           <div className={cn("flex flex-col gap-6", err && "opacity-60")}>
             {/* headline cards */}
-            <section className="grid grid-cols-2 gap-3 md:grid-cols-4">
+            <section className="grid grid-cols-2 gap-3 md:grid-cols-5">
               <StatCard
                 label={t("usage.totalCost")}
                 // Partially-priced totals undercount (unpriced models contribute
@@ -347,6 +357,14 @@ export default function UsageRoute() {
                 hint={`${t("usage.cacheRead")} ${fmtTokens(data.totals.cache_read_tokens)}`}
               />
               <StatCard label={t("usage.output")} value={fmtTokens(data.totals.output_tokens)} />
+              <StatCard
+                label={t("usage.cacheHitRate")}
+                value={fmtCacheHit(
+                  data.totals.input_tokens,
+                  data.totals.cache_read_tokens,
+                )}
+                hint={t("usage.cacheHitHint")}
+              />
               <StatCard label={t("usage.events")} value={String(data.totals.events)} />
             </section>
 
@@ -416,7 +434,7 @@ export default function UsageRoute() {
                 {t("usage.byModel")}
               </h2>
               <UsageTable
-                cols={[t("usage.model"), t("usage.input"), t("usage.output"), t("usage.cacheRead"), t("usage.ctxPeak"), t("usage.totalCost")]}
+                cols={[t("usage.model"), t("usage.input"), t("usage.output"), t("usage.cacheRead"), t("usage.cacheHitRate"), t("usage.ctxPeak"), t("usage.totalCost")]}
                 rows={data.by_model.map((m, i) => ({
                   key: `${m.model ?? "unknown"}-${i}`,
                   cells: [
@@ -424,6 +442,7 @@ export default function UsageRoute() {
                     fmtTokens(m.input_tokens),
                     fmtTokens(m.output_tokens),
                     fmtTokens(m.cache_read_tokens),
+                    fmtCacheHit(m.input_tokens, m.cache_read_tokens),
                     fmtCtxPeak(m.context_peak, m.context_window),
                     m.priced ? fmtCost(m.cost_usd) : t("usage.tokensOnly"),
                   ],
