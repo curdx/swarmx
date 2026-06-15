@@ -108,6 +108,32 @@ impl Notification {
     }
 }
 
+impl Response {
+    /// A success response carrying `result` for the given request id.
+    pub fn result(id: Value, result: Value) -> Self {
+        Self {
+            jsonrpc: JSONRPC_VERSION.into(),
+            id,
+            result: Some(result),
+            error: None,
+        }
+    }
+
+    /// An error response for the given request id.
+    pub fn error(id: Value, code: i64, message: impl Into<String>) -> Self {
+        Self {
+            jsonrpc: JSONRPC_VERSION.into(),
+            id,
+            result: None,
+            error: Some(RpcError {
+                code,
+                message: message.into(),
+                data: None,
+            }),
+        }
+    }
+}
+
 impl Message {
     /// Classify a parsed JSON value into a JSON-RPC message. Per the 2.0 spec:
     /// `method` present ⇒ request (has `id`) or notification (no `id`);
@@ -249,6 +275,10 @@ pub enum ConnError {
     /// The connection's reader task ended (EOF / IO error) before a response
     /// arrived, or a write failed — the peer is gone.
     Closed,
+    /// A protocol-level violation above the transport: an unexpected/missing
+    /// field, an unsupported negotiated version, or a session call made out of
+    /// order. The transport is fine; the exchange isn't.
+    Protocol(String),
 }
 
 impl std::fmt::Display for ConnError {
@@ -256,6 +286,7 @@ impl std::fmt::Display for ConnError {
         match self {
             ConnError::Rpc(e) => write!(f, "JSON-RPC error {}: {}", e.code, e.message),
             ConnError::Closed => write!(f, "JSON-RPC connection closed"),
+            ConnError::Protocol(m) => write!(f, "ACP protocol error: {m}"),
         }
     }
 }
@@ -362,10 +393,17 @@ impl Connection {
         }
     }
 
-    /// Send a request and await its correlated response. Resolves to the
-    /// `result` value, or `ConnError::Rpc` if the peer returned an error, or
-    /// `ConnError::Closed` if the peer went away first.
-    pub async fn request(&self, method: &str, params: Option<Value>) -> Result<Value, ConnError> {
+    /// Send a request and return a receiver for its correlated response
+    /// WITHOUT awaiting it. Lets a caller drive other channels (notifications,
+    /// peer requests) concurrently while a long-running request — e.g. an ACP
+    /// `session/prompt` turn — is in flight: park the receiver in a `select!`
+    /// alongside the notification/peer-request channels. [`request`] is the
+    /// await-and-unwrap convenience built on this.
+    pub async fn send_request(
+        &self,
+        method: &str,
+        params: Option<Value>,
+    ) -> Result<oneshot::Receiver<Response>, ConnError> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = oneshot::channel();
         self.pending.lock().unwrap().insert(id, tx);
@@ -376,6 +414,14 @@ impl Connection {
             self.pending.lock().unwrap().remove(&id); // un-register; no response coming
             return Err(e);
         }
+        Ok(rx)
+    }
+
+    /// Send a request and await its correlated response. Resolves to the
+    /// `result` value, or `ConnError::Rpc` if the peer returned an error, or
+    /// `ConnError::Closed` if the peer went away first.
+    pub async fn request(&self, method: &str, params: Option<Value>) -> Result<Value, ConnError> {
+        let rx = self.send_request(method, params).await?;
         match rx.await {
             Ok(resp) => match resp.error {
                 Some(err) => Err(ConnError::Rpc(err)),
@@ -556,6 +602,316 @@ fn item_field(params: Option<&Value>, field: &str) -> Option<String> {
         .map(str::to_string)
 }
 
+// ───────────────────────────── ACP session (v1) ─────────────────────────────
+
+/// The ACP wire protocol version flockmux speaks: the integer `1`
+/// (`ProtocolVersion::V1` == `LATEST` upstream). It MUST go on the wire as a
+/// JSON *number* — a spec-compliant agent deserializes a string like `"1.0.0"`
+/// to `V0` (the unsupported/pre-release fallback).
+pub const ACP_PROTOCOL_VERSION: i64 = 1;
+
+/// Why a `session/prompt` turn ended (the ACP `StopReason`). flockmux maps
+/// `EndTurn` → an idle worker and the rest to the appropriate AgentState.
+/// Unknown wire strings map to `Other` so a spec bump never panics.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StopReason {
+    EndTurn,
+    MaxTokens,
+    MaxTurnRequests,
+    Refusal,
+    Cancelled,
+    Other(String),
+}
+
+impl StopReason {
+    fn from_wire(s: &str) -> Self {
+        match s {
+            "end_turn" => StopReason::EndTurn,
+            "max_tokens" => StopReason::MaxTokens,
+            "max_turn_requests" => StopReason::MaxTurnRequests,
+            "refusal" => StopReason::Refusal,
+            "cancelled" => StopReason::Cancelled,
+            other => StopReason::Other(other.to_string()),
+        }
+    }
+}
+
+/// One decoded streaming update from a prompt turn — the inner `update` of an
+/// ACP `session/update` notification, classified by its `sessionUpdate`
+/// discriminator. Unknown variants fall through to `Other` (the codec already
+/// tolerates unknown frames, so the spec can grow without dropping data).
+#[derive(Debug, Clone, PartialEq)]
+pub enum AcpUpdate {
+    /// Streamed user-facing assistant text.
+    AgentMessageChunk { text: String },
+    /// Streamed reasoning / "thinking" content (surfaced separately).
+    AgentThoughtChunk { text: String },
+    /// A new tool invocation announced (status usually `pending`).
+    ToolCall {
+        tool_call_id: String,
+        title: String,
+        status: String,
+    },
+    /// A status/result transition for an existing tool call.
+    ToolCallUpdate {
+        tool_call_id: String,
+        status: String,
+    },
+    /// The agent's structured task plan was (re)published.
+    Plan,
+    /// Any other / future `sessionUpdate` variant, kept by name.
+    Other { kind: String },
+}
+
+/// Pull the text out of an ACP `ContentBlock` (`{type:"text", text:"…"}`) or an
+/// array of them, ignoring non-text blocks. Returns `None` if there's no text.
+fn content_text(c: &Value) -> Option<String> {
+    if let Some(t) = c.get("text").and_then(Value::as_str) {
+        return Some(t.to_string());
+    }
+    if let Some(arr) = c.as_array() {
+        let joined: String = arr
+            .iter()
+            .filter_map(|b| b.get("text").and_then(Value::as_str))
+            .collect();
+        if !joined.is_empty() {
+            return Some(joined);
+        }
+    }
+    None
+}
+
+/// Decode an ACP `session/update` notification into a typed [`AcpUpdate`].
+fn map_session_update(n: &Notification) -> AcpUpdate {
+    let update = n.params.as_ref().and_then(|p| p.get("update"));
+    let kind = update
+        .and_then(|u| u.get("sessionUpdate"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let text_of = |u: &Value| {
+        u.get("content")
+            .and_then(content_text)
+            .or_else(|| u.get("text").and_then(Value::as_str).map(str::to_string))
+            .unwrap_or_default()
+    };
+    let str_field = |u: &Value, k: &str| {
+        u.get(k)
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string()
+    };
+    match (update, kind) {
+        (Some(u), "agent_message_chunk") => AcpUpdate::AgentMessageChunk { text: text_of(u) },
+        (Some(u), "agent_thought_chunk") => AcpUpdate::AgentThoughtChunk { text: text_of(u) },
+        (Some(u), "tool_call") => AcpUpdate::ToolCall {
+            tool_call_id: str_field(u, "toolCallId"),
+            title: str_field(u, "title"),
+            status: u
+                .get("status")
+                .and_then(Value::as_str)
+                .unwrap_or("pending")
+                .to_string(),
+        },
+        (Some(u), "tool_call_update") => AcpUpdate::ToolCallUpdate {
+            tool_call_id: str_field(u, "toolCallId"),
+            status: str_field(u, "status"),
+        },
+        (_, "plan") => AcpUpdate::Plan,
+        (_, other) => AcpUpdate::Other {
+            kind: other.to_string(),
+        },
+    }
+}
+
+/// Answer a peer-initiated request that arrives mid-turn. flockmux advertises
+/// no fs/terminal capability and runs workers with permission pre-granted, so:
+/// `session/request_permission` → select the first offered option (allow);
+/// any other method → JSON-RPC "method not found", so a capability-honest agent
+/// fails fast instead of the turn hanging on an answer that never comes.
+///
+/// NOTE: the exact `RequestPermissionResponse.outcome` shape is pinned against
+/// live `opencode acp` during the spawn-integration step; the nested
+/// `{outcome:{outcome,optionId}}` form here matches the ACP v1 schema.
+fn auto_answer(req: &Request) -> Response {
+    match req.method.as_str() {
+        "session/request_permission" => {
+            let option_id = req
+                .params
+                .as_ref()
+                .and_then(|p| p.get("options"))
+                .and_then(Value::as_array)
+                .and_then(|opts| opts.first())
+                .and_then(|o| o.get("optionId").or_else(|| o.get("id")))
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            let outcome = match option_id {
+                Some(id) => json!({ "outcome": { "outcome": "selected", "optionId": id } }),
+                None => json!({ "outcome": { "outcome": "cancelled" } }),
+            };
+            Response::result(req.id.clone(), outcome)
+        }
+        other => Response::error(
+            req.id.clone(),
+            -32601,
+            format!("flockmux ACP client does not implement {other}"),
+        ),
+    }
+}
+
+/// Typed ACP (Agent Client Protocol, protocol v1) session driver above
+/// [`Connection`]. flockmux is the ACP **client** and owns the turn loop:
+/// `initialize` → `session/new` → `session/prompt`, streaming `session/update`
+/// notifications and answering peer-initiated requests (permission / fs) that
+/// arrive while a turn is in flight.
+///
+/// Target: the native `opencode acp` agent (ndjson JSON-RPC over stdio — the
+/// framing [`LineDecoder`] already speaks). Claude and Codex are deliberately
+/// NOT driven this way: claude over ACP goes through the Claude Agent SDK
+/// (metered against the separate Agent-SDK credit pool, off the interactive
+/// subscription — a billing red line), and codex has no native ACP.
+pub struct AcpSession {
+    conn: Connection,
+    notifications: mpsc::UnboundedReceiver<Notification>,
+    incoming_requests: mpsc::UnboundedReceiver<Request>,
+    session_id: Option<String>,
+}
+
+impl AcpSession {
+    pub fn from_handles(handles: ConnectionHandles) -> Self {
+        Self {
+            conn: handles.conn,
+            notifications: handles.notifications,
+            incoming_requests: handles.incoming_requests,
+            session_id: None,
+        }
+    }
+
+    /// ACP `initialize` handshake. Sends `protocolVersion = 1` (the integer)
+    /// plus the capabilities flockmux actually serves — none: no fs, no
+    /// terminal, so the worker does its own file IO in the shared workspace cwd
+    /// (mirroring the PTY path). Asserts the agent negotiated the same integer
+    /// version; a mismatch is a hard error rather than proceeding on an
+    /// unsupported wire. Returns the raw result (authMethods, agentCaps, …).
+    pub async fn initialize(
+        &self,
+        client_name: &str,
+        client_version: &str,
+    ) -> Result<Value, ConnError> {
+        let result = self
+            .conn
+            .request(
+                "initialize",
+                Some(json!({
+                    "protocolVersion": ACP_PROTOCOL_VERSION,
+                    "clientInfo": { "name": client_name, "version": client_version },
+                    "clientCapabilities": {
+                        "fs": { "readTextFile": false, "writeTextFile": false },
+                        "terminal": false,
+                    },
+                })),
+            )
+            .await?;
+        match result.get("protocolVersion").and_then(Value::as_i64) {
+            Some(v) if v == ACP_PROTOCOL_VERSION => Ok(result),
+            Some(v) => Err(ConnError::Protocol(format!(
+                "agent negotiated ACP v{v}, flockmux speaks v{ACP_PROTOCOL_VERSION}"
+            ))),
+            None => Err(ConnError::Protocol(
+                "initialize response missing integer protocolVersion".into(),
+            )),
+        }
+    }
+
+    /// Create a fresh session rooted at `cwd` (which MUST be absolute) and
+    /// remember its id for subsequent prompts. `mcpServers` is empty on purpose:
+    /// flockmux wires opencode's swarm MCP via the per-agent `OPENCODE_CONFIG`
+    /// file, not over ACP.
+    pub async fn new_session(&mut self, cwd: &str) -> Result<String, ConnError> {
+        let result = self
+            .conn
+            .request("session/new", Some(json!({ "cwd": cwd, "mcpServers": [] })))
+            .await?;
+        let id = result
+            .get("sessionId")
+            .and_then(Value::as_str)
+            .ok_or_else(|| ConnError::Protocol("session/new response missing sessionId".into()))?
+            .to_string();
+        self.session_id = Some(id.clone());
+        Ok(id)
+    }
+
+    /// Run one prompt turn to completion. Sends `session/prompt`, then drives
+    /// the turn until the response arrives: each `session/update` is decoded and
+    /// handed to `on_update`, and peer-initiated requests are auto-answered (see
+    /// [`auto_answer`]). Answering them CONCURRENTLY with the pending prompt is
+    /// mandatory — otherwise the agent blocks waiting on a permission reply and
+    /// the turn deadlocks. Returns the turn's [`StopReason`]. Requires a prior
+    /// [`new_session`](Self::new_session).
+    pub async fn run_turn(
+        &mut self,
+        text: &str,
+        mut on_update: impl FnMut(AcpUpdate),
+    ) -> Result<StopReason, ConnError> {
+        let session_id = self
+            .session_id
+            .clone()
+            .ok_or_else(|| ConnError::Protocol("prompt before session/new".into()))?;
+        // Disjoint field borrows so the loop can drain BOTH channels AND answer
+        // peer requests on the same connection without a whole-`self` borrow.
+        let conn = &self.conn;
+        let notifications = &mut self.notifications;
+        let incoming_requests = &mut self.incoming_requests;
+        let mut rx = conn
+            .send_request(
+                "session/prompt",
+                Some(json!({
+                    "sessionId": session_id,
+                    "prompt": [{ "type": "text", "text": text }],
+                })),
+            )
+            .await?;
+        loop {
+            tokio::select! {
+                resp = &mut rx => {
+                    let resp = resp.map_err(|_| ConnError::Closed)?;
+                    if let Some(err) = resp.error {
+                        return Err(ConnError::Rpc(err));
+                    }
+                    let stop = resp
+                        .result
+                        .as_ref()
+                        .and_then(|r| r.get("stopReason"))
+                        .and_then(Value::as_str)
+                        .map(StopReason::from_wire)
+                        .unwrap_or(StopReason::EndTurn);
+                    return Ok(stop);
+                }
+                Some(note) = notifications.recv() => {
+                    if note.method == "session/update" {
+                        on_update(map_session_update(&note));
+                    }
+                }
+                Some(req) = incoming_requests.recv() => {
+                    // Best-effort: a failed write means the peer is gone, which
+                    // the prompt receiver surfaces as Closed on the next poll.
+                    let _ = conn.respond(auto_answer(&req)).await;
+                }
+            }
+        }
+    }
+
+    /// Abort the in-flight turn (fire-and-forget). A pending `run_turn` then
+    /// resolves with `StopReason::Cancelled`, not an error. No-op if no session.
+    pub async fn cancel(&self) -> Result<(), ConnError> {
+        let Some(session_id) = self.session_id.clone() else {
+            return Ok(());
+        };
+        self.conn
+            .notify("session/cancel", Some(json!({ "sessionId": session_id })))
+            .await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -687,6 +1043,112 @@ mod tests {
         assert_eq!(gen.next(), json!(1));
         assert_eq!(gen.next(), json!(2));
         assert_eq!(gen.next(), json!(3));
+    }
+
+    #[test]
+    fn stop_reason_maps_known_and_unknown() {
+        assert_eq!(StopReason::from_wire("end_turn"), StopReason::EndTurn);
+        assert_eq!(StopReason::from_wire("cancelled"), StopReason::Cancelled);
+        assert_eq!(StopReason::from_wire("max_tokens"), StopReason::MaxTokens);
+        assert_eq!(
+            StopReason::from_wire("future_reason"),
+            StopReason::Other("future_reason".into())
+        );
+    }
+
+    #[test]
+    fn session_update_decodes_variants() {
+        let msg = |u: Value| {
+            Notification::new("session/update", Some(json!({ "sessionId": "s", "update": u })))
+        };
+        assert_eq!(
+            map_session_update(&msg(json!({
+                "sessionUpdate": "agent_message_chunk",
+                "content": { "type": "text", "text": "hi" }
+            }))),
+            AcpUpdate::AgentMessageChunk { text: "hi".into() }
+        );
+        assert_eq!(
+            map_session_update(&msg(json!({
+                "sessionUpdate": "agent_thought_chunk",
+                "content": { "type": "text", "text": "hmm" }
+            }))),
+            AcpUpdate::AgentThoughtChunk { text: "hmm".into() }
+        );
+        assert_eq!(
+            map_session_update(&msg(json!({
+                "sessionUpdate": "tool_call",
+                "toolCallId": "t1", "title": "grep", "status": "pending"
+            }))),
+            AcpUpdate::ToolCall {
+                tool_call_id: "t1".into(),
+                title: "grep".into(),
+                status: "pending".into()
+            }
+        );
+        assert_eq!(
+            map_session_update(&msg(json!({
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": "t1", "status": "completed"
+            }))),
+            AcpUpdate::ToolCallUpdate {
+                tool_call_id: "t1".into(),
+                status: "completed".into()
+            }
+        );
+        assert_eq!(
+            map_session_update(&msg(json!({ "sessionUpdate": "plan", "entries": [] }))),
+            AcpUpdate::Plan
+        );
+        // A future variant the spec adds later survives as Other (no data loss).
+        assert_eq!(
+            map_session_update(&msg(json!({ "sessionUpdate": "usage_update", "tokens": 5 }))),
+            AcpUpdate::Other {
+                kind: "usage_update".into()
+            }
+        );
+    }
+
+    #[test]
+    fn auto_answer_allows_permission_and_rejects_unknown() {
+        let perm = Request::new(
+            1,
+            "session/request_permission",
+            Some(json!({ "options": [
+                { "optionId": "allow", "name": "Allow" },
+                { "optionId": "reject" }
+            ] })),
+        );
+        let resp = auto_answer(&perm);
+        assert_eq!(resp.id, json!(1));
+        assert_eq!(
+            resp.result.unwrap(),
+            json!({ "outcome": { "outcome": "selected", "optionId": "allow" } })
+        );
+        assert!(resp.error.is_none());
+
+        // A method flockmux didn't advertise → method-not-found, never a hang.
+        let fs = Request::new(2, "fs/read_text_file", None);
+        let resp = auto_answer(&fs);
+        assert!(resp.result.is_none());
+        assert_eq!(resp.error.unwrap().code, -32601);
+    }
+
+    #[test]
+    fn content_text_handles_block_and_array() {
+        assert_eq!(
+            content_text(&json!({ "type": "text", "text": "x" })),
+            Some("x".into())
+        );
+        assert_eq!(
+            content_text(&json!([
+                { "type": "text", "text": "a" },
+                { "type": "image" },
+                { "type": "text", "text": "b" }
+            ])),
+            Some("ab".into())
+        );
+        assert_eq!(content_text(&json!({ "type": "image" })), None);
     }
 }
 
@@ -896,6 +1358,128 @@ mod conn_tests {
             CodexAppEvent::AgentMessageDelta {
                 text: "hello".into()
             }
+        );
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn acp_session_initializes_creates_session_and_drives_a_turn() {
+        let (h, mut peer_r, mut peer_w) = pair();
+        // A minimal fake `opencode acp` agent.
+        let server = tokio::spawn(async move {
+            // initialize: assert the integer protocolVersion 1, echo it back.
+            let mut line = String::new();
+            peer_r.read_line(&mut line).await.unwrap();
+            let init: Request = serde_json::from_str(line.trim()).unwrap();
+            assert_eq!(init.method, "initialize");
+            assert_eq!(
+                init.params.as_ref().unwrap().get("protocolVersion").unwrap(),
+                &json!(1),
+                "protocolVersion must be the integer 1, not a string"
+            );
+            peer_w
+                .write_all(
+                    &Message::Response(Response::result(
+                        init.id,
+                        json!({ "protocolVersion": 1, "agentCapabilities": { "loadSession": true } }),
+                    ))
+                    .encode_line(),
+                )
+                .await
+                .unwrap();
+
+            // session/new → sessionId
+            line.clear();
+            peer_r.read_line(&mut line).await.unwrap();
+            let new: Request = serde_json::from_str(line.trim()).unwrap();
+            assert_eq!(new.method, "session/new");
+            assert_eq!(new.params.as_ref().unwrap().get("cwd").unwrap(), "/tmp/ws");
+            peer_w
+                .write_all(
+                    &Message::Response(Response::result(new.id, json!({ "sessionId": "sess_1" })))
+                        .encode_line(),
+                )
+                .await
+                .unwrap();
+
+            // session/prompt: stream a tool_call, then ask permission, then end.
+            line.clear();
+            peer_r.read_line(&mut line).await.unwrap();
+            let prompt: Request = serde_json::from_str(line.trim()).unwrap();
+            assert_eq!(prompt.method, "session/prompt");
+            assert_eq!(
+                prompt.params.as_ref().unwrap().get("sessionId").unwrap(),
+                "sess_1"
+            );
+            peer_w
+                .write_all(
+                    &Message::Notification(Notification::new(
+                        "session/update",
+                        Some(json!({ "sessionId": "sess_1", "update": {
+                            "sessionUpdate": "tool_call",
+                            "toolCallId": "t1", "title": "read file", "status": "pending"
+                        }})),
+                    ))
+                    .encode_line(),
+                )
+                .await
+                .unwrap();
+            peer_w
+                .write_all(
+                    &Message::Request(Request::new(
+                        99,
+                        "session/request_permission",
+                        Some(json!({ "sessionId": "sess_1", "options": [
+                            { "optionId": "allow", "name": "Allow" }
+                        ] })),
+                    ))
+                    .encode_line(),
+                )
+                .await
+                .unwrap();
+            // The client must auto-allow with the first optionId.
+            line.clear();
+            peer_r.read_line(&mut line).await.unwrap();
+            let perm_resp: Response = serde_json::from_str(line.trim()).unwrap();
+            assert_eq!(perm_resp.id, json!(99));
+            assert_eq!(
+                perm_resp.result.unwrap(),
+                json!({ "outcome": { "outcome": "selected", "optionId": "allow" } })
+            );
+            peer_w
+                .write_all(
+                    &Message::Response(Response::result(
+                        prompt.id,
+                        json!({ "stopReason": "end_turn" }),
+                    ))
+                    .encode_line(),
+                )
+                .await
+                .unwrap();
+        });
+
+        let mut session = AcpSession::from_handles(h);
+        let init = session.initialize("flockmux", "0.1.0").await.unwrap();
+        assert_eq!(
+            init.get("agentCapabilities").unwrap().get("loadSession").unwrap(),
+            &json!(true)
+        );
+        let sid = session.new_session("/tmp/ws").await.unwrap();
+        assert_eq!(sid, "sess_1");
+
+        let mut updates = Vec::new();
+        let stop = session
+            .run_turn("do the thing", |u| updates.push(u))
+            .await
+            .unwrap();
+        assert_eq!(stop, StopReason::EndTurn);
+        assert_eq!(
+            updates,
+            vec![AcpUpdate::ToolCall {
+                tool_call_id: "t1".into(),
+                title: "read file".into(),
+                status: "pending".into(),
+            }]
         );
         server.await.unwrap();
     }
