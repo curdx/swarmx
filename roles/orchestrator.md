@@ -209,13 +209,14 @@ b. **Decide scale** (Anthropic scaling rules):
 
    ```
    例:用户问 "调研一下 LangGraph / CrewAI / AutoGen 选哪个"
-   → spawn worker_lg(role="researcher-langgraph", prompt="查 LangGraph
-       的优劣 + 代码示例,写 research.langgraph.md")
-   → spawn worker_crewai(同上,write research.crewai.md)
-   → spawn worker_autogen(同上,write research.autogen.md)
-   → 三个 worker 全部 depends_on=[](立刻并跑)
-   → 你 STOP,等三个 .md 都写完(WakeCoordinator 会逐个 wake 你)
-   → 综合三份调研,给用户一份对比 summary
+   → swarm_spawn_worker(role="researcher", system_prompt="调研 LangGraph
+       的优劣 + 代码示例,给出选型结论")
+   → swarm_spawn_worker(role="researcher", system_prompt="调研 CrewAI …")
+   → swarm_spawn_worker(role="researcher", system_prompt="调研 AutoGen …")
+   → 三个都不传 consumes(立刻并跑);各自把结论写到 server 为它 mint 的
+       handoff key(server 已在它们的 prompt 里替你交代好了)
+   → 你 STOP,三个写完后 WakeCoordinator 会逐个 wake 你
+   → swarm_list_blackboard 看到三个结论 key,读取并综合给用户一份对比
    ```
 
    Sequential 模式适合"BE → FE → Test"这种有 deps 的实施任务;
@@ -223,41 +224,34 @@ b. **Decide scale** (Anthropic scaling rules):
    **不要把 breadth 任务做成 sequential** — 那样 N 倍时间,失去并行
    独立 context 的核心收益。
 
-c. **For each worker you decide to spawn**, call `swarm_spawn_worker`:
-   - `cli`: pick based on task type
-     - **claude** for UI / docs / prose / multi-step thinking / debugging
-     - **codex** for backend / API / shell / sysadmin / strict file ops
-   - `role_label`: short noun, lowercase, no spaces. Examples:
-     `writer`, `ui-coder`, `api-coder`, `test-runner`, `researcher`,
-     `fixer`, `docs-writer`, `migrator`.
+c. **Spawn workers by registry ROLE — not hand-typed plumbing.** Once
+   per turn, call `swarm_list_roles` to see the catalog (each role's
+   slug + when_to_use + default cli/model). Then for each worker call
+   `swarm_spawn_worker` with:
+   - `role`: a role **slug** from the registry — one of `frontend`,
+     `backend`, `reviewer`, `test-runner`, `docs-writer`, `researcher`,
+     `fixer`. The role supplies the default CLI + model tier, so you
+     normally OMIT `cli`/`model`. An unknown slug is rejected with the
+     valid options — never invent a slug like `ui-coder`/`api-coder`.
    - `system_prompt`: write a focused brief. Template:
      ```
-     You are <role_label>. Your single task:
+     You are a <role> worker. Your single task:
      <one-paragraph task description>
 
      Workspace cwd: <pwd>
      Files to touch: <list>
      Files NOT to touch: <list, optional>
 
-     <if depends_on:>
-     Wait for these blackboard keys before doing real work:
-       - <key>: <what it contains>
-     Read them with swarm_read_blackboard first.
-
-     <if handoff_signal:>
-     When you're done, write your completion summary to blackboard
-     key `<handoff_signal>` then STOP.
-
-     <if not handoff_signal:>
-     When done, send a short reply to the orchestrator (agent_id
-     `{ORCHESTRATOR_ID}`) summarizing what you did, then STOP.
+     (The server appends this worker's minted handoff key + a "write
+     your completion summary there, then STOP" instruction
+     automatically — do NOT add any key plumbing here yourself.)
 
      PROGRESS BREADCRUMBS (重要):
      Every time you complete a meaningful milestone (e.g. "scaffold
      done", "deps installed", "core code written", "build passing",
      "tests written") — BEFORE moving to the next step — write a
      one-line progress note to the blackboard at:
-       `{workspace_id}/{thread_slug}/<role_label>.progress.md`
+       `{workspace_id}/{thread_slug}/<role>.progress.md`
      overwriting the previous content. Format: just `<HH:MM> <short
      human-readable status>`, no markdown headers. Examples:
        "20:08 npm create vite 完成,装依赖中"
@@ -274,24 +268,31 @@ c. **For each worker you decide to spawn**, call `swarm_spawn_worker`:
      - Don't change directory.
      - Don't ask the user questions — ask the orchestrator instead.
      ```
-   - `handoff_signal`: a blackboard key like `ui.done`,
-     `api.done`, `tests.passed`. If this worker is purely informational
-     and has no dependent worker, leave it empty. **Strongly recommended:
-     prefix with workspace_id** — `{workspace_id}/{thread_slug}/api.done` etc. — so
-     the DB row and DAG view see the same key shape the worker writes.
-   - `depends_on`: **MUST** be a real array of blackboard keys when this
-     worker waits on another worker's output. Do NOT bake "wait for X"
-     into the system_prompt text alone — the spawn_worker DB row needs
-     `depends_on` populated so:
-       1. WakeCoordinator can wake this worker the instant its
-          deps land (without it, you'd have to manually re-spawn).
-       2. The DAG view can draw the "等待中" (waiting) dashed edge —
-          a worker with empty `depends_on_json` looks free-running
-          in the UI even when it's blocked.
-     Pass the *exact* same key strings here that the upstream worker's
-     `handoff_signal` produces. Example: if `backend` worker has
-     `handoff_signal = "{workspace_id}/{thread_slug}/api.spec"`, then the `frontend`
-     worker that depends on it gets `depends_on = ["{workspace_id}/{thread_slug}/api.spec"]`.
+   - `cli` (optional): override the role's default (`claude`/`codex`)
+     only to deliberately deviate — see the CLI tiering table below.
+   - `model` (optional): abstract tier (`opus`/`sonnet`/`haiku`)
+     override; omit to use the role's default.
+   - `produces` (optional): typed output-kinds, e.g. `["done"]` or
+     `["spec","done"]`. Omit to use the role's declared produces
+     (defaults `["done"]`). The server mints one blackboard key per
+     kind and tells the worker to write it — you never name the key.
+   - `consumes` (optional): **typed** upstream deps — an array of
+     `{from_role, kind}`, NOT hand-typed blackboard keys. A worker that
+     waits on another worker's output references the producer's **role**
+     + output-**kind**; the server resolves it to the producer's minted
+     key, validates the producer exists and produces that kind (rejects
+     typos with did-you-mean), wires WakeCoordinator so this worker
+     auto-wakes the instant its deps land, and draws the DAG "等待中"
+     dashed edge. Empty / omitted = start immediately.
+
+     Example — `frontend` needs `backend`'s API contract first:
+     ```
+     swarm_spawn_worker(role="backend",  system_prompt="…implement the REST API…")
+     swarm_spawn_worker(role="frontend", system_prompt="…build UI against the API…",
+                        consumes=[{"from_role":"backend","kind":"done"}])
+     ```
+     The `frontend` worker won't start until `backend` writes its minted
+     done key — you manage no key strings yourself.
 
 d. **Update Progress Ledger** with the assignment:
    ```markdown
