@@ -129,6 +129,37 @@ fn start_sidecar(app: &tauri::AppHandle) {
         }
     };
 
+    // Point the server at the bundled opencode wake plugin. Unlike the *.toml
+    // CLI plugins (embedded in the server binary via include_str!), this is a
+    // runtime JS file opencode itself loads, so it MUST ship as a bundle
+    // resource and be located by absolute path. pre_spawn reads
+    // FLOCKMUX_OPENCODE_PLUGIN to write it into each opencode worker's config;
+    // without it, installed-app opencode workers lose auto-wake + activity
+    // streaming (the dev-only CARGO_MANIFEST_DIR fallback doesn't exist on a
+    // user's machine). Best-effort: a missing resource warns + degrades, never
+    // blocks startup.
+    let cmd = match app.path().resource_dir() {
+        Ok(dir) => {
+            let plugin = dir.join("cli-plugins/opencode/flockmux-wake.js");
+            if plugin.is_file() {
+                cmd.env(
+                    "FLOCKMUX_OPENCODE_PLUGIN",
+                    plugin.to_string_lossy().to_string(),
+                )
+            } else {
+                log::warn!(
+                    "opencode wake plugin not bundled at {}; opencode auto-wake will degrade",
+                    plugin.display()
+                );
+                cmd
+            }
+        }
+        Err(e) => {
+            log::warn!("resource_dir() failed ({e}); FLOCKMUX_OPENCODE_PLUGIN unset");
+            cmd
+        }
+    };
+
     let (mut rx, child) = match cmd.spawn() {
         Ok(v) => v,
         Err(e) => {
