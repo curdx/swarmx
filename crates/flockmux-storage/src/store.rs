@@ -32,6 +32,45 @@ fn is_busy(e: &SqliteError) -> bool {
     )
 }
 
+/// Rewrite an arbitrary user search string into a safe FTS5 MATCH expression.
+///
+/// FTS5 treats `*` `:` `(` `)` `-` `^` `"` `+`, the keywords AND/OR/NOT/NEAR,
+/// and bareword quirks as *query operators*. Passing the raw user string to
+/// `MATCH` therefore lets a malformed input raise a SQLite syntax error (which
+/// would otherwise leak out as an HTTP 500). We defuse this by emitting a list
+/// of double-quoted phrase tokens: inside a quoted FTS5 string every special
+/// character is literal token text, so no input can form an operator.
+///
+/// Tokenization mirrors the `unicode61` tokenizer used by `messages_fts`: we
+/// break on every non-alphanumeric character (Unicode-aware, so CJK and other
+/// scripts still search). Each token becomes `"token"`, with any embedded `"`
+/// escaped per the FTS5 spec by doubling it (`""`); tokens are joined by spaces
+/// (implicit AND). Returns an empty string when the input has no searchable
+/// characters — the caller treats that as "no results" rather than running an
+/// (also-invalid) empty MATCH.
+fn sanitize_fts5_query(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len() + 2);
+    for token in raw.split(|c: char| !c.is_alphanumeric()) {
+        if token.is_empty() {
+            continue;
+        }
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        out.push('"');
+        // A bare-alphanumeric token can't contain `"`, but escape defensively
+        // in case the tokenization rule is ever loosened.
+        for ch in token.chars() {
+            if ch == '"' {
+                out.push('"');
+            }
+            out.push(ch);
+        }
+        out.push('"');
+    }
+    out
+}
+
 /// True if `e` is a UNIQUE/constraint failure — used by `create_workspace` to
 /// retry on a (rare) generated-slug collision rather than surfacing a 500.
 fn is_constraint_violation(e: &SqliteError) -> bool {
@@ -1744,6 +1783,19 @@ impl Store {
     }
 
     pub async fn search_messages(&self, query: String) -> Result<Vec<MessageRecord>> {
+        // Never feed the raw user string to FTS5 MATCH: bare special characters
+        // (`*` `:` `(` `-` `^` `"`, the AND/OR/NOT/NEAR keywords, …) are FTS5
+        // *query operators*, so a malformed query would surface as a raw SQLite
+        // syntax error (HTTP 500 leaking SQL). We rewrite the input into a set
+        // of double-quoted phrase tokens — inside a quoted string every special
+        // char is treated as literal token text — joined by spaces (implicit
+        // AND). An embedded `"` is escaped per the FTS5 spec by doubling it.
+        let match_query = sanitize_fts5_query(&query);
+        // If the input contained no tokenizable characters, an empty MATCH is
+        // itself a syntax error — just return no hits.
+        if match_query.is_empty() {
+            return Ok(Vec::new());
+        }
         let pool = self.pool.clone();
         tokio::task::spawn_blocking(move || {
             with_busy_retry(&pool, |conn| -> rusqlite::Result<Vec<MessageRecord>> {
@@ -1761,7 +1813,7 @@ impl Store {
                  ORDER BY rank \
                  LIMIT 200",
                 )?;
-                let rows = stmt.query_map(params![query], message_with_trace_from_row)?;
+                let rows = stmt.query_map(params![match_query], message_with_trace_from_row)?;
                 rows.collect::<rusqlite::Result<Vec<_>>>()
             })
         })
@@ -1805,23 +1857,36 @@ impl Store {
         let pool = self.pool.clone();
         tokio::task::spawn_blocking(move || {
             with_busy_retry(&pool, |conn| -> rusqlite::Result<Vec<i64>> {
-                // Single UPDATE ... RETURNING instead of N round-trips. Params bound
-                // positionally: at_ms, to_agent, then one per id.
-                let placeholders = vec!["?"; ids.len()].join(",");
-                let sql = format!(
-                    "UPDATE messages SET read_at = ? \
-                 WHERE read_at IS NULL AND to_agent = ? AND id IN ({placeholders}) \
-                 RETURNING id"
-                );
-                let mut binds: Vec<rusqlite::types::Value> = Vec::with_capacity(ids.len() + 2);
-                binds.push(at_ms.into());
-                binds.push(to_agent.clone().into());
-                binds.extend(ids.iter().map(|id| (*id).into()));
-                let mut stmt = conn.prepare(&sql)?;
-                let rows = stmt.query_map(rusqlite::params_from_iter(binds.iter()), |r| {
-                    r.get::<_, i64>(0)
-                })?;
-                rows.collect::<rusqlite::Result<Vec<i64>>>()
+                // `ids` is caller-supplied and unbounded; SQLite caps a statement at
+                // SQLITE_MAX_VARIABLE_NUMBER (999 on the default build). Two fixed
+                // params (at_ms, to_agent) leave room for ~997 ids, so we chunk at
+                // 900/statement to keep a comfortable margin. A flat `IN` over a
+                // large batch used to blow the cap and surface as a 500.
+                const CHUNK: usize = 900;
+                let mut updated: Vec<i64> = Vec::new();
+                for chunk in ids.chunks(CHUNK) {
+                    // Single UPDATE ... RETURNING per chunk instead of N round-trips.
+                    // Params bound positionally: at_ms, to_agent, then one per id.
+                    let placeholders = vec!["?"; chunk.len()].join(",");
+                    let sql = format!(
+                        "UPDATE messages SET read_at = ? \
+                     WHERE read_at IS NULL AND to_agent = ? AND id IN ({placeholders}) \
+                     RETURNING id"
+                    );
+                    let mut binds: Vec<rusqlite::types::Value> =
+                        Vec::with_capacity(chunk.len() + 2);
+                    binds.push(at_ms.into());
+                    binds.push(to_agent.clone().into());
+                    binds.extend(chunk.iter().map(|id| (*id).into()));
+                    let mut stmt = conn.prepare(&sql)?;
+                    let rows = stmt.query_map(rusqlite::params_from_iter(binds.iter()), |r| {
+                        r.get::<_, i64>(0)
+                    })?;
+                    for id in rows {
+                        updated.push(id?);
+                    }
+                }
+                Ok(updated)
             })
         })
         .await
@@ -3160,6 +3225,32 @@ impl Store {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[test]
+    fn sanitize_fts5_query_quotes_tokens_and_defuses_operators() {
+        // Plain words become quoted phrase tokens (implicit AND).
+        assert_eq!(sanitize_fts5_query("planner"), "\"planner\"");
+        assert_eq!(sanitize_fts5_query("hello world"), "\"hello\" \"world\"");
+
+        // FTS5 operators / special chars never survive as operators: they are
+        // split out as separators, leaving only quoted token text.
+        assert_eq!(sanitize_fts5_query("foo AND bar"), "\"foo\" \"AND\" \"bar\"");
+        assert_eq!(sanitize_fts5_query("col:val"), "\"col\" \"val\"");
+        assert_eq!(sanitize_fts5_query("pre*"), "\"pre\"");
+        assert_eq!(sanitize_fts5_query("NEAR(a b)"), "\"NEAR\" \"a\" \"b\"");
+
+        // Inputs that are *only* special characters (the classic crash case,
+        // e.g. a lone `"` or `*`) sanitize to the empty string → no results.
+        assert_eq!(sanitize_fts5_query("\""), "");
+        assert_eq!(sanitize_fts5_query("*"), "");
+        assert_eq!(sanitize_fts5_query("\"\"\""), "");
+        assert_eq!(sanitize_fts5_query("()-^:"), "");
+        assert_eq!(sanitize_fts5_query("   "), "");
+        assert_eq!(sanitize_fts5_query(""), "");
+
+        // Non-ASCII (CJK) tokens are preserved so unicode61 search still works.
+        assert_eq!(sanitize_fts5_query("会议"), "\"会议\"");
+    }
 
     #[test]
     fn with_suffix_appends_not_replaces() {
