@@ -1115,6 +1115,8 @@
     "output": "输出",
     "cacheRead": "缓存读",
     "cacheWrite": "缓存写",
+    "cacheHitRate": "缓存命中率",
+    "cacheHitHint": "缓存读取 / 总输入",
     "ctx": "上下文窗口",
     "ctxPeak": "峰值上下文",
     "updatedAt": "更新于 {{time}}",

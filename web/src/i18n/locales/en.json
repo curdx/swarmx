@@ -1115,6 +1115,8 @@
     "output": "Output",
     "cacheRead": "Cache read",
     "cacheWrite": "Cache write",
+    "cacheHitRate": "Cache hit rate",
+    "cacheHitHint": "cache reads / total input",
     "ctx": "Context",
     "ctxPeak": "Peak context",
     "updatedAt": "Updated {{time}}",
