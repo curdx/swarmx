@@ -22,6 +22,12 @@ mod pty_stream;
 mod reaper;
 mod registry;
 mod roles;
+// W2-1 phase 1: the verification-gate executor (security-hardened allowlist +
+// timeboxed process-group exec), unit-tested. Phase 2 wires it into the handoff
+// path (spawn schema + persist + interception + `verifying` status) — see
+// docs/w2-1-verification-gate-design-2026-06-15.md. `allow(dead_code)` until then.
+#[allow(dead_code)]
+mod verify;
 mod routes;
 mod runtime_path;
 mod spawn;
