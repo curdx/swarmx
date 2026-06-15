@@ -730,13 +730,9 @@ export function MessagesPanel({
       setItems((prev) =>
         prev.some((m) => m.id === rec.id) ? prev : [...prev, rec],
       );
-      // 主动 wake scout —— flockmux 现状是 sendMessage 只 push mailbox 不
-      // wake recipient,而 scout 已经 STOP 在那等。fire 一发 manual wake
-      // 让它去 swarm_list_messages 处理这条新消息。best-effort,失败也
-      // 不阻塞 UI(下次 BlackboardChanged / Stop hook 自然会消化)。
-      api.wakeAgent(recipient.agent_id).catch(() => {
-        /* swallow */
-      });
+      // W0-2: 唤醒已由服务端在 /api/message 内完成(外部消息→活 agent 自动
+      // deliver_manual_wake)。前端不再补发,否则与服务端 wake 双重 kick,会
+      // 多触发一轮队长。重新拉起已退出的队长仍走 onSend / ⚡ 唤醒调度。
       if (recipientBusy) {
         setQueuedHint(true);
         window.setTimeout(() => setQueuedHint(false), 4000);
@@ -781,9 +777,7 @@ export function MessagesPanel({
         setItems((prev) =>
           prev.some((m) => m.id === rec.id) ? prev : [...prev, rec],
         );
-        api.wakeAgent(recipient.agent_id).catch(() => {
-          /* swallow */
-        });
+        // W0-2: 服务端 /api/message 已自动 wake 活 agent,前端不再补发(避免双 kick)。
       }
       if (mountedRef.current) setError(null);
     } catch (e) {
