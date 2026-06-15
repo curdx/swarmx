@@ -1,4 +1,15 @@
 {
+  "backend": {
+    "title": "后端已停止",
+    "statusStopped": "本地后端进程已不在运行。",
+    "statusRetrying": "正在自动重启…（第 {{attempt}} 次）",
+    "statusPermanent": "自动重启已达上限，请手动重启。",
+    "showDetail": "查看错误输出",
+    "hideDetail": "收起错误输出",
+    "restart": "重启后端",
+    "restarting": "重启中…",
+    "restartFailed": "重启失败：{{err}}"
+  },
   "mcp": {
     "title": "MCP",
     "expand": "展开 MCP",
@@ -339,7 +350,7 @@
       "repoUrl": "github.com/curdx/flockmux-core",
       "endpointTitle": "后端地址",
       "endpointHint": "本地 flockmux-server 监听的回环端口（loopback only）",
-      "cratesTitle": "Rust crates",
+      "cratesTitle": "Rust crate 列表",
       "cratesHint": "9 个 crate 组成后端，src-tauri 是壳",
       "depsTitle": "前端依赖",
       "credits": "致谢",
@@ -1335,7 +1346,8 @@
   "home": {
     "deleteFailed": "删除工作空间失败",
     "workspaces": "工作空间",
-    "workspaceCount": "{{count}} 个工作空间",
+    "workspaceCount_one": "{{count}} 个工作空间",
+    "workspaceCount_other": "{{count}} 个工作空间",
     "loadingWorkspaces": "正在读取工作空间…",
     "backendUnreachable": "连接不上后端服务",
     "backendUnreachableDesc": "flockmux 后端 (127.0.0.1:7777) 没有响应，所以读不到你的工作空间。请确认服务在运行，然后重试。"

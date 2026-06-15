@@ -333,6 +333,120 @@ function structFields(text, structName) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
+// 规则8: i18n —— 代码用到的每个 t("key") 必须在 en + zh 都有；en/zh 结构对齐；
+// 不得有「中文值与英文逐字相同」的疑似漏翻（英文回退）。
+//
+// Root cause it guards: 前端 i18n 是手维护的 en.json/zh.json，有三类编译器与
+// vitest 都抓不到、只有真实用户能看到的「界面撒谎」：
+//   (a) 代码 t("x.y") 引用了两个 locale 都没有的 key → 用户看到原始 key 串；
+//   (b) 加了 en 没加 zh（或反之）→ 切语言后那条目回退、用户看到另一种语言；
+//   (c) zh 值直接照抄英文（漏翻）→ 中文用户看到英文。
+// i18next 复数后缀(_one/_other/…)与动态拼接 key(t(`a.${x}`) / t("a.b."))需特殊
+// 处理，否则误报。本仓库 i18n 大债曾靠反复手工批次修而无回归防线，这条把它焊死。
+// ─────────────────────────────────────────────────────────────────────────
+{
+  const { readdir, readFile: rf } = await import("node:fs/promises");
+  const PLURAL = ["_zero", "_one", "_two", "_few", "_many", "_other", "_plural"];
+  // 合法「中英同形」白名单：品牌名/URL/纯技术标识等不该翻译的整条 key。
+  // 单词级技术名词(MCP/PTY/CLI/stdio…)不会触发回退规则——回退规则只盯「含空格
+  // 分隔的多词英文短语」，单 token 天然豁免，无需在此登记。
+  const FALLBACK_ALLOW = new Set([
+    "settings.about.repoUrl", // 仓库 URL，不翻译
+  ]);
+
+  function flatten(obj, prefix, acc) {
+    for (const [k, v] of Object.entries(obj)) {
+      const key = prefix ? `${prefix}.${k}` : k;
+      if (v && typeof v === "object" && !Array.isArray(v)) flatten(v, key, acc);
+      else acc[key] = v;
+    }
+    return acc;
+  }
+  function baseKey(k) {
+    for (const suf of PLURAL) if (k.endsWith(suf)) return k.slice(0, -suf.length);
+    return k;
+  }
+
+  let en, zh;
+  try {
+    en = JSON.parse(await readText("web/src/i18n/locales/en.json"));
+    zh = JSON.parse(await readText("web/src/i18n/locales/zh.json"));
+  } catch (e) {
+    fail(`规则8: 读不到/解析失败 en.json 或 zh.json：${e.message}`);
+  }
+  if (en && zh) {
+    const fen = flatten(en, "", {});
+    const fzh = flatten(zh, "", {});
+    // base-key 索引：strip 复数后缀后的 key 集合，用于「存在性」与「对齐」判断，
+    // 这样 zh 只给 _other（中文唯一复数类目）也算覆盖了该 base key。
+    const basesEn = new Set(Object.keys(fen).map(baseKey));
+    const basesZh = new Set(Object.keys(fzh).map(baseKey));
+    const hasEn = (key) => fen[key] !== undefined || basesEn.has(key);
+    const hasZh = (key) => fzh[key] !== undefined || basesZh.has(key);
+
+    // (b) 结构对齐：每个 base key 必须 en/zh 都在。
+    for (const b of basesEn) {
+      if (!basesZh.has(b)) {
+        fail(`规则8(b): key \`${b}\` 在 en.json 有、zh.json 缺 —— 切到中文会回退显示英文。`);
+      }
+    }
+    for (const b of basesZh) {
+      if (!basesEn.has(b)) {
+        fail(`规则8(b): key \`${b}\` 在 zh.json 有、en.json 缺 —— 切到英文会回退显示中文。`);
+      }
+    }
+
+    // (c) 疑似英文回退：zh 值与 en 逐字相同，且像「多词英文短语」（两个空格分隔
+    // 的拉丁词）。单词技术名词/纯插值/无空格 URL 不触发，避免误报。
+    const englishPhrase = /[A-Za-z]{2,}\s+[A-Za-z]{2,}/;
+    for (const [k, v] of Object.entries(fen)) {
+      if (typeof v !== "string") continue;
+      if (FALLBACK_ALLOW.has(k)) continue;
+      if (fzh[k] === v && englishPhrase.test(v)) {
+        fail(
+          `规则8(c): zh.json 的 \`${k}\` 与 en 逐字相同（"${v.slice(0, 60)}"）—— 疑似漏翻、中文用户看到英文。确属不译(品牌/URL)请加进 FALLBACK_ALLOW。`,
+        );
+      }
+    }
+
+    // (a) 代码里 t("literal") / i18n.t("literal") 用到的 key 必须 en+zh 都有。
+    // 只看双引号字符串字面量；t(`a.${x}`) 动态 key 与以 "." 结尾的拼接前缀跳过。
+    const usedFiles = [];
+    async function walkSrc(dir) {
+      let entries;
+      try {
+        entries = await readdir(dir, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const e of entries) {
+        if (e.name === "node_modules" || e.name === "dist" || e.name === "src-tauri") continue;
+        const full = path.join(dir, e.name);
+        if (e.isDirectory()) await walkSrc(full);
+        else if (/\.(tsx?|ts)$/.test(e.name)) usedFiles.push(await rf(full, "utf8"));
+      }
+    }
+    await walkSrc(path.join(root, "web/src"));
+    const used = new Set();
+    for (const txt of usedFiles) {
+      for (const m of txt.matchAll(/\bt\(\s*"([A-Za-z0-9_.]+)"/g)) {
+        const key = m[1];
+        if (key.endsWith(".")) continue; // 动态拼接前缀 t("a.b." + x)
+        used.add(key);
+      }
+    }
+    for (const key of [...used].sort()) {
+      if (!hasEn(key)) {
+        fail(`规则8(a): 代码 t("${key}") 在 en.json 找不到（含复数后缀也没有）—— 英文用户看到原始 key 串。`);
+      }
+      if (!hasZh(key)) {
+        fail(`规则8(a): 代码 t("${key}") 在 zh.json 找不到（含复数后缀也没有）—— 中文用户看到原始 key 串。`);
+      }
+    }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
 if (failures.length > 0) {
   console.error(`❌ harness-check 失败（${failures.length} 项）：`);
   for (const failure of failures) console.error(`  - ${failure}`);
