@@ -852,11 +852,27 @@ pub async fn merge_thread_handler(
         }
     };
     let cwd = std::path::PathBuf::from(&ws.cwd);
+    let dir_cwd = std::path::PathBuf::from(&th.cwd);
 
     // All git work on a blocking thread (shells out). Returns the base branch +
     // the merge outcome, or a user-facing refusal string.
     let branch_for_git = branch.clone();
     let result = tokio::task::spawn_blocking(move || {
+        // W1-2: workers edit files in the isolated direction worktree but are
+        // never told to `git commit`, and merge_into_base brings only COMMITTED
+        // content — so an un-committed worktree would merge as an empty/stale
+        // branch (data loss + a lying "Merged"). Capture that work as a commit
+        // on the direction's branch FIRST. Guarded by `dir_cwd != cwd` so it
+        // only ever touches the isolated direction worktree, never the base —
+        // the base's own uncommitted-changes red line below stays intact.
+        if dir_cwd != cwd {
+            if let Err(e) = crate::worktree::commit_worktree_work(
+                &dir_cwd,
+                "flockmux: capture direction work before merge",
+            ) {
+                return Err(format!("提交方向改动失败：{e}"));
+            }
+        }
         if crate::worktree::working_dirty(&cwd) {
             return Err("主线有未提交改动，请先提交或暂存后再合并".to_string());
         }
