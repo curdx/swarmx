@@ -39,10 +39,12 @@ pub enum McpFormat {
     /// opencode: a per-agent config file at `~/.flockmux/opencode/<agent_id>.json`
     /// carrying `mcp.flockmux-swarm` (local stdio, per-agent identity in
     /// `environment`) + `permission = "allow"` + `autoupdate = false`. spawn.rs
-    /// points opencode at it via `OPENCODE_CONFIG=<file>`, which makes opencode
-    /// load ONLY that file (skipping global+project config discovery — its
-    /// `--strict-mcp-config` equivalent), so PerAgent/Shared layouts don't
-    /// collide. The wake plugin is merged in separately by `OpencodePlugin`.
+    /// points opencode at it via `OPENCODE_CONFIG=<file>`, which (verified live)
+    /// DEEP-MERGES on top of the user's config — flockmux's keys win on conflict,
+    /// and the user's `provider`/model config is preserved so the worker can run
+    /// a model. Per-agent identity is collision-free even in Shared layouts (each
+    /// process has its own OPENCODE_CONFIG file; flockmux writes no project-local
+    /// opencode.json to clobber). The wake plugin is merged in by `OpencodePlugin`.
     OpencodeJson,
 }
 

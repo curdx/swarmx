@@ -831,18 +831,21 @@ pub fn claude_per_agent_mcp_config_path(agent_id: &str) -> Option<PathBuf> {
 }
 
 /// Per-agent opencode config file. Written under `~/.flockmux/opencode/` keyed
-/// by `agent_id`; spawn.rs sets `OPENCODE_CONFIG=<this path>` so opencode loads
-/// ONLY this file and skips global+project config discovery (verified in
-/// opencode `src/config/config.ts`: setting `OPENCODE_CONFIG` bypasses the
-/// default-config block). That is opencode's equivalent of claude's
-/// `--strict-mcp-config` / codex's per-agent `CODEX_HOME`, and it makes both the
-/// PerAgent and Shared workspace layouts collision-free (each agent gets its own
-/// identity instead of clobbering a shared `<ws>/opencode.json`).
+/// by `agent_id`; spawn.rs sets `OPENCODE_CONFIG=<this path>`.
 ///
-/// The file carries: the flockmux-swarm MCP server (local stdio, with per-agent
+/// VERIFIED LIVE (opencode 1.17.7): `OPENCODE_CONFIG` deep-MERGES on top of the
+/// user's config — it does NOT replace it. flockmux's keys win on conflict, so
+/// this file authoritatively sets the flockmux-swarm MCP server (with per-agent
 /// identity in `environment`), `permission = "allow"` (headless: no approval
-/// prompts), and `autoupdate = false` (no startup update on a headless run). The
-/// wake `plugin[]` is appended separately by [`install_opencode_wake_plugin`].
+/// prompts), and `autoupdate = false`. The user's own `provider`/model config is
+/// PRESERVED, so the worker can authenticate and run a model. Tradeoff: the
+/// user's personal MCP servers also merge in, but opencode times bad ones out
+/// (5s default) rather than hard-blocking.
+///
+/// Per-agent identity is collision-free even in Shared-workspace spells: each
+/// process has its OWN OPENCODE_CONFIG file with its OWN agent_id, and flockmux
+/// writes no project-local `<ws>/opencode.json` for them to clobber. The wake
+/// `plugin[]` is appended separately by [`install_opencode_wake_plugin`].
 pub fn write_opencode_per_agent_config(
     agent_id: &str,
     mcp_bin: &Path,

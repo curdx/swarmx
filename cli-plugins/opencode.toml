@@ -1,18 +1,25 @@
 # OpenCode CLI plugin (Model A — PTY transport).
 #
-# Spawned under flockmux-shim as an interactive TUI, like claude/codex. The
-# per-agent isolation here is CLEANER than codex's: instead of a global config
-# strip, flockmux writes a per-agent config file at
-# ~/.flockmux/opencode/<agent_id>.json and sets `OPENCODE_CONFIG=<that file>`
-# at spawn (spawn.rs). When OPENCODE_CONFIG is set, opencode SKIPS all global +
-# project config discovery and loads ONLY that file (verified in opencode
-# src/config/config.ts) — its equivalent of claude's `--strict-mcp-config`.
-# That file carries: the flockmux-swarm MCP server (per-agent identity in
-# `environment`), `permission = "allow"` (headless: no approval prompts),
-# `autoupdate = false`, and the flockmux wake plugin.
+# Spawned under flockmux-shim as an interactive TUI, like claude/codex. flockmux
+# writes a per-agent config file at ~/.flockmux/opencode/<agent_id>.json and
+# sets `OPENCODE_CONFIG=<that file>` at spawn (spawn.rs).
 #
-# Auth is SHARED (opencode stores creds at $XDG_DATA_HOME/opencode/auth.json),
-# so the user logs in once with `opencode auth login`; no per-agent auth.
+# IMPORTANT (verified live against opencode 1.17.7): `OPENCODE_CONFIG` MERGES on
+# top of the user's existing config, it does NOT replace it. flockmux's keys win
+# on conflict (deep-merge, last-writer), so the per-agent file authoritatively
+# sets: the flockmux-swarm MCP server (with this agent's identity in
+# `environment`), `permission = "allow"`, `autoupdate = false`, and the wake
+# plugin. The user's own `provider`/model config is PRESERVED (so the worker can
+# authenticate and run a model) — which is what we want. The tradeoff: the
+# user's personal MCP servers also merge in; opencode times bad ones out (5s
+# default) rather than hard-blocking, so this is acceptable.
+#
+# Per-agent identity is still collision-free even in Shared-workspace spells:
+# each process has its OWN OPENCODE_CONFIG file with its OWN agent_id, and
+# flockmux writes no project-local <ws>/opencode.json that they'd clobber.
+#
+# Auth is SHARED ($XDG_DATA_HOME/opencode/auth.json), so a login (or a custom
+# provider in the user's global config) applies to every worker; no per-agent auth.
 
 id = "opencode"
 display_name = "OpenCode"
