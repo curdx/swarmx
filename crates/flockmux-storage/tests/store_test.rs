@@ -719,6 +719,54 @@ async fn message_search_fts5() {
     assert_eq!(hits.len(), 1);
 }
 
+/// Malformed / hostile FTS5 input must never raise a SQLite syntax error (which
+/// used to surface as an HTTP 500 leaking the raw SQL message). The query is
+/// sanitized into quoted phrase tokens, so these all return Ok — either with
+/// the matching rows (token text is still matched literally) or with no rows.
+#[tokio::test]
+async fn message_search_fts5_malformed_input_never_errors() {
+    let (_dir, store) = fresh_store().await;
+    store
+        .insert_message(NewMessage {
+            from_agent: "a".into(),
+            to_agent: "b".into(),
+            kind: "note".into(),
+            body: "schedule a meeting about the planner".into(),
+            sent_at: ts(1),
+            in_reply_to: None,
+            meta: None,
+        })
+        .await
+        .unwrap();
+
+    // Inputs that previously produced FTS5 syntax errors. Each must be Ok(_).
+    for q in [
+        "\"",            // lone unbalanced quote
+        "*",             // bare prefix operator
+        "planner*",      // trailing prefix operator
+        "col:planner",   // column filter syntax
+        "foo AND",       // dangling boolean keyword
+        "NEAR(a b)",     // NEAR with no closing context
+        "(planner",      // unbalanced paren
+        "^planner",      // first-token operator
+        "a -b",          // NOT/exclusion operator
+        "",              // empty
+        "   ",           // whitespace only
+        "()-^:*\"",      // nothing but operators
+    ] {
+        let res = store.search_messages(q.into()).await;
+        assert!(res.is_ok(), "query {q:?} should not error, got {res:?}");
+    }
+
+    // Token text inside an operator-laden query is still matched literally.
+    let hits = store.search_messages("planner*".into()).await.unwrap();
+    assert_eq!(hits.len(), 1, "prefix-operator input still finds the row");
+
+    // A query of only special characters yields no rows (empty MATCH avoided).
+    let hits = store.search_messages("*".into()).await.unwrap();
+    assert!(hits.is_empty());
+}
+
 #[tokio::test]
 async fn mark_delivered_only_undelivered() {
     let (_dir, store) = fresh_store().await;
@@ -849,6 +897,51 @@ async fn mark_read_refuses_cross_agent() {
         .pop()
         .unwrap();
     assert!(row.read_at.is_none(), "row stayed unread");
+}
+
+/// Regression: a flat `IN (...)` over the whole id list blows SQLite's
+/// `SQLITE_MAX_VARIABLE_NUMBER` (999 on the default build) and surfaces as a
+/// 500. `mark_read` now chunks at 900 ids/call, so a batch well past one chunk
+/// must succeed and mark every row.
+#[tokio::test]
+async fn mark_read_chunks_large_id_batch() {
+    let (_dir, store) = fresh_store().await;
+    // > 2 chunks of 900 so the batching loop runs at least three times.
+    const N: usize = 2050;
+    let mut ids = Vec::with_capacity(N);
+    for i in 0..N {
+        let m = store
+            .insert_message(NewMessage {
+                from_agent: "a".into(),
+                to_agent: "b".into(),
+                kind: "note".into(),
+                body: format!("m{i}"),
+                sent_at: ts(i as i64 + 1),
+                in_reply_to: None,
+                meta: None,
+            })
+            .await
+            .unwrap();
+        ids.push(m.id);
+    }
+
+    let marked = store
+        .mark_read(ids.clone(), "b".into(), ts(10_000))
+        .await
+        .expect("large batch must not hit the variable cap");
+    assert_eq!(marked.len(), N, "every id marked exactly once");
+    let marked_set: std::collections::HashSet<i64> = marked.into_iter().collect();
+    assert!(
+        ids.iter().all(|id| marked_set.contains(id)),
+        "all inserted ids present in the returned set"
+    );
+
+    // Idempotent across chunks: a second pass marks nothing.
+    let again = store.mark_read(ids, "b".into(), ts(20_000)).await.unwrap();
+    assert!(again.is_empty(), "second pass is a no-op");
+
+    let unread = store.count_unread("b".into()).await.unwrap();
+    assert_eq!(unread, 0, "no rows left unread after the bulk mark");
 }
 
 #[tokio::test]
