@@ -93,6 +93,31 @@ pub async fn send_message(
         })
         .await
         .map_err(internal_err)?;
+
+    // W0-2: close the "external message doesn't wake the recipient" gap.
+    // `/api/message` is the entry point for the UI, scripts, and the future
+    // public API — but only the UI used to follow up with a manual wake, so a
+    // bare POST left the orchestrator asleep on a fresh instruction. Auto-wake
+    // the recipient when an EXTERNAL sender (user/system) messages a LIVE agent.
+    // Agent-to-agent traffic (from = an agent id) is deliberately excluded — it
+    // is driven by the BlackboardChanged wake path and must not double-kick.
+    // cron uses the core `swarm.send_message` (not this handler) + its own wake,
+    // so it's unaffected. Fire-and-forget so the response isn't held on the
+    // ~150ms PTY settle inside deliver_manual_wake.
+    {
+        let to = record.to_agent.clone();
+        let external = matches!(record.from_agent.as_str(), "user" | "system");
+        if external && to != "user" && state.registry.get(&to).is_some() {
+            let swarm = state.swarm.clone();
+            let registry = state.registry.clone();
+            tokio::spawn(async move {
+                if let Err(e) = crate::wake::deliver_manual_wake(&swarm, &registry, &to).await {
+                    tracing::debug!(?e, agent = %to, "auto-wake on send_message failed (best-effort)");
+                }
+            });
+        }
+    }
+
     Ok(Json(MessageRecord {
         id: record.id,
         from_agent: record.from_agent,
