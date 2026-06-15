@@ -482,7 +482,11 @@ impl TailState {
 /// backfill) and the live WS broadcast (`publish_event`). Centralised so a row
 /// can never reach one sink but not the other — they share the same `seq`, so
 /// the UI merges backfill + live by it.
-fn emit_activity(
+/// Feed one tool-activity step into the live + persisted activity pipeline
+/// (ring + SQLite + thought-trace derivation + WS broadcast). Used by the
+/// transcript tailer for claude/codex, and by `POST /api/agent/:id/activity`
+/// for engines we can't transcript-tail (opencode pushes its tool events here).
+pub(crate) fn emit_activity(
     swarm: &Swarm,
     agent_id: &str,
     phase: &str,

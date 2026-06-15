@@ -53,7 +53,10 @@ pub fn router() -> Router<AppState> {
         .route("/api/roles", get(super::rest::list_roles))
         .route("/api/agent/:id", delete(super::rest::kill))
         .route("/api/agent/:id/wake", post(super::rest::wake_agent))
-        .route("/api/agent/:id/activity", get(super::rest::agent_activity))
+        .route(
+            "/api/agent/:id/activity",
+            get(super::rest::agent_activity).post(super::rest::post_agent_activity),
+        )
         .route("/api/agent/:id/interrupt", post(super::rest::interrupt))
         .route("/api/agent/:id/resume", post(super::rest::resume))
         .route("/api/agent/:id/mcp-ready", post(super::rest::mcp_ready))

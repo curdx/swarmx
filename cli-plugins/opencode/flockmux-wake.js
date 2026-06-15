@@ -42,8 +42,59 @@ function wakeReason(count) {
   ].join("\n")
 }
 
+// Build a short one-line label for a tool call (tool name + one salient arg),
+// mirroring flockmux's transcript summarize() for claude/codex.
+const SALIENT_KEYS = ["key", "path", "file_path", "filePath", "command", "cmd", "pattern", "query", "url", "prompt", "description"]
+function toolLabel(tool, args) {
+  let label = String(tool || "tool").replace(/^.*?_(?=swarm_)/, "") // strip MCP server prefix before swarm_*
+  if (args && typeof args === "object") {
+    for (const k of SALIENT_KEYS) {
+      const v = args[k]
+      if (typeof v === "string" && v) {
+        label += " " + v
+        break
+      }
+    }
+  }
+  label = label.replace(/\s+/g, " ").trim()
+  return label.length > 80 ? label.slice(0, 79) + "…" : label
+}
+
+async function postActivity(agentId, phase, label, seq, durationMs) {
+  try {
+    await fetch(`${SERVER_URL}/api/agent/${encodeURIComponent(agentId)}/activity`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ phase, label, seq, duration_ms: durationMs }),
+    })
+  } catch {
+    // Activity is best-effort telemetry; never let it disturb the agent.
+  }
+}
+
 export const FlockmuxWake = async ({ client }) => {
+  // Per-agent (per-process) activity state: a monotonic seq pairs a "running"
+  // row with its later "ok", keyed by opencode's callID.
+  let seq = 0
+  const calls = new Map()
+
   return {
+    // Stream tool calls to flockmux so opencode worker steps show in the UI
+    // (opencode can't be transcript-tailed — see post_agent_activity in rest.rs).
+    "tool.execute.before": async (input, output) => {
+      if (!AGENT_ID || !input || !input.callID) return
+      const s = seq++
+      const label = toolLabel(input.tool, output && output.args)
+      calls.set(input.callID, { seq: s, label, start: Date.now() })
+      await postActivity(AGENT_ID, "running", label, s)
+    },
+    "tool.execute.after": async (input) => {
+      if (!AGENT_ID || !input || !input.callID) return
+      const c = calls.get(input.callID)
+      if (!c) return
+      calls.delete(input.callID)
+      await postActivity(AGENT_ID, "ok", c.label, c.seq, Date.now() - c.start)
+    },
     event: async ({ event }) => {
       // Only act at a turn boundary, and only if we know who we are.
       if (!event || event.type !== "session.idle") return
