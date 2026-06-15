@@ -271,6 +271,19 @@ fn install_hint_for(p: &CliPlugin) -> Option<CliInstallHint> {
             verify_command: Some("claude --version".to_string()),
             login_command: Some("claude".to_string()),
         }),
+        "opencode" => Some(CliInstallHint {
+            title: "Install OpenCode".to_string(),
+            summary: "Official install script first; npm and Homebrew are useful fallbacks."
+                .to_string(),
+            docs_url: "https://opencode.ai/docs/".to_string(),
+            commands: vec![
+                "curl -fsSL https://opencode.ai/install | bash".to_string(),
+                "npm install -g opencode-ai".to_string(),
+                "brew install opencode".to_string(),
+            ],
+            verify_command: Some("opencode --version".to_string()),
+            login_command: Some("opencode auth login".to_string()),
+        }),
         _ => None,
     }
 }

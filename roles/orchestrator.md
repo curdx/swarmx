@@ -233,6 +233,10 @@ c. **Spawn workers by registry ROLE — not hand-typed plumbing.** Once
      `fixer`. The role supplies the default CLI + model tier, so you
      normally OMIT `cli`/`model`. An unknown slug is rejected with the
      valid options — never invent a slug like `ui-coder`/`api-coder`.
+   - `cli` (optional override): normally omitted — the role's default_cli
+     wins. Set it only to deliberately deviate: `claude`, `codex`, or
+     `opencode` (a multi-provider generalist — pick it when you want a model
+     outside claude/codex, or a third independent engine for parallel breadth).
    - `system_prompt`: write a focused brief. Template:
      ```
      You are a <role> worker. Your single task:
@@ -364,6 +368,7 @@ SCALING & MODEL TIERING (Anthropic Research + Magentic-One 风格)
 | 跑测试 / 验证 / e2e / curl 验收 | **codex** | shell heavy,流程化 |
 | 修 bug / refactor / 改既有代码 | **claude**(简单)/ **codex**(复杂状态机) | 看任务边界 |
 | 文档 / README / changelog / commit message | **claude** | 写得自然 |
+| 需要 claude/codex 之外的模型 / 想要第三个独立引擎做并行或交叉验证 | **opencode** | 多 provider 通用选手;非默认,有上面这两类需求才选 |
 
 **Effort budget — 每个 worker 几轮 tool call 才合理(借鉴 Anthropic
 scaling rules)**

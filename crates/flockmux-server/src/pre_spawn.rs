@@ -732,6 +732,17 @@ pub fn run_patches(plugin: &crate::plugins::CliPlugin, workspace: &Path, ctx: &P
                     tracing::warn!(?err, "codex: mcp-inject patch failed");
                 }
             }
+            McpFormat::OpencodeJson => {
+                // opencode: one per-agent config file carries mcp + permission +
+                // autoupdate. spawn.rs points opencode at it via OPENCODE_CONFIG
+                // (which makes opencode load ONLY this file). The wake plugin is
+                // merged into the SAME file by the OpencodePlugin stop-hook arm.
+                if let Err(err) =
+                    write_opencode_per_agent_config(&ctx.agent_id, &ctx.mcp_bin, &ctx.server_url)
+                {
+                    tracing::warn!(?err, "opencode: per-agent config write failed");
+                }
+            }
             McpFormat::None => {
                 tracing::warn!(cli = %plugin.id, "auto_inject_mcp set but mcp_format = none; agent will have NO swarm_* tools (cannot coordinate)");
             }
@@ -754,6 +765,7 @@ pub fn run_patches(plugin: &crate::plugins::CliPlugin, workspace: &Path, ctx: &P
                 &ctx.server_url,
                 plugin.stop_hook_timeout,
             ),
+            StopHookFormat::OpencodePlugin => install_opencode_wake_plugin(&ctx.agent_id),
             StopHookFormat::None => {
                 tracing::warn!(cli = %plugin.id, "auto_inject_stop_hook set but stop_hook_format = none; agent will never be re-woken");
                 Ok(())
@@ -816,6 +828,154 @@ pub fn claude_per_agent_mcp_config_path(agent_id: &str) -> Option<PathBuf> {
             .join("mcp")
             .join(format!("{agent_id}.json"))
     })
+}
+
+/// Per-agent opencode config file. Written under `~/.flockmux/opencode/` keyed
+/// by `agent_id`; spawn.rs sets `OPENCODE_CONFIG=<this path>` so opencode loads
+/// ONLY this file and skips global+project config discovery (verified in
+/// opencode `src/config/config.ts`: setting `OPENCODE_CONFIG` bypasses the
+/// default-config block). That is opencode's equivalent of claude's
+/// `--strict-mcp-config` / codex's per-agent `CODEX_HOME`, and it makes both the
+/// PerAgent and Shared workspace layouts collision-free (each agent gets its own
+/// identity instead of clobbering a shared `<ws>/opencode.json`).
+///
+/// The file carries: the flockmux-swarm MCP server (local stdio, with per-agent
+/// identity in `environment`), `permission = "allow"` (headless: no approval
+/// prompts), and `autoupdate = false` (no startup update on a headless run). The
+/// wake `plugin[]` is appended separately by [`install_opencode_wake_plugin`].
+pub fn write_opencode_per_agent_config(
+    agent_id: &str,
+    mcp_bin: &Path,
+    server_url: &str,
+) -> Result<PathBuf> {
+    let path = opencode_per_agent_config_path(agent_id)
+        .context("home not found; cannot write per-agent opencode config")?;
+    write_opencode_config_at(&path, agent_id, mcp_bin, server_url)?;
+    Ok(path)
+}
+
+/// Path-explicit core of [`write_opencode_per_agent_config`] (testable without
+/// touching `$HOME`).
+fn write_opencode_config_at(
+    path: &Path,
+    agent_id: &str,
+    mcp_bin: &Path,
+    server_url: &str,
+) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let body = json!({
+        "$schema": "https://opencode.ai/config.json",
+        "autoupdate": false,
+        // Top-level bare-string permission normalizes to {"*":"allow"} in
+        // opencode (src/v1/config/permission.ts), i.e. full auto-approve.
+        "permission": "allow",
+        "mcp": {
+            "flockmux-swarm": {
+                "type": "local",
+                "command": [mcp_bin.to_string_lossy(), "--agent-id", agent_id],
+                "environment": {
+                    "FLOCKMUX_AGENT_ID": agent_id,
+                    "FLOCKMUX_SERVER_URL": server_url,
+                },
+                "enabled": true,
+            }
+        }
+    });
+    write_json_atomic(path, &body)
+}
+
+/// Computes the path [`write_opencode_per_agent_config`] writes to without
+/// touching disk. `spawn.rs` uses this to set `OPENCODE_CONFIG`. Returns `None`
+/// if `$HOME` is not set.
+pub fn opencode_per_agent_config_path(agent_id: &str) -> Option<PathBuf> {
+    home_path().map(|h| {
+        h.join(".flockmux")
+            .join("opencode")
+            .join(format!("{agent_id}.json"))
+    })
+}
+
+/// Merge the flockmux wake plugin into the per-agent opencode config's
+/// `plugin[]`. opencode has no blocking Stop hook, so the wake loop runs as a
+/// plugin: on `session.idle` it calls flockmux's `consume_wakes` and re-prompts
+/// the session when wakes are pending (see `cli-plugins/opencode/flockmux-wake.js`
+/// — the opencode equivalent of `flockmux-mcp wake-check`).
+///
+/// Read-modify-write of the file [`write_opencode_per_agent_config`] just wrote
+/// (run_patches calls the MCP writer first). Idempotent: the plugin entry is
+/// appended once. No-op + warn if the bundled plugin JS can't be located — the
+/// worker still has swarm_* tools but won't be auto-rewoken.
+pub fn install_opencode_wake_plugin(agent_id: &str) -> Result<()> {
+    let path = opencode_per_agent_config_path(agent_id)
+        .context("home not found; cannot install opencode wake plugin")?;
+    let plugin = match opencode_wake_plugin_path() {
+        Some(p) => p,
+        None => {
+            tracing::warn!(
+                agent = %agent_id,
+                "opencode wake plugin JS not found; worker will have swarm_* tools but no \
+                 auto-wake (set FLOCKMUX_OPENCODE_PLUGIN, or ship cli-plugins/opencode/flockmux-wake.js)"
+            );
+            return Ok(());
+        }
+    };
+    merge_opencode_plugin_at(&path, &plugin)
+}
+
+/// Path-explicit core of [`install_opencode_wake_plugin`]: idempotently add
+/// `plugin_path` to the config file's `plugin[]`. Testable without `$HOME` or
+/// the bundled-plugin lookup.
+fn merge_opencode_plugin_at(path: &Path, plugin_path: &Path) -> Result<()> {
+    let mut root: Value = if path.is_file() {
+        let bytes = fs::read(path).with_context(|| format!("read {}", path.display()))?;
+        serde_json::from_slice(&bytes).unwrap_or_else(|_| json!({}))
+    } else {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        json!({})
+    };
+    let entry = Value::String(plugin_path.to_string_lossy().into_owned());
+    match root.get_mut("plugin").and_then(|v| v.as_array_mut()) {
+        Some(arr) => {
+            if !arr.iter().any(|v| v == &entry) {
+                arr.push(entry);
+            }
+        }
+        None => {
+            root["plugin"] = Value::Array(vec![entry]);
+        }
+    }
+    write_json_atomic(path, &root)
+}
+
+/// Locate the bundled flockmux opencode wake plugin (a small JS file). Env
+/// override first (the Tauri sidecar sets `FLOCKMUX_OPENCODE_PLUGIN` to the
+/// packaged resource path), then a `CARGO_MANIFEST_DIR`-relative repo path for
+/// dev. Returns `None` if neither resolves (caller warns + degrades). Mirrors
+/// the `locate_*` helpers in `spawn.rs`.
+fn opencode_wake_plugin_path() -> Option<PathBuf> {
+    if let Some(p) = std::env::var_os("FLOCKMUX_OPENCODE_PLUGIN") {
+        let p = PathBuf::from(p);
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    // dev fallback: <workspace-root>/cli-plugins/opencode/flockmux-wake.js
+    // (CARGO_MANIFEST_DIR is crates/flockmux-server; step up two levels).
+    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    if let Some(ws) = manifest.parent().and_then(|p| p.parent()) {
+        let cand = ws
+            .join("cli-plugins")
+            .join("opencode")
+            .join("flockmux-wake.js");
+        if cand.is_file() {
+            return Some(cand);
+        }
+    }
+    None
 }
 
 /// Per-spawn context that the host computes once and threads into pre-spawn
@@ -1479,5 +1639,67 @@ trust_level = \"trusted\"\n";
         assert_eq!(after["userOptions"]["model"], json!("sonnet-4-6"));
         // Wake hook still got added.
         assert!(after["hooks"]["Stop"].is_array());
+    }
+
+    #[test]
+    fn opencode_config_writes_mcp_permission_and_autoupdate() {
+        let dir = tempdir().unwrap();
+        let cfg = dir.path().join("agent.json");
+        let bin = dir.path().join("flockmux-mcp");
+        write_opencode_config_at(&cfg, "opencode-abc123", &bin, "http://127.0.0.1:7777").unwrap();
+        let v: Value = serde_json::from_slice(&fs::read(&cfg).unwrap()).unwrap();
+        // Headless posture: no startup update, full auto-approve.
+        assert_eq!(v["autoupdate"], json!(false));
+        assert_eq!(v["permission"], json!("allow"));
+        // swarm MCP server: local stdio, per-agent identity in command + environment.
+        let mcp = &v["mcp"]["flockmux-swarm"];
+        assert_eq!(mcp["type"], json!("local"));
+        assert_eq!(mcp["enabled"], json!(true));
+        assert_eq!(
+            mcp["command"],
+            json!([bin.to_string_lossy(), "--agent-id", "opencode-abc123"])
+        );
+        assert_eq!(
+            mcp["environment"]["FLOCKMUX_AGENT_ID"],
+            json!("opencode-abc123")
+        );
+        assert_eq!(
+            mcp["environment"]["FLOCKMUX_SERVER_URL"],
+            json!("http://127.0.0.1:7777")
+        );
+    }
+
+    #[test]
+    fn opencode_plugin_merge_is_idempotent_and_preserves_mcp() {
+        let dir = tempdir().unwrap();
+        let cfg = dir.path().join("agent.json");
+        let bin = dir.path().join("flockmux-mcp");
+        write_opencode_config_at(&cfg, "opencode-xyz", &bin, "http://127.0.0.1:7777").unwrap();
+        let plugin = dir.path().join("flockmux-wake.js");
+        // Merge twice → exactly one entry (run_patches may re-run on re-spawn).
+        merge_opencode_plugin_at(&cfg, &plugin).unwrap();
+        merge_opencode_plugin_at(&cfg, &plugin).unwrap();
+        let v: Value = serde_json::from_slice(&fs::read(&cfg).unwrap()).unwrap();
+        assert_eq!(
+            v["plugin"],
+            json!([plugin.to_string_lossy()]),
+            "plugin appended exactly once (idempotent)"
+        );
+        // The mcp + permission the MCP writer wrote must survive the
+        // read-modify-write of the plugin merge.
+        assert_eq!(v["permission"], json!("allow"));
+        assert_eq!(v["mcp"]["flockmux-swarm"]["type"], json!("local"));
+    }
+
+    #[test]
+    fn opencode_plugin_merge_creates_file_when_config_absent() {
+        let dir = tempdir().unwrap();
+        let cfg = dir.path().join("nested").join("agent.json");
+        let plugin = dir.path().join("flockmux-wake.js");
+        // No prior config (e.g. the MCP write was skipped) → still mints a valid
+        // file carrying just the plugin, so wake degrades gracefully.
+        merge_opencode_plugin_at(&cfg, &plugin).unwrap();
+        let v: Value = serde_json::from_slice(&fs::read(&cfg).unwrap()).unwrap();
+        assert_eq!(v["plugin"], json!([plugin.to_string_lossy()]));
     }
 }
