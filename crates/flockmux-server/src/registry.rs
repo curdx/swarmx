@@ -31,10 +31,13 @@ pub struct Lifecycle {
 }
 
 pub struct AgentSlot {
-    pub bridge: Arc<PtyBridge>,
-    /// Shared resume buffer fed by the PTY-reader pump and observed by
-    /// every WS subscriber. Survives WS disconnect/reconnect.
-    pub stream: Arc<PtyStream>,
+    /// The transport carrying this agent's I/O: a PTY (claude/codex, scraped
+    /// over a pseudo-terminal) or a structured ACP stdio session (opencode,
+    /// driven as JSON-RPC where flockmux owns the turn loop). PTY-specific
+    /// handles live inside the `Pty` variant; consumers go through the
+    /// `AgentSlot` methods (`is_alive`, `pty_stream`, `pty_input`, …) so they
+    /// don't care which transport backs the agent.
+    pub channel: AgentChannel,
     /// Shim lifecycle state captured by the pump's OSC scanner. Stored
     /// here so a fresh WS attach can be told ShimReady/ShimExit even if
     /// the OSC marker fired before the client connected.
@@ -43,7 +46,6 @@ pub struct AgentSlot {
     /// the event live (in addition to the snapshot delivered via Hello).
     /// `subscribe()` is cheap and lossless for the small lifecycle volume.
     pub lifecycle_tx: tokio::sync::broadcast::Sender<LifecycleEvent>,
-    pub input_tx: mpsc::Sender<Bytes>,
     pub cli: String,
     pub role: String,
     pub workspace: String,
@@ -60,6 +62,68 @@ pub struct AgentSlot {
     /// retains the latest value, so a ping that races the subscriber is never
     /// lost (`send_replace` updates the stored value even with no receivers).
     pub mcp_ready: tokio::sync::watch::Sender<bool>,
+}
+
+/// How an agent's I/O is transported. `Pty` for the interactive CLIs
+/// (claude/codex) scraped over a pseudo-terminal; future structured transports
+/// (ACP / opencode) add a variant here and the `AgentSlot` accessor methods
+/// gain an arm — every consumer keeps going through those methods.
+pub enum AgentChannel {
+    Pty {
+        bridge: Arc<PtyBridge>,
+        /// Shared resume buffer fed by the PTY-reader pump and observed by
+        /// every WS subscriber. Survives WS disconnect/reconnect.
+        stream: Arc<PtyStream>,
+        /// Inject keystrokes into the PTY (wake "kicks", terminal WS input).
+        input_tx: mpsc::Sender<Bytes>,
+    },
+}
+
+impl AgentSlot {
+    /// Is the agent's underlying process still running?
+    pub fn is_alive(&self) -> bool {
+        match &self.channel {
+            AgentChannel::Pty { bridge, .. } => bridge.is_alive(),
+        }
+    }
+
+    /// The process exit code if it has already exited, else `None`.
+    pub fn try_exit_code(&self) -> Option<i32> {
+        match &self.channel {
+            AgentChannel::Pty { bridge, .. } => bridge.try_exit_code(),
+        }
+    }
+
+    /// Terminate the agent's underlying process.
+    pub fn kill(&self) {
+        match &self.channel {
+            AgentChannel::Pty { bridge, .. } => bridge.kill(),
+        }
+    }
+
+    /// The PTY bridge, for transports that have one (terminal WS attach).
+    /// `None` for structured transports (ACP) with no terminal.
+    pub fn pty_bridge(&self) -> Option<Arc<PtyBridge>> {
+        match &self.channel {
+            AgentChannel::Pty { bridge, .. } => Some(bridge.clone()),
+        }
+    }
+
+    /// The PTY output ring buffer, or `None` for transports with no terminal
+    /// view (ACP) — the terminal WS endpoints serve nothing for those.
+    pub fn pty_stream(&self) -> Option<Arc<PtyStream>> {
+        match &self.channel {
+            AgentChannel::Pty { stream, .. } => Some(stream.clone()),
+        }
+    }
+
+    /// The PTY stdin sender for byte injection (wake kick / terminal input),
+    /// or `None` for transports that aren't keystroke-driven (ACP).
+    pub fn pty_input(&self) -> Option<mpsc::Sender<Bytes>> {
+        match &self.channel {
+            AgentChannel::Pty { input_tx, .. } => Some(input_tx.clone()),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

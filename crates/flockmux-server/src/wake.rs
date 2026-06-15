@@ -314,7 +314,13 @@ pub async fn inject_with_kick_text(
         .ok_or_else(|| anyhow!("no registry slot for `{agent_id}` — agent may have exited"))?;
     let input_tx = {
         let guard = slot.lock();
-        guard.input_tx.clone()
+        match guard.pty_input() {
+            Some(tx) => tx,
+            // Non-PTY agent (ACP): no PTY to kick. ACP wakes are delivered
+            // through the session (a fresh `session/prompt`), not byte
+            // injection — nothing to do on this path.
+            None => return Ok(()),
+        }
     };
 
     // M6g (2026-05-24): removed the "skip-if-mid-stream" PTY quiet
@@ -639,7 +645,7 @@ impl WakeCoordinator {
                 }
                 {
                     let s = slot.lock();
-                    s.bridge.kill();
+                    s.kill();
                 }
                 swarm.unregister_agent(&agent_id);
                 unregister_wake_subs(&subs, &agent_id).await;

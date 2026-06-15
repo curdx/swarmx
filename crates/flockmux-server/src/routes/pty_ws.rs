@@ -100,15 +100,23 @@ async fn handle_socket(
     };
 
     // Clone the bits we need so we can drop the slot lock before any await.
-    let (stream, input_tx, lifecycle_tx, lifecycle_snapshot) = {
+    let parts = {
         let slot = slot_arc.lock();
         let lifecycle_snapshot = *slot.lifecycle.lock();
-        (
-            slot.stream.clone(),
-            slot.input_tx.clone(),
-            slot.lifecycle_tx.clone(),
-            lifecycle_snapshot,
-        )
+        match (slot.pty_stream(), slot.pty_input()) {
+            (Some(stream), Some(input_tx)) => {
+                Some((stream, input_tx, slot.lifecycle_tx.clone(), lifecycle_snapshot))
+            }
+            // Non-PTY agent (ACP): no terminal stream to attach to.
+            _ => None,
+        }
+    };
+    let (stream, input_tx, lifecycle_tx, lifecycle_snapshot) = match parts {
+        Some(p) => p,
+        None => {
+            let _ = socket.close().await;
+            return;
+        }
     };
 
     // Resolve `last_seq` against the buffer's current state. `cursor` is the
@@ -337,9 +345,11 @@ async fn apply_control(
 ) {
     match ctrl {
         ClientControl::Resize { cols, rows } => {
-            let bridge = slot.lock().bridge.clone();
-            if let Err(err) = bridge.resize(cols, rows) {
-                warn!(?err, "resize failed");
+            // No-op for non-PTY agents (ACP has no resizable terminal).
+            if let Some(bridge) = slot.lock().pty_bridge() {
+                if let Err(err) = bridge.resize(cols, rows) {
+                    warn!(?err, "resize failed");
+                }
             }
         }
         ClientControl::Ack { seq } => {

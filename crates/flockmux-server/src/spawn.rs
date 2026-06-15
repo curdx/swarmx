@@ -2,7 +2,7 @@
 
 use crate::plugins::CliPlugin;
 use crate::pty_stream::PtyStream;
-use crate::registry::{AgentSlot, Lifecycle, LifecycleEvent};
+use crate::registry::{AgentChannel, AgentSlot, Lifecycle, LifecycleEvent};
 use anyhow::{Context, Result};
 use bytes::Bytes;
 use flockmux_pty::{PtyBridge, PtyHandles, SpawnOpts};
@@ -441,11 +441,13 @@ pub fn spawn_agent(
     }
 
     let slot = AgentSlot {
-        bridge,
-        stream,
+        channel: AgentChannel::Pty {
+            bridge,
+            stream,
+            input_tx,
+        },
         lifecycle,
         lifecycle_tx,
-        input_tx,
         cli: plugin.id.clone(),
         role: role.unwrap_or_else(|| plugin.id.clone()),
         workspace: workspace.to_string_lossy().into_owned(),
