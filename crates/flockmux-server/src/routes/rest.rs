@@ -1674,6 +1674,71 @@ pub async fn spawn_worker(
     )
     .map_err(|msg| (StatusCode::BAD_REQUEST, Json(json!({ "error": msg }))))?;
 
+    // ── W0-4: runtime DAG cycle guard (fail LOUD, not a 300s deadlock) ──
+    // `consumes` resolves to role-deterministic minted keys, so across
+    // separately-spawned workers the orchestrator CAN form a cycle: spawn
+    // role A consuming B, then role B consuming A — both would then sit on
+    // the readiness gate until the 300s timeout. `run_spell` already cycle-
+    // checks the static spell DAG; do the same for the dynamic spawn path.
+    // Build the role→handoff / role→depends graph from the live workers in
+    // THIS direction plus the worker we're about to add, and reject a loop.
+    {
+        let sibling_ids: Vec<String> = match state.store.list_agents().await {
+            Ok(rows) => rows
+                .into_iter()
+                .filter(|a| {
+                    a.killed_at.is_none()
+                        && a.workspace_id.as_deref() == Some(req.workspace_id.as_str())
+                        && a.thread_id == thread_id
+                        && a.role != "orchestrator"
+                })
+                .map(|a| a.id)
+                .collect(),
+            // Don't block a spawn on a transient store read error — the
+            // readiness-gate timeout is still a backstop. Log and skip.
+            Err(e) => {
+                tracing::warn!(?e, "cycle-guard: list_agents failed; skipping cycle check");
+                Vec::new()
+            }
+        };
+        let mut role_handoff: HashMap<String, String> = HashMap::new();
+        let mut role_depends: HashMap<String, Vec<String>> = HashMap::new();
+        if !sibling_ids.is_empty() {
+            if let Ok(workers) = state.store.list_workers_by_ids(sibling_ids).await {
+                for w in workers.values() {
+                    if w.role_slug.is_empty() {
+                        continue;
+                    }
+                    if !w.handoff_signal.is_empty() {
+                        role_handoff.insert(w.role_slug.clone(), w.handoff_signal.clone());
+                    }
+                    let deps: Vec<String> =
+                        serde_json::from_str(&w.depends_on_json).unwrap_or_default();
+                    role_depends
+                        .entry(w.role_slug.clone())
+                        .or_default()
+                        .extend(deps);
+                }
+            }
+        }
+        // The worker we're about to spawn.
+        role_handoff.insert(role_slug.clone(), handoff_signal.clone());
+        role_depends
+            .entry(role_slug.clone())
+            .or_default()
+            .extend(depends_on.iter().cloned());
+
+        if let Err(cycle) = crate::wake::detect_depends_on_cycles(&role_handoff, &role_depends) {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": format!(
+                    "spawn rejected: would create a dependency cycle — {cycle}. \
+                     Restructure so roles in this direction don't consume each other in a loop."
+                ) })),
+            ));
+        }
+    }
+
     // The orchestrator's prompt + an INPUTS wait-gate (if it has deps) + an
     // explicit copy-verbatim handoff block.
     let system_prompt = build_worker_prompt(
