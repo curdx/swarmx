@@ -95,10 +95,10 @@ fn detect_exit(slot: &Mutex<AgentSlot>) -> Option<i32> {
     if slot.lifecycle.lock().shim_exit.is_some() {
         return None;
     }
-    if slot.bridge.is_alive() {
+    if slot.is_alive() {
         return None;
     }
-    let code = slot.bridge.try_exit_code().unwrap_or(-1);
+    let code = slot.try_exit_code().unwrap_or(-1);
     slot.lifecycle.lock().shim_exit = Some(code);
     // Relay to any live PTY subscriber so it updates immediately; its consumer
     // is idempotent with the direct persist/publish the caller does.
@@ -110,7 +110,7 @@ fn detect_exit(slot: &Mutex<AgentSlot>) -> Option<i32> {
 mod tests {
     use super::*;
     use crate::pty_stream::PtyStream;
-    use crate::registry::Lifecycle;
+    use crate::registry::{AgentChannel, Lifecycle};
     use flockmux_pty::{PtyBridge, PtyHandles, SpawnOpts};
     use std::collections::HashMap;
     use std::sync::atomic::AtomicBool;
@@ -130,11 +130,13 @@ mod tests {
         let input_tx = bridge.input_sender();
         let (lifecycle_tx, _rx) = tokio::sync::broadcast::channel(16);
         let slot = AgentSlot {
-            bridge: Arc::new(bridge),
-            stream: Arc::new(PtyStream::new()),
+            channel: AgentChannel::Pty {
+                bridge: Arc::new(bridge),
+                stream: Arc::new(PtyStream::new()),
+                input_tx,
+            },
             lifecycle: Arc::new(Mutex::new(Lifecycle::default())),
             lifecycle_tx,
-            input_tx,
             cli: "test".into(),
             role: "test".into(),
             workspace: "/tmp".into(),
@@ -146,7 +148,7 @@ mod tests {
 
     async fn wait_until_dead(slot: &Mutex<AgentSlot>) {
         for _ in 0..200 {
-            if !slot.lock().bridge.is_alive() {
+            if !slot.lock().is_alive() {
                 return;
             }
             tokio::time::sleep(Duration::from_millis(20)).await;

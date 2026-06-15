@@ -1085,7 +1085,7 @@ pub(crate) async fn teardown_agent(state: &AppState, agent_id: &str) -> bool {
             tracing::info!(agent = %agent_id, "teardown_agent: killing agent (killed_at, neutral Exited)");
             {
                 let slot = slot.lock();
-                slot.bridge.kill();
+                slot.kill();
             }
             // Drop the in-memory inbox before persisting the kill so any
             // in-flight send_message sees "no inbox" rather than racing
@@ -1439,7 +1439,10 @@ pub(crate) fn spawn_bootstrap_inject(
             }
         }
 
-        let input_tx = slot_lock.lock().input_tx.clone();
+        let Some(input_tx) = slot_lock.lock().pty_input() else {
+            tracing::info!(agent = %agent_id, "bootstrap: non-PTY (ACP) agent — first turn is delivered via the ACP session, not a PTY inject");
+            return;
+        };
         // SECURITY: strip ANSI / terminal-control bytes before they hit the PTY.
         // The prompt is machine-rendered from spell/role/worker text that may carry
         // ESC/CSI/OSC sequences or other control chars; injected verbatim they let
@@ -2037,7 +2040,13 @@ async fn interrupt_one_inner(state: &AppState, agent_id: &str) -> Result<(), Str
         guard
             .paused
             .store(true, std::sync::atomic::Ordering::Relaxed);
-        guard.input_tx.clone()
+        match guard.pty_input() {
+            Some(tx) => tx,
+            // Non-PTY agent (ACP): no PTY to Ctrl-C. The pause flag (set above)
+            // still gates auto-wake; turn cancellation goes through the ACP
+            // session instead.
+            None => return Ok(()),
+        }
     };
     // Best-effort Ctrl-C. If the PTY is already dead (shim_exit fired
     // but registry slot hasn't been removed yet) the send returns Err —
