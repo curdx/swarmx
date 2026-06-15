@@ -139,7 +139,7 @@
     },
     "step2": {
       "title": "Tell the AI the goal",
-      "body": "Describe the feature, bug, or refactor in plain language and let the dispatcher break it down."
+      "body": "Describe the feature, bug, or refactor in plain language and let the captain break it down."
     },
     "step3": {
       "title": "Track progress from multiple angles",
@@ -156,7 +156,7 @@
       },
       "auto": {
         "title": "Auto dispatch",
-        "body": "Describe the task in plain English; the orchestrator breaks it down and starts the right agents"
+        "body": "Describe the task in plain English; the captain breaks it down and starts the right agents"
       }
     },
     "sidebarEmpty": "No workspaces yet"
@@ -187,7 +187,7 @@
     },
     "composer": {
       "title": "Tell the AI what you want — plain English",
-      "body": "\"Add a login page\", \"fix this bug\" — the orchestrator breaks it down and spins up the right agents to do it."
+      "body": "\"Add a login page\", \"fix this bug\" — the captain breaks it down and spins up the right agents to do it."
     },
     "cmdk": {
       "title": "⌘K opens the command palette",
@@ -229,7 +229,7 @@
     "loading": "Loading changes…",
     "intro": "This direction changed {{count}} file(s); merging into {{base}}",
     "noChanges": "This direction has no changes to merge",
-    "baseDirty": "The main line ({{base}}) has uncommitted changes — commit or stash them first",
+    "baseDirty": "The main direction ({{base}}) has uncommitted changes — commit or stash them first",
     "confirm": "Merge",
     "merging": "Merging…",
     "mergedTitle": "Merged",
@@ -481,9 +481,9 @@
     "members": "Members",
     "selectWorkspace": "Pick a workspace to see its members",
     "noMembers": "No AI members in this workspace yet",
-    "reviveOrchestrator": "Wake the dispatcher",
+    "reviveOrchestrator": "Wake the captain",
     "reviving": "Waking…",
-    "pmBadge": "Dispatcher",
+    "pmBadge": "Captain",
     "mobileWorkspaceNav": "Open workspace list",
     "backToCurrent": "Back to current workspace",
     "workspaceViews": "Current workspace",
@@ -513,7 +513,7 @@
     "newDirectionDialogTitle": "New direction in \"{{name}}\"",
     "newDirectionNamePlaceholder": "Name it (optional — the AI names it from your first message)",
     "newDirectionConfirm": "Open direction",
-    "newDirectionSpawnNote": "Opening a direction immediately starts a new orchestrator AI for this line.",
+    "newDirectionSpawnNote": "Opening a direction immediately starts a new captain for this direction.",
     "newDirectionNonGit": "This project isn't a git repo — directions share the same files (no isolation), so their edits will clobber and affect each other.",
     "newDirectionOrBranch": "Or open an existing branch",
     "directionPreparing": "isolating…",
@@ -567,7 +567,7 @@
     "newDirectionIncomplete": "Direction creation didn't finish, please retry",
     "deleteDirectionFailed": "Failed to delete direction",
     "deleteWorkspaceFailed": "Failed to delete workspace",
-    "workspaceStripPreparing": "Preparing orchestrator…",
+    "workspaceStripPreparing": "Preparing captain…",
     "workspaceStripFailed": "AI failed to start",
     "breadcrumbsTitle": "Recent",
     "paused": "Paused",
@@ -901,7 +901,7 @@
       "thinking": "Thinking",
       "summary": "Reasoning summary",
       "stepUnderstood": "Understood this request: \"{{msg}}\"",
-      "stepOrchestrator": "Checked the thread and workspace state, then chose whether to answer directly or dispatch workers",
+      "stepOrchestrator": "Checked the direction and workspace state, then chose whether to answer directly or dispatch workers",
       "stepWorker": "{{role}} read the task brief and relevant context",
       "stepMerged": "Merged results from {{count}} related agent(s): {{roles}}",
       "stepCheckedThread": "Compared this round with existing progress to avoid duplication or gaps",
@@ -940,7 +940,7 @@
   },
   "cron": {
     "title": "Scheduled jobs",
-    "subtitle": "Deliver a prompt to a workspace's orchestrator on a 5-field cron; \"Run now\" fires immediately.",
+    "subtitle": "Deliver a prompt to a workspace's captain on a 5-field cron; \"Run now\" fires immediately.",
     "localTimeNote": "Times are in your local zone {{tz}}",
     "workspace": "Workspace",
     "expr": "Cron expression",
@@ -962,7 +962,7 @@
     "name": "Name",
     "namePlaceholder": "e.g. Daily standup digest",
     "prompt": "Prompt",
-    "promptPlaceholder": "What the orchestrator should do when it fires…",
+    "promptPlaceholder": "What the captain should do when it fires…",
     "create": "Create",
     "creating": "Creating…",
     "createdOk": "Created: {{desc}}",
@@ -977,7 +977,7 @@
     "paused": "Paused",
     "lastRun": "last",
     "running": "Firing…",
-    "ranOk": "Fired — delivered to the orchestrator",
+    "ranOk": "Fired — delivered to the captain",
     "confirmDelete": "Confirm delete",
     "edit": "Edit",
     "save": "Save",
@@ -1012,7 +1012,7 @@
     "subtitle": "Every worker is a task; status is derived from lifecycle automatically — or mark blocked / done / archived by hand.",
     "count": "{{n}} tasks",
     "loadError": "Failed to load tasks",
-    "empty": "No tasks yet — they appear once the orchestrator spawns workers.",
+    "empty": "No tasks yet — they appear once the captain spawns workers.",
     "untitled": "Untitled",
     "manual": "manual",
     "live": "Running",
@@ -1192,7 +1192,7 @@
       "xhigh": "One step above high (Opus 4.7/4.8, Codex)",
       "max": "Maxed out — for hard problems (Codex has no max → X-High)"
     },
-    "switching": "Switching, restarting orchestrator…"
+    "switching": "Switching, restarting captain…"
   },
   "cmdk": {
     "placeholder": "Search commands, jumps, wake agents…",
@@ -1325,7 +1325,7 @@
     "agoMinutes": "{{n}}m ago",
     "agoHours": "{{n}}h ago",
     "title": "AI Work Ledger",
-    "subtitle": "The orchestrator's thinking lives here. Task ledger (goals + plan) on the left, progress on the right.",
+    "subtitle": "The captain's thinking lives here. Task ledger (goals + plan) on the left, progress on the right.",
     "compactHint": "Compact the ledger with a small model (keeps key info; the old version stays recoverable in the op-log)",
     "compacting": "Compacting…",
     "compact": "Compact",
@@ -1335,10 +1335,10 @@
     "refresh": "Refresh",
     "taskTitle": "Task Ledger",
     "taskSubtitle": "Goals · Assumptions · Plan (DAG)",
-    "taskEmpty": "Nothing yet. The orchestrator creates this on its first wake.",
+    "taskEmpty": "Nothing yet. The captain creates this on its first wake.",
     "progressTitle": "Progress",
     "progressSubtitle": "Current step · Assignments · Blockers",
-    "progressEmpty": "Nothing yet. The orchestrator updates this live as it assigns work.",
+    "progressEmpty": "Nothing yet. The captain updates this live as it assigns work.",
     "breadcrumbsTitle": "Activity",
     "breadcrumbsSubtitle": "Recent worker heartbeats (written automatically after each step)",
     "breadcrumbsCount": "{{n}} worker(s)",

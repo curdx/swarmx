@@ -58,6 +58,20 @@ export function roleInitial(role: string): string {
   return (role.charAt(0) || "?").toUpperCase();
 }
 
+/** User-facing display name for a role. The orchestrator is shown as the
+ *  friendly "队长 / Captain" everywhere it's rendered (chip, message sender,
+ *  DAG node) so the UI never surfaces the raw "orchestrator" slug alongside the
+ *  "队长" we use in every other surface (W-UX naming unification). All other
+ *  roles render their own label (e.g. "Backend Engineer") unchanged. Color +
+ *  avatar initial still key off the raw slug, so theming is untouched. */
+export function roleDisplayName(role: string | null | undefined): string {
+  const r = (role ?? "").toLowerCase();
+  if (r === "orchestrator" || r === "captain" || r === "self") {
+    return i18n.t("chat.role.captain", { defaultValue: "队长" });
+  }
+  return role ?? "agent";
+}
+
 /** Resolve a role label for an agent_id.
  *
  *  Lookup map first (built from /api/agent — covers exited agents too), then

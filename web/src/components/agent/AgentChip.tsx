@@ -23,6 +23,7 @@ import { cn } from "@/lib/cn";
 import {
   resolveRole,
   roleColorClass,
+  roleDisplayName,
   roleInitial,
   shortAgentId,
 } from "@/lib/agent";
@@ -141,7 +142,7 @@ export function AgentChip({
         {avatar}
         <span className="flex min-w-0 flex-col leading-tight">
           <span className={cn("truncate font-heading font-medium", roleColor, sz.role)}>
-            {role}
+            {roleDisplayName(role)}
           </span>
           {(cli || short) && (
             <span className={cn("truncate font-mono", idColor, sz.id)}>
@@ -153,7 +154,7 @@ export function AgentChip({
     ) : (
       <>
         {avatar}
-        <span className={cn("font-medium", roleColor, sz.role)}>{role}</span>
+        <span className={cn("font-medium", roleColor, sz.role)}>{roleDisplayName(role)}</span>
         {idSpan}
       </>
     );

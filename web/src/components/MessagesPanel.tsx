@@ -69,7 +69,7 @@ import { AgentChip } from "@/components/agent/AgentChip";
 import { ImageAttachments } from "@/components/ImageAttachments";
 import { ModelPicker } from "@/components/ModelPicker";
 import { extractImagePaths, fileUrl, baseName } from "@/lib/imagePaths";
-import { roleColorClass as roleColor } from "@/lib/agent";
+import { roleColorClass as roleColor, roleDisplayName } from "@/lib/agent";
 import { activityVerb } from "@/lib/activityVerb";
 import {
   EmptyState,
@@ -1450,7 +1450,7 @@ export function MessagesPanel({
                     {showHeader && (
                       <div className="mb-0.5 flex items-baseline gap-2 px-0.5">
                         <span className="font-heading text-[13px] font-semibold text-foreground-primary">
-                          {role}
+                          {roleDisplayName(role)}
                         </span>
                         <span className="font-caption text-[10px] tabular-nums text-foreground-tertiary">
                           {formatClock(m.sent_at)}
@@ -2005,7 +2005,7 @@ function PendingBubble({
       </div>
       <div className="flex min-w-0 flex-col items-start">
         <span className="mb-0.5 flex items-baseline gap-2 px-0.5 font-heading text-[13px] font-semibold text-foreground-primary">
-          {role}
+          {roleDisplayName(role)}
           <span className="font-caption text-[10px] font-normal text-foreground-tertiary">
             {label}
           </span>
@@ -2104,7 +2104,7 @@ function VanishedTurnCard({
       </div>
       <div className="flex min-w-0 flex-col items-start gap-1">
         <span className="px-0.5 font-heading text-[13px] font-semibold text-foreground-primary">
-          {role}
+          {roleDisplayName(role)}
         </span>
         <div className="w-[min(82vw,520px)] rounded-2xl rounded-bl-sm border border-state-warning/30 bg-status-warning-soft/50 px-3 py-2 shadow-sm">
           <p className="font-body text-[12px] leading-5 text-foreground-secondary">
