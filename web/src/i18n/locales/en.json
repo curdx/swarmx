@@ -1,4 +1,15 @@
 {
+  "backend": {
+    "title": "Backend stopped",
+    "statusStopped": "The local backend process is no longer running.",
+    "statusRetrying": "Auto-restarting… (attempt {{attempt}})",
+    "statusPermanent": "Auto-restart gave up — restart it manually.",
+    "showDetail": "Show error output",
+    "hideDetail": "Hide error output",
+    "restart": "Restart backend",
+    "restarting": "Restarting…",
+    "restartFailed": "Restart failed: {{err}}"
+  },
   "mcp": {
     "title": "MCP",
     "expand": "Expand MCP",

@@ -26,6 +26,7 @@ import { useTranslation } from "react-i18next";
 import { useEffect } from "react";
 import { Boxes, Command, Search } from "lucide-react";
 import { CommandPalette } from "@/components/CommandPalette";
+import { BackendDownBanner } from "@/components/BackendDownBanner";
 import { McpActivityBar } from "@/components/mcp/McpActivityBar";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { NotificationPopover } from "@/components/NotificationPopover";
@@ -84,6 +85,10 @@ export function AppShell() {
   return (
     <TooltipProvider delayDuration={300}>
       <div className="flex h-full flex-col bg-surface-primary text-foreground-primary">
+        {/* Honest backend-down strip — top of the shell, full width, above the
+            header so it's the first thing the user sees if the sidecar dies.
+            No-op in browser dev builds and while the backend is healthy. */}
+        <BackendDownBanner />
         <header
           className="flex h-11 shrink-0 items-center gap-3 border-b border-border-subtle bg-surface-secondary px-3"
           {...TAURI_DRAG_REGION}
