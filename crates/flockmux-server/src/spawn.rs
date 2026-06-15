@@ -331,11 +331,12 @@ pub fn spawn_agent(
     }
 
     // opencode: point the worker at its per-agent OPENCODE_CONFIG (written by
-    // pre_spawn) so it loads an ISOLATED config carrying ONLY flockmux-swarm +
-    // allow-all permission + the wake plugin. Setting OPENCODE_CONFIG makes
-    // opencode SKIP global+project config discovery (its --strict-mcp-config
-    // equivalent), so PerAgent and Shared workspace layouts both stay
-    // collision-free. Gated on the per-agent file existing (pre_spawn wrote it).
+    // pre_spawn). VERIFIED LIVE: OPENCODE_CONFIG deep-MERGES on top of the user's
+    // config (it does NOT replace it) — flockmux's keys (swarm MCP w/ this
+    // agent's identity, allow-all permission, autoupdate off, wake plugin) win on
+    // conflict, while the user's provider/model config is preserved so the worker
+    // can run a model. Per-agent identity stays collision-free across PerAgent and
+    // Shared layouts (each process has its own file). Gated on the file existing.
     if plugin.mcp_format == crate::plugins::McpFormat::OpencodeJson && plugin.auto_inject_mcp {
         if let Some(cfg) = crate::pre_spawn::opencode_per_agent_config_path(&agent_id) {
             if cfg.is_file() {
