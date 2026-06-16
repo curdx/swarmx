@@ -280,6 +280,10 @@ export interface RunSpellRequest {
   /** The direction (thread) the spell should run in. UI launchers set this to
    *  target a specific direction; omitted resolves to the main direction. */
   thread_id?: string;
+  /** Engine (cli-plugin id) for the spell's orchestrator/captain, overriding
+   *  the role's `default_cli`. Lets a workspace run with e.g. opencode as the
+   *  captain. Omitted ⇒ role default (claude). */
+  captain_cli?: string;
 }
 
 /** `POST /api/workspaces/:id/threads` — open a new direction. `name` optional

@@ -107,6 +107,7 @@ pub fn spawn_agent(
     server_url: &str,
     recorder: Option<RecorderHandle>,
     swarm: &Arc<Swarm>,
+    store: &Arc<flockmux_storage::Store>,
 ) -> Result<AgentSpawn> {
     let agent_id = format!("{}-{}", plugin.id, &Uuid::new_v4().to_string()[..8]);
     let workspace = match workspace {
@@ -356,6 +357,7 @@ pub fn spawn_agent(
             env,
             agent_id.clone(),
             swarm.clone(),
+            store.clone(),
             lifecycle.clone(),
             lifecycle_tx.clone(),
         )?;

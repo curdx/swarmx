@@ -843,6 +843,9 @@
     "pickFolderShort": "选择…",
     "pickFolderUnavailable": "在桌面 app 内可直接选文件夹；浏览器调试模式请手动粘路径",
     "accentLabel": "标识色",
+    "captainEngine": "队长引擎",
+    "captainDefault": "默认（Claude）",
+    "captainNotInstalled": "（未安装）",
     "accentTitle": "标识色：{{name}}",
     "accentColors": {
       "blue": "蓝",

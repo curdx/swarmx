@@ -25,6 +25,7 @@ use crate::registry::{AgentChannel, Lifecycle, LifecycleEvent};
 use crate::transcript::emit_activity;
 use anyhow::{Context, Result};
 use flockmux_protocol::ws_swarm::{AgentState, SwarmEvent};
+use flockmux_storage::Store;
 use flockmux_swarm::Swarm;
 use parking_lot::Mutex;
 use std::collections::HashMap;
@@ -71,6 +72,7 @@ pub fn spawn_acp(
     env: HashMap<String, String>,
     agent_id: String,
     swarm: Arc<Swarm>,
+    store: Arc<Store>,
     lifecycle: Arc<Mutex<Lifecycle>>,
     lifecycle_tx: broadcast::Sender<LifecycleEvent>,
 ) -> Result<AgentChannel> {
@@ -119,6 +121,7 @@ pub fn spawn_acp(
     let cwd = workspace.to_string_lossy().into_owned();
     let driver_agent = agent_id.clone();
     let driver_swarm = swarm;
+    let driver_store = store;
     let driver_lifecycle = lifecycle_tx;
     let driver_lifecycle_snap = lifecycle;
 
@@ -163,6 +166,13 @@ pub fn spawn_acp(
         // is dropped → the loop ends.
         while let Some(text) = prompt_rx.recv().await {
             tracing::info!(agent = %driver_agent, prompt_len = text.len(), "acp turn start");
+            // Persist activity time so the first-response watchdog sees a turn
+            // is underway. Without this an ACP captain whose first turn (a real
+            // Phase-A scan) runs past the watchdog window gets wrongly killed —
+            // ACP has no transcript tailer to touch this like the PTY path does.
+            let _ = driver_store
+                .touch_agent_activity(driver_agent.clone(), now_ms())
+                .await;
             driver_swarm.publish_event(SwarmEvent::AgentState {
                 agent_id: driver_agent.clone(),
                 state: AgentState::Thinking,
