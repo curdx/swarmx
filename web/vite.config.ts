@@ -15,6 +15,12 @@ const pkg = JSON.parse(
   readFileSync(path.resolve(__dirname, "./package.json"), "utf-8"),
 ) as { version: string };
 
+// Backend host:port the dev/preview proxy points at. Defaults to the standard
+// dev server on :7777; override with FLOCKMUX_BACKEND (e.g. "127.0.0.1:7788")
+// to run an isolated test stack against a separate backend without disturbing
+// a long-lived :7777 dev session.
+const BACKEND = process.env.FLOCKMUX_BACKEND || "127.0.0.1:7777";
+
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   resolve: {
@@ -28,9 +34,9 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      "/api": "http://127.0.0.1:7777",
+      "/api": `http://${BACKEND}`,
       "/ws": {
-        target: "ws://127.0.0.1:7777",
+        target: `ws://${BACKEND}`,
         ws: true,
         changeOrigin: true,
       },
@@ -42,9 +48,9 @@ export default defineConfig({
   preview: {
     port: 4173,
     proxy: {
-      "/api": "http://127.0.0.1:7777",
+      "/api": `http://${BACKEND}`,
       "/ws": {
-        target: "ws://127.0.0.1:7777",
+        target: `ws://${BACKEND}`,
         ws: true,
         changeOrigin: true,
       },
