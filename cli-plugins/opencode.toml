@@ -67,9 +67,10 @@ trust_format = "none"
 # config (written by the mcp writer), not codex's version.json dance.
 auto_dismiss_update = false
 
-# PTY transport for Model A. Model B (ACP) will flip this to "acp" once the ACP
-# session driver lands; the same manifest then drives `opencode acp` over stdio.
-transport = "pty"
+# ACP transport (Model B): flockmux drives `opencode acp` over piped stdio and
+# owns the turn loop (see crate::acp_engine). The same manifest drove the PTY
+# path before the ACP session driver landed; flip back to "pty" to fall back.
+transport = "acp"
 
 # Frontend keystroke-settle delay (ms) for the bootstrap-prompt inject into the
 # TUI input. UNVERIFIED for opencode (no live capture yet) — 300 mirrors codex's

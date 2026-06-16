@@ -19,6 +19,7 @@ use flockmux_pty::PtyBridge;
 use parking_lot::Mutex;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
+use tokio::process::Child;
 use tokio::sync::mpsc;
 
 /// Lifecycle status surfaced to every (re-)attaching client so the UI can
@@ -77,6 +78,15 @@ pub enum AgentChannel {
         /// Inject keystrokes into the PTY (wake "kicks", terminal WS input).
         input_tx: mpsc::Sender<Bytes>,
     },
+    /// ACP (structured JSON-RPC over stdio): no PTY, no terminal view.
+    /// `child` is the piped `opencode acp` process (liveness via `try_wait`,
+    /// teardown via `start_kill`); `prompt_tx` delivers each turn's prompt text
+    /// (the bootstrap first turn, then wakes) to the driver loop, which runs it
+    /// as one `session/prompt`.
+    Acp {
+        child: Arc<Mutex<Child>>,
+        prompt_tx: mpsc::UnboundedSender<String>,
+    },
 }
 
 impl AgentSlot {
@@ -84,6 +94,10 @@ impl AgentSlot {
     pub fn is_alive(&self) -> bool {
         match &self.channel {
             AgentChannel::Pty { bridge, .. } => bridge.is_alive(),
+            AgentChannel::Acp { child, .. } => {
+                // `try_wait` reaps without blocking; `Ok(None)` = still running.
+                child.lock().try_wait().map(|o| o.is_none()).unwrap_or(false)
+            }
         }
     }
 
@@ -91,6 +105,9 @@ impl AgentSlot {
     pub fn try_exit_code(&self) -> Option<i32> {
         match &self.channel {
             AgentChannel::Pty { bridge, .. } => bridge.try_exit_code(),
+            AgentChannel::Acp { child, .. } => {
+                child.lock().try_wait().ok().flatten().and_then(|s| s.code())
+            }
         }
     }
 
@@ -98,6 +115,9 @@ impl AgentSlot {
     pub fn kill(&self) {
         match &self.channel {
             AgentChannel::Pty { bridge, .. } => bridge.kill(),
+            AgentChannel::Acp { child, .. } => {
+                let _ = child.lock().start_kill();
+            }
         }
     }
 
@@ -106,6 +126,7 @@ impl AgentSlot {
     pub fn pty_bridge(&self) -> Option<Arc<PtyBridge>> {
         match &self.channel {
             AgentChannel::Pty { bridge, .. } => Some(bridge.clone()),
+            AgentChannel::Acp { .. } => None,
         }
     }
 
@@ -114,6 +135,7 @@ impl AgentSlot {
     pub fn pty_stream(&self) -> Option<Arc<PtyStream>> {
         match &self.channel {
             AgentChannel::Pty { stream, .. } => Some(stream.clone()),
+            AgentChannel::Acp { .. } => None,
         }
     }
 
@@ -122,6 +144,17 @@ impl AgentSlot {
     pub fn pty_input(&self) -> Option<mpsc::Sender<Bytes>> {
         match &self.channel {
             AgentChannel::Pty { input_tx, .. } => Some(input_tx.clone()),
+            AgentChannel::Acp { .. } => None,
+        }
+    }
+
+    /// Deliver a turn's prompt text to a structured (ACP) agent's driver loop
+    /// (the bootstrap first turn, then each wake). Returns `false` if this isn't
+    /// an ACP agent or the driver has already stopped (channel closed).
+    pub fn deliver_acp_prompt(&self, text: String) -> bool {
+        match &self.channel {
+            AgentChannel::Acp { prompt_tx, .. } => prompt_tx.send(text).is_ok(),
+            AgentChannel::Pty { .. } => false,
         }
     }
 }

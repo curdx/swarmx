@@ -316,10 +316,16 @@ pub async fn inject_with_kick_text(
         let guard = slot.lock();
         match guard.pty_input() {
             Some(tx) => tx,
-            // Non-PTY agent (ACP): no PTY to kick. ACP wakes are delivered
-            // through the session (a fresh `session/prompt`), not byte
-            // injection — nothing to do on this path.
-            None => return Ok(()),
+            None => {
+                // ACP: deliver the wake as the next turn over the session
+                // (a fresh `session/prompt`), not PTY byte injection.
+                if guard.deliver_acp_prompt(kick_text.to_string()) {
+                    tracing::debug!(agent = %agent_id, key = %key_for_log, "ACP wake delivered as session/prompt");
+                } else {
+                    tracing::warn!(agent = %agent_id, key = %key_for_log, "ACP wake dropped: prompt channel closed");
+                }
+                return Ok(());
+            }
         }
     };
 
