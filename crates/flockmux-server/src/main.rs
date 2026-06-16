@@ -569,6 +569,9 @@ async fn auto_respawn_orchestrators(state: &AppState) -> Result<()> {
             // Auto-respawn revives the orchestrator on the workspace's main
             // thread; run_spell resolves it (oldest thread) when this is None.
             thread_id: None,
+            // Preserve the captain engine across restart (else an opencode
+            // captain would silently come back as the role-default claude).
+            captain_cli: routes::rest::last_orchestrator_cli(&state, &ws.id).await,
         };
         match routes::rest::run_spell(State(state.clone()), AxJson(req)).await {
             Ok(resp) => {

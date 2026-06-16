@@ -2251,6 +2251,20 @@ pub async fn list_spells(State(state): State<AppState>) -> impl IntoResponse {
 /// interact with the agent manually. Returning 500 would mislead them
 /// into thinking nothing was spawned, when in fact N agents are now live
 /// in the registry.
+/// The cli-plugin (engine) the workspace's MOST RECENT orchestrator used —
+/// alive or dead — so a respawn (restart auto-respawn, direction rename, cron
+/// revive) re-creates the captain on the SAME engine the user picked instead of
+/// silently resetting to the role default. `None` (→ role default) if the
+/// workspace never had an orchestrator. Used as `RunSpellRequest.captain_cli`.
+pub(crate) async fn last_orchestrator_cli(state: &AppState, workspace_id: &str) -> Option<String> {
+    let agents = state.store.list_agents().await.ok()?;
+    agents
+        .into_iter()
+        .filter(|a| a.workspace_id.as_deref() == Some(workspace_id) && a.role == "orchestrator")
+        .max_by_key(|a| a.spawned_at)
+        .map(|a| a.cli)
+}
+
 pub async fn run_spell(
     State(state): State<AppState>,
     Json(req): Json<RunSpellRequest>,
@@ -2266,7 +2280,7 @@ pub async fn run_spell(
     // front. Failing here is much friendlier than half-spawning agents
     // and then erroring out — partial spawns are visible PTYs the user
     // would have to kill manually.
-    let resolved_agents: Vec<spells::ResolvedAgent> = spell
+    let mut resolved_agents: Vec<spells::ResolvedAgent> = spell
         .manifest
         .agents
         .iter()
@@ -2280,6 +2294,25 @@ pub async fn run_spell(
                 })),
             )
         })?;
+
+    // Optional captain-engine override (RunSpellRequest.captain_cli): swap the
+    // orchestrator agent's resolved cli so a workspace can run with e.g.
+    // opencode as captain instead of the role-default claude. Validated against
+    // the plugin registry; an unknown id is ignored (warn) rather than spawning
+    // a bogus binary. Worker agents are left untouched.
+    if let Some(cli) = req.captain_cli.as_deref().filter(|c| !c.is_empty()) {
+        if state.plugins.get(cli).is_some() {
+            for a in resolved_agents
+                .iter_mut()
+                .filter(|a| a.role == "orchestrator")
+            {
+                tracing::info!(spell = %req.name, from = %a.cli, to = %cli, "captain_cli override applied");
+                a.cli = cli.to_string();
+            }
+        } else {
+            tracing::warn!(spell = %req.name, cli = %cli, "captain_cli names no known plugin; ignoring");
+        }
+    }
 
     // M6b: detect depends_on cycles before any spawn happens. We build
     // the cycle-detection inputs from the resolved agents themselves

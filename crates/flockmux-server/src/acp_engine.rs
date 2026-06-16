@@ -21,7 +21,7 @@
 
 use crate::acp::{AcpSession, AcpUpdate, ConnError, Connection};
 use crate::plugins::CliPlugin;
-use crate::registry::{AgentChannel, LifecycleEvent};
+use crate::registry::{AgentChannel, Lifecycle, LifecycleEvent};
 use crate::transcript::emit_activity;
 use anyhow::{Context, Result};
 use flockmux_protocol::ws_swarm::{AgentState, SwarmEvent};
@@ -71,6 +71,7 @@ pub fn spawn_acp(
     env: HashMap<String, String>,
     agent_id: String,
     swarm: Arc<Swarm>,
+    lifecycle: Arc<Mutex<Lifecycle>>,
     lifecycle_tx: broadcast::Sender<LifecycleEvent>,
 ) -> Result<AgentChannel> {
     // `opencode acp` speaks newline-delimited JSON-RPC over its own stdio — no
@@ -119,6 +120,7 @@ pub fn spawn_acp(
     let driver_agent = agent_id.clone();
     let driver_swarm = swarm;
     let driver_lifecycle = lifecycle_tx;
+    let driver_lifecycle_snap = lifecycle;
 
     tokio::spawn(async move {
         // ── Handshake ──────────────────────────────────────────────────────
@@ -145,8 +147,14 @@ pub fn spawn_acp(
             }
         };
         tracing::info!(agent = %driver_agent, session = %session_id, "acp session ready");
-        // Ready: the existing lifecycle subscriber records shim_ready + flips
-        // AgentState to Ready + arms the first-response watchdog.
+        // Ready: set the lifecycle SNAPSHOT first, then broadcast the event.
+        // The snapshot is load-bearing — the deferred bootstrap-inject's
+        // `already_ready` short-circuit reads it, which is what catches the case
+        // where the bootstrap resubscribed AFTER this fast ACP ShimReady fired
+        // (broadcast doesn't replay, so the event alone can be missed). The
+        // existing lifecycle subscriber maps the event → AgentState::Ready +
+        // records shim_ready + arms the first-response watchdog.
+        driver_lifecycle_snap.lock().shim_ready = true;
         let _ = driver_lifecycle.send(LifecycleEvent::ShimReady);
 
         // ── Turn loop ──────────────────────────────────────────────────────
@@ -154,6 +162,7 @@ pub fn spawn_acp(
         // then each wake. `prompt_rx` closes when the slot (and its prompt_tx)
         // is dropped → the loop ends.
         while let Some(text) = prompt_rx.recv().await {
+            tracing::info!(agent = %driver_agent, prompt_len = text.len(), "acp turn start");
             driver_swarm.publish_event(SwarmEvent::AgentState {
                 agent_id: driver_agent.clone(),
                 state: AgentState::Thinking,
@@ -221,6 +230,7 @@ pub fn spawn_acp(
             seq += 1;
             match result {
                 Ok(stop) => {
+                    tracing::info!(agent = %driver_agent, ?stop, reply_len = reply.len(), "acp turn done");
                     let snippet: String = reply.trim().chars().take(80).collect();
                     let label = if snippet.is_empty() {
                         format!("turn done ({stop:?})")
