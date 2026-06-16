@@ -356,6 +356,7 @@ pub fn spawn_agent(
             env,
             agent_id.clone(),
             swarm.clone(),
+            lifecycle.clone(),
             lifecycle_tx.clone(),
         )?;
         let slot = AgentSlot {

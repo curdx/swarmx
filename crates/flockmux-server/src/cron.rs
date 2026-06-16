@@ -262,6 +262,8 @@ async fn revive_orchestrator(state: &AppState, job: &CronJobRecord) -> Result<St
         workspace_id: Some(job.workspace_id.clone()),
         caller_agent_id: None,
         thread_id: None, // → resolves to the workspace's main direction
+        // Preserve the captain engine when a cron job revives the orchestrator.
+        captain_cli: crate::routes::rest::last_orchestrator_cli(state, &job.workspace_id).await,
     };
     let resp = crate::routes::rest::run_spell(State(state.clone()), Json(req))
         .await

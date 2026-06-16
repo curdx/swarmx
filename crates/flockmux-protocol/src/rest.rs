@@ -486,6 +486,13 @@ pub struct RunSpellRequest {
     /// specific direction explicitly.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thread_id: Option<String>,
+    /// Optional engine (cli-plugin id) for the spell's `orchestrator` agent,
+    /// overriding its role `default_cli`. Lets a workspace be created with e.g.
+    /// `opencode` as the captain instead of the default `claude`. Only the
+    /// orchestrator agent is overridden; worker agents keep their roles'
+    /// engines. Ignored (with a warning) if it names no known plugin.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub captain_cli: Option<String>,
 }
 
 /// `POST /api/spell/run` response. Lists the agents the runner actually

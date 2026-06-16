@@ -1494,6 +1494,8 @@ async fn reroot_thread_orchestrator(
         workspace_id: Some(workspace_id.to_string()),
         caller_agent_id: None,
         thread_id: Some(thread_id.to_string()),
+        // Preserve the captain engine across the rename-respawn.
+        captain_cli: super::rest::last_orchestrator_cli(&state, workspace_id).await,
     };
     match run_spell(State(state.clone()), Json(req)).await {
         Ok(Json(resp)) => {
