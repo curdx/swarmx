@@ -843,6 +843,9 @@
     "pickFolderShort": "Browse…",
     "pickFolderUnavailable": "Available inside the desktop app; paste the path manually in browser-dev mode",
     "accentLabel": "Color",
+    "captainEngine": "Captain engine",
+    "captainDefault": "Default (Claude)",
+    "captainNotInstalled": " (not installed)",
     "accentTitle": "Accent color: {{name}}",
     "accentColors": {
       "blue": "Blue",

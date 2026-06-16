@@ -654,6 +654,7 @@ pub(crate) async fn spawn_with_bookkeeping(
         &state.server_url,
         recorder_handle,
         &state.swarm,
+        &state.store,
     )
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 

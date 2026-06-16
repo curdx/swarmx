@@ -37,7 +37,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { api, ApiError } from "../../api/http";
-import type { SpellInfo, SwarmEvent, Workspace } from "../../api/types";
+import type { CliPluginInfo, SpellInfo, SwarmEvent, Workspace } from "../../api/types";
 import { useSwarmFeed } from "../../hooks/useSwarmFeed";
 import {
   ACCENT_OPTIONS,
@@ -65,6 +65,9 @@ import { cn } from "@/lib/cn";
 
 const INIT_SPELL = "init";
 const SCOUT_TIMEOUT_MS = 60_000;
+// Sentinel for "use the orchestrator role's default_cli" — Radix Select can't
+// take an empty-string value, so we map this to `captain_cli: undefined`.
+const CAPTAIN_DEFAULT = "__default__";
 
 // Tauri runtime detection — only the desktop shell exposes
 // __TAURI_INTERNALS__ on window. Vite dev (plain browser) is undefined,
@@ -191,6 +194,9 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const nextRowId = useRef(1);
   const [spells, setSpells] = useState<SpellInfo[]>([]);
+  const [plugins, setPlugins] = useState<CliPluginInfo[]>([]);
+  // Which engine runs the captain (orchestrator). Default = role default_cli.
+  const [captainCli, setCaptainCli] = useState<string>(CAPTAIN_DEFAULT);
   const [scan, setScan] = useState<ScanState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pathChecks, setPathChecks] = useState<Record<number, PathValidationState>>({});
@@ -221,6 +227,7 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
     setAdvancedOpen(false);
     nextRowId.current = 1;
     setError(null);
+    setCaptainCli(CAPTAIN_DEFAULT);
   };
 
   useSwarmFeed({
@@ -247,6 +254,12 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
       .listSpells()
       .then((rows) => setSpells(rows))
       .catch((e) => setError((e as Error).message));
+    // Engines available to run the captain (claude/codex/opencode …). Best-
+    // effort: a failure just leaves the default-only picker.
+    api
+      .listPlugins()
+      .then((rows) => setPlugins(rows))
+      .catch(() => {});
   }, [open]);
 
   // scan 超时兜底：scout 因为 LLM 不可用 / 目录权限等问题没有写黑板，60s
@@ -436,6 +449,7 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
         task: wsName,
         workspace_dir: mainPath,
         workspace_id: created.id,
+        captain_cli: captainCli === CAPTAIN_DEFAULT ? undefined : captainCli,
       });
     } catch (e) {
       setScan(null);
@@ -556,6 +570,43 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
                     })}
                   </div>
                 </div>
+              </div>
+              {/* Captain engine: which CLI runs the orchestrator. Default =
+                  the orchestrator role's default_cli (claude). opencode runs
+                  over ACP; claude/codex over PTY. */}
+              <div className="flex flex-col gap-1">
+                <Label
+                  htmlFor="wizard-captain"
+                  className="font-caption text-[10px] text-foreground-tertiary"
+                >
+                  {t("wizard.captainEngine", "队长引擎")}
+                </Label>
+                <Select value={captainCli} onValueChange={setCaptainCli}>
+                  <SelectTrigger
+                    id="wizard-captain"
+                    size="sm"
+                    className="h-9 w-[220px] text-sm"
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={CAPTAIN_DEFAULT}>
+                      {t("wizard.captainDefault", "默认（Claude）")}
+                    </SelectItem>
+                    {plugins.map((p) => (
+                      <SelectItem
+                        key={p.id}
+                        value={p.id}
+                        disabled={p.installed === false}
+                      >
+                        {p.display_name}
+                        {p.installed === false
+                          ? t("wizard.captainNotInstalled", "（未安装）")
+                          : ""}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
             </section>
 
