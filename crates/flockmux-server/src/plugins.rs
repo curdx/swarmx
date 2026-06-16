@@ -593,13 +593,15 @@ mod tests {
         assert_eq!(codex.mcp_format, McpFormat::CodexGlobalToml);
         assert_eq!(codex.stop_hook_format, StopHookFormat::CodexHooksJson);
 
-        // opencode (Model A): per-agent opencode.json for MCP+permission, the
-        // wake plugin for the Stop-hook-equivalent, no trust gate, PTY transport.
+        // opencode (Model B / ACP): per-agent opencode.json for MCP+permission,
+        // no trust gate, ACP transport (flockmux owns the turn loop via
+        // crate::acp_engine). The wake-plugin stop-hook format stays declared so
+        // flipping transport back to "pty" still works.
         let opencode = reg.get("opencode").expect("opencode plugin present");
         assert_eq!(opencode.trust_format, TrustFormat::None);
         assert_eq!(opencode.mcp_format, McpFormat::OpencodeJson);
         assert_eq!(opencode.stop_hook_format, StopHookFormat::OpencodePlugin);
-        assert_eq!(opencode.transport, Transport::Pty);
+        assert_eq!(opencode.transport, Transport::Acp);
         assert!(opencode.auto_inject_mcp, "opencode injects swarm MCP");
         assert!(
             opencode.auto_inject_stop_hook,

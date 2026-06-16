@@ -653,6 +653,7 @@ pub(crate) async fn spawn_with_bookkeeping(
         &state.mcp_bin,
         &state.server_url,
         recorder_handle,
+        &state.swarm,
     )
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -1439,8 +1440,16 @@ pub(crate) fn spawn_bootstrap_inject(
             }
         }
 
-        let Some(input_tx) = slot_lock.lock().pty_input() else {
-            tracing::info!(agent = %agent_id, "bootstrap: non-PTY (ACP) agent — first turn is delivered via the ACP session, not a PTY inject");
+        let pty_input = slot_lock.lock().pty_input();
+        let Some(input_tx) = pty_input else {
+            // ACP: hand the first-turn prompt to the driver as a `session/prompt`.
+            // No terminal → no escape risk, so send the raw (un-PTY-sanitized)
+            // text. The PTY paste/submit dance below is not reached.
+            if slot_lock.lock().deliver_acp_prompt(prompt) {
+                tracing::info!(agent = %agent_id, "bootstrap: delivered first turn to ACP session");
+            } else {
+                tracing::warn!(agent = %agent_id, "bootstrap: ACP prompt channel closed before first turn");
+            }
             return;
         };
         // SECURITY: strip ANSI / terminal-control bytes before they hit the PTY.

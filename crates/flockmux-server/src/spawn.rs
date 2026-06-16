@@ -7,6 +7,7 @@ use anyhow::{Context, Result};
 use bytes::Bytes;
 use flockmux_pty::{PtyBridge, PtyHandles, SpawnOpts};
 use flockmux_recorder::RecorderHandle;
+use flockmux_swarm::Swarm;
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -105,6 +106,7 @@ pub fn spawn_agent(
     mcp_bin: &Path,
     server_url: &str,
     recorder: Option<RecorderHandle>,
+    swarm: &Arc<Swarm>,
 ) -> Result<AgentSpawn> {
     let agent_id = format!("{}-{}", plugin.id, &Uuid::new_v4().to_string()[..8]);
     let workspace = match workspace {
@@ -114,22 +116,11 @@ pub fn spawn_agent(
 
     enforce_billing_policy(plugin)?;
 
-    // L4 transport seam: the ACP (structured JSON-RPC-over-stdio) session
-    // driver isn't wired yet. `crate::acp` now has both the codec AND the async
-    // `Connection` layer (request/response correlation + notification/peer-
-    // request channels) — what's still missing is the ACP-specific session on
-    // top: spawn the child with PIPED stdio (not a PTY), `Connection::spawn` on
-    // it, do the `initialize` handshake, and map ACP notifications (permission
-    // / tool-call / streaming) onto SwarmEvents. That needs a live ACP CLI to
-    // pin the schema, so for now a plugin declaring `transport = "acp"` still
-    // spawns over the PTY (usable today); this warning marks the branch point.
-    if plugin.transport == crate::plugins::Transport::Acp {
-        tracing::warn!(
-            agent = %agent_id, cli = %plugin.id,
-            "transport=acp declared but the ACP session driver isn't wired yet \
-             (L4 foundation only); falling back to the PTY transport"
-        );
-    }
+    // ACP transport (opencode) is handled by the `Transport::Acp` branch
+    // further down — AFTER env + pre-spawn setup (it reuses the same per-agent
+    // OPENCODE_CONFIG + env allowlist), then returns early. Everything between
+    // here and there is PTY-only (argv/shim/model overlay) and the ACP branch
+    // simply skips it.
 
     // Suppress per-CLI interactive prompts that would block a headless PTY
     // (claude's "trust folder", codex's "update available"). Each patch is a
@@ -348,6 +339,40 @@ pub fn spawn_agent(
                 );
             }
         }
+    }
+
+    // ── ACP transport branch ────────────────────────────────────────────────
+    // opencode driven as a structured JSON-RPC stdio session: flockmux owns the
+    // turn loop. Skips all PTY machinery (shim/argv/model overlay/PtyBridge/
+    // pump). Reuses the env built above (incl. the per-agent OPENCODE_CONFIG
+    // that wires the swarm MCP) and the shared lifecycle channel so the existing
+    // lifecycle subscriber maps ShimReady/HealthFail → AgentState.
+    if plugin.transport == crate::plugins::Transport::Acp {
+        let lifecycle = Arc::new(Mutex::new(Lifecycle::default()));
+        let (lifecycle_tx, _rx) = tokio::sync::broadcast::channel(16);
+        let channel = crate::acp_engine::spawn_acp(
+            plugin,
+            &workspace,
+            env,
+            agent_id.clone(),
+            swarm.clone(),
+            lifecycle_tx.clone(),
+        )?;
+        let slot = AgentSlot {
+            channel,
+            lifecycle,
+            lifecycle_tx,
+            cli: plugin.id.clone(),
+            role: role.unwrap_or_else(|| plugin.id.clone()),
+            workspace: workspace.to_string_lossy().into_owned(),
+            paused: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            mcp_ready: tokio::sync::watch::channel(false).0,
+        };
+        return Ok(AgentSpawn {
+            agent_id,
+            slot,
+            transcript_session_id: None,
+        });
     }
 
     // claude: force a known session id so the transcript tailer locates the

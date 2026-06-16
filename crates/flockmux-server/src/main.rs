@@ -13,6 +13,7 @@
 //! CORS, so the CORS layer alone is not a security boundary).
 
 mod acp;
+mod acp_engine;
 mod billing;
 mod cron;
 mod models_config;
