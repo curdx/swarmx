@@ -47,11 +47,6 @@ mcp_format       = "codex-global-toml" # global [mcp_servers.flockmux-swarm] in 
 stop_hook_format = "codex-hooks-json"  # <ws>/.codex/hooks.json (timeout seconds)
 stop_hook_timeout = 10                 # SECONDS (codex's hook schema unit; ms would be 2.7h)
 input_settle_ms = 300                  # codex's ratatui input poll attaches ~120-180ms after ready
-# Structured transport pilot metadata. This does NOT change the default spawn
-# path; spawn.rs still uses PTY unless a future explicit opt-in driver consumes
-# this field. Codex app-server is the first structured target because it stays
-# on the Codex CLI account surface.
-structured_args = ["app-server"]
 
 # L5c model overlay: codex takes `-m/--model <MODEL>`. {model} is substituted
 # at spawn with the per-spawn `model` (REST/MCP) or `default_model`. Unset

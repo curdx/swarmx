@@ -107,24 +107,19 @@ async fn handle_socket(
             (Some(stream), Some(input_tx)) => {
                 Some((stream, input_tx, slot.lifecycle_tx.clone(), lifecycle_snapshot))
             }
-            // Non-PTY agent (ACP): no terminal stream to attach to.
+            // No live PTY (agent already exited / no terminal stream).
             _ => None,
         }
     };
     let (stream, input_tx, lifecycle_tx, lifecycle_snapshot) = match parts {
         Some(p) => p,
         None => {
-            // Non-PTY agent (ACP): no terminal stream to attach. Send a
-            // readable control frame so a client that still reached this
-            // endpoint (e.g. an old `?tab=terminal` deep link) shows an
-            // explanatory message instead of a bare WS 1005 close. The drawer's
-            // normal path no longer opens this socket for ACP agents.
+            // No live PTY to attach to. Send a readable control frame so the
+            // client shows an explanatory message instead of a bare WS 1005 close.
             let _ = send_ctrl(
                 &mut socket,
                 &ServerControl::Error {
-                    message: format!(
-                        "agent {agent_id} runs over ACP — no PTY terminal; see the Activity tab"
-                    ),
+                    message: format!("agent {agent_id} has no live terminal"),
                 },
             )
             .await;
@@ -359,7 +354,7 @@ async fn apply_control(
 ) {
     match ctrl {
         ClientControl::Resize { cols, rows } => {
-            // No-op for non-PTY agents (ACP has no resizable terminal).
+            // No-op if the agent has no live PTY bridge (already exited).
             if let Some(bridge) = slot.lock().pty_bridge() {
                 if let Err(err) = bridge.resize(cols, rows) {
                     warn!(?err, "resize failed");

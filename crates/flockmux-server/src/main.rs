@@ -12,8 +12,6 @@
 //! visits from driving their agents over a cross-site WebSocket (WS bypasses
 //! CORS, so the CORS layer alone is not a security boundary).
 
-mod acp;
-mod acp_engine;
 mod billing;
 // Per-CLI behavior adapters (claude / codex / opencode) behind one CliAdapter
 // trait — every CLI-specific spawn seam lives in its own `cli/<name>.rs`, so the
@@ -21,6 +19,7 @@ mod billing;
 mod cli;
 mod cron;
 mod models_config;
+mod opencode_tui;
 mod plugins;
 mod pty_stream;
 mod reaper;

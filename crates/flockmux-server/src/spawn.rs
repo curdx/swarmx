@@ -7,7 +7,6 @@ use anyhow::{Context, Result};
 use bytes::Bytes;
 use flockmux_pty::{PtyBridge, PtyHandles, SpawnOpts};
 use flockmux_recorder::RecorderHandle;
-use flockmux_swarm::Swarm;
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -106,8 +105,6 @@ pub fn spawn_agent(
     mcp_bin: &Path,
     server_url: &str,
     recorder: Option<RecorderHandle>,
-    swarm: &Arc<Swarm>,
-    store: &Arc<flockmux_storage::Store>,
 ) -> Result<AgentSpawn> {
     let agent_id = format!("{}-{}", plugin.id, &Uuid::new_v4().to_string()[..8]);
     let workspace = match workspace {
@@ -119,10 +116,9 @@ pub fn spawn_agent(
 
     // Resolve THE adapter for this CLI once. Everything CLI-specific below —
     // pre-spawn patches, argv/env contributions, transcript session id — is
-    // delegated to it so this function stays generic machinery. ACP transport
-    // (opencode) is handled by the `Transport::Acp` branch further down, AFTER
-    // env + pre-spawn setup (it reuses the per-agent config env the adapter
-    // contributes), then returns early; the PTY path runs to the bottom.
+    // delegated to it so this function stays generic machinery. Every CLI runs
+    // over the PTY; opencode additionally gets a `--port` for its TUI HTTP
+    // control API (see the input_delivery block after the argv contributions).
     let adapter = crate::cli::adapter_for(plugin);
     tracing::debug!(agent = %agent_id, cli = %plugin.id, adapter = adapter.name(), "resolved CLI adapter");
 
@@ -186,6 +182,29 @@ pub fn spawn_agent(
     // shared-cwd ~/.claude.json collision). Each adapter knows its own flags and
     // formats; this is a no-op for a CLI that needs neither.
     adapter.contribute_argv(plugin, &agent_id, &mut argv);
+
+    // opencode: drive its TUI over the documented `/tui/*` HTTP control API
+    // (append-prompt + submit-prompt) instead of keystroke injection — its TUI
+    // can't take a large bootstrap via bracketed paste (it parks at READY and
+    // never submits). We spawn the TUI on a known ephemeral `--port` and the
+    // bootstrap / wake paths POST prompts there. The port is remembered on the
+    // slot so those paths can reach it. See `crate::opencode_tui`.
+    let mut tui_http_port: Option<u16> = None;
+    if plugin.input_delivery == crate::plugins::InputDelivery::OpencodeTuiHttp {
+        match alloc_ephemeral_port() {
+            Some(port) => {
+                argv.push("--port".into());
+                argv.push(port.to_string());
+                tui_http_port = Some(port);
+                tracing::info!(agent = %agent_id, port, "opencode TUI HTTP control port allocated");
+            }
+            None => tracing::warn!(
+                agent = %agent_id,
+                "could not allocate a TUI HTTP control port for opencode; \
+                 bootstrap/wake delivery will fail"
+            ),
+        }
+    }
 
     // Env: flockmux-pty starts the child from an EMPTY environment
     // (`CommandBuilder::env_clear`), so the worker sees ONLY what we insert
@@ -261,50 +280,13 @@ pub fn spawn_agent(
 
     // Per-CLI env contributions beyond the shared allowlist: codex's per-agent
     // CODEX_HOME (isolates MCP from the user's global ~/.codex), opencode's
-    // per-agent OPENCODE_CONFIG (which the ACP branch below reuses verbatim).
-    // No-op for a CLI that needs neither.
+    // per-agent OPENCODE_CONFIG. No-op for a CLI that needs neither.
     adapter.contribute_env(plugin, &agent_id, &mut env);
-
-    // ── ACP transport branch ────────────────────────────────────────────────
-    // opencode driven as a structured JSON-RPC stdio session: flockmux owns the
-    // turn loop. Skips all PTY machinery (shim/argv/model overlay/PtyBridge/
-    // pump). Reuses the env built above (incl. the per-agent OPENCODE_CONFIG
-    // that wires the swarm MCP) and the shared lifecycle channel so the existing
-    // lifecycle subscriber maps ShimReady/HealthFail → AgentState.
-    if plugin.transport == crate::plugins::Transport::Acp {
-        let lifecycle = Arc::new(Mutex::new(Lifecycle::default()));
-        let (lifecycle_tx, _rx) = tokio::sync::broadcast::channel(16);
-        let channel = crate::acp_engine::spawn_acp(
-            plugin,
-            &workspace,
-            env,
-            agent_id.clone(),
-            swarm.clone(),
-            store.clone(),
-            lifecycle.clone(),
-            lifecycle_tx.clone(),
-        )?;
-        let slot = AgentSlot {
-            channel,
-            lifecycle,
-            lifecycle_tx,
-            cli: plugin.id.clone(),
-            role: role.unwrap_or_else(|| plugin.id.clone()),
-            workspace: workspace.to_string_lossy().into_owned(),
-            paused: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            mcp_ready: tokio::sync::watch::channel(false).0,
-        };
-        return Ok(AgentSpawn {
-            agent_id,
-            slot,
-            transcript_session_id: None,
-        });
-    }
 
     // claude pins a known session id (pushing `--session-id`) so the transcript
     // tailer locates the exact JSONL instead of guessing the newest file in the
     // project dir; codex/opencode return None (codex locates via its per-agent
-    // CODEX_HOME). PTY path only — the ACP branch already returned above.
+    // CODEX_HOME).
     let transcript_session_id = adapter.transcript_session_id(plugin, &agent_id, &mut argv);
 
     let argv_strings: Vec<String> = argv;
@@ -399,6 +381,9 @@ pub fn spawn_agent(
         // `.subscribe()`; `send_replace` updates the retained value even before
         // any subscriber exists, so an early ping is never lost.
         mcp_ready: tokio::sync::watch::channel(false).0,
+        // Set for opencode (drives its TUI over /tui/* HTTP); None for the
+        // keystroke CLIs. Allocated above when input_delivery is opencode-tui-http.
+        tui_http_port,
     };
 
     Ok(AgentSpawn {
@@ -410,6 +395,17 @@ pub fn spawn_agent(
 
 fn enforce_billing_policy(plugin: &CliPlugin) -> Result<()> {
     crate::billing::enforce_spawn_billing_policy(plugin).map_err(anyhow::Error::msg)
+}
+
+/// Grab a free loopback TCP port by binding `127.0.0.1:0` and releasing it. Used
+/// to assign opencode's TUI a known `--port` for the `/tui/*` HTTP control API.
+/// There's a tiny TOCTOU window between release and opencode re-binding, but the
+/// port space is large and the child binds within milliseconds.
+fn alloc_ephemeral_port() -> Option<u16> {
+    std::net::TcpListener::bind("127.0.0.1:0")
+        .ok()
+        .and_then(|l| l.local_addr().ok())
+        .map(|a| a.port())
 }
 
 fn env_blocked(plugin: &CliPlugin, key: &str) -> bool {
@@ -1128,7 +1124,7 @@ mod ready_plan_tests {
 mod billing_policy_tests {
     use super::*;
     use crate::plugins::{
-        BillingSurface, McpFormat, ReadyStep, StopHookFormat, Transport, TrustFormat,
+        BillingSurface, InputDelivery, McpFormat, ReadyStep, StopHookFormat, TrustFormat,
     };
 
     #[test]
@@ -1173,8 +1169,7 @@ mod billing_policy_tests {
             native_tiers: false,
             effort_args: Vec::new(),
             effort_levels: HashMap::new(),
-            transport: Transport::Pty,
-            structured_args: Vec::new(),
+            input_delivery: InputDelivery::Keystroke,
         }
     }
 
@@ -1185,17 +1180,6 @@ mod billing_policy_tests {
         assert!(env_blocked(&p, "ANTHROPIC_API_KEY"));
         assert!(env_blocked(&p, "ANTHROPIC_BASE_URL"));
         assert!(!env_blocked(&p, "OPENAI_API_KEY"));
-    }
-
-    #[test]
-    fn claude_non_pty_requires_paid_transport_opt_in() {
-        std::env::remove_var("FLOCKMUX_ALLOW_PAID_TRANSPORT");
-        let mut p = minimal_plugin("claude");
-        p.mcp_format = McpFormat::ClaudeLocalScope;
-        p.billing_surface = BillingSurface::InteractiveSubscription;
-        p.transport = Transport::Acp;
-        let err = enforce_billing_policy(&p).expect_err("non-PTY Claude must be rejected");
-        assert!(err.to_string().contains("interactive subscription PTY"));
     }
 
     #[test]

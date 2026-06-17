@@ -69,31 +69,25 @@ pub enum StopHookFormat {
     OpencodePlugin,
 }
 
-/// How flockmux talks to this CLI's process (L4). `pty` (default) drives the
-/// CLI's interactive TUI over a pseudo-terminal — scraping output, injecting
-/// keystrokes, auto-answering dialogs (the only wired transport today). `acp`
-/// reserves a structured JSON-RPC-over-stdio path (ACP / Codex `app-server`)
-/// that would yield real tool-call / permission / streaming events instead of
-/// scraping a TUI. The codec for it lives in `crate::acp`; session-driving is
-/// a future increment, so declaring `acp` currently warns and falls back to
-/// PTY (see `spawn.rs`).
+/// How flockmux delivers a turn's prompt text (the first-turn bootstrap and
+/// each wake "kick") into this CLI. Every CLI runs over a PTY; this only picks
+/// the INPUT channel:
+///
+/// - `keystroke` (default) — type the prompt into the CLI's TUI as PTY bytes
+///   (bracketed paste + Enter). Works for claude/codex.
+/// - `opencode-tui-http` — POST the prompt to opencode's built-in `/tui/*`
+///   control API on the agent's `--port`. opencode's TUI can't reliably accept
+///   a large (~24k-char) bootstrap via keystrokes — the paste parks without
+///   submitting — so we use its own documented HTTP control surface instead.
+///   spawn allocates a per-agent port and passes `--port`; the port is stored
+///   on the `AgentSlot` and the bootstrap/wake paths deliver via
+///   `crate::opencode_tui`. See `crate::opencode_tui`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "kebab-case")]
-pub enum Transport {
+pub enum InputDelivery {
     #[default]
-    Pty,
-    Acp,
-}
-
-impl Transport {
-    /// Stable lowercase wire string (`"pty"` / `"acp"`) for the REST `AgentInfo`
-    /// surface the UI reads to pick a terminal-vs-activity drawer view.
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Transport::Pty => "pty",
-            Transport::Acp => "acp",
-        }
-    }
+    Keystroke,
+    OpencodeTuiHttp,
 }
 
 /// Which account / quota surface a CLI plugin consumes by default. This is a
@@ -349,17 +343,12 @@ pub struct CliPlugin {
     #[serde(default)]
     pub effort_levels: HashMap<String, String>,
 
-    /// Transport to drive this CLI (L4). Defaults to `pty` — the only wired
-    /// path today. `acp` is reserved for structured JSON-RPC-over-stdio; see
-    /// [`Transport`].
+    /// How a turn's prompt (bootstrap + wakes) is delivered into this CLI.
+    /// Defaults to `keystroke` (type into the PTY's TUI). opencode declares
+    /// `opencode-tui-http` because its TUI can't take a large bootstrap via
+    /// keystrokes — see [`InputDelivery`] and `crate::opencode_tui`.
     #[serde(default)]
-    pub transport: Transport,
-    /// Optional argv tail for a future structured JSON-RPC session driver.
-    /// Codex declares `["app-server"]`; Claude intentionally leaves this empty
-    /// so a manifest edit cannot route it through SDK/ACP adapter billing by
-    /// accident. This is metadata until `spawn.rs` grows the opt-in driver.
-    #[serde(default)]
-    pub structured_args: Vec<String>,
+    pub input_delivery: InputDelivery,
 }
 
 fn default_home_env() -> String {
@@ -521,19 +510,6 @@ impl PluginRegistry {
     }
 }
 
-/// Candidate argv for a future structured JSON-RPC driver. This is deliberately
-/// separate from `default_args`: it is metadata for an opt-in driver and never
-/// changes the PTY spawn path by itself.
-#[cfg(test)]
-pub fn structured_command(plugin: &CliPlugin) -> Option<Vec<String>> {
-    if plugin.structured_args.is_empty() {
-        return None;
-    }
-    let mut argv = Vec::with_capacity(1 + plugin.structured_args.len());
-    argv.push(plugin.binary.clone());
-    argv.extend(plugin.structured_args.iter().cloned());
-    Some(argv)
-}
 
 /// Locate the `cli-plugins/` directory: first the path from env
 /// `FLOCKMUX_CLI_PLUGINS_DIR`, otherwise `<workspace>/cli-plugins` relative
@@ -604,15 +580,16 @@ mod tests {
         assert_eq!(codex.mcp_format, McpFormat::CodexGlobalToml);
         assert_eq!(codex.stop_hook_format, StopHookFormat::CodexHooksJson);
 
-        // opencode (Model B / ACP): per-agent opencode.json for MCP+permission,
-        // no trust gate, ACP transport (flockmux owns the turn loop via
-        // crate::acp_engine). The wake-plugin stop-hook format stays declared so
-        // flipping transport back to "pty" still works.
+        // opencode (PTY): per-agent opencode.json for MCP+permission, no trust
+        // gate, runs as a full-screen TUI in the PTY like claude/codex. Its
+        // bootstrap/wakes are delivered over opencode's `/tui/*` HTTP control API
+        // (input_delivery = opencode-tui-http) because keystroke paste can't carry
+        // a large bootstrap into its TUI; see crate::opencode_tui.
         let opencode = reg.get("opencode").expect("opencode plugin present");
         assert_eq!(opencode.trust_format, TrustFormat::None);
         assert_eq!(opencode.mcp_format, McpFormat::OpencodeJson);
         assert_eq!(opencode.stop_hook_format, StopHookFormat::OpencodePlugin);
-        assert_eq!(opencode.transport, Transport::Acp);
+        assert_eq!(opencode.input_delivery, InputDelivery::OpencodeTuiHttp);
         assert!(opencode.auto_inject_mcp, "opencode injects swarm MCP");
         assert!(
             opencode.auto_inject_stop_hook,
@@ -686,24 +663,18 @@ mod tests {
         );
         assert_eq!(codex.billing_surface, BillingSurface::CliAccount);
 
-        // L4: both default to the PTY transport (the only wired one); neither
-        // opts into the not-yet-wired ACP path.
-        assert_eq!(claude.transport, Transport::Pty, "claude defaults to pty");
-        assert_eq!(codex.transport, Transport::Pty, "codex defaults to pty");
-        assert!(
-            claude.structured_args.is_empty(),
-            "claude must not declare structured args by default",
+        // Input delivery: claude/codex type into the PTY's TUI (keystroke,
+        // the default); opencode is driven over its `/tui/*` HTTP control API.
+        assert_eq!(
+            claude.input_delivery,
+            InputDelivery::Keystroke,
+            "claude delivers prompts as keystrokes"
         );
         assert_eq!(
-            codex.structured_args,
-            vec!["app-server"],
-            "codex declares the app-server pilot entrypoint",
+            codex.input_delivery,
+            InputDelivery::Keystroke,
+            "codex delivers prompts as keystrokes"
         );
-        assert_eq!(
-            structured_command(&codex),
-            Some(vec!["codex".into(), "app-server".into()]),
-        );
-        assert_eq!(structured_command(&claude), None);
     }
 
     /// The compiled-in catalog must carry claude + codex. Without these baked

@@ -312,18 +312,24 @@ pub async fn inject_with_kick_text(
     let slot = registry
         .get(agent_id)
         .ok_or_else(|| anyhow!("no registry slot for `{agent_id}` — agent may have exited"))?;
+    // opencode is driven over its TUI's `/tui/*` HTTP control API, not keystrokes:
+    // deliver the wake by POSTing it as a fresh turn. (claude/codex fall through
+    // to the keystroke path below.) Read the port under the lock, then drop the
+    // guard before awaiting the HTTP call.
+    let tui_port = slot.lock().tui_http_port();
+    if let Some(port) = tui_port {
+        crate::opencode_tui::deliver_turn(port, kick_text)
+            .await
+            .map_err(|e| anyhow!("opencode TUI wake delivery failed: {e:#}"))?;
+        tracing::debug!(agent = %agent_id, key = %key_for_log, port, "wake delivered over opencode TUI HTTP");
+        return Ok(());
+    }
     let input_tx = {
         let guard = slot.lock();
         match guard.pty_input() {
             Some(tx) => tx,
             None => {
-                // ACP: deliver the wake as the next turn over the session
-                // (a fresh `session/prompt`), not PTY byte injection.
-                if guard.deliver_acp_prompt(kick_text.to_string()) {
-                    tracing::debug!(agent = %agent_id, key = %key_for_log, "ACP wake delivered as session/prompt");
-                } else {
-                    tracing::warn!(agent = %agent_id, key = %key_for_log, "ACP wake dropped: prompt channel closed");
-                }
+                tracing::warn!(agent = %agent_id, key = %key_for_log, "wake dropped: agent has no live PTY input");
                 return Ok(());
             }
         }
