@@ -136,7 +136,15 @@ export function AgentDrawer({ agentId, activities, onClose }: Props) {
   // clicking its avatar in chat used to open an empty/error drawer. Default a
   // dead agent to its recordings — the richest "what did this agent do" view —
   // instead. An explicit ?tab= always wins (deep-link / user pick).
-  const defaultTab: TabId = !infoResolved || liveAgent ? "terminal" : "recordings";
+  // ACP agents (opencode) have no PTY — the terminal tab can't attach a
+  // /ws/pty socket (it closes with a bare WS 1005). Default them to the
+  // Activity tab (their real live view) instead of terminal.
+  const isAcp = info?.transport === "acp";
+  const defaultTab: TabId = isAcp
+    ? "activity"
+    : !infoResolved || liveAgent
+      ? "terminal"
+      : "recordings";
   const tab: TabId = explicitTab ?? defaultTab;
   // Drop the param only for the section's natural default so the URL stays
   // clean there — and crucially so clicking a NON-default tab (e.g. 终端 on a
@@ -335,9 +343,11 @@ export function AgentDrawer({ agentId, activities, onClose }: Props) {
         <SheetHeader className="sr-only">
           <SheetTitle>{`Agent drawer · ${info?.role ?? agentId}`}</SheetTitle>
           <SheetDescription>
-            {t("agent.sheetDesc", {
+            {t(isAcp ? "agent.sheetDescAcp" : "agent.sheetDesc", {
               id: agentId,
-              defaultValue: "PTY 终端 / 录像 / 消息 / 上下文 for agent {{id}}",
+              defaultValue: isAcp
+                ? "ACP 活动 / 录像 / 消息 / 上下文 for agent {{id}}"
+                : "PTY 终端 / 录像 / 消息 / 上下文 for agent {{id}}",
             })}
           </SheetDescription>
         </SheetHeader>
@@ -353,9 +363,12 @@ export function AgentDrawer({ agentId, activities, onClose }: Props) {
           {/* Mount all tabs concurrently is tempting (keeps terminal alive
               across tab switches), but xterm holds a WebGL slot and a WS
               so we'd burn budget on idle panes. Switch-unmount instead. */}
-          {tab === "terminal" && (
-            <TerminalTab agentId={agentId} live={liveAgent} loading={!infoResolved} />
-          )}
+          {tab === "terminal" &&
+            (isAcp ? (
+              <AcpTerminalNotice onGoActivity={() => setTab("activity")} />
+            ) : (
+              <TerminalTab agentId={agentId} live={liveAgent} loading={!infoResolved} />
+            ))}
           {tab === "activity" && (
             <AgentActivityLog activities={mergedActivities} />
           )}
@@ -873,12 +886,43 @@ function ContextTab({
 }
 
 
+// ── ACP terminal notice ───────────────────────────────────────────────────
+// ACP agents (opencode) run over structured JSON-RPC, not a PTY — there's no
+// terminal screen. Instead of attaching a /ws/pty socket that just closes with
+// a bare WS 1005, the terminal tab renders this pointer to the Activity tab,
+// where the ACP agent's real live actions stream.
+function AcpTerminalNotice({ onGoActivity }: { onGoActivity: () => void }) {
+  const { t } = useTranslation();
+  return (
+    <div className="flex h-full flex-col items-center justify-center gap-3 p-8 text-center">
+      <TerminalIcon className="size-7 text-foreground-tertiary" />
+      <div className="text-sm text-foreground-secondary">
+        {t("agent.acpNoTerminal.title", "此 AI 通过 ACP 运行，没有终端画面")}
+      </div>
+      <div className="max-w-sm text-xs leading-relaxed text-foreground-tertiary">
+        {t(
+          "agent.acpNoTerminal.body",
+          "opencode 以结构化协议（ACP）驱动，不在终端里运行。它的实时动作（读文件、跑命令、思考、回复）请在「活动」标签查看。",
+        )}
+      </div>
+      <button
+        type="button"
+        onClick={onGoActivity}
+        className="mt-1 rounded-md border border-current/20 px-3 py-1.5 text-xs text-foreground-secondary opacity-80 transition hover:opacity-100"
+      >
+        {t("agent.acpNoTerminal.cta", "查看活动")}
+      </button>
+    </div>
+  );
+}
+
 // ── StatBar ──────────────────────────────────────────────────────────────
 
 function StatBar({ info, now }: { info: AgentInfo | null; now: number }) {
   const { t } = useTranslation();
   const spawnedAt = info?.spawned_at ?? null;
   const live = info && info.killed_at == null && info.shim_exit == null;
+  const isAcp = info?.transport === "acp";
 
   const stats = useMemo(
     () =>
@@ -893,7 +937,8 @@ function StatBar({ info, now }: { info: AgentInfo | null; now: number }) {
         // metrics yet, so they rendered a permanent "—" that read as broken.
         // Re-add once the shim emits per-turn telemetry.
         {
-          label: t("agent.stat.pty"),
+          // ACP agents have no PTY; label the transport honestly as ACP.
+          label: isAcp ? t("agent.stat.acp", "ACP") : t("agent.stat.pty"),
           value: live ? t("agent.stat.live") : t("agent.stat.off"),
           color: live ? "text-state-success" : "text-foreground-tertiary",
         },
@@ -909,7 +954,7 @@ function StatBar({ info, now }: { info: AgentInfo | null; now: number }) {
             : "text-foreground-tertiary",
         },
       ] as const,
-    [info, live, spawnedAt, now, t],
+    [info, live, spawnedAt, now, t, isAcp],
   );
 
   return (

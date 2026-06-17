@@ -785,6 +785,7 @@
       "token": "TOKEN",
       "tools": "TOOLS",
       "pty": "PTY",
+      "acp": "ACP",
       "hook": "HOOK",
       "live": "live",
       "off": "off",
@@ -807,6 +808,12 @@
     "pauseFailed": "暂停失败",
     "deadNoAction": "该 agent 已结束,无法操作",
     "sheetDesc": "PTY 终端 / 录像 / 消息 / 上下文 for agent {{id}}",
+    "sheetDescAcp": "ACP 活动 / 录像 / 消息 / 上下文 for agent {{id}}",
+    "acpNoTerminal": {
+      "title": "此 AI 通过 ACP 运行，没有终端画面",
+      "body": "opencode 以结构化协议（ACP）驱动，不在终端里运行。它的实时动作（读文件、跑命令、思考、回复）请在「活动」标签查看。",
+      "cta": "查看活动"
+    },
     "notifyReply": "{{from}} 回复了你"
   },
   "wizard": {

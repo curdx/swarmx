@@ -962,6 +962,7 @@ pub async fn list_agents(State(state): State<AppState>) -> impl IntoResponse {
                 last_error: None,
                 last_error_kind: None,
                 last_error_at: None,
+                transport: slot.transport().to_string(),
             },
         );
     }
@@ -991,6 +992,15 @@ pub async fn list_agents(State(state): State<AppState>) -> impl IntoResponse {
                     // computed from the saved role so the graph can
                     // place the node even when its wake-state is gone.
                     let handoff_signal = handoff_for(&row.role);
+                    // Dead/history row has no live channel — derive transport
+                    // from the plugin manifest for the saved cli so a cold-
+                    // loaded ACP agent still shows the ACP (no-terminal) view.
+                    let transport = state
+                        .plugins
+                        .get(&row.cli)
+                        .map(|p| p.transport.as_str())
+                        .unwrap_or("pty")
+                        .to_string();
                     items.push(AgentInfo {
                         agent_id: row.id,
                         cli: row.cli,
@@ -1011,6 +1021,7 @@ pub async fn list_agents(State(state): State<AppState>) -> impl IntoResponse {
                         last_error: row.last_error,
                         last_error_kind: row.last_error_kind,
                         last_error_at: row.last_error_at,
+                        transport,
                     });
                 }
             }

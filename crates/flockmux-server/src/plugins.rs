@@ -85,6 +85,17 @@ pub enum Transport {
     Acp,
 }
 
+impl Transport {
+    /// Stable lowercase wire string (`"pty"` / `"acp"`) for the REST `AgentInfo`
+    /// surface the UI reads to pick a terminal-vs-activity drawer view.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Transport::Pty => "pty",
+            Transport::Acp => "acp",
+        }
+    }
+}
+
 /// Which account / quota surface a CLI plugin consumes by default. This is a
 /// guardrail, not a billing meter: flockmux still cannot see subscription spend
 /// from PTY CLIs. The value exists so a future structured transport cannot

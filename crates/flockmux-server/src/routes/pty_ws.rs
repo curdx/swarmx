@@ -114,6 +114,20 @@ async fn handle_socket(
     let (stream, input_tx, lifecycle_tx, lifecycle_snapshot) = match parts {
         Some(p) => p,
         None => {
+            // Non-PTY agent (ACP): no terminal stream to attach. Send a
+            // readable control frame so a client that still reached this
+            // endpoint (e.g. an old `?tab=terminal` deep link) shows an
+            // explanatory message instead of a bare WS 1005 close. The drawer's
+            // normal path no longer opens this socket for ACP agents.
+            let _ = send_ctrl(
+                &mut socket,
+                &ServerControl::Error {
+                    message: format!(
+                        "agent {agent_id} runs over ACP — no PTY terminal; see the Activity tab"
+                    ),
+                },
+            )
+            .await;
             let _ = socket.close().await;
             return;
         }
