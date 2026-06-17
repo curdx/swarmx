@@ -44,6 +44,7 @@ running). Use macOS or Linux for a supported setup.
 | `FLOCKMUX_WEB_DIR` | resolved next to the binary | Built web bundle the server serves. |
 | `FLOCKMUX_SHIM_PATH` | sibling of the server binary | Path to the `flockmux-shim` binary. |
 | `FLOCKMUX_MCP_PATH` | sibling of the server binary | Path to the `flockmux-mcp` binary. |
+| `FLOCKMUX_OPENCODE_PLUGIN` | bundled `cli-plugins/opencode/flockmux-wake.js` | Path to the opencode wake plugin JS merged into each opencode worker's per-agent config (the Tauri sidecar sets this to the packaged resource). If unresolved, opencode workers still get swarm tools but no auto-wake. |
 
 ## Limits & retention
 
