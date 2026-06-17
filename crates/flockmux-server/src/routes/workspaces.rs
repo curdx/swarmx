@@ -1034,6 +1034,7 @@ async fn spawn_merge_resolver(
         Vec::new(),
         state.swarm.clone(),
         spawn_ms,
+        state.server_url.clone(),
     );
     Ok(out.agent_id)
 }

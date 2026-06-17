@@ -66,6 +66,11 @@ pub struct AgentSlot {
     /// `crate::opencode_tui` instead of keystroke injection. `None` for the
     /// keystroke CLIs (claude/codex).
     pub tui_http_port: Option<u16>,
+    /// For reasonix: the `--addr` port its `reasonix serve` HTTP+SSE control API
+    /// listens on. `Some(port)` routes this agent's bootstrap/wakes through
+    /// `crate::reasonix_serve` (POST /submit + /events SSE) instead of keystrokes
+    /// or the opencode `/tui` path. `None` for every other CLI.
+    pub serve_http_port: Option<u16>,
 }
 
 /// An agent's PTY I/O. Every CLI (claude/codex/opencode) runs as an interactive
@@ -129,6 +134,12 @@ impl AgentSlot {
     /// and `crate::opencode_tui`). `None` for keystroke CLIs (claude/codex).
     pub fn tui_http_port(&self) -> Option<u16> {
         self.tui_http_port
+    }
+
+    /// The reasonix `serve` HTTP-control port (see `serve_http_port` field and
+    /// `crate::reasonix_serve`). `None` for every non-reasonix CLI.
+    pub fn serve_http_port(&self) -> Option<u16> {
+        self.serve_http_port
     }
 }
 

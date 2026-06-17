@@ -46,6 +46,12 @@ pub enum McpFormat {
     /// process has its own OPENCODE_CONFIG file; flockmux writes no project-local
     /// opencode.json to clobber). The wake plugin is merged in by `OpencodePlugin`.
     OpencodeJson,
+    /// reasonix: a project-root `<ws>/.mcp.json` carrying `mcpServers.flockmux-swarm`
+    /// (the Claude Code MCP schema, which reasonix reads as-is — verified live).
+    /// Per-agent identity rides in the entry's `args`/`env`. No `--mcp-config`
+    /// flag needed: reasonix auto-discovers `.mcp.json` in the session cwd (the
+    /// per-agent workspace). Written by `cli::reasonix`.
+    ReasonixMcpJson,
 }
 
 /// Where/how the wake Stop-hook is materialized (the timeout-unit divergence —
@@ -88,6 +94,11 @@ pub enum InputDelivery {
     #[default]
     Keystroke,
     OpencodeTuiHttp,
+    /// reasonix: driven over its `reasonix serve` HTTP+SSE control API. spawn
+    /// allocates a per-agent port and passes `--addr 127.0.0.1:<port>`; the
+    /// bootstrap/wake paths POST to `/submit` and the agent's turns/activity are
+    /// followed on the `/events` SSE stream. See `crate::reasonix_serve`.
+    ReasonixServeHttp,
 }
 
 /// Which account / quota surface a CLI plugin consumes by default. This is a
@@ -425,6 +436,10 @@ impl PluginRegistry {
                 "opencode.toml",
                 include_str!("../../../cli-plugins/opencode.toml"),
             ),
+            (
+                "reasonix.toml",
+                include_str!("../../../cli-plugins/reasonix.toml"),
+            ),
         ];
         let mut plugins: HashMap<String, CliPlugin> = HashMap::new();
         for (name, content) in BUILTIN {
@@ -600,6 +615,36 @@ mod tests {
             "opencode is provider/model, not opus/sonnet/haiku tiers"
         );
         assert_eq!(opencode.model_args, vec!["--model", "{model}"]);
+
+        // reasonix (HTTP/SSE): driven over `reasonix serve`. MCP via project
+        // .mcp.json (Claude Code schema), no trust gate, NO Stop hook (its Stop
+        // is observe-only; turn_done on the SSE stream is the turn-end signal),
+        // prompts delivered over the serve HTTP control API.
+        let reasonix = reg.get("reasonix").expect("reasonix plugin present");
+        assert_eq!(reasonix.trust_format, TrustFormat::None);
+        assert_eq!(reasonix.mcp_format, McpFormat::ReasonixMcpJson);
+        assert_eq!(reasonix.stop_hook_format, StopHookFormat::None);
+        assert_eq!(reasonix.input_delivery, InputDelivery::ReasonixServeHttp);
+        assert!(reasonix.auto_inject_mcp, "reasonix injects swarm MCP");
+        assert!(
+            !reasonix.auto_inject_stop_hook,
+            "reasonix uses serve SSE turn_done, not a Stop hook"
+        );
+        assert!(
+            !reasonix.native_tiers,
+            "reasonix is DeepSeek provider/model, not opus/sonnet/haiku tiers"
+        );
+        assert_eq!(reasonix.model_args, vec!["--model", "{model}"]);
+        assert_eq!(reasonix.billing_surface, BillingSurface::ApiKey);
+        assert_eq!(
+            reasonix.default_model.as_deref(),
+            Some("deepseek-flash"),
+            "reasonix defaults to the cheap deepseek-flash provider"
+        );
+        assert!(
+            reasonix.blocked_env_prefixes.is_empty(),
+            "reasonix must NOT block DEEPSEEK_ (it needs the key)"
+        );
 
         // The codex "Hooks need review" auto-answer migrated from the old
         // auto_answer_hooks_dialog bool into a data-driven ready_plan step.
@@ -785,10 +830,11 @@ binary="x"
         // broken.toml skipped, everyone else survived. opencode comes from the
         // builtin floor (load_layered seeds builtins first), so it's present too.
         assert!(reg.get("opencode").is_some(), "opencode from builtin floor");
+        assert!(reg.get("reasonix").is_some(), "reasonix from builtin floor");
         assert_eq!(
             reg.list().len(),
-            4,
-            "claude + codex + gemini + opencode(builtin)"
+            5,
+            "claude + codex + gemini + opencode(builtin) + reasonix(builtin)"
         );
     }
 
@@ -817,10 +863,11 @@ binary="x"
         );
         assert!(reg.get("codex").is_some(), "codex stays from builtins");
         assert!(reg.get("opencode").is_some(), "opencode stays from builtins");
+        assert!(reg.get("reasonix").is_some(), "reasonix stays from builtins");
         assert_eq!(
             reg.list().len(),
-            3,
-            "claude(dir) + codex(builtin) + opencode(builtin)"
+            4,
+            "claude(dir) + codex(builtin) + opencode(builtin) + reasonix(builtin)"
         );
 
         // All-absent layers → fall back to the builtin catalog, not empty.
@@ -828,6 +875,7 @@ binary="x"
         assert!(only_builtins.get("claude").is_some());
         assert!(only_builtins.get("codex").is_some());
         assert!(only_builtins.get("opencode").is_some());
-        assert_eq!(only_builtins.list().len(), 3, "builtins are the floor");
+        assert!(only_builtins.get("reasonix").is_some());
+        assert_eq!(only_builtins.list().len(), 4, "builtins are the floor");
     }
 }

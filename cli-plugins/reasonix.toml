@@ -1,0 +1,83 @@
+# Reasonix CLI plugin (DeepSeek-native coding agent) — HTTP/SSE transport.
+#
+# Unlike claude/codex (PTY keystroke) and opencode (PTY TUI + /tui HTTP),
+# reasonix is driven via its OWN `reasonix serve` mode: a headless HTTP+SSE
+# session server (browser client at /). flockmux spawns
+#   flockmux-shim reasonix serve --model <m> --addr 127.0.0.1:<port>
+# under the PTY (so lifecycle/kill/is_alive reuse the existing machinery — the
+# PTY just carries serve's one-line startup banner), then drives EVERYTHING over
+# HTTP:
+#   - bootstrap + each wake: POST /submit {input}
+#   - turn-end / activity / usage: the GET /events SSE stream (turn_done,
+#     tool_dispatch/tool_result, usage, …)
+#   - auto-approve: POST /tool-approval-mode {mode:"yolo"}
+# See crate::reasonix_serve. No keystroke injection, no Stop hook — reasonix's
+# Stop hook is observe-only (can't continue a turn), so the SSE turn_done event
+# is the turn-end signal instead, and POST /submit delivers the next turn.
+#
+# Because serve has no TUI, this agent has NO terminal view; the UI defaults to
+# the structured Activity view (fed from the SSE tool_dispatch/tool_result/usage
+# events via POST /api/agent/:id/activity).
+#
+# MCP: reasonix reads the Claude Code `mcpServers` schema from a project-root
+# `.mcp.json` as-is (verified live: it exposed mcp__flockmux-swarm__swarm_* to
+# the model). So the adapter drops the SAME per-agent .mcp.json body flockmux
+# writes for claude into the workspace. Format `reasonix-mcp-json`.
+#
+# Auth/billing: DeepSeek API key via the DEEPSEEK_API_KEY env var (spawn.rs
+# forwards the DEEPSEEK_ prefix). reasonix ships built-in deepseek-flash /
+# deepseek-pro providers, so no provider config is written.
+
+id = "reasonix"
+display_name = "Reasonix (DeepSeek)"
+binary = "reasonix"
+# `serve` launches the HTTP+SSE session server. spawn.rs appends
+# `--addr 127.0.0.1:<port>` (allocated per agent, like opencode's --port) when
+# input_delivery = reasonix-serve-http.
+default_args = ["serve"]
+home_env = "HOME"
+
+# Direct DeepSeek API-key billing (no subscription). Don't block DEEPSEEK_:
+# unlike claude (where ambient ANTHROPIC_* must be blocked to stay on
+# subscription), reasonix REQUIRES the key to reach the model.
+billing_surface = "api-key"
+requires_explicit_billing_opt_in = false
+blocked_env_prefixes = []
+
+# No "do you trust this folder?" gate in reasonix.
+auto_trust_workspace = false
+trust_format = "none"
+
+# MCP: write the per-agent workspace .mcp.json (Claude Code mcpServers schema).
+auto_inject_mcp = true
+mcp_format = "reasonix-mcp-json"
+
+# No Stop hook: reasonix's Stop is observe-only. Wake/continue is driven by the
+# SSE turn_done event + POST /submit (crate::reasonix_serve), not a hook.
+auto_inject_stop_hook = false
+auto_dismiss_update = false
+
+# Drive prompts over reasonix serve's HTTP control API (POST /submit) + SSE.
+input_delivery = "reasonix-serve-http"
+input_settle_ms = 0
+
+# Model overlay: reasonix serve takes `--model <provider-name>` (e.g.
+# deepseek-flash / deepseek-pro — the PROVIDER name, not the underlying model
+# id). native_tiers = false: DeepSeek isn't claude's opus/sonnet/haiku
+# vocabulary, so the 模型 page shows its default model + effort rows only.
+model_args = ["--model", "{model}"]
+default_model = "deepseek-flash"
+native_tiers = false
+
+# DeepSeek exposes no discrete reasoning-effort flag on serve; leave empty.
+effort_args = []
+
+# Health needles — "alive but can't work" signatures. None yet: reasonix's
+# missing-key / insufficient-balance text hasn't been captured from a verified
+# run, and we don't ship guessed substrings (a wrong needle stays silent). Until
+# the exact text is confirmed, auth/balance failures surface via the
+# first-response watchdog. Add verified entries here to upgrade to instant fail:
+# [[health_needles]]
+# needle = "<verified substring>"
+# reason = "Reasonix 未配置 DEEPSEEK_API_KEY 或余额不足"
+# kind = "auth"

@@ -162,6 +162,26 @@ fn default_pricing_rules() -> Vec<PricingRule> {
             },
             note: "Approximation for codex CLI token_count model ids.".into(),
         },
+        PricingRule {
+            id: "deepseek".into(),
+            provider: "DeepSeek".into(),
+            label: "DeepSeek (Reasonix)".into(),
+            matchers: vec!["deepseek".into()],
+            context_window: Some(1_000_000),
+            rates_usd_per_mtok: Rate {
+                // Approximate, from DeepSeek's published V3.x API rates — V4
+                // (deepseek-v4-flash / -pro, used by reasonix) prices are not yet
+                // officially confirmed. Cache-hit input is ~1/4 of cache-miss,
+                // which is reasonix's whole cost story. Adjust when V4 rates land.
+                input: 0.27,
+                output: 1.10,
+                cache_read: 0.07,
+                cache_write: 0.27,
+            },
+            note: "Approximate (DeepSeek V3.x rates); V4 pricing unconfirmed. \
+                   Matches deepseek-v4-flash / deepseek-v4-pro via 'deepseek'."
+                .into(),
+        },
     ]
 }
 
