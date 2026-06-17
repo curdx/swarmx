@@ -174,6 +174,17 @@ pub struct AgentInfo {
     /// Unix-ms the `last_error` was recorded. `None` when no error.
     #[serde(default)]
     pub last_error_at: Option<i64>,
+    /// Which transport the agent runs over: `"pty"` (terminal-scraped claude/
+    /// codex) or `"acp"` (structured opencode, no terminal). The drawer picks
+    /// its view from this — ACP agents have no PTY, so the terminal tab must
+    /// not open a `/ws/pty` socket (it closes with a bare WS 1005). Defaults to
+    /// `"pty"` for pre-transport rows / older servers.
+    #[serde(default = "transport_default")]
+    pub transport: String,
+}
+
+fn transport_default() -> String {
+    "pty".to_string()
 }
 
 /// One tool-level activity row, served by `GET /api/agent/:id/activity`. Same

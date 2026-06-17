@@ -132,6 +132,12 @@ export interface AgentInfo {
   last_error_kind?: string | null;
   /** Unix-ms the `last_error` was recorded. Null when healthy. */
   last_error_at?: number | null;
+  /** Which transport the agent runs over: "pty" (terminal-scraped claude/codex)
+   *  or "acp" (structured opencode, no terminal). The drawer picks its view from
+   *  this — ACP agents have no PTY, so the terminal tab must not open a /ws/pty
+   *  socket (it closes with a bare WS 1005). Optional; treat missing as "pty"
+   *  for older servers. */
+  transport?: string;
 }
 
 // ── M3 swarm DTOs ────────────────────────────────────────────────────────

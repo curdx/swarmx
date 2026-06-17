@@ -157,6 +157,18 @@ impl AgentSlot {
             AgentChannel::Pty { .. } => false,
         }
     }
+
+    /// Which transport this agent runs over: `"pty"` for terminal-scraped CLIs
+    /// (claude/codex), `"acp"` for structured JSON-RPC agents (opencode). The UI
+    /// reads this to pick the drawer view — ACP agents have no terminal, so the
+    /// terminal tab must NOT attach a `/ws/pty` socket for them (it would close
+    /// with a bare WS 1005).
+    pub fn transport(&self) -> &'static str {
+        match &self.channel {
+            AgentChannel::Pty { .. } => "pty",
+            AgentChannel::Acp { .. } => "acp",
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

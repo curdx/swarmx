@@ -785,6 +785,7 @@
       "token": "TOKEN",
       "tools": "TOOLS",
       "pty": "PTY",
+      "acp": "ACP",
       "hook": "HOOK",
       "live": "live",
       "off": "off",
@@ -807,6 +808,12 @@
     "pauseFailed": "Pause failed",
     "deadNoAction": "This agent has ended; no actions available",
     "sheetDesc": "PTY terminal / recordings / messages / context for agent {{id}}",
+    "sheetDescAcp": "ACP activity / recordings / messages / context for agent {{id}}",
+    "acpNoTerminal": {
+      "title": "This AI runs over ACP — there's no terminal screen",
+      "body": "opencode is driven over a structured protocol (ACP), not inside a terminal. See its live actions (reads, commands, thinking, replies) in the Activity tab.",
+      "cta": "Open Activity"
+    },
     "notifyReply": "{{from}} replied to you"
   },
   "wizard": {
