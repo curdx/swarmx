@@ -15,10 +15,13 @@
 mod acp;
 mod acp_engine;
 mod billing;
+// Per-CLI behavior adapters (claude / codex / opencode) behind one CliAdapter
+// trait — every CLI-specific spawn seam lives in its own `cli/<name>.rs`, so the
+// generic spawn pipeline never branches on a CLI id. See `cli/mod.rs`.
+mod cli;
 mod cron;
 mod models_config;
 mod plugins;
-mod pre_spawn;
 mod pty_stream;
 mod reaper;
 mod registry;

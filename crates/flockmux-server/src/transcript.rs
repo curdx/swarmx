@@ -284,7 +284,7 @@ fn encode_cwd(cwd: &Path) -> String {
 /// this worker's session(s). New codex compresses cold files to `.jsonl.zst`;
 /// the ACTIVE file stays plain `.jsonl`, which is what we tail.
 fn codex_file(agent_id: &str) -> Option<PathBuf> {
-    let home = crate::pre_spawn::codex_per_agent_home_path(agent_id)?;
+    let home = crate::cli::codex::codex_per_agent_home_path(agent_id)?;
     let sessions = home.join("sessions");
     newest(&sessions, true, &|p| {
         p.file_name()
