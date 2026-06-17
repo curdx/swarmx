@@ -136,8 +136,19 @@ export function AgentDrawer({ agentId, activities, onClose }: Props) {
   // clicking its avatar in chat used to open an empty/error drawer. Default a
   // dead agent to its recordings — the richest "what did this agent do" view —
   // instead. An explicit ?tab= always wins (deep-link / user pick).
+  //
+  // reasonix runs `reasonix serve` (headless HTTP+SSE) — it has NO TUI, so its
+  // PTY only carries serve's startup banner and there's nothing useful in the
+  // terminal/recordings. Default reasonix (live OR dead) to the Activity view,
+  // which is fed from its SSE tool/usage events.
   const defaultTab: TabId =
-    !infoResolved || liveAgent ? "terminal" : "recordings";
+    !infoResolved
+      ? "terminal"
+      : info?.cli === "reasonix"
+        ? "activity"
+        : liveAgent
+          ? "terminal"
+          : "recordings";
   const tab: TabId = explicitTab ?? defaultTab;
   // Drop the param only for the section's natural default so the URL stays
   // clean there — and crucially so clicking a NON-default tab (e.g. 终端 on a

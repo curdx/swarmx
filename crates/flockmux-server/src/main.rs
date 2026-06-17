@@ -20,6 +20,7 @@ mod cli;
 mod cron;
 mod models_config;
 mod opencode_tui;
+mod reasonix_serve;
 mod plugins;
 mod pty_stream;
 mod reaper;
@@ -325,6 +326,7 @@ async fn main() -> Result<()> {
         wake_subs,
         exit_keys,
         state.store.clone(),
+        state.server_url.clone(),
     );
     info!("wake coordinator started");
 

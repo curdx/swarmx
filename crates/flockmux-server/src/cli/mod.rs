@@ -25,6 +25,7 @@ mod shared;
 pub mod claude;
 pub mod codex;
 pub mod opencode;
+pub mod reasonix;
 
 use crate::plugins::{CliPlugin, McpFormat, TrustFormat};
 use parking_lot::Mutex;
@@ -105,6 +106,7 @@ pub fn adapter_for(plugin: &CliPlugin) -> &'static dyn CliAdapter {
         McpFormat::ClaudeLocalScope => &claude::ClaudeAdapter,
         McpFormat::CodexGlobalToml => &codex::CodexAdapter,
         McpFormat::OpencodeJson => &opencode::OpencodeAdapter,
+        McpFormat::ReasonixMcpJson => &reasonix::ReasonixAdapter,
         // No MCP format declared: still route by trust format so a trust-only
         // CLI lands on the right family; otherwise the generic floor.
         McpFormat::None => match plugin.trust_format {

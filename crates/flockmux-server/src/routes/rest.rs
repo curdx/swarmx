@@ -284,6 +284,21 @@ fn install_hint_for(p: &CliPlugin) -> Option<CliInstallHint> {
             verify_command: Some("opencode --version".to_string()),
             login_command: Some("opencode auth login".to_string()),
         }),
+        "reasonix" => Some(CliInstallHint {
+            title: "Install Reasonix".to_string(),
+            summary: "DeepSeek-native coding agent. Install via npm (the @next tag \
+                      is the current 1.x build), then provide a DeepSeek API key — \
+                      either `export DEEPSEEK_API_KEY=sk-...` before starting \
+                      flockmux, or run `reasonix setup` to save it."
+                .to_string(),
+            docs_url: "https://reasonix.io/docs/".to_string(),
+            commands: vec![
+                "npm install -g reasonix@next".to_string(),
+                "brew install esengine/reasonix/reasonix".to_string(),
+            ],
+            verify_command: Some("reasonix version".to_string()),
+            login_command: Some("reasonix setup".to_string()),
+        }),
         _ => None,
     }
 }
@@ -1298,6 +1313,10 @@ pub(crate) fn spawn_bootstrap_inject(
     // latest blackboard write is at/after this — so a STALE key left on disk by
     // a PRIOR run on the same thread can't bypass the gate.
     spawned_at: i64,
+    // This server's own base URL (loopback). Threaded to the reasonix SSE driver
+    // so it can reach consume_wakes + the activity ingress; unused by the
+    // keystroke / opencode paths.
+    server_url: String,
 ) {
     tokio::spawn(async move {
         // Short-circuit if ShimReady already fired in the gap between
@@ -1356,9 +1375,15 @@ pub(crate) fn spawn_bootstrap_inject(
                 return;
             }
         };
+        // reasonix connects its MCP servers only AFTER the first `/submit` (its
+        // session bootstraps the MCP clients lazily), so the mcp-ready ping can
+        // never arrive before we submit — waiting here would just burn the full
+        // fallback every time. Skip the wait for reasonix; the driver submits as
+        // soon as serve binds and MCP attaches a beat later.
+        let is_reasonix_serve = slot_lock.lock().serve_http_port().is_some();
         // Subscribe without holding the parking_lot guard across the await.
         let mut mcp_rx = slot_lock.lock().mcp_ready.subscribe();
-        if !*mcp_rx.borrow() {
+        if !is_reasonix_serve && !*mcp_rx.borrow() {
             // Generous cap: only applies when the ping never arrives (e.g. a
             // future CLI without MCP, or a lost ping). On the happy path the
             // watch fires in ~1-2s and we proceed immediately.
@@ -1449,6 +1474,24 @@ pub(crate) fn spawn_bootstrap_inject(
         // cold TUI accepts a too-early submit with 200 but silently drops it (the
         // race that parked captains forever). `workspace_dir` scopes the
         // confirmation to this agent.
+        // reasonix is driven over its `reasonix serve` HTTP+SSE API. Instead of
+        // pasting/POSTing the bootstrap inline, hand off to the long-lived driver
+        // task: it waits for serve to bind, sets yolo, submits this bootstrap,
+        // then follows /events to drive the turn_done→wake loop + activity. The
+        // driver owns delivery for the agent's whole life. See crate::reasonix_serve.
+        let serve_port = { slot_lock.lock().serve_http_port() };
+        if let Some(port) = serve_port {
+            crate::reasonix_serve::run_driver_spawn(crate::reasonix_serve::DriverCfg {
+                serve_port: port,
+                agent_id: agent_id.clone(),
+                flockmux_url: server_url.clone(),
+                bootstrap_prompt: prompt,
+                registry: registry.clone(),
+            });
+            tracing::info!(agent = %agent_id, port, "bootstrap: reasonix serve driver started");
+            return;
+        }
+
         let (tui_port, workspace_dir) = {
             let g = slot_lock.lock();
             (g.tui_http_port(), g.workspace.clone())
@@ -2001,6 +2044,7 @@ pub async fn spawn_worker(
         depends_on.clone(), // P1-D: gate the first turn on these minted keys
         state.swarm.clone(),
         worker_spawn_ms,
+        state.server_url.clone(),
     );
 
     Ok(Json(SpawnWorkerResponse {
@@ -2684,6 +2728,7 @@ pub async fn run_spell(
             Vec::new(),
             state.swarm.clone(),
             now_ms(),
+            state.server_url.clone(),
         );
     }
 

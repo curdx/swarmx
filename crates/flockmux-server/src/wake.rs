@@ -324,6 +324,18 @@ pub async fn inject_with_kick_text(
         tracing::debug!(agent = %agent_id, key = %key_for_log, port, "wake delivered over opencode TUI HTTP");
         return Ok(());
     }
+    // reasonix has no PTY/TUI to type into — deliver the kick as a fresh turn
+    // over its `reasonix serve` HTTP API. Used by the manual-wake path and any
+    // other direct kick caller; the BlackboardChanged auto-wake path handles
+    // reasonix earlier (in deliver_wake) with an atomic consume + idle gate.
+    let serve_port = slot.lock().serve_http_port();
+    if let Some(port) = serve_port {
+        crate::reasonix_serve::deliver_turn(port, kick_text)
+            .await
+            .map_err(|e| anyhow!("reasonix serve wake delivery failed: {e:#}"))?;
+        tracing::debug!(agent = %agent_id, key = %key_for_log, port, "wake delivered over reasonix serve HTTP");
+        return Ok(());
+    }
     let input_tx = {
         let guard = slot.lock();
         match guard.pty_input() {
@@ -440,6 +452,10 @@ pub struct WakeCoordinator {
     /// its handoff_signal we mark its DB row as killed too, otherwise
     /// the agent stays "live" forever in `list_agents`.
     store: Arc<flockmux_storage::Store>,
+    /// This server's own base URL (loopback). Used to drive reasonix agents over
+    /// their `reasonix serve` HTTP API (consume_wakes + /submit) on the idle-wake
+    /// path — reasonix has no PTY to kick. See `crate::reasonix_serve`.
+    server_url: String,
 }
 
 impl WakeCoordinator {
@@ -453,6 +469,7 @@ impl WakeCoordinator {
         subs: WakeSubs,
         exit_keys: ExitKeys,
         store: Arc<flockmux_storage::Store>,
+        server_url: String,
     ) -> JoinHandle<()> {
         let me = Self {
             swarm,
@@ -460,6 +477,7 @@ impl WakeCoordinator {
             subs,
             exit_keys,
             store,
+            server_url,
         };
         tokio::spawn(me.run())
     }
@@ -883,6 +901,26 @@ impl WakeCoordinator {
             // Don't even try the PTY kick if mailbox failed — the kick
             // alone won't tell Claude what changed, so it'd be confusing
             // noise. Bail.
+            return;
+        }
+
+        // reasonix is driven over `reasonix serve` HTTP — there is no PTY to
+        // kick. If the agent is idle, atomically consume the wake we just wrote
+        // and submit the reason as a fresh turn; if it's mid-turn we leave the
+        // mailbox entry for the SSE driver's `turn_done` path (which consumes the
+        // SAME atomic mailbox, so the wake is delivered exactly once). See
+        // `crate::reasonix_serve`.
+        let serve_port = self
+            .registry
+            .get(target)
+            .and_then(|s| s.lock().serve_http_port());
+        if let Some(port) = serve_port {
+            match crate::reasonix_serve::wake_if_idle(port, &self.server_url, target).await {
+                Ok(submitted) => {
+                    tracing::info!(target, key, port, submitted, "reasonix wake routed via serve HTTP")
+                }
+                Err(err) => tracing::warn!(?err, target, key, "reasonix serve wake delivery failed"),
+            }
             return;
         }
 

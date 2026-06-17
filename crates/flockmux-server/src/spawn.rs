@@ -206,6 +206,28 @@ pub fn spawn_agent(
         }
     }
 
+    // reasonix is driven over its `reasonix serve` HTTP+SSE control API. Like
+    // opencode we allocate a known ephemeral port, but reasonix takes it as
+    // `--addr 127.0.0.1:<port>` (not `--port`). The port rides on the slot so the
+    // bootstrap path can start the SSE driver and the wake path can POST /submit.
+    // See `crate::reasonix_serve`.
+    let mut serve_http_port: Option<u16> = None;
+    if plugin.input_delivery == crate::plugins::InputDelivery::ReasonixServeHttp {
+        match alloc_ephemeral_port() {
+            Some(port) => {
+                argv.push("--addr".into());
+                argv.push(format!("127.0.0.1:{port}"));
+                serve_http_port = Some(port);
+                tracing::info!(agent = %agent_id, port, "reasonix serve HTTP control port allocated");
+            }
+            None => tracing::warn!(
+                agent = %agent_id,
+                "could not allocate a serve HTTP control port for reasonix; \
+                 bootstrap/wake delivery will fail"
+            ),
+        }
+    }
+
     // Env: flockmux-pty starts the child from an EMPTY environment
     // (`CommandBuilder::env_clear`), so the worker sees ONLY what we insert
     // here. We forward what a CLI legitimately needs (HOME for OAuth creds,
@@ -262,7 +284,7 @@ pub fn spawn_agent(
             );
             continue;
         }
-        if ["ANTHROPIC_", "OPENAI_", "CLAUDE_"]
+        if ["ANTHROPIC_", "OPENAI_", "CLAUDE_", "DEEPSEEK_"]
             .iter()
             .any(|p| k.starts_with(p))
         {
@@ -384,6 +406,9 @@ pub fn spawn_agent(
         // Set for opencode (drives its TUI over /tui/* HTTP); None for the
         // keystroke CLIs. Allocated above when input_delivery is opencode-tui-http.
         tui_http_port,
+        // Set for reasonix (drives `reasonix serve` over HTTP+SSE); None
+        // otherwise. Allocated above when input_delivery is reasonix-serve-http.
+        serve_http_port,
     };
 
     Ok(AgentSpawn {
