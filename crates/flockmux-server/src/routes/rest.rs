@@ -1445,11 +1445,18 @@ pub(crate) fn spawn_bootstrap_inject(
         // (append + submit) to the agent's `--port`. No terminal keyboard path →
         // no escape-injection risk, so send the RAW (un-PTY-sanitized) text — the
         // HTTP body is rendered as a message, not interpreted as terminal bytes.
-        let tui_port = slot_lock.lock().tui_http_port();
+        // `deliver_bootstrap` RE-submits until opencode actually starts a turn: a
+        // cold TUI accepts a too-early submit with 200 but silently drops it (the
+        // race that parked captains forever). `workspace_dir` scopes the
+        // confirmation to this agent.
+        let (tui_port, workspace_dir) = {
+            let g = slot_lock.lock();
+            (g.tui_http_port(), g.workspace.clone())
+        };
         if let Some(port) = tui_port {
-            match crate::opencode_tui::deliver_turn(port, &prompt).await {
-                Ok(()) => tracing::info!(agent = %agent_id, port, "bootstrap: delivered first turn over opencode TUI HTTP"),
-                Err(err) => tracing::warn!(agent = %agent_id, port, ?err, "bootstrap: opencode TUI HTTP delivery failed"),
+            match crate::opencode_tui::deliver_bootstrap(port, &prompt, &workspace_dir).await {
+                Ok(()) => tracing::info!(agent = %agent_id, port, "bootstrap: opencode started its first turn (TUI HTTP)"),
+                Err(err) => tracing::warn!(agent = %agent_id, port, ?err, "bootstrap: opencode never started a turn (TUI HTTP)"),
             }
             return;
         }
