@@ -485,7 +485,7 @@ async fn main() -> Result<()> {
     }
 
     axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
+        .with_graceful_shutdown(shutdown_signal(state.registry.clone()))
         .await?;
     Ok(())
 }
@@ -692,11 +692,19 @@ fn on_path(bin: &str) -> Option<PathBuf> {
         .find(|full| full.is_file())
 }
 
-/// Resolves on SIGINT (Ctrl-C) or SIGTERM so `axum::serve` stops accepting new
-/// connections and drains in-flight ones, then the process exits cleanly —
-/// letting Drop tear down PTYs / child processes instead of leaving them on a
-/// hard kill.
-async fn shutdown_signal() {
+/// Resolves on SIGINT (Ctrl-C) or SIGTERM. Before letting `axum::serve` drain
+/// and exit, it **reaps every live agent's process group** so the spawned CLIs
+/// don't orphan.
+///
+/// Why this is explicit and not left to Drop: a long-lived WS/SSE subscriber
+/// (e.g. an attached terminal, or reasonix's `/events` follower) keeps axum's
+/// graceful drain from ever completing, so `serve()` never returns and the Arc
+/// `Drop`s that *would* tear down the PTYs never run — the server lingers and
+/// the agents (shim → CLI → its descendants, e.g. reasonix's
+/// node→serve→flockmux-mcp tree) survive reparented to init, still holding
+/// ports and burning tokens. Killing the agents here closes their PTYs, which
+/// also lets those stuck connections end so the drain can finish.
+async fn shutdown_signal(registry: registry::Registry) {
     let ctrl_c = async {
         let _ = tokio::signal::ctrl_c().await;
     };
@@ -716,7 +724,22 @@ async fn shutdown_signal() {
         _ = ctrl_c => {},
         _ = terminate => {},
     }
-    tracing::info!("shutdown signal received — draining connections");
+    tracing::info!("shutdown signal received — reaping agents + draining connections");
+
+    // PtyBridge::kill() signals the whole process group (SIGTERM → ~1s grace →
+    // SIGKILL) and blocks, so run the reaping off the async worker.
+    let agents = registry.list();
+    if !agents.is_empty() {
+        let count = agents.len();
+        let _ = tokio::task::spawn_blocking(move || {
+            for (id, slot) in agents {
+                slot.lock().kill();
+                tracing::debug!(agent = %id, "reaped agent process group on shutdown");
+            }
+        })
+        .await;
+        tracing::info!(count, "reaped live agents on shutdown");
+    }
 }
 
 /// Retention window in ms from `FLOCKMUX_RETENTION_DAYS` (default 30 days).
