@@ -187,22 +187,33 @@ function structFields(text, structName) {
 // servers (chrome-devtools, pencil, …) which stall a headless worker at
 // startup (503 / hangs). If a refactor of the spawn env drops this line, codex
 // workers silently fall back to the global ~/.codex and break.
+//
+// Since the per-CLI adapter split, the two halves of this invariant live in
+// separate files: the actual `env.insert("CODEX_HOME", ...)` is in the codex
+// adapter's `contribute_env`, and the routing gate that selects that adapter
+// for a codex plugin (`McpFormat::CodexGlobalToml`) is in the dispatch hub.
+// Both must stay put.
 // ─────────────────────────────────────────────────────────────────────────
 {
-  const spawnPath = "crates/flockmux-server/src/spawn.rs";
-  const spawnText = await readText(spawnPath);
+  const codexAdapterPath = "crates/flockmux-server/src/cli/codex.rs";
+  const dispatchPath = "crates/flockmux-server/src/cli/mod.rs";
+  const codexAdapterText = await readText(codexAdapterPath);
+  const dispatchText = await readText(dispatchPath);
   // Match the quoted literal `"CODEX_HOME"` — it only appears in the actual
   // `env.insert("CODEX_HOME", ...)` call, NOT in the surrounding prose comments
   // (which mention CODEX_HOME unquoted). So deleting the injection trips this
   // even if the explanatory comment stays.
-  if (!spawnText.includes('"CODEX_HOME"')) {
+  if (!codexAdapterText.includes('"CODEX_HOME"')) {
     fail(
-      `规则4: ${spawnPath} 不再注入 CODEX_HOME（找不到 env.insert("CODEX_HOME", ...)）—— codex worker 会回退到用户全局 ~/.codex，被个人 MCP server 卡死/503。务必保留 per-agent CODEX_HOME 注入。`,
+      `规则4: ${codexAdapterPath} 不再注入 CODEX_HOME（找不到 env.insert("CODEX_HOME", ...)）—— codex worker 会回退到用户全局 ~/.codex，被个人 MCP server 卡死/503。务必保留 per-agent CODEX_HOME 注入。`,
     );
   }
-  if (!spawnText.includes("McpFormat::CodexGlobalToml")) {
+  // The dispatch must still route codex plugins (mcp_format = codex-global-toml)
+  // to CodexAdapter; without it, codex agents get the generic no-op adapter and
+  // never receive CODEX_HOME.
+  if (!dispatchText.includes("McpFormat::CodexGlobalToml")) {
     fail(
-      `规则4: ${spawnPath} 缺 McpFormat::CodexGlobalToml 门控 —— 确认 codex per-agent CODEX_HOME 的注入条件还在。`,
+      `规则4: ${dispatchPath} 缺 McpFormat::CodexGlobalToml 门控 —— 确认 adapter_for 仍把 codex 路由到 CodexAdapter（其 contribute_env 注入 per-agent CODEX_HOME）。`,
     );
   }
 }
