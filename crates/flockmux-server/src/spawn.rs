@@ -11,7 +11,7 @@ use flockmux_swarm::Swarm;
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use uuid::Uuid;
@@ -117,23 +117,25 @@ pub fn spawn_agent(
 
     enforce_billing_policy(plugin)?;
 
-    // ACP transport (opencode) is handled by the `Transport::Acp` branch
-    // further down — AFTER env + pre-spawn setup (it reuses the same per-agent
-    // OPENCODE_CONFIG + env allowlist), then returns early. Everything between
-    // here and there is PTY-only (argv/shim/model overlay) and the ACP branch
-    // simply skips it.
+    // Resolve THE adapter for this CLI once. Everything CLI-specific below —
+    // pre-spawn patches, argv/env contributions, transcript session id — is
+    // delegated to it so this function stays generic machinery. ACP transport
+    // (opencode) is handled by the `Transport::Acp` branch further down, AFTER
+    // env + pre-spawn setup (it reuses the per-agent config env the adapter
+    // contributes), then returns early; the PTY path runs to the bottom.
+    let adapter = crate::cli::adapter_for(plugin);
+    tracing::debug!(agent = %agent_id, cli = %plugin.id, adapter = adapter.name(), "resolved CLI adapter");
 
-    // Suppress per-CLI interactive prompts that would block a headless PTY
-    // (claude's "trust folder", codex's "update available"). Each patch is a
-    // no-op when not configured / not applicable. The MCP-inject patch is
-    // also routed here since it shares the "pre-spawn home dir mutation"
-    // shape.
-    let pre_ctx = crate::pre_spawn::PreSpawnCtx {
+    // Per-CLI pre-spawn host patches: pre-accept trust prompts, dismiss update
+    // nags, inject the flockmux-swarm MCP server, install the wake hook. Each
+    // capability is gated inside the adapter on the plugin's `auto_*` flags and
+    // is a no-op when not configured.
+    let pre_ctx = crate::cli::PreSpawnCtx {
         agent_id: agent_id.clone(),
         mcp_bin: mcp_bin.to_path_buf(),
         server_url: server_url.to_string(),
     };
-    crate::pre_spawn::run_patches(plugin, &workspace, &pre_ctx);
+    adapter.pre_spawn(plugin, &workspace, &pre_ctx);
 
     let mut argv = Vec::with_capacity(2 + plugin.default_args.len() + 1);
     argv.push(shim_path.to_string_lossy().into_owned());
@@ -178,58 +180,12 @@ pub fn spawn_agent(
         }
     }
 
-    // codex 0.130 gates non-managed Stop hooks behind an in-app /hooks
-    // trust-review prompt — workspace-local hooks.json gets installed but
-    // never executes until the user manually approves it. PR #21768 ships
-    // `--dangerously-bypass-hook-trust` to skip the review for automation
-    // hosts like us. The flag isn't in 0.130 yet (codex aborts spawn on
-    // unknown argv), so probe `<binary> --help` once per process and only
-    // inject the flag if it's already supported. Net effect:
-    //   - codex 0.130: probe -> false, argv unchanged, hooks.json stays
-    //     dormant (known constraint, documented in auto-memory).
-    //   - codex >=0.131 (future): probe -> true, flag injected, our
-    //     existing hooks.json install becomes immediately effective with
-    //     zero config change on flockmux's side.
-    // Gated on the codex hooks.json format (not the literal id) + a binary
-    // probe, so it's the *capability* that drives it: any CLI declaring
-    // `stop_hook_format = "codex-hooks-json"` whose binary supports the flag
-    // gets it; others never do.
-    if plugin.stop_hook_format == crate::plugins::StopHookFormat::CodexHooksJson
-        && binary_supports_flag(&plugin.binary, "--dangerously-bypass-hook-trust")
-    {
-        argv.push("--dangerously-bypass-hook-trust".into());
-        tracing::info!(
-            agent = %agent_id,
-            "--dangerously-bypass-hook-trust supported; injecting"
-        );
-    }
-
-    // claude: point at the per-agent MCP config file pre_spawn just wrote.
-    // `--strict-mcp-config` makes claude ignore `~/.claude.json` entirely so
-    // a sibling spawn that overwrote the workspace's mcpServers section (the
-    // shared_workspace collision that hung M6b run #4) can no longer leak
-    // someone else's agent_id into our MCP server. Skipped if the file
-    // wasn't written (no $HOME) — fall back to legacy ~/.claude.json path.
-    if plugin.mcp_format == crate::plugins::McpFormat::ClaudeLocalScope && plugin.auto_inject_mcp {
-        if let Some(path) = crate::pre_spawn::claude_per_agent_mcp_config_path(&agent_id) {
-            if path.is_file() {
-                argv.push("--mcp-config".into());
-                argv.push(path.to_string_lossy().into_owned());
-                argv.push("--strict-mcp-config".into());
-                tracing::info!(
-                    agent = %agent_id,
-                    mcp_config = %path.display(),
-                    "claude per-agent MCP config injected (bypasses ~/.claude.json collision)"
-                );
-            } else {
-                tracing::warn!(
-                    agent = %agent_id,
-                    mcp_config = %path.display(),
-                    "claude per-agent MCP config missing on disk; falling back to ~/.claude.json"
-                );
-            }
-        }
-    }
+    // Per-CLI argv contributions, applied after the model/effort overlay:
+    // codex's `--dangerously-bypass-hook-trust` (probed for binary support),
+    // claude's per-agent `--mcp-config … --strict-mcp-config` (dodges the
+    // shared-cwd ~/.claude.json collision). Each adapter knows its own flags and
+    // formats; this is a no-op for a CLI that needs neither.
+    adapter.contribute_argv(plugin, &agent_id, &mut argv);
 
     // Env: flockmux-pty starts the child from an EMPTY environment
     // (`CommandBuilder::env_clear`), so the worker sees ONLY what we insert
@@ -303,44 +259,11 @@ pub fn spawn_agent(
     env.insert("FLOCKMUX_AGENT_ID".into(), agent_id.clone());
     env.insert("FLOCKMUX_SERVER_URL".into(), server_url.to_string());
 
-    // codex: point the worker at its per-agent CODEX_HOME (written by
-    // pre_spawn) so it loads an ISOLATED config with ONLY flockmux-swarm —
-    // not the user's personal ~/.codex MCP servers (chrome-devtools, pencil,
-    // …), which stall a headless worker at startup. Mirrors claude's
-    // `--strict-mcp-config`. Gated on the per-agent config.toml existing;
-    // otherwise codex falls back to the global ~/.codex (still has the block).
-    if plugin.mcp_format == crate::plugins::McpFormat::CodexGlobalToml && plugin.auto_inject_mcp {
-        if let Some(home) = crate::pre_spawn::codex_per_agent_home_path(&agent_id) {
-            if home.join("config.toml").is_file() {
-                env.insert("CODEX_HOME".into(), home.to_string_lossy().into_owned());
-                tracing::info!(
-                    agent = %agent_id,
-                    codex_home = %home.display(),
-                    "codex per-agent CODEX_HOME injected (isolates MCP from user's global ~/.codex)"
-                );
-            }
-        }
-    }
-
-    // opencode: point the worker at its per-agent OPENCODE_CONFIG (written by
-    // pre_spawn). VERIFIED LIVE: OPENCODE_CONFIG deep-MERGES on top of the user's
-    // config (it does NOT replace it) — flockmux's keys (swarm MCP w/ this
-    // agent's identity, allow-all permission, autoupdate off, wake plugin) win on
-    // conflict, while the user's provider/model config is preserved so the worker
-    // can run a model. Per-agent identity stays collision-free across PerAgent and
-    // Shared layouts (each process has its own file). Gated on the file existing.
-    if plugin.mcp_format == crate::plugins::McpFormat::OpencodeJson && plugin.auto_inject_mcp {
-        if let Some(cfg) = crate::pre_spawn::opencode_per_agent_config_path(&agent_id) {
-            if cfg.is_file() {
-                env.insert("OPENCODE_CONFIG".into(), cfg.to_string_lossy().into_owned());
-                tracing::info!(
-                    agent = %agent_id,
-                    opencode_config = %cfg.display(),
-                    "opencode per-agent OPENCODE_CONFIG injected (isolated config: swarm MCP + allow + wake plugin)"
-                );
-            }
-        }
-    }
+    // Per-CLI env contributions beyond the shared allowlist: codex's per-agent
+    // CODEX_HOME (isolates MCP from the user's global ~/.codex), opencode's
+    // per-agent OPENCODE_CONFIG (which the ACP branch below reuses verbatim).
+    // No-op for a CLI that needs neither.
+    adapter.contribute_env(plugin, &agent_id, &mut env);
 
     // ── ACP transport branch ────────────────────────────────────────────────
     // opencode driven as a structured JSON-RPC stdio session: flockmux owns the
@@ -378,20 +301,11 @@ pub fn spawn_agent(
         });
     }
 
-    // claude: force a known session id so the transcript tailer locates the
-    // exact session JSONL (`<uuid>.jsonl`) instead of guessing the newest file
-    // in the project dir — a stale prior session in the same workspace would
-    // otherwise win. codex gets None (it locates via its per-agent CODEX_HOME).
-    let transcript_session_id = if plugin.mcp_format == crate::plugins::McpFormat::ClaudeLocalScope
-    {
-        let sid = Uuid::new_v4().to_string();
-        argv.push("--session-id".into());
-        argv.push(sid.clone());
-        tracing::info!(agent = %agent_id, session_id = %sid, "claude --session-id forced for transcript location");
-        Some(sid)
-    } else {
-        None
-    };
+    // claude pins a known session id (pushing `--session-id`) so the transcript
+    // tailer locates the exact JSONL instead of guessing the newest file in the
+    // project dir; codex/opencode return None (codex locates via its per-agent
+    // CODEX_HOME). PTY path only — the ACP branch already returned above.
+    let transcript_session_id = adapter.transcript_session_id(plugin, &agent_id, &mut argv);
 
     let argv_strings: Vec<String> = argv;
 
@@ -1295,12 +1209,6 @@ mod billing_policy_tests {
     }
 }
 
-/// Probe `<binary> --help` once and cache whether `flag` appears anywhere
-/// in stdout or stderr. Used to feature-detect CLI flags whose absence
-/// would crash spawn (codex 0.130 rejects unknown argv with non-zero exit
-/// — adding a future-only flag unconditionally would brick every spawn on
-/// the older version).
-///
 /// L5c — substitute `{model}` in each manifest `model_args` entry. Pure +
 /// unit-tested so the spawn argv path stays trivial. Caller decides whether a
 /// model is in effect; this only renders the template.
@@ -1318,64 +1226,6 @@ fn effort_overlay_args(effort: &str, template: &[String]) -> Vec<String> {
         .iter()
         .map(|a| a.replace("{effort}", effort))
         .collect()
-}
-
-/// Cache key is `(binary, flag)` so different plugins probing different
-/// flags don't collide. The cache is process-lifetime — a CLI upgrade
-/// requires a server restart to re-probe, which is fine for the local
-/// single-user model.
-///
-/// Errors and timeouts on the probe fall through as `false`: if we can't
-/// confirm the flag is supported, we don't inject it.
-///
-/// The probe is **timeout-bounded** (F17): `<binary> --help` runs on a worker
-/// thread and we wait at most `PROBE_TIMEOUT` for it via `recv_timeout`. This
-/// fn is called synchronously on the async spawn path, so an unresponsive
-/// `--help` must not be able to stall a spawn forever — past the deadline we
-/// give up and return `false`, making the doc comment above actually true.
-/// (A genuinely hung `--help` leaves its child + thread lingering until it
-/// exits on its own or the server does; a real CLI's `--help` returns in ms,
-/// so this is an acceptable bound on a pathological case.)
-fn binary_supports_flag(binary: &str, flag: &str) -> bool {
-    const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
-    static CACHE: OnceLock<Mutex<HashMap<(String, String), bool>>> = OnceLock::new();
-    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-
-    let key = (binary.to_string(), flag.to_string());
-    if let Some(&v) = cache.lock().get(&key) {
-        return v;
-    }
-
-    let bin = binary.to_string();
-    let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        // output() drains stdout+stderr (so the child can't deadlock on a full
-        // pipe) and waits for exit. Result is sent back; ignore send errors
-        // (receiver already gave up on timeout).
-        let _ = tx.send(std::process::Command::new(&bin).arg("--help").output());
-    });
-
-    let supported = match rx.recv_timeout(PROBE_TIMEOUT) {
-        Ok(Ok(o)) => {
-            let stdout = String::from_utf8_lossy(&o.stdout);
-            let stderr = String::from_utf8_lossy(&o.stderr);
-            stdout.contains(flag) || stderr.contains(flag)
-        }
-        Ok(Err(_)) => false, // spawn / IO error
-        Err(_) => {
-            // recv timed out — the probe took longer than PROBE_TIMEOUT.
-            tracing::warn!(
-                binary,
-                flag,
-                "binary flag probe timed out; assuming unsupported"
-            );
-            false
-        }
-    };
-
-    tracing::info!(binary, flag, supported, "binary flag probe result");
-    cache.lock().insert(key, supported);
-    supported
 }
 
 fn locate_sibling_bin(name: &str, env_override: &str) -> Result<PathBuf> {
