@@ -7,9 +7,11 @@
 //! `OPENCODE_CONFIG` (verified live: it DEEP-MERGES on top of the user's config,
 //! so the user's provider/model survives and flockmux's keys win).
 //!
-//! Transport is data-driven via `plugin.transport` (`opencode.toml` declares
-//! `acp`), and the generic ACP branch in `spawn.rs` reuses the env this adapter
-//! builds. Selected by [`super::adapter_for`] for `mcp_format = "opencode-json"`.
+//! opencode runs as a full-screen TUI over the PTY like claude/codex, but its
+//! bootstrap/wakes are delivered over its `/tui/*` HTTP control API rather than
+//! keystrokes (`input_delivery = "opencode-tui-http"`; see `crate::opencode_tui`
+//! + `spawn.rs`). Selected by [`super::adapter_for`] for
+//! `mcp_format = "opencode-json"`.
 
 use super::shared::{home_path, write_json_atomic};
 use super::{CliAdapter, PreSpawnCtx};
@@ -65,8 +67,7 @@ impl CliAdapter for OpencodeAdapter {
         // plugin) win on conflict, while the user's provider/model config is
         // preserved so the worker can run a model. Per-agent identity stays
         // collision-free across PerAgent and Shared layouts (each process has
-        // its own file). Used by BOTH the PTY fallback and the ACP transport
-        // branch (which reuses this env). Gated on the file existing.
+        // its own file). Gated on the file existing.
         if !plugin.auto_inject_mcp {
             return;
         }

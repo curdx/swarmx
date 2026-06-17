@@ -19,7 +19,6 @@ use flockmux_pty::PtyBridge;
 use parking_lot::Mutex;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
-use tokio::process::Child;
 use tokio::sync::mpsc;
 
 /// Lifecycle status surfaced to every (re-)attaching client so the UI can
@@ -32,12 +31,10 @@ pub struct Lifecycle {
 }
 
 pub struct AgentSlot {
-    /// The transport carrying this agent's I/O: a PTY (claude/codex, scraped
-    /// over a pseudo-terminal) or a structured ACP stdio session (opencode,
-    /// driven as JSON-RPC where flockmux owns the turn loop). PTY-specific
-    /// handles live inside the `Pty` variant; consumers go through the
-    /// `AgentSlot` methods (`is_alive`, `pty_stream`, `pty_input`, …) so they
-    /// don't care which transport backs the agent.
+    /// The PTY carrying this agent's I/O — every CLI (claude/codex/opencode)
+    /// runs as an interactive TUI scraped over a pseudo-terminal. Consumers go
+    /// through the `AgentSlot` methods (`is_alive`, `pty_stream`, `pty_input`,
+    /// …) rather than touching the channel directly.
     pub channel: AgentChannel,
     /// Shim lifecycle state captured by the pump's OSC scanner. Stored
     /// here so a fresh WS attach can be told ShimReady/ShimExit even if
@@ -63,12 +60,17 @@ pub struct AgentSlot {
     /// retains the latest value, so a ping that races the subscriber is never
     /// lost (`send_replace` updates the stored value even with no receivers).
     pub mcp_ready: tokio::sync::watch::Sender<bool>,
+    /// For CLIs driven over their TUI's HTTP control API (opencode): the known
+    /// `--port` flockmux spawned the TUI on. `Some(port)` is the signal that
+    /// this agent's prompts (bootstrap + wakes) are delivered via
+    /// `crate::opencode_tui` instead of keystroke injection. `None` for the
+    /// keystroke CLIs (claude/codex).
+    pub tui_http_port: Option<u16>,
 }
 
-/// How an agent's I/O is transported. `Pty` for the interactive CLIs
-/// (claude/codex) scraped over a pseudo-terminal; future structured transports
-/// (ACP / opencode) add a variant here and the `AgentSlot` accessor methods
-/// gain an arm — every consumer keeps going through those methods.
+/// An agent's PTY I/O. Every CLI (claude/codex/opencode) runs as an interactive
+/// TUI scraped over a pseudo-terminal. Kept as a single-variant enum so the
+/// accessor methods below give consumers a stable, channel-agnostic surface.
 pub enum AgentChannel {
     Pty {
         bridge: Arc<PtyBridge>,
@@ -78,15 +80,6 @@ pub enum AgentChannel {
         /// Inject keystrokes into the PTY (wake "kicks", terminal WS input).
         input_tx: mpsc::Sender<Bytes>,
     },
-    /// ACP (structured JSON-RPC over stdio): no PTY, no terminal view.
-    /// `child` is the piped `opencode acp` process (liveness via `try_wait`,
-    /// teardown via `start_kill`); `prompt_tx` delivers each turn's prompt text
-    /// (the bootstrap first turn, then wakes) to the driver loop, which runs it
-    /// as one `session/prompt`.
-    Acp {
-        child: Arc<Mutex<Child>>,
-        prompt_tx: mpsc::UnboundedSender<String>,
-    },
 }
 
 impl AgentSlot {
@@ -94,10 +87,6 @@ impl AgentSlot {
     pub fn is_alive(&self) -> bool {
         match &self.channel {
             AgentChannel::Pty { bridge, .. } => bridge.is_alive(),
-            AgentChannel::Acp { child, .. } => {
-                // `try_wait` reaps without blocking; `Ok(None)` = still running.
-                child.lock().try_wait().map(|o| o.is_none()).unwrap_or(false)
-            }
         }
     }
 
@@ -105,9 +94,6 @@ impl AgentSlot {
     pub fn try_exit_code(&self) -> Option<i32> {
         match &self.channel {
             AgentChannel::Pty { bridge, .. } => bridge.try_exit_code(),
-            AgentChannel::Acp { child, .. } => {
-                child.lock().try_wait().ok().flatten().and_then(|s| s.code())
-            }
         }
     }
 
@@ -115,59 +101,34 @@ impl AgentSlot {
     pub fn kill(&self) {
         match &self.channel {
             AgentChannel::Pty { bridge, .. } => bridge.kill(),
-            AgentChannel::Acp { child, .. } => {
-                let _ = child.lock().start_kill();
-            }
         }
     }
 
-    /// The PTY bridge, for transports that have one (terminal WS attach).
-    /// `None` for structured transports (ACP) with no terminal.
+    /// The PTY bridge (terminal WS attach).
     pub fn pty_bridge(&self) -> Option<Arc<PtyBridge>> {
         match &self.channel {
             AgentChannel::Pty { bridge, .. } => Some(bridge.clone()),
-            AgentChannel::Acp { .. } => None,
         }
     }
 
-    /// The PTY output ring buffer, or `None` for transports with no terminal
-    /// view (ACP) — the terminal WS endpoints serve nothing for those.
+    /// The PTY output ring buffer (what the terminal WS endpoints serve).
     pub fn pty_stream(&self) -> Option<Arc<PtyStream>> {
         match &self.channel {
             AgentChannel::Pty { stream, .. } => Some(stream.clone()),
-            AgentChannel::Acp { .. } => None,
         }
     }
 
-    /// The PTY stdin sender for byte injection (wake kick / terminal input),
-    /// or `None` for transports that aren't keystroke-driven (ACP).
+    /// The PTY stdin sender for byte injection (wake kick / terminal input).
     pub fn pty_input(&self) -> Option<mpsc::Sender<Bytes>> {
         match &self.channel {
             AgentChannel::Pty { input_tx, .. } => Some(input_tx.clone()),
-            AgentChannel::Acp { .. } => None,
         }
     }
 
-    /// Deliver a turn's prompt text to a structured (ACP) agent's driver loop
-    /// (the bootstrap first turn, then each wake). Returns `false` if this isn't
-    /// an ACP agent or the driver has already stopped (channel closed).
-    pub fn deliver_acp_prompt(&self, text: String) -> bool {
-        match &self.channel {
-            AgentChannel::Acp { prompt_tx, .. } => prompt_tx.send(text).is_ok(),
-            AgentChannel::Pty { .. } => false,
-        }
-    }
-
-    /// Which transport this agent runs over: `"pty"` for terminal-scraped CLIs
-    /// (claude/codex), `"acp"` for structured JSON-RPC agents (opencode). The UI
-    /// reads this to pick the drawer view — ACP agents have no terminal, so the
-    /// terminal tab must NOT attach a `/ws/pty` socket for them (it would close
-    /// with a bare WS 1005).
-    pub fn transport(&self) -> &'static str {
-        match &self.channel {
-            AgentChannel::Pty { .. } => "pty",
-            AgentChannel::Acp { .. } => "acp",
-        }
+    /// The TUI HTTP-control port for opencode agents (see `tui_http_port` field
+    /// and `crate::opencode_tui`). `None` for keystroke CLIs (claude/codex).
+    pub fn tui_http_port(&self) -> Option<u16> {
+        self.tui_http_port
     }
 }
 

@@ -7,11 +7,11 @@
 //!   - how the flockmux-swarm MCP server is injected,
 //!   - how the wake hook is installed,
 //!   - which argv / env a headless launch needs,
-//!   - whether the CLI is driven over a PTY or ACP.
+//!   - how a turn's prompt is delivered (keystroke vs opencode's TUI HTTP API).
 //!
 //! The GENERIC machinery (PTY pump, ready-plan dialog answerer, health scanner,
-//! model/effort overlay, the ACP turn loop) lives in `spawn.rs` / `acp_engine.rs`
-//! and never branches on a CLI id — it asks the adapter at each seam.
+//! model/effort overlay) lives in `spawn.rs` and never branches on a CLI id — it
+//! asks the adapter at each seam.
 //!
 //! Adding a CLI is therefore additive and local: drop a `cli/<name>.rs`
 //! implementing [`CliAdapter`], add one arm to [`adapter_for`], and ship a
@@ -68,9 +68,8 @@ pub trait CliAdapter: Send + Sync {
     fn contribute_argv(&self, _plugin: &CliPlugin, _agent_id: &str, _argv: &mut Vec<String>) {}
 
     /// Extra env entries beyond the shared allowlist (e.g. an isolated per-agent
-    /// config dir). Runs after the generic env is built and BEFORE the transport
-    /// branch, so an ACP CLI's config env is in scope for `acp_engine`. Default:
-    /// nothing.
+    /// config dir like codex's CODEX_HOME or opencode's OPENCODE_CONFIG). Runs
+    /// after the generic env is built, before the PTY spawn. Default: nothing.
     fn contribute_env(
         &self,
         _plugin: &CliPlugin,

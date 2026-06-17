@@ -48,14 +48,14 @@ mcp_format = "opencode-json"
 # claude/codex Stop hook. Merged into the SAME per-agent config file. Format
 # `opencode-plugin` → pre_spawn::install_opencode_wake_plugin.
 #
-# NOTE (verified live): the plugin pairs with flockmux's existing PTY wake-kick
-# exactly like the claude/codex Stop hook does — the kick is a SHORT nudge that
-# wakes an ALREADY-IDLE agent (the plugin only fires on the session.idle
-# *transition*, so it can't nudge an agent that already settled), and the plugin
-# then delivers the full wake reason via consume_wakes. Do NOT "dedupe" by
-# suppressing the kick for opencode: that would strand wakes for idle agents.
-# Confirmed end-to-end (idle agent + message + manual wake → woke + acted, single
-# clean blackboard write, no double-processing).
+# NOTE: the plugin pairs with flockmux's wake-kick exactly like the claude/codex
+# Stop hook does — the kick is a SHORT nudge that wakes an ALREADY-IDLE agent (the
+# plugin only fires on the session.idle *transition*, so it can't nudge an agent
+# that already settled), and the plugin then delivers the full wake reason via
+# consume_wakes. For opencode the kick is delivered over the `/tui/*` HTTP control
+# API (same path as the bootstrap, input_delivery below), NOT keystrokes. Do NOT
+# "dedupe" by suppressing the kick for opencode: that would strand wakes for idle
+# agents.
 auto_inject_stop_hook = true
 stop_hook_format = "opencode-plugin"
 
@@ -67,16 +67,19 @@ trust_format = "none"
 # config (written by the mcp writer), not codex's version.json dance.
 auto_dismiss_update = false
 
-# ACP transport (Model B): flockmux drives `opencode acp` over piped stdio and
-# owns the turn loop (see crate::acp_engine). The same manifest drove the PTY
-# path before the ACP session driver landed; flip back to "pty" to fall back.
-transport = "acp"
+# Input delivery: opencode runs as a full-screen TUI in the PTY (terminal view +
+# recordings work like claude/codex), but its TUI can't take a large (~24k-char)
+# bootstrap via keystroke paste — the bracketed paste parks the TUI at READY and
+# never submits (verified live, opencode 1.17.7). opencode's own remedy is the
+# documented `/tui/*` HTTP control API its embedded server exposes (the surface
+# its browser extension drives). So flockmux spawns the TUI with a known per-agent
+# `--port` and POSTs append-prompt + submit-prompt instead of faking keystrokes.
+# Deterministic and size-independent. See crate::opencode_tui + spawn.rs.
+input_delivery = "opencode-tui-http"
 
-# Frontend keystroke-settle delay (ms) for the bootstrap-prompt inject into the
-# TUI input. UNVERIFIED for opencode (no live capture yet) — 300 mirrors codex's
-# ratatui poll; tune against a real opencode session. Wake does NOT use
-# keystrokes (it's the plugin), so this only affects the initial task inject.
-input_settle_ms = 300
+# Keystroke-settle delay is irrelevant for opencode (prompts go over HTTP, not
+# the TUI keyboard), so leave it at 0.
+input_settle_ms = 0
 
 # Model overlay: opencode's TUI accepts `--model provider/model` (verified:
 # cli/cmd/tui.ts). {model} is substituted at spawn from the per-spawn model or

@@ -29,7 +29,7 @@ stop() {
     while read -r p; do [ -n "$p" ] && kill "$p" 2>/dev/null; done < "$PIDFILE"
     rm -f "$PIDFILE"
   fi
-  # Belt-and-suspenders: anything still bound to our ports (ACP children die via
+  # Belt-and-suspenders: anything still bound to our ports (child CLIs die via
   # kill_on_drop when the backend goes).
   lsof -ti :"$BPORT" 2>/dev/null | xargs kill 2>/dev/null || true
   lsof -ti :"$FPORT" 2>/dev/null | xargs kill 2>/dev/null || true
@@ -49,7 +49,7 @@ echo "▶ starting backend on :$BPORT (isolated data: $DATA)…"
 nohup env FLOCKMUX_PORT="$BPORT" FLOCKMUX_SERVER_URL="http://127.0.0.1:$BPORT" \
   FLOCKMUX_DB_PATH="$DATA/d.db" FLOCKMUX_WORKSPACES_DIR="$DATA/ws" \
   FLOCKMUX_BLACKBOARD_DIR="$DATA/bb" FLOCKMUX_RECORDINGS_DIR="$DATA/rec" \
-  RUST_LOG="warn,flockmux_server::acp_engine=info" \
+  RUST_LOG="warn,flockmux_server=info" \
   "$ROOT/target/debug/flockmux-server" > "$DATA/backend.log" 2>&1 &
 echo $! > "$PIDFILE"
 

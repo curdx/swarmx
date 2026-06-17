@@ -4,7 +4,7 @@
 //! interactive subscription PTY" rule. Routes and spawn paths should ask this
 //! module instead of each carrying their own env-var names and warning copy.
 
-use crate::plugins::{BillingSurface, CliPlugin, McpFormat, Transport};
+use crate::plugins::{BillingSurface, CliPlugin};
 
 pub const PAID_TRANSPORT_ENV: &str = "FLOCKMUX_ALLOW_PAID_TRANSPORT";
 pub const CLAUDE_PRINT_ENV: &str = "FLOCKMUX_ALLOW_CLAUDE_PRINT";
@@ -36,18 +36,6 @@ pub fn enforce_spawn_billing_policy(plugin: &CliPlugin) -> Result<(), String> {
             "CLI plugin `{}` uses billing surface `{:?}` and requires explicit opt-in. \
              Set {PAID_TRANSPORT_ENV}=1 only if you intend to use SDK/API billing.",
             plugin.id, plugin.billing_surface
-        ));
-    }
-
-    if plugin.mcp_format == McpFormat::ClaudeLocalScope
-        && plugin.transport != Transport::Pty
-        && !paid_transport_opt_in_enabled()
-    {
-        return Err(format!(
-            "Claude plugin `{}` is configured with non-PTY transport `{:?}`. \
-             flockmux keeps Claude on the interactive subscription PTY by default; \
-             set {PAID_TRANSPORT_ENV}=1 only for an intentional paid/experimental transport.",
-            plugin.id, plugin.transport
         ));
     }
 

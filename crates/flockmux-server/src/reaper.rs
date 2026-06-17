@@ -142,6 +142,7 @@ mod tests {
             workspace: "/tmp".into(),
             paused: Arc::new(AtomicBool::new(false)),
             mcp_ready: tokio::sync::watch::channel(false).0,
+            tui_http_port: None,
         };
         Arc::new(Mutex::new(slot))
     }

@@ -346,7 +346,7 @@ fn cli_plugin_installed(plugin: &CliPlugin) -> bool {
 
 fn fallback_candidate_order(plugin: &CliPlugin) -> (u8, &str) {
     // Codex is the safest automatic fallback because it stays on the CLI-account
-    // surface and is the first structured-transport pilot in this project.
+    // surface and runs over the same PTY path as the other engines.
     let preferred = if plugin.id == "codex" { 0 } else { 1 };
     (preferred, plugin.id.as_str())
 }
@@ -653,8 +653,6 @@ pub(crate) async fn spawn_with_bookkeeping(
         &state.mcp_bin,
         &state.server_url,
         recorder_handle,
-        &state.swarm,
-        &state.store,
     )
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -962,7 +960,6 @@ pub async fn list_agents(State(state): State<AppState>) -> impl IntoResponse {
                 last_error: None,
                 last_error_kind: None,
                 last_error_at: None,
-                transport: slot.transport().to_string(),
             },
         );
     }
@@ -992,15 +989,6 @@ pub async fn list_agents(State(state): State<AppState>) -> impl IntoResponse {
                     // computed from the saved role so the graph can
                     // place the node even when its wake-state is gone.
                     let handoff_signal = handoff_for(&row.role);
-                    // Dead/history row has no live channel — derive transport
-                    // from the plugin manifest for the saved cli so a cold-
-                    // loaded ACP agent still shows the ACP (no-terminal) view.
-                    let transport = state
-                        .plugins
-                        .get(&row.cli)
-                        .map(|p| p.transport.as_str())
-                        .unwrap_or("pty")
-                        .to_string();
                     items.push(AgentInfo {
                         agent_id: row.id,
                         cli: row.cli,
@@ -1021,7 +1009,6 @@ pub async fn list_agents(State(state): State<AppState>) -> impl IntoResponse {
                         last_error: row.last_error,
                         last_error_kind: row.last_error_kind,
                         last_error_at: row.last_error_at,
-                        transport,
                     });
                 }
             }
@@ -1452,16 +1439,23 @@ pub(crate) fn spawn_bootstrap_inject(
             }
         }
 
+        // opencode is driven over its TUI's `/tui/*` HTTP control API, not
+        // keystrokes: its TUI can't take a large (~24k-char) bootstrap via
+        // bracketed paste (it parks at READY and never submits). POST the prompt
+        // (append + submit) to the agent's `--port`. No terminal keyboard path →
+        // no escape-injection risk, so send the RAW (un-PTY-sanitized) text — the
+        // HTTP body is rendered as a message, not interpreted as terminal bytes.
+        let tui_port = slot_lock.lock().tui_http_port();
+        if let Some(port) = tui_port {
+            match crate::opencode_tui::deliver_turn(port, &prompt).await {
+                Ok(()) => tracing::info!(agent = %agent_id, port, "bootstrap: delivered first turn over opencode TUI HTTP"),
+                Err(err) => tracing::warn!(agent = %agent_id, port, ?err, "bootstrap: opencode TUI HTTP delivery failed"),
+            }
+            return;
+        }
         let pty_input = slot_lock.lock().pty_input();
         let Some(input_tx) = pty_input else {
-            // ACP: hand the first-turn prompt to the driver as a `session/prompt`.
-            // No terminal → no escape risk, so send the raw (un-PTY-sanitized)
-            // text. The PTY paste/submit dance below is not reached.
-            if slot_lock.lock().deliver_acp_prompt(prompt) {
-                tracing::info!(agent = %agent_id, "bootstrap: delivered first turn to ACP session");
-            } else {
-                tracing::warn!(agent = %agent_id, "bootstrap: ACP prompt channel closed before first turn");
-            }
+            tracing::warn!(agent = %agent_id, "bootstrap: agent has no live PTY input; first turn not delivered");
             return;
         };
         // SECURITY: strip ANSI / terminal-control bytes before they hit the PTY.
@@ -2063,9 +2057,8 @@ async fn interrupt_one_inner(state: &AppState, agent_id: &str) -> Result<(), Str
             .store(true, std::sync::atomic::Ordering::Relaxed);
         match guard.pty_input() {
             Some(tx) => tx,
-            // Non-PTY agent (ACP): no PTY to Ctrl-C. The pause flag (set above)
-            // still gates auto-wake; turn cancellation goes through the ACP
-            // session instead.
+            // No live PTY to Ctrl-C (agent already exited). The pause flag (set
+            // above) still gates auto-wake.
             None => return Ok(()),
         }
     };

@@ -572,8 +572,8 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
                 </div>
               </div>
               {/* Captain engine: which CLI runs the orchestrator. Default =
-                  the orchestrator role's default_cli (claude). opencode runs
-                  over ACP; claude/codex over PTY. */}
+                  the orchestrator role's default_cli (claude). All engines
+                  (claude/codex/opencode) run over PTY. */}
               <div className="flex flex-col gap-1">
                 <Label
                   htmlFor="wizard-captain"
