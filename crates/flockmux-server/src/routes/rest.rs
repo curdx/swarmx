@@ -1877,8 +1877,19 @@ pub async fn spawn_worker(
 
     // The orchestrator's prompt + an INPUTS wait-gate (if it has deps) + an
     // explicit copy-verbatim handoff block.
+    // B1: substitute {workspace_id}/{thread_slug} in the orchestrator-authored
+    // prompt BEFORE appending the handoff plumbing. The orchestrator role doc
+    // shows the progress-breadcrumb path as a verbatim `{workspace_id}/{thread_slug}/…`
+    // template in backticks; an LLM that copies it literally would send the
+    // worker's progress to a literal-placeholder-named blackboard key the Ledger
+    // view can never read (looks like the worker silently died). A worker prompt
+    // has no {task}/{<role>_id}, so a targeted two-token replace beats render_prompt.
+    let rendered_system_prompt = req
+        .system_prompt
+        .replace("{workspace_id}", &req.workspace_id)
+        .replace("{thread_slug}", &thread_slug);
     let system_prompt = build_worker_prompt(
-        &req.system_prompt,
+        &rendered_system_prompt,
         &minted_produces,
         &error_key,
         &depends_on,

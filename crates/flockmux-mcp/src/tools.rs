@@ -153,8 +153,8 @@ pub fn tool_descriptors() -> Vec<Value> {
                     },
                     "cli": {
                         "type": "string",
-                        "description": "Optional CLI override (claude, codex, or opencode). Omit to use the role's default_cli. Only set this to deliberately deviate from the role.",
-                        "enum": ["claude", "codex", "opencode"]
+                        "description": "Optional CLI override (claude, codex, opencode, or reasonix). Omit to use the role's default_cli. Only set this to deliberately deviate from the role.",
+                        "enum": ["claude", "codex", "opencode", "reasonix"]
                     },
                     "model": {
                         "type": "string",

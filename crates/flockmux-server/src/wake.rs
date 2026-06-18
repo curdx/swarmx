@@ -571,7 +571,21 @@ impl WakeCoordinator {
                         .await;
                 }
                 Ok(SwarmEvent::AgentState { agent_id, state }) => {
-                    if matches!(state, flockmux_protocol::ws_swarm::AgentState::Exited) {
+                    // A producer that DIES must fail-loud to its downstream —
+                    // whether the exit was clean (`Exited`) or abnormal (`Error`).
+                    // The reaper synthesizes `Error` for a non-zero / crashed /
+                    // SIGKILLed child that left no ShimExit marker (reaper.rs);
+                    // before this, only `Exited` reached `handle_agent_exit`, so a
+                    // crashed producer never wrote `<signal>.error` and every
+                    // dependent hung at the readiness gate for MAX_WAIT (300s).
+                    // Both states now route to `handle_agent_exit`, which is
+                    // idempotent (it unregisters the exit_key on first call), so a
+                    // death that emits Error AND a later event writes `.error` once.
+                    if matches!(
+                        state,
+                        flockmux_protocol::ws_swarm::AgentState::Exited
+                            | flockmux_protocol::ws_swarm::AgentState::Error
+                    ) {
                         self.handle_agent_exit(&agent_id).await;
                     }
                 }

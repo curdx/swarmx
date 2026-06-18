@@ -49,6 +49,7 @@ import {
   X,
 } from "lucide-react";
 import { api, ApiError } from "../api/http";
+import { useSwarmFeedStatus } from "../hooks/useSwarmFeed";
 import { toast } from "@/lib/toast";
 import type {
   AgentActivity,
@@ -303,6 +304,21 @@ export function MessagesPanel({
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  // A3: the swarm feed is broadcast-only with no resume (see useSwarmFeed), so
+  // any messages that arrived while the shared WS was disconnected never reached
+  // `liveMessage`. When the socket flips back to "open" (a reconnect), re-pull
+  // the active direction's history — otherwise a reply sent during the outage
+  // stays invisible until the user switches threads or hits refresh. Edge-
+  // triggered on not-open → open only, so a steady "open" never refetches.
+  const feedStatus = useSwarmFeedStatus();
+  const prevFeedStatusRef = useRef(feedStatus);
+  useEffect(() => {
+    if (prevFeedStatusRef.current !== "open" && feedStatus === "open") {
+      refresh();
+    }
+    prevFeedStatusRef.current = feedStatus;
+  }, [feedStatus, refresh]);
 
   useEffect(() => {
     if (!agentActivityById) return;
