@@ -429,6 +429,25 @@ pub async fn deliver_manual_wake(swarm: &Swarm, registry: &Registry, target: &st
         .send_message(msg)
         .await
         .map_err(|e| anyhow!("manual wake mailbox send failed: {e}"))?;
+    // opencode double-kick guard (same root cause as the auto-wake path in
+    // `deliver_wake`): an opencode agent's flockmux-wake.js plugin consumes the
+    // wake on its next `session.idle` and starts its own turn, so without
+    // pre-consuming, the TUI deliver_turn below PLUS the plugin would fire TWO
+    // turns for this one wake. Claim it now so the plugin sees count=0.
+    if registry
+        .get(target)
+        .and_then(|s| s.lock().tui_http_port())
+        .is_some()
+    {
+        match swarm.store().consume_wakes(target.to_string(), now).await {
+            Ok(ids) if !ids.is_empty() => swarm.publish_event(SwarmEvent::MessageRead {
+                ids,
+                to_agent: target.to_string(),
+                at: now,
+            }),
+            _ => {}
+        }
+    }
     // Best-effort PTY kick. Use the existing inject_with_kick_text so
     // the M6d-6 quiet-gate protects us from polluting an in-flight
     // turn; `key_for_log` is "manual-wake" so log/grep stays clean.
@@ -934,6 +953,41 @@ impl WakeCoordinator {
                     tracing::info!(target, key, port, submitted, "reasonix wake routed via serve HTTP")
                 }
                 Err(err) => tracing::warn!(?err, target, key, "reasonix serve wake delivery failed"),
+            }
+            return;
+        }
+
+        // opencode is driven over its TUI HTTP API AND runs the flockmux-wake.js
+        // plugin, which consumes pending wakes on every `session.idle` and starts
+        // its OWN turn. A blind `deliver_turn` here does NOT consume the mailbox
+        // wake we just wrote, so the plugin sees it on the turn's trailing
+        // `session.idle` and fires a SECOND redundant turn — a double-kick
+        // (live-confirmed: the wake's `read_at` was stamped by the plugin ~47s
+        // after the deliver_turn). Atomically pre-consume the wake so the plugin
+        // sees count=0 and stays quiet; the single deliver_turn below is then the
+        // only turn. Mirrors the reasonix branch above (consume + single submit).
+        let tui_port = self
+            .registry
+            .get(target)
+            .and_then(|s| s.lock().tui_http_port());
+        if let Some(port) = tui_port {
+            match self.swarm.store().consume_wakes(target.to_string(), now).await {
+                Ok(ids) if !ids.is_empty() => self.swarm.publish_event(SwarmEvent::MessageRead {
+                    ids,
+                    to_agent: target.to_string(),
+                    at: now,
+                }),
+                Ok(_) => {}
+                Err(err) => {
+                    tracing::warn!(?err, target, key, "opencode pre-consume wakes failed; plugin may double-kick")
+                }
+            }
+            if let Err(err) =
+                crate::opencode_tui::deliver_turn(port, &format!("共享区 `{key}` 有更新，请查看")).await
+            {
+                tracing::warn!(?err, target, key, port, "opencode TUI wake delivery failed");
+            } else {
+                tracing::debug!(target, key, port, "opencode wake delivered (mailbox pre-consumed; no plugin double-kick)");
             }
             return;
         }
