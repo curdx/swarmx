@@ -2351,18 +2351,34 @@ pub async fn run_spell(
             )
         })?;
 
-    // Optional captain-engine override (RunSpellRequest.captain_cli): swap the
-    // orchestrator agent's resolved cli so a workspace can run with e.g.
-    // opencode as captain instead of the role-default claude. Validated against
-    // the plugin registry; an unknown id is ignored (warn) rather than spawning
-    // a bogus binary. Worker agents are left untouched.
-    if let Some(cli) = req.captain_cli.as_deref().filter(|c| !c.is_empty()) {
+    // Captain-engine selection for the spell's orchestrator agent(s). Priority:
+    //   1. Explicit `RunSpellRequest.captain_cli` — the create wizard passes the
+    //      user's pick; cron / auto-respawn / direction-rename pass the workspace's
+    //      established engine via `last_orchestrator_cli`.
+    //   2. Fallback when omitted: the engine the workspace's most-recent
+    //      orchestrator ran on. This covers the bare-`init` callers that DON'T pass
+    //      it — notably the manual "唤醒队长 / revive orchestrator" button — which
+    //      used to silently reset a non-default captain (reasonix/codex/opencode)
+    //      back to the role default (claude) on every revive of a 0-member room.
+    //   3. Neither (a brand-new workspace's first init) → the role's `default_cli`.
+    // Validated against the plugin registry; an unknown id is ignored (warn)
+    // rather than spawning a bogus binary. Worker agents are left untouched.
+    let captain_cli = match req.captain_cli.as_deref().filter(|c| !c.is_empty()) {
+        Some(cli) => Some(cli.to_string()),
+        None => match req.workspace_id.as_deref() {
+            Some(ws) => last_orchestrator_cli(&state, ws).await,
+            None => None,
+        },
+    };
+    if let Some(cli) = captain_cli.as_deref() {
         if state.plugins.get(cli).is_some() {
             for a in resolved_agents
                 .iter_mut()
                 .filter(|a| a.role == "orchestrator")
             {
-                tracing::info!(spell = %req.name, from = %a.cli, to = %cli, "captain_cli override applied");
+                if a.cli != cli {
+                    tracing::info!(spell = %req.name, from = %a.cli, to = %cli, "captain_cli resolved");
+                }
                 a.cli = cli.to_string();
             }
         } else {
