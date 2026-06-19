@@ -18,15 +18,26 @@
 //!   - `NotUsable`    — exited early (reasonix with no DEEPSEEK_API_KEY立退s
 //!                      code 1), spawn failed, or timed out with no readiness.
 //!
-//! Stage-1 note: classification leans on lifecycle signals only — accurate for
-//! claude (it ships a "Not logged in" needle) and reasonix (no key = serve
-//! exits non-zero). codex/opencode ship no auth needle yet, so a logged-out
-//! codex/opencode can still read as `Usable` here; tightening that (a real
-//! one-line turn check + auth needles) is a later stage. The cache schema and
-//! API already carry everything those refinements need.
+//! Two layers of evidence:
+//!   - **launch-only** (`observe`) — ShimReady + no auth banner + no early exit.
+//!     Token-free; authoritative for claude (ships a "Not logged in" needle) and
+//!     reasonix (no key ⇒ `serve` exits non-zero at launch).
+//!   - **verified one-turn** (`pty_one_turn_check`) — for keystroke engines
+//!     (claude/codex) that pass launch, actually send one trivial turn and watch
+//!     for the answer. This is what catches a logged-out codex: it comes up fine
+//!     and only 401s when a turn is attempted, so launch-only would wrongly read
+//!     it `Usable`. Spends a tiny amount of model tokens — the price of certainty.
+//!
+//! Remaining gap: opencode is driven over its TUI HTTP control API, not
+//! keystrokes, so its verified-turn path isn't wired yet — a logged-out opencode
+//! can still read `Usable` from launch-only. Its turn would go through
+//! `crate::opencode_tui` + a `/session` completion poll (a later refinement).
+//! Real-usage write-back (`record_live_verdict`) also keeps the cache fresh from
+//! live agents for free.
 
 use crate::plugins::CliPlugin;
-use crate::registry::LifecycleEvent;
+use crate::pty_stream::FetchResult;
+use crate::registry::{AgentSlot, LifecycleEvent};
 use crate::spawn::{spawn_agent, WorkspaceLayout};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -146,6 +157,34 @@ pub fn cache_upsert(result: &ProbeResult) {
     }
 }
 
+/// Write-back from a LIVE (non-probe) agent's lifecycle. A real user spawning
+/// engine X and watching it come up healthy is the same evidence an explicit
+/// probe gathers — for free — so we fold it into the same cache. This keeps the
+/// verdicts self-maintaining: normal use fills the cache, and the manual
+/// "检测可用性" button becomes a rarely-needed fallback. `method` is tagged
+/// `live-*` so diagnostics can tell a real-usage verdict from a probed one.
+///
+/// Fidelity note: this mirrors the launch-only signal (ShimReady ⇒ Usable),
+/// the SAME bar the probe uses — so a logged-out codex/opencode (no auth needle)
+/// can still write `Usable` here. The verified one-turn check is what tightens
+/// that; this is the cheap always-on layer.
+pub fn record_live_verdict(
+    engine: &str,
+    state: ProbeState,
+    reason: Option<String>,
+    kind: Option<String>,
+    method: &'static str,
+) {
+    cache_upsert(&ProbeResult {
+        engine: engine.to_string(),
+        state,
+        reason,
+        kind,
+        probed_at: now_ms(),
+        method: method.to_string(),
+    });
+}
+
 /// Set while a `probe_all` sweep is running. The API reads it so the UI can show
 /// a spinner, and `probe_all` uses it to refuse a duplicate concurrent sweep
 /// (each engine spawns a real cold-starting CLI — running two sweeps at once
@@ -197,7 +236,32 @@ pub async fn probe_all(
     let _guard = ProbeGuard;
     let mut out = Vec::with_capacity(plugins.len());
     for p in plugins {
-        let r = probe_one(p, shim_path, mcp_bin, server_url).await;
+        // Isolate each engine: a probe spawns a real CLI and parses its raw
+        // output, so a panic (a bad byte boundary, an adapter bug) must NOT take
+        // down the rest of the sweep. Run it as its own task and turn a JoinError
+        // (panic) into an honest NotUsable verdict.
+        let plugin = p.clone();
+        let shim = shim_path.to_path_buf();
+        let mcp = mcp_bin.to_path_buf();
+        let url = server_url.to_string();
+        let r = match tokio::spawn(
+            async move { probe_one(&plugin, &shim, &mcp, &url).await },
+        )
+        .await
+        {
+            Ok(r) => r,
+            Err(join_err) => {
+                tracing::error!(engine = %p.id, ?join_err, "engine-probe: probe task panicked — isolated, sweep continues");
+                ProbeResult {
+                    engine: p.id.clone(),
+                    state: ProbeState::NotUsable,
+                    reason: Some("探测过程内部错误（已隔离，不影响其他引擎）".into()),
+                    kind: Some("fatal".into()),
+                    probed_at: now_ms(),
+                    method: "panic".into(),
+                }
+            }
+        };
         tracing::info!(
             engine = %r.engine, state = ?r.state, method = %r.method,
             reason = ?r.reason, "engine-probe: result"
@@ -264,6 +328,22 @@ pub async fn probe_one(
 
     // 4. Watch the same lifecycle channel live agents use.
     let verdict = observe(&mut rx, probe_timeout(&engine)).await;
+
+    // 4b. Verified one-turn check (keystroke engines only). Launch-only can't
+    //     tell a logged-out codex/opencode (comes up fine, 401s on the turn)
+    //     from a working one, so for a launch-Usable PTY engine we actually
+    //     complete one trivial turn. opencode (TUI HTTP) and reasonix (serve)
+    //     aren't keystroke-driven: opencode's verified turn is a later refinement
+    //     and reasonix's launch verdict is already authoritative (no key → it
+    //     exits at launch), so they keep the launch verdict.
+    let verdict = if verdict.state == ProbeState::Usable
+        && slot.tui_http_port().is_none()
+        && slot.serve_http_port().is_none()
+    {
+        pty_one_turn_check(&slot).await
+    } else {
+        verdict
+    };
 
     // 5. Tear down: kill the PTY process group, drop the slot (pump drains),
     //    wipe the temp workspace + any per-agent scratch the adapters wrote.
@@ -380,6 +460,136 @@ fn ready_or_timeout(ready: bool) -> Verdict {
             method: "timeout",
         }
     }
+}
+
+/// How long to wait for the engine to actually answer the one-turn prompt. A
+/// trivial arithmetic turn lands in a few seconds on a warm CLI; a cold model
+/// call or a retrying auth failure can take longer, hence a generous window.
+const TURN_TIMEOUT: Duration = Duration::from_secs(35);
+
+/// Verified one-turn check for keystroke (PTY) engines — the honest tightening
+/// of launch-only classification.
+///
+/// `ShimReady` only proves the CLI's wrapper came up; codex/opencode ship no
+/// auth needle, so a logged-out one launches fine and only fails when a turn is
+/// actually attempted (it 401s on the model call). So we send ONE trivial
+/// arithmetic prompt and watch the PTY output for the *answer*. The answer is
+/// the sum of two pseudo-random addends and is NOT present in the prompt, so the
+/// TUI's echo of our pasted prompt can't satisfy the scan — only a real model
+/// turn produces it. Auth/quota banners in the turn output → NeedsLogin; no
+/// answer before the deadline → NotUsable. This DOES spend a (tiny) amount of
+/// model tokens, unlike the launch-only path — it's the price of certainty.
+async fn pty_one_turn_check(slot: &AgentSlot) -> Verdict {
+    let (Some(input), Some(stream)) = (slot.pty_input(), slot.pty_stream()) else {
+        // Not a keystroke channel (caller gates on this) — keep launch verdict.
+        return Verdict {
+            state: ProbeState::Usable,
+            reason: None,
+            kind: None,
+            method: "ready",
+        };
+    };
+
+    // Two pseudo-random 4-digit addends from a uuid; their SUM is the token to
+    // scan for, and it never appears in the prompt text.
+    let id = Uuid::new_v4();
+    let b = id.as_bytes();
+    let a = 1000 + (u16::from_le_bytes([b[0], b[1]]) % 9000) as u32;
+    let c = 1000 + (u16::from_le_bytes([b[2], b[3]]) % 9000) as u32;
+    let sum = (a + c).to_string();
+    let prompt = format!(
+        "What is {a} plus {c}? Reply with ONLY the result as plain digits — \
+         no commas, no spaces, no words, nothing else."
+    );
+
+    // Cursor at the head: read only output produced AFTER we ask.
+    let mut cursor = stream.snapshot().next_seq.saturating_sub(1);
+
+    // Deliver like the bootstrap path: paste body, settle (scaled to size), a
+    // standalone \r to submit, then a safety \r once the paste has closed.
+    let body = crate::spells::sanitize_pty_inject(&prompt).into_bytes();
+    let body_len = body.len() as u64;
+    if input.send(bytes::Bytes::from(body)).await.is_err() {
+        return Verdict {
+            state: ProbeState::NotUsable,
+            reason: Some("无法向 PTY 投递验证提示".into()),
+            kind: Some("fatal".into()),
+            method: "turn-deliver-fail",
+        };
+    }
+    tokio::time::sleep(Duration::from_millis(150 + body_len / 100)).await;
+    let _ = input.send(bytes::Bytes::from_static(b"\r")).await;
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    let _ = input.send(bytes::Bytes::from_static(b"\r")).await;
+
+    // Scan the PTY output for the answer (→ verified) or an auth banner. Keep
+    // RAW BYTES and lossy-decode for matching: a PTY chunk can split a UTF-8
+    // char or ANSI sequence at any boundary, so byte-truncating the buffer is
+    // panic-free (unlike `String::split_off`, which panics on a non-char
+    // boundary — a real crash codex's multibyte TUI output triggers constantly).
+    const SCAN_CAP: usize = 64 * 1024;
+    let start = Instant::now();
+    let mut buf: Vec<u8> = Vec::new();
+    while start.elapsed() < TURN_TIMEOUT {
+        if let FetchResult::Ok(entries) = stream.fetch_since(cursor) {
+            for (seq, bytes) in entries {
+                cursor = cursor.max(seq);
+                buf.extend_from_slice(&bytes);
+            }
+        }
+        // Bound memory: the answer lands near the tail; keep the last 64 KiB.
+        // `drain` at an arbitrary byte index never panics.
+        if buf.len() > SCAN_CAP {
+            buf.drain(..buf.len() - SCAN_CAP);
+        }
+        if let Some(v) = classify_turn(&String::from_utf8_lossy(&buf), &sum) {
+            return v;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    // Deadline with no answer: NeedsLogin if a banner showed, else launched-but-
+    // can't-complete-a-turn.
+    classify_turn(&String::from_utf8_lossy(&buf), &sum).unwrap_or(Verdict {
+        state: ProbeState::NotUsable,
+        reason: Some("启动正常但在超时内没完成一次对话（可能未登录 / 额度耗尽 / 配置不全）".into()),
+        kind: Some("turn-timeout".into()),
+        method: "turn-timeout",
+    })
+}
+
+/// Classify accumulated one-turn output: an auth/quota banner → NeedsLogin; the
+/// expected answer present → verified Usable; otherwise keep waiting (`None`).
+/// Auth is checked first because a logged-out engine prints the banner *instead*
+/// of an answer.
+fn classify_turn(buf: &str, sum: &str) -> Option<Verdict> {
+    let low = buf.to_lowercase();
+    const AUTH: &[&str] = &[
+        "not logged in",
+        "not authenticated",
+        "unauthorized",
+        "missing bearer",
+        "please log in",
+        "please login",
+        "/login",
+        "log in to",
+    ];
+    if AUTH.iter().any(|n| low.contains(n)) {
+        return Some(Verdict {
+            state: ProbeState::NeedsLogin,
+            reason: Some("启动正常，但发起一次对话时返回未登录 / 未授权".into()),
+            kind: Some("auth".into()),
+            method: "turn-auth",
+        });
+    }
+    if buf.contains(sum) {
+        return Some(Verdict {
+            state: ProbeState::Usable,
+            reason: None,
+            kind: None,
+            method: "turn-ok",
+        });
+    }
+    None
 }
 
 /// Remove the probe's scratch: temp workspace + per-agent config dirs the
