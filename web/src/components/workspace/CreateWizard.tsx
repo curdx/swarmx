@@ -328,6 +328,10 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
             if (current !== d.path) return prev;
             return { ...prev, [d.id]: res };
           });
+          // A successful re-check clears a stale submit-time path error (e.g. the
+          // "目录不存在" left by an earlier failed submit) so the form never shows
+          // a red error banner next to a green "目录可访问".
+          if (res.state === "ok") setError(null);
         });
       }, 350),
     );

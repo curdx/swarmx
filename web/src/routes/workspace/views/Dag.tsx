@@ -167,6 +167,7 @@ interface CanvasProps {
 }
 
 function Canvas({ agents, bbAt, selectedId, onSelect, showMinimap, focusNonce }: CanvasProps) {
+  const { t } = useTranslation();
   const live = useMemo(() => liveAgents(agents), [agents]);
 
   const edges = useMemo<Edge[]>(() => {
@@ -234,7 +235,7 @@ function Canvas({ agents, bbAt, selectedId, onSelect, showMinimap, focusNonce }:
 
   const flow = useReactFlow();
   useEffect(() => {
-    const t = window.setTimeout(() => {
+    const timer = window.setTimeout(() => {
       try {
         // Cap auto-fit zoom at 1.0 so a workspace with a single agent
         // doesn't blow up the node to fill the entire pane. Multi-agent
@@ -245,7 +246,7 @@ function Canvas({ agents, bbAt, selectedId, onSelect, showMinimap, focusNonce }:
         /* fitView throws on empty graph */
       }
     }, 50);
-    return () => window.clearTimeout(t);
+    return () => window.clearTimeout(timer);
   }, [flow, nodes.length, edges.length]);
 
   // Pan the viewport to a node selected from the left list so the selection
@@ -290,19 +291,32 @@ function Canvas({ agents, bbAt, selectedId, onSelect, showMinimap, focusNonce }:
       nodesDraggable={false}
       nodesConnectable={false}
       ariaLabelConfig={{
-        "node.a11yDescription.default":
+        "node.a11yDescription.default": t(
+          "dag.a11y.nodeDefault",
           "按 Enter 或空格选中节点，方向键移动，Esc 取消。",
-        "node.a11yDescription.keyboardDisabled": "节点不可移动。",
+        ),
+        "node.a11yDescription.keyboardDisabled": t(
+          "dag.a11y.nodeDisabled",
+          "节点不可移动。",
+        ),
         "node.a11yDescription.ariaLiveMessage": ({ direction, x, y }) =>
-          `节点已${direction === "up" ? "上移" : direction === "down" ? "下移" : direction === "left" ? "左移" : "右移"}至 ${Math.round(x)}, ${Math.round(y)}`,
-        "edge.a11yDescription.default": "agent 间的 handoff 依赖连线。",
-        "controls.ariaLabel": "画布缩放控制",
-        "controls.zoomIn.ariaLabel": "放大",
-        "controls.zoomOut.ariaLabel": "缩小",
-        "controls.fitView.ariaLabel": "适应画面",
-        "controls.interactive.ariaLabel": "切换交互模式",
-        "minimap.ariaLabel": "缩略图",
-        "handle.ariaLabel": "连接点",
+          t("dag.a11y.nodeMoved", {
+            dir: t(`dag.a11y.dir.${direction}`, direction),
+            x: Math.round(x),
+            y: Math.round(y),
+            defaultValue: "节点已{{dir}}至 {{x}}, {{y}}",
+          }),
+        "edge.a11yDescription.default": t(
+          "dag.a11y.edgeDefault",
+          "agent 间的 handoff 依赖连线。",
+        ),
+        "controls.ariaLabel": t("dag.a11y.controls", "画布缩放控制"),
+        "controls.zoomIn.ariaLabel": t("dag.a11y.zoomIn", "放大"),
+        "controls.zoomOut.ariaLabel": t("dag.a11y.zoomOut", "缩小"),
+        "controls.fitView.ariaLabel": t("dag.a11y.fitView", "适应画面"),
+        "controls.interactive.ariaLabel": t("dag.a11y.interactive", "切换交互模式"),
+        "minimap.ariaLabel": t("dag.a11y.minimap", "缩略图"),
+        "handle.ariaLabel": t("dag.a11y.handle", "连接点"),
       }}
     >
       <Background gap={24} size={1.25} />
