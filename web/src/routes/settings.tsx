@@ -19,12 +19,22 @@ import i18n from "@/i18n";
 import { setTheme } from "@/lib/theme";
 import { HTTP_BASE } from "@/lib/apiBase";
 import { api } from "@/api/http";
-import type { CliPluginInfo, ModelConfig, ModelsResponse } from "@/api/types";
+import type {
+  CliPluginInfo,
+  EngineReadiness,
+  ModelConfig,
+  ModelsResponse,
+} from "@/api/types";
+import { useEngineReadiness } from "@/hooks/useEngineReadiness";
 import {
   Bell,
   Check,
   CheckCircle2,
+  CircleAlert,
+  CircleCheck,
+  CircleX,
   DownloadCloud,
+  Loader2,
   RefreshCw,
   CircleUser,
   Copy,
@@ -840,11 +850,58 @@ function EffortRow({
 
 // ── Plugins panel ───────────────────────────────────────────────────────
 
+/** Small real-usability verdict pill shown next to an installed engine's
+ *  "已安装" tag. Neutral "未验证" until a probe runs — never a fake green. */
+function ProbeBadge({ verdict }: { verdict?: EngineReadiness }) {
+  const { t } = useTranslation();
+  const state = verdict?.state ?? "unknown";
+  if (state === "not_installed") return null;
+  const map = {
+    usable: {
+      cls: "bg-status-success-soft text-status-success",
+      icon: <CircleCheck className="size-3" />,
+      label: t("settings.plugins.verdictUsable", "可用"),
+    },
+    unknown: {
+      cls: "bg-surface-tertiary text-foreground-tertiary",
+      icon: <Info className="size-3" />,
+      label: t("settings.plugins.verdictUnverified", "未验证"),
+    },
+    needs_login: {
+      cls: "bg-status-warning-soft text-status-warning",
+      icon: <CircleAlert className="size-3" />,
+      label: t("settings.plugins.verdictNeedsLogin", "需登录"),
+    },
+    not_usable: {
+      cls: "bg-status-danger-soft text-state-danger",
+      icon: <CircleX className="size-3" />,
+      label: t("settings.plugins.verdictNotUsable", "无法启动"),
+    },
+  } as const;
+  const v = map[state];
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-caption text-[10px]",
+        v.cls,
+      )}
+      title={verdict?.reason ?? undefined}
+    >
+      {v.icon}
+      {v.label}
+    </span>
+  );
+}
+
 function PluginsPanel() {
   const { t } = useTranslation();
   const [items, setItems] = useState<CliPluginInfo[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
+  // Real-usability verdicts (actually start each CLI) layered over the install
+  // info. Probing is opt-in via the button — it cold-starts every engine.
+  const readiness = useEngineReadiness();
+  const verdictById = new Map(readiness.engines.map((e) => [e.id, e]));
 
   const copyCommand = (key: string, command: string) => {
     if (!navigator.clipboard) return;
@@ -875,6 +932,35 @@ function PluginsPanel() {
         title={t("settings.plugins.title")}
         hint={t("settings.plugins.hint")}
       />
+      {/* Real-usability check: "installed" only means the binary resolves —
+          this actually starts each engine to prove it can run (catches a
+          logged-out CLI or a key-less reasonix). Slow (cold-starts every
+          engine) so it's an explicit action, never automatic. */}
+      <div className="flex flex-wrap items-center gap-2 rounded-md border border-border-subtle bg-surface-secondary px-3 py-2">
+        <button
+          type="button"
+          onClick={readiness.probe}
+          disabled={readiness.probing || readiness.loading}
+          className="inline-flex items-center gap-1.5 rounded-md border border-border-subtle bg-surface-elevated px-2.5 py-1 font-caption text-[11px] text-foreground-secondary transition-colors hover:bg-surface-tertiary disabled:opacity-60"
+        >
+          {readiness.probing ? (
+            <Loader2 className="size-3.5 animate-spin" />
+          ) : (
+            <RefreshCw className="size-3.5" />
+          )}
+          {readiness.probing
+            ? t("settings.plugins.probing", "检测中…")
+            : t("settings.plugins.probe", "检测可用性")}
+        </button>
+        <span className="font-caption text-[11px] text-foreground-tertiary">
+          {readiness.probing
+            ? t("settings.plugins.probeRunning", "正在逐个真实启动引擎，可能要十几秒…")
+            : t(
+                "settings.plugins.probeHint",
+                "「已安装」只代表能找到命令；点这里真实启动每个引擎，确认能否运行。",
+              )}
+        </span>
+      </div>
       {error && (
         <div className="rounded-md border border-state-danger/40 bg-status-danger-soft px-3 py-2 text-xs text-state-danger">
           {t("settings.plugins.loadError", { error })}
@@ -952,6 +1038,9 @@ function PluginsPanel() {
                             ? t("settings.plugins.missingTag")
                             : t("settings.plugins.unknownTag")}
                       </span>
+                      {installed && (
+                        <ProbeBadge verdict={verdictById.get(p.id)} />
+                      )}
                     </div>
                     <span className="break-all font-caption text-[11px] text-foreground-tertiary">
                       <span className="font-mono">{p.id}</span> ·{" "}

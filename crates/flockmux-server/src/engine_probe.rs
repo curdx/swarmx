@@ -31,6 +31,7 @@ use crate::spawn::{spawn_agent, WorkspaceLayout};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
@@ -145,15 +146,55 @@ pub fn cache_upsert(result: &ProbeResult) {
     }
 }
 
+/// Set while a `probe_all` sweep is running. The API reads it so the UI can show
+/// a spinner, and `probe_all` uses it to refuse a duplicate concurrent sweep
+/// (each engine spawns a real cold-starting CLI — running two sweeps at once
+/// would thrash the machine).
+static PROBE_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+
+/// True while a real-usability sweep is in flight.
+pub fn is_probing() -> bool {
+    PROBE_IN_FLIGHT.load(Ordering::SeqCst)
+}
+
+/// Atomically claim the in-flight flag; `false` means a sweep already owns it.
+fn try_begin() -> bool {
+    PROBE_IN_FLIGHT
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_ok()
+}
+
+/// RAII release so the flag clears even if a probe panics mid-sweep.
+struct ProbeGuard;
+impl Drop for ProbeGuard {
+    fn drop(&mut self) {
+        PROBE_IN_FLIGHT.store(false, Ordering::SeqCst);
+    }
+}
+
+/// All cached verdicts (engine → result), sorted by engine id for a stable UI
+/// order. Empty until the first sweep (or, later, real-usage write-back) runs.
+pub fn cached_results() -> Vec<ProbeResult> {
+    let mut v: Vec<ProbeResult> = load_cache().engines.into_values().collect();
+    v.sort_by(|a, b| a.engine.cmp(&b.engine));
+    v
+}
+
 /// Probe every plugin in the registry, SERIALLY (each spawns a real CLI; four
 /// cold starts at once is heavy and opencode is memory-hungry). Results are
 /// written to the cache as each completes, so a reader sees them trickle in.
+/// No-ops (returns empty) if another sweep is already running.
 pub async fn probe_all(
     plugins: &[CliPlugin],
     shim_path: &Path,
     mcp_bin: &Path,
     server_url: &str,
 ) -> Vec<ProbeResult> {
+    if !try_begin() {
+        tracing::info!("engine-probe: a sweep is already in flight, skipping duplicate");
+        return Vec::new();
+    }
+    let _guard = ProbeGuard;
     let mut out = Vec::with_capacity(plugins.len());
     for p in plugins {
         let r = probe_one(p, shim_path, mcp_bin, server_url).await;

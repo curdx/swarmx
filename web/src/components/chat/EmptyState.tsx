@@ -15,18 +15,23 @@
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 import {
+  CircleAlert,
   CircleCheck,
   CircleX,
   Loader2,
   PlugZap,
+  RefreshCw,
   Sparkles,
 } from "lucide-react";
-import type { CliPluginInfo } from "../../api/types";
+import type { EngineReadiness } from "../../api/types";
 
 export interface EmptyStateCliReadiness {
   loading: boolean;
-  installed: CliPluginInfo[];
-  missing: CliPluginInfo[];
+  /** A real-usability sweep is running right now. */
+  probing: boolean;
+  engines: EngineReadiness[];
+  /** Kick a real-usability sweep (actually start each engine). */
+  onProbe: () => void;
 }
 
 interface StarterDef {
@@ -48,10 +53,16 @@ export function EmptyState({
   onPickStarter: (text: string) => void;
 }) {
   const { t } = useTranslation();
+  const { loading, probing, engines, onProbe } = cliReadiness;
+  // "No engine" = nothing is even installed → hide starters and point to setup.
   const noEngine =
-    !cliReadiness.loading &&
-    cliReadiness.installed.length === 0 &&
-    cliReadiness.missing.length > 0;
+    !loading && engines.length > 0 && engines.every((e) => !e.installed);
+  // Offer a usability check once at least one engine is installed but we don't
+  // yet have a fresh "usable" verdict for all of them.
+  const canProbe =
+    !loading &&
+    engines.some((e) => e.installed) &&
+    engines.some((e) => e.state === "unknown" || e.state === "not_usable" || e.state === "needs_login");
 
   return (
     <div className="mx-auto mt-12 flex w-full max-w-[460px] flex-col gap-6">
@@ -93,42 +104,41 @@ export function EmptyState({
         </div>
       )}
 
-      {/* engine pre-check — honest, never a fake green */}
+      {/* engine pre-check — honest, never a fake green. "Installed" is shown
+          neutrally as "未验证" until a real-usability probe confirms it can run. */}
       <div className="flex flex-col gap-2 rounded-xl border border-border-subtle bg-surface-primary px-3 py-2.5">
-        <p className="flex items-center gap-1.5 font-caption text-[10px] uppercase tracking-wider text-foreground-tertiary">
-          <PlugZap className="size-3" />
-          {t("chat.emptyState.precheckTitle", "AI 引擎")}
-        </p>
-        {cliReadiness.loading ? (
+        <div className="flex items-center justify-between gap-2">
+          <p className="flex items-center gap-1.5 font-caption text-[10px] uppercase tracking-wider text-foreground-tertiary">
+            <PlugZap className="size-3" />
+            {t("chat.emptyState.precheckTitle", "AI 引擎")}
+          </p>
+          {(canProbe || probing) && (
+            <button
+              type="button"
+              onClick={onProbe}
+              disabled={probing}
+              className="inline-flex items-center gap-1 font-caption text-[10px] text-foreground-tertiary transition-colors hover:text-foreground-secondary disabled:opacity-60"
+            >
+              {probing ? (
+                <Loader2 className="size-3 animate-spin" />
+              ) : (
+                <RefreshCw className="size-3" />
+              )}
+              {probing
+                ? t("chat.emptyState.probing", "检测中…")
+                : t("chat.emptyState.probe", "检测可用性")}
+            </button>
+          )}
+        </div>
+        {loading ? (
           <span className="flex items-center gap-1.5 font-caption text-[11px] text-foreground-tertiary">
             <Loader2 className="size-3 animate-spin" />
             {t("chat.emptyState.precheckLoading", "正在检查引擎…")}
           </span>
         ) : (
           <div className="flex flex-col gap-1">
-            {cliReadiness.installed.map((p) => (
-              <span
-                key={p.id}
-                className="flex items-center gap-1.5 font-caption text-[11px] text-foreground-secondary"
-              >
-                <CircleCheck className="size-3.5 text-status-success" />
-                {t("chat.emptyState.engineLoggedIn", {
-                  name: p.display_name,
-                  defaultValue: "{{name}} 已就绪",
-                })}
-              </span>
-            ))}
-            {cliReadiness.missing.map((p) => (
-              <span
-                key={p.id}
-                className="flex items-center gap-1.5 font-caption text-[11px] text-foreground-tertiary"
-              >
-                <CircleX className="size-3.5 text-foreground-tertiary" />
-                {t("chat.emptyState.engineMissing", {
-                  name: p.display_name,
-                  defaultValue: "{{name}} 未安装",
-                })}
-              </span>
+            {engines.map((e) => (
+              <EngineRow key={e.id} engine={e} />
             ))}
           </div>
         )}
@@ -151,5 +161,63 @@ export function EmptyState({
         )}
       </div>
     </div>
+  );
+}
+
+/** One engine's honest readiness line. The probe verdict drives icon + color;
+ *  an installed-but-unprobed engine is neutral "未验证", never a green check. */
+function EngineRow({ engine }: { engine: EngineReadiness }) {
+  const { t } = useTranslation();
+  const { display_name: name, state, reason } = engine;
+
+  const variants = {
+    usable: {
+      icon: <CircleCheck className="size-3.5 text-status-success" />,
+      cls: "text-foreground-secondary",
+      text: t("chat.emptyState.engineUsable", { name, defaultValue: "{{name}} 可用" }),
+    },
+    unknown: {
+      icon: <PlugZap className="size-3.5 text-foreground-tertiary" />,
+      cls: "text-foreground-tertiary",
+      text: t("chat.emptyState.engineUnverified", {
+        name,
+        defaultValue: "{{name}} 已安装（未验证）",
+      }),
+    },
+    needs_login: {
+      icon: <CircleAlert className="size-3.5 text-state-warning" />,
+      cls: "text-state-warning",
+      text: t("chat.emptyState.engineNeedsLogin", {
+        name,
+        defaultValue: "{{name}} 需登录",
+      }),
+    },
+    not_usable: {
+      icon: <CircleX className="size-3.5 text-state-danger" />,
+      cls: "text-state-danger",
+      text: t("chat.emptyState.engineNotUsable", {
+        name,
+        defaultValue: "{{name}} 无法启动",
+      }),
+    },
+    not_installed: {
+      icon: <CircleX className="size-3.5 text-foreground-tertiary" />,
+      cls: "text-foreground-tertiary",
+      text: t("chat.emptyState.engineMissing", {
+        name,
+        defaultValue: "{{name}} 未安装",
+      }),
+    },
+  } as const;
+
+  const v = variants[state];
+  return (
+    <span
+      className={`flex items-center gap-1.5 font-caption text-[11px] ${v.cls}`}
+      title={reason ?? undefined}
+    >
+      {v.icon}
+      {v.text}
+    </span>
   );
 }

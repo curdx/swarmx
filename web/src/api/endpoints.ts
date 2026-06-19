@@ -40,6 +40,10 @@ function encodePathSegments(path: string): string {
 export const apiRoutes = {
   plugins: {
     list: () => endpoint("plugins.list", "GET", "/api/plugins"),
+    /** Kick a background real-usability sweep (actually start each CLI). */
+    probe: () => endpoint("plugins.probe", "POST", "/api/plugins/probe"),
+    /** Cached probe verdicts + whether a sweep is in flight. */
+    probeStatus: () => endpoint("plugins.probeStatus", "GET", "/api/plugins/probe"),
   },
   mcp: {
     env: () => endpoint("mcp.env", "GET", "/api/mcp/env"),
