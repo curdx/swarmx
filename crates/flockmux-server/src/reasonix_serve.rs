@@ -93,6 +93,118 @@ pub async fn is_running(port: u16) -> Option<bool> {
     body.get("running").and_then(|v| v.as_bool())
 }
 
+/// Outcome of a one-turn usability probe (see [`verify_one_turn`]).
+pub enum TurnProbe {
+    /// The model produced output → the engine really ran a turn.
+    Ok,
+    /// The turn ended / timed out with no model output (wedged, no quota, …).
+    NoOutput,
+    /// An auth/credential error surfaced in the event stream → needs login/key.
+    Auth(String),
+}
+
+/// Verified one-turn usability check for the engine probe. reasonix isn't a TUI
+/// and isn't keystroke-driven — the PTY carries only `serve`'s logs, never the
+/// model's reply — so the probe drives the SAME HTTP+SSE control surface the live
+/// driver uses: `POST /submit` a trivial turn, then follow `/events` and watch
+/// for the model to actually PRODUCE output (a `text`/`message` event) before
+/// `turn_done`. Launch-only can't tell a valid key from an invalid/expired one
+/// (the `serve` binds either way and only 401s on the model call); this can.
+/// `Ok` = produced output, `NoOutput` = none by the deadline, `Auth(detail)` =
+/// an unauthorized/invalid-key event was seen.
+pub async fn verify_one_turn(port: u16, prompt: &str, total: Duration) -> TurnProbe {
+    // serve should already be up (the probe's `observe` waited for ShimReady),
+    // but make sure it answers before we submit.
+    if !wait_serve_ready(port, Duration::from_secs(10)).await {
+        return TurnProbe::NoOutput;
+    }
+    if let Ok(c) = control_client() {
+        let _ = set_yolo(&c, port).await;
+    }
+
+    // Open the SSE stream BEFORE submitting so a fast turn's `turn_done` can't
+    // fire before we're listening.
+    let Ok(sc) = stream_client() else {
+        return TurnProbe::NoOutput;
+    };
+    let mut resp = match sc.get(format!("{}/events", base(port))).send().await {
+        Ok(r) if r.status().is_success() => r,
+        _ => return TurnProbe::NoOutput,
+    };
+    if deliver_turn(port, prompt).await.is_err() {
+        return TurnProbe::NoOutput;
+    }
+
+    let start = Instant::now();
+    let mut buf: Vec<u8> = Vec::new();
+    let mut produced = false;
+    let mut auth: Option<String> = None;
+    loop {
+        let Some(remaining) = total.checked_sub(start.elapsed()) else {
+            break;
+        };
+        // Bound each read by the remaining budget so a silent stream still exits.
+        let chunk = match tokio::time::timeout(remaining, resp.chunk()).await {
+            Ok(Ok(Some(c))) => c,
+            // stream end, error, or deadline → stop and decide on what we saw.
+            _ => break,
+        };
+        buf.extend_from_slice(&chunk);
+        while let Some(nl) = buf.iter().position(|&b| b == b'\n') {
+            let line = buf.drain(..=nl).collect::<Vec<u8>>();
+            let line = String::from_utf8_lossy(&line);
+            let line = line.trim();
+            let payload = line.strip_prefix("data:").map(str::trim).unwrap_or(line);
+            if !payload.starts_with('{') {
+                continue;
+            }
+            // Auth/credential scan on the raw event text (a `notice`/error frame
+            // carries the provider's message). Conservative needles only.
+            if auth.is_none() {
+                let low = payload.to_lowercase();
+                if low.contains("unauthorized")
+                    || low.contains("not logged in")
+                    || low.contains("invalid api key")
+                    || low.contains("invalid_api_key")
+                    || low.contains("authentication")
+                {
+                    auth = Some(payload.chars().take(200).collect());
+                }
+            }
+            let Ok(event) = serde_json::from_str::<Value>(payload) else {
+                continue;
+            };
+            match event.get("kind").and_then(|k| k.as_str()).unwrap_or("") {
+                // Final model output (not `reasoning`, which can fire without a
+                // real answer) — proof the model actually responded.
+                "text" | "message" => produced = true,
+                "turn_done" => {
+                    if let Some(d) = auth {
+                        return TurnProbe::Auth(d);
+                    }
+                    return if produced {
+                        TurnProbe::Ok
+                    } else {
+                        TurnProbe::NoOutput
+                    };
+                }
+                _ => {}
+            }
+        }
+        if buf.len() > 1_048_576 {
+            buf.clear();
+        }
+    }
+    // Deadline / stream end without a `turn_done`.
+    if let Some(d) = auth {
+        TurnProbe::Auth(d)
+    } else if produced {
+        TurnProbe::Ok
+    } else {
+        TurnProbe::NoOutput
+    }
+}
+
 /// Poll `GET /status` until serve answers (it binds within ~1s of spawn) or the
 /// window elapses. Returns false if it never came up.
 async fn wait_serve_ready(port: u16, overall: Duration) -> bool {
