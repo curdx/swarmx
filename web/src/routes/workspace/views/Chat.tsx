@@ -20,6 +20,7 @@ import {
   useEngineReadiness,
   type EngineReadinessState,
 } from "../../../hooks/useEngineReadiness";
+import { engineStatusKey } from "../../../lib/engineEvidence";
 import { MessagesPanel } from "../../../components/MessagesPanel";
 import { OrchestratorFailureCard } from "../../../components/workspace/OrchestratorFailureCard";
 import { BootstrapChecklistCard } from "../../../components/chat/BootstrapChecklistCard";
@@ -304,6 +305,12 @@ function WorkspaceStatusStrip({
     .filter((e) => !e.installed)
     .map((p) => p.display_name)
     .join(" / ");
+  // Hover detail for the engine chip: every installed engine + how it was
+  // verified (已验证回合 / 使用中 / 仅启动 / 需登录 …), one per line. Lets the
+  // compact chip stay short while the full per-engine evidence is one hover away.
+  const engineHover = installedEngines
+    .map((e) => `${e.display_name} — ${t(engineStatusKey(e))}`)
+    .join("\n");
   return (
     <div className="shrink-0 border-b border-border-subtle bg-surface-primary px-3 py-2">
       <div className="mx-auto flex w-full max-w-[1040px] flex-col gap-2 rounded-lg border border-border-subtle bg-surface-elevated px-3 py-2 shadow-sm sm:flex-row sm:items-center">
@@ -354,7 +361,10 @@ function WorkspaceStatusStrip({
                   not "ready". Hidden on error so it never sits beside a failure
                   card claiming the engine is fine. */}
               {!hasError && !cliLoading && installedEngines.length > 0 && (
-                <span className="inline-flex min-w-0 items-center gap-1">
+                <span
+                  className="inline-flex min-w-0 cursor-default items-center gap-1"
+                  title={engineHover}
+                >
                   <PlugZap className="size-3 shrink-0" />
                   <span className="truncate">
                     {usableNames
