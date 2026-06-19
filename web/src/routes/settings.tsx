@@ -26,16 +26,20 @@ import type {
   ModelsResponse,
 } from "@/api/types";
 import { useEngineReadiness } from "@/hooks/useEngineReadiness";
+import { evidenceOf, EVIDENCE_I18N } from "@/lib/engineEvidence";
 import {
+  Activity,
   Bell,
   Check,
   CheckCircle2,
   CircleAlert,
   CircleCheck,
+  CircleDashed,
   CircleX,
   DownloadCloud,
   Loader2,
   RefreshCw,
+  ShieldCheck,
   CircleUser,
   Copy,
   Cpu,
@@ -880,15 +884,56 @@ function ProbeBadge({ verdict }: { verdict?: EngineReadiness }) {
   } as const;
   const v = map[state];
   return (
+    <>
+      <span
+        className={cn(
+          "inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-caption text-[10px]",
+          v.cls,
+        )}
+        title={verdict?.reason ?? undefined}
+      >
+        {v.icon}
+        {v.label}
+      </span>
+      <EvidencePill verdict={verdict} />
+    </>
+  );
+}
+
+/** Secondary pill on a "usable" engine showing HOW it was verified — a real
+ *  one-turn check (已验证回合) vs live use (使用中) vs launch-only (仅启动) — so a
+ *  green "可用" isn't ambiguous about its evidence. */
+function EvidencePill({ verdict }: { verdict?: EngineReadiness }) {
+  const { t } = useTranslation();
+  const ev = evidenceOf({
+    state: verdict?.state ?? "unknown",
+    method: verdict?.method,
+  });
+  if (ev === "none") return null;
+  const meta = {
+    verified: {
+      icon: <ShieldCheck className="size-3" />,
+      cls: "border-status-success/40 text-status-success",
+    },
+    live: {
+      icon: <Activity className="size-3" />,
+      cls: "border-accent-primary/40 text-accent-primary-deep",
+    },
+    launch: {
+      icon: <CircleDashed className="size-3" />,
+      cls: "border-border-subtle text-foreground-tertiary",
+    },
+  }[ev];
+  return (
     <span
       className={cn(
-        "inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-caption text-[10px]",
-        v.cls,
+        "inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 font-caption text-[10px]",
+        meta.cls,
       )}
-      title={verdict?.reason ?? undefined}
+      title={t(EVIDENCE_I18N[ev].detail)}
     >
-      {v.icon}
-      {v.label}
+      {meta.icon}
+      {t(EVIDENCE_I18N[ev].label)}
     </span>
   );
 }

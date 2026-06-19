@@ -102,6 +102,11 @@ export interface EngineReadiness {
   reason?: string | null;
   kind?: string | null;
   probed_at?: number | null;
+  /** How the verdict was reached (probe `method`): "turn-ok" (a real one-turn
+   *  check passed), "live-ready" (a live agent came up), "ready" (launch only),
+   *  "turn-auth" / "health-needle" / "exit" / … Drives the evidence marker so a
+   *  "usable" isn't ambiguous about how strongly it was proven. */
+  method?: string | null;
 }
 
 export interface SpawnAgentRequest {
