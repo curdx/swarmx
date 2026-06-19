@@ -1010,6 +1010,17 @@ pub async fn list_agents(State(state): State<AppState>) -> impl IntoResponse {
     for (id, slot) in state.registry.list() {
         let slot = slot.lock();
         let lc = *slot.lifecycle.lock();
+        // Converge a process that died WITHOUT emitting an OSC exit marker
+        // (SIGKILL / OOM): the in-memory Lifecycle would otherwise keep reporting
+        // shim_ready=true, shim_exit=None — UI shows a green/ready agent — until
+        // the 5s reaper sweep catches it. A deterministic is_alive() (waitpid)
+        // here collapses that "lying green" window to zero: a dead-but-unmarked
+        // agent reports an abnormal exit immediately.
+        let shim_exit = match lc.shim_exit {
+            existing @ Some(_) => existing,
+            None if !slot.is_alive() => Some(-1),
+            None => None,
+        };
         let depends_on = depends_for(&id);
         let handoff_signal = handoff_for(&slot.role);
         let paused = slot.paused.load(std::sync::atomic::Ordering::Relaxed);
@@ -1021,7 +1032,7 @@ pub async fn list_agents(State(state): State<AppState>) -> impl IntoResponse {
                 role: slot.role.clone(),
                 workspace: slot.workspace.clone(),
                 shim_ready: lc.shim_ready,
-                shim_exit: lc.shim_exit,
+                shim_exit,
                 killed_at: None,
                 spawned_at: None,
                 depends_on,

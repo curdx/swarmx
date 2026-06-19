@@ -621,7 +621,18 @@ export default function ChatView() {
           "会向该 agent 投递一条手动唤醒消息，推动它继续读取 mailbox / blackboard。仅在它确实卡住或需要人工催促时使用。",
         ),
         confirmLabel: t("agent.wake"),
-        onConfirm: () => api.wakeAgent(agent.agent_id).catch(() => {}),
+        // Don't swallow a failed wake — three sibling call sites toast, so a
+        // silent failure here would look exactly like success (the dialog just
+        // closes) while the agent was never actually woken (诚实性红线).
+        onConfirm: () =>
+          api.wakeAgent(agent.agent_id).catch((e) => {
+            toast.error(
+              t("agent.wakeFailed", {
+                msg: (e as Error)?.message ?? "",
+                defaultValue: "唤醒失败：{{msg}}",
+              }),
+            );
+          }),
       });
     },
     [t],
@@ -646,7 +657,8 @@ export default function ChatView() {
           ? cfg.reasoning
           : activeThread.reasoning_effort ?? null;
       const label =
-        (nextTier ?? "默认") + (nextReasoning ? `·${nextReasoning}` : "");
+        (nextTier ?? t("chat.modelDefault", "默认")) +
+        (nextReasoning ? `·${nextReasoning}` : "");
       const willRestart = activeMembers.some((m) => m.role === "orchestrator");
       const run = (async () => {
         await api.setThreadModel(workspace.workspaceId, activeThread.id, {
@@ -670,11 +682,23 @@ export default function ChatView() {
       // the loading → success / error states off the actual operation.
       toast.promise(run, {
         loading: willRestart
-          ? `正在切换到 ${label} 并重启队长…`
-          : `正在切换到 ${label}…`,
-        success: `已切换到 ${label}`,
+          ? t("chat.modelSwitchingRestart", {
+              label,
+              defaultValue: "正在切换到 {{label}} 并重启队长…",
+            })
+          : t("chat.modelSwitching", {
+              label,
+              defaultValue: "正在切换到 {{label}}…",
+            }),
+        success: t("chat.modelSwitched", {
+          label,
+          defaultValue: "已切换到 {{label}}",
+        }),
         error: (e) =>
-          `切换模型失败:${(e as Error)?.message ?? "未知错误"}`,
+          t("chat.modelSwitchFailed", {
+            msg: (e as Error)?.message ?? t("common.unknownError", "未知错误"),
+            defaultValue: "切换模型失败：{{msg}}",
+          }),
       });
       try {
         await run;
@@ -758,7 +782,17 @@ export default function ChatView() {
             kind: "note",
             body,
           });
-          api.wakeAgent(orch.agent_id).catch(() => {});
+          // Surface a failed nudge — the message is persisted, but if the wake
+          // doesn't land the captain may never come read it ("我跟 AI 说了话它
+          // 干坐着"). Don't let that fail look identical to success.
+          api.wakeAgent(orch.agent_id).catch((e) => {
+            toast.error(
+              t("agent.wakeFailed", {
+                msg: (e as Error)?.message ?? "",
+                defaultValue: "唤醒失败：{{msg}}",
+              }),
+            );
+          });
         }
         refreshAgents();
       } catch (e) {

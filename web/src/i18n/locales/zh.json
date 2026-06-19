@@ -175,7 +175,8 @@
         "body": "用自然语言描述任务，自动匹配编排并启动"
       }
     },
-    "sidebarEmpty": "还没有工作空间"
+    "sidebarEmpty": "还没有工作空间",
+    "sidebarBackendDown": "连不上后端，工作空间暂时读不到"
   },
   "task": {
     "pending": "等待 AI 响应…",
@@ -223,6 +224,7 @@
     "sending": "发送中…",
     "loading": "加载中…",
     "retry": "重试",
+    "unknownError": "未知错误",
     "noMatch": "没有匹配",
     "all": "全部",
     "allWorkspaces": "全部工作空间",
@@ -414,6 +416,11 @@
     }
   },
   "chat": {
+    "modelDefault": "默认",
+    "modelSwitching": "正在切换到 {{label}}…",
+    "modelSwitchingRestart": "正在切换到 {{label}} 并重启队长…",
+    "modelSwitched": "已切换到 {{label}}",
+    "modelSwitchFailed": "切换模型失败：{{msg}}",
     "verb": {
       "edit": "写 {{file}}",
       "editGeneric": "改文件",

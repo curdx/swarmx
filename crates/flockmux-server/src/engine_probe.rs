@@ -181,6 +181,26 @@ pub fn record_live_verdict(
     kind: Option<String>,
     method: &'static str,
 ) {
+    // Honesty guard: a live `Usable` here is launch-only evidence (ShimReady) —
+    // it must NEVER overwrite an already-recorded NeedsLogin/NotUsable verdict,
+    // or stage-3's "installed≠usable" tightening gets silently undone on the
+    // cheap always-on path (a logged-out engine spawns, ShimReady fires, and the
+    // honest NeedsLogin would flip back to a fake green). Launch-only may only
+    // UPGRADE an unknown/usable/stale verdict, not whitewash a known-bad one.
+    // (The explicit probe and live HealthFail still write straight through —
+    // they carry stronger or negative evidence.)
+    if matches!(state, ProbeState::Usable) {
+        if let Some(prev) = load_cache().engines.get(engine) {
+            if matches!(prev.state, ProbeState::NeedsLogin | ProbeState::NotUsable) {
+                tracing::debug!(
+                    engine,
+                    prev = ?prev.state,
+                    "live-ready: not overwriting a verified-negative verdict (no fake green)"
+                );
+                return;
+            }
+        }
+    }
     cache_upsert(&ProbeResult {
         engine: engine.to_string(),
         state,

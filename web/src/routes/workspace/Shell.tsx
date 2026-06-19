@@ -207,6 +207,7 @@ export default function WorkspaceShell() {
     refreshAgents,
     refreshWorkspaces,
     wsLoaded,
+    wsError,
     deleteWorkspace,
   } = useWorkspaceShellData(wsId, threadSlugParam);
 
@@ -473,6 +474,7 @@ export default function WorkspaceShell() {
             workspaces={workspaces}
             activeId={wsId ?? null}
             isLoading={!wsLoaded}
+            wsError={wsError}
             onOpenWizard={() => setWizardOpen(true)}
             onDelete={onDeleteWorkspace}
             onRootsChanged={refreshWorkspaces}
