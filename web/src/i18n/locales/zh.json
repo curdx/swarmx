@@ -1,4 +1,14 @@
 {
+  "engine": {
+    "evidence": {
+      "verified": "已验证回合",
+      "verifiedDetail": "已发起一次真实对话并收到模型回复——能完整跑一个回合（最强证据）",
+      "live": "使用中",
+      "liveDetail": "最近的真实任务里这个引擎在线干过活（活体验证，未单独跑验证回合）",
+      "launch": "仅启动",
+      "launchDetail": "只确认进程能启动，未发起对话回合验证；未登录 / key 无效 / 额度问题要等真发一个回合才会暴露"
+    }
+  },
   "backend": {
     "title": "后端已停止",
     "statusStopped": "本地后端进程已不在运行。",

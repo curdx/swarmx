@@ -1,4 +1,14 @@
 {
+  "engine": {
+    "evidence": {
+      "verified": "Verified",
+      "verifiedDetail": "Completed a real one-turn check — sent a prompt and got a model reply (strongest proof)",
+      "live": "In use",
+      "liveDetail": "This engine ran in a recent real task (live evidence; no separate turn check)",
+      "launch": "Launch only",
+      "launchDetail": "Only confirmed the process starts; no turn was run — a logged-out / bad-key / out-of-quota engine only fails when a turn is actually attempted"
+    }
+  },
   "backend": {
     "title": "Backend stopped",
     "statusStopped": "The local backend process is no longer running.",

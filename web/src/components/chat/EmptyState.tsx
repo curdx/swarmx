@@ -15,15 +15,19 @@
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 import {
+  Activity,
   CircleAlert,
   CircleCheck,
+  CircleDashed,
   CircleX,
   Loader2,
   PlugZap,
   RefreshCw,
+  ShieldCheck,
   Sparkles,
 } from "lucide-react";
 import type { EngineReadiness } from "../../api/types";
+import { evidenceOf, EVIDENCE_I18N } from "../../lib/engineEvidence";
 
 export interface EmptyStateCliReadiness {
   loading: boolean;
@@ -218,6 +222,39 @@ function EngineRow({ engine }: { engine: EngineReadiness }) {
     >
       {v.icon}
       {v.text}
+      <EngineEvidence engine={engine} />
+    </span>
+  );
+}
+
+/** Compact evidence marker for a "usable" engine in the empty-room precheck:
+ *  a real one-turn check (已验证回合) reads as a shield, live use as activity,
+ *  launch-only as a dashed circle — so "可用" shows how it was proven. */
+function EngineEvidence({ engine }: { engine: EngineReadiness }) {
+  const { t } = useTranslation();
+  const ev = evidenceOf(engine);
+  if (ev === "none") return null;
+  const meta = {
+    verified: {
+      icon: <ShieldCheck className="size-3 text-status-success" />,
+      cls: "text-status-success",
+    },
+    live: {
+      icon: <Activity className="size-3 text-accent-primary" />,
+      cls: "text-accent-primary-deep",
+    },
+    launch: {
+      icon: <CircleDashed className="size-3 text-foreground-tertiary" />,
+      cls: "text-foreground-tertiary",
+    },
+  }[ev];
+  return (
+    <span
+      className={`ml-0.5 inline-flex items-center gap-0.5 ${meta.cls}`}
+      title={t(EVIDENCE_I18N[ev].detail)}
+    >
+      {meta.icon}
+      {t(EVIDENCE_I18N[ev].label)}
     </span>
   );
 }

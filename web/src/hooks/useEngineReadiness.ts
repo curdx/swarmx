@@ -74,6 +74,7 @@ export function useEngineReadiness(): EngineReadinessState {
             reason: probe?.reason ?? null,
             kind: probe?.kind ?? null,
             probed_at: probe?.probed_at ?? null,
+            method: probe?.method ?? null,
           };
         }),
       );
@@ -154,6 +155,7 @@ export function useEngineReadiness(): EngineReadinessState {
             reason: probe?.reason ?? null,
             kind: probe?.kind ?? null,
             probed_at: probe?.probed_at ?? null,
+            method: probe?.method ?? null,
           };
         });
         setEngines(merged);
