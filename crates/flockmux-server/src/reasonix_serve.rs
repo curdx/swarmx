@@ -125,8 +125,23 @@ pub async fn consume_and_submit(serve_port: u16, flockmux_url: &str, agent_id: &
 /// path instead). Avoids submitting a second turn on top of a running one.
 pub async fn wake_if_idle(serve_port: u16, flockmux_url: &str, agent_id: &str) -> Result<bool> {
     match is_running(serve_port).await {
-        Some(true) => Ok(false), // busy → driver's turn_done will catch it
-        _ => consume_and_submit(serve_port, flockmux_url, agent_id).await,
+        // Busy: a mid-turn wake is picked up by the driver's `turn_done` path.
+        Some(true) => Ok(false),
+        // Idle: claim the wake and submit it as a fresh turn.
+        Some(false) => consume_and_submit(serve_port, flockmux_url, agent_id).await,
+        // Serve unreachable (still booting, or transiently wedged): do NOT
+        // consume. `consume_wakes` is atomic and would mark the mailbox wake
+        // READ, but the follow-up `submit` against the unreachable port then
+        // fails — NET-LOSING the wake (marked read, never delivered). This is
+        // live-confirmed: freezing the serve process (SIGSTOP) made `read_at`
+        // get stamped while `/submit send` failed in the same call. Leaving the
+        // wake un-consumed in the mailbox lets it be re-delivered by the driver's
+        // `turn_done` (once serve answers) or by the next BlackboardChanged. The
+        // caller (`deliver_wake`) logs this Err as a `warn!`, doesn't panic.
+        None => Err(anyhow!(
+            "reasonix serve unreachable (status probe = None); leaving wake in \
+             the mailbox for turn_done / next deliver to retry (not consuming)"
+        )),
     }
 }
 
