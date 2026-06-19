@@ -54,6 +54,56 @@ export interface CliInstallHint {
   login_command?: string | null;
 }
 
+/**
+ * Real-usability verdict from `GET /api/plugins/probe`. The honest answer to
+ * "can I use this engine right now" — the backend actually STARTS the CLI over
+ * PTY (not just "is the binary installed"). See `engine_probe.rs`.
+ *   - usable        — started, no auth/quota banner, didn't exit early.
+ *   - needs_login   — alive but an auth needle fired (must log in).
+ *   - not_installed — binary not on the runtime PATH.
+ *   - not_usable    — exited early / spawn failed / timed out (missing key, etc.).
+ */
+export type EngineProbeState =
+  | "usable"
+  | "needs_login"
+  | "not_installed"
+  | "not_usable";
+
+export interface EngineProbe {
+  engine: string;
+  state: EngineProbeState;
+  /** Human-facing detail (why it can't run); absent when usable. */
+  reason?: string | null;
+  /** Coarse failure class: "auth" | "fatal" | "timeout" | "exit". */
+  kind?: string | null;
+  /** Unix-ms when the verdict was reached (for staleness). */
+  probed_at: number;
+  /** How the verdict was reached: "ready" | "health-needle" | "exit" | … */
+  method: string;
+}
+
+export interface EngineProbeResponse {
+  /** A real-usability sweep is running right now (poll until false). */
+  probing: boolean;
+  engines: EngineProbe[];
+}
+
+/**
+ * Per-engine readiness the UI renders: install info merged with the probe
+ * verdict. `state === "unknown"` = installed but not yet probed — shown
+ * neutrally ("已安装（未验证）"), never as a fake green "ready".
+ */
+export interface EngineReadiness {
+  id: string;
+  display_name: string;
+  installed: boolean;
+  install?: CliInstallHint | null;
+  state: EngineProbeState | "unknown";
+  reason?: string | null;
+  kind?: string | null;
+  probed_at?: number | null;
+}
+
 export interface SpawnAgentRequest {
   cli: string;
   role?: string;

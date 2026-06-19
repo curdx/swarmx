@@ -210,6 +210,10 @@ pub async fn list_plugins(State(state): State<AppState>) -> impl IntoResponse {
 /// `~/.flockmux/engine-probe.json` as each completes (it's slow — opencode cold
 /// start alone is up to ~90s — so it must not block the request).
 pub async fn probe_engines(State(state): State<AppState>) -> impl IntoResponse {
+    // Reading the flag here only shapes the response message; the real
+    // single-sweep guarantee is `try_begin` inside `probe_all`, which no-ops a
+    // duplicate even if two POSTs race past this check.
+    let already = crate::engine_probe::is_probing();
     let plugins: Vec<crate::plugins::CliPlugin> =
         state.plugins.list().into_iter().cloned().collect();
     let count = plugins.len();
@@ -221,8 +225,22 @@ pub async fn probe_engines(State(state): State<AppState>) -> impl IntoResponse {
     });
     (
         StatusCode::ACCEPTED,
-        Json(serde_json::json!({ "status": "probing", "engines": count })),
+        Json(serde_json::json!({
+            "status": if already { "already_probing" } else { "probing" },
+            "engines": count,
+        })),
     )
+}
+
+/// `GET /api/plugins/probe` — the cached real-usability verdicts plus whether a
+/// sweep is in flight right now. The frontend reads this on mount (stale cache
+/// shown immediately) and polls it while `probing` is true to pick up verdicts
+/// as each engine completes (stale-while-revalidate).
+pub async fn probe_status() -> impl IntoResponse {
+    Json(serde_json::json!({
+        "probing": crate::engine_probe::is_probing(),
+        "engines": crate::engine_probe::cached_results(),
+    }))
 }
 
 async fn cli_plugin_info(p: &CliPlugin) -> CliPluginInfo {

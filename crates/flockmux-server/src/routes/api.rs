@@ -13,7 +13,10 @@ use crate::AppState;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/plugins", get(super::rest::list_plugins))
-        .route("/api/plugins/probe", post(super::rest::probe_engines))
+        .route(
+            "/api/plugins/probe",
+            post(super::rest::probe_engines).get(super::rest::probe_status),
+        )
         .route("/api/usage", get(super::usage::usage_summary))
         .route(
             "/api/usage/pricing",

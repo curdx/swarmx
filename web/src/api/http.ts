@@ -10,6 +10,7 @@ import type {
   CreateGoalRequest,
   CreateThreadRequest,
   CreateWorkspaceRequest,
+  EngineProbeResponse,
   GoalStatus,
   GoalEvidenceResponse,
   GoalsResponse,
@@ -176,6 +177,14 @@ export interface McpStatus {
 export const api = {
   listPlugins: () =>
     dedupe("plugins", 30_000, () => requestEndpoint<CliPluginInfo[]>(apiRoutes.plugins.list())),
+  /** Kick a background real-usability sweep. Returns immediately (202); verdicts
+   *  land in the probe cache as each engine completes — poll `getEngineProbe`. */
+  probeEngines: () =>
+    requestEndpoint<{ status: string; engines: number }>(apiRoutes.plugins.probe()),
+  /** Cached probe verdicts + in-flight flag. NOT deduped — the readiness hook
+   *  polls this while a sweep runs. */
+  getEngineProbe: () =>
+    requestEndpoint<EngineProbeResponse>(apiRoutes.plugins.probeStatus()),
   // MCP admin (「快捷装 MCP」页面)
   mcpEnv: () => requestEndpoint<McpEnv>(apiRoutes.mcp.env()),
   mcpStatus: () => requestEndpoint<McpStatus>(apiRoutes.mcp.status()),

@@ -15,7 +15,11 @@ import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 import i18n from "@/i18n";
 import { api } from "../../../api/http";
-import type { AgentInfo, CliPluginInfo } from "../../../api/types";
+import type { AgentInfo } from "../../../api/types";
+import {
+  useEngineReadiness,
+  type EngineReadinessState,
+} from "../../../hooks/useEngineReadiness";
 import { MessagesPanel } from "../../../components/MessagesPanel";
 import { OrchestratorFailureCard } from "../../../components/workspace/OrchestratorFailureCard";
 import { BootstrapChecklistCard } from "../../../components/chat/BootstrapChecklistCard";
@@ -246,19 +250,13 @@ const TASK_READY_DISMISS_MS = 4_000;
 // 独立事件，不归到用户上一条消息。
 const TASK_ATTACH_WINDOW_MS = 15_000;
 
-interface CliReadiness {
-  loading: boolean;
-  installed: CliPluginInfo[];
-  missing: CliPluginInfo[];
-}
-
 function WorkspaceStatusStrip({
   workspaceName,
   directionName,
   memberCount,
   sourceCount,
   cwdBranch,
-  cliReadiness,
+  readiness,
   reviving,
   onRevive,
   hasError = false,
@@ -269,7 +267,7 @@ function WorkspaceStatusStrip({
   memberCount: number;
   sourceCount: number;
   cwdBranch: string | null;
-  cliReadiness: CliReadiness;
+  readiness: EngineReadinessState;
   reviving: boolean;
   onRevive: () => void;
   /** True when the direction's orchestrator is in an error state (auth/quota/
@@ -286,16 +284,26 @@ function WorkspaceStatusStrip({
   // A member that exists but can't work is NOT "online". `hasError` overrides
   // the raw member count so the strip never contradicts the failure card.
   const hasMembers = memberCount > 0 && !hasError;
+  const { loading: cliLoading, engines } = readiness;
+  const installedEngines = engines.filter((e) => e.installed);
+  const usableEngines = engines.filter((e) => e.state === "usable");
+  // "No usable engine" only blocks when nothing is even installed — an
+  // installed-but-unverified engine can still be tried (the captain spawn will
+  // surface the real error), so we don't hard-gate on the probe verdict here.
   const noCliReady =
-    !cliReadiness.loading &&
-    cliReadiness.installed.length === 0 &&
-    cliReadiness.missing.length > 0;
+    !cliLoading && engines.length > 0 && installedEngines.length === 0;
   const someCliMissing =
-    !cliReadiness.loading &&
-    cliReadiness.installed.length > 0 &&
-    cliReadiness.missing.length > 0;
-  const cliNames = cliReadiness.installed.map((p) => p.display_name).join(" / ");
-  const missingCliNames = cliReadiness.missing.map((p) => p.display_name).join(" / ");
+    !cliLoading &&
+    installedEngines.length > 0 &&
+    installedEngines.length < engines.length;
+  // Prefer verified-usable names for the chip; fall back to installed names
+  // (shown without a "ready" claim) when nothing's been probed yet.
+  const usableNames = usableEngines.map((p) => p.display_name).join(" / ");
+  const cliNames = installedEngines.map((p) => p.display_name).join(" / ");
+  const missingCliNames = engines
+    .filter((e) => !e.installed)
+    .map((p) => p.display_name)
+    .join(" / ");
   return (
     <div className="shrink-0 border-b border-border-subtle bg-surface-primary px-3 py-2">
       <div className="mx-auto flex w-full max-w-[1040px] flex-col gap-2 rounded-lg border border-border-subtle bg-surface-elevated px-3 py-2 shadow-sm sm:flex-row sm:items-center">
@@ -341,19 +349,20 @@ function WorkspaceStatusStrip({
                   <span className="truncate font-mono">{cwdBranch}</span>
                 </span>
               )}
-              {/* "AI 引擎就绪" only means the binary is installed — it must NOT
-                  sit next to a failure card claiming the engine is fine. Hide
-                  it on error; the card carries the real status. */}
-              {!hasError &&
-                !cliReadiness.loading &&
-                cliReadiness.installed.length > 0 && (
-                  <span className="inline-flex min-w-0 items-center gap-1">
-                    <PlugZap className="size-3 shrink-0" />
-                    <span className="truncate">
-                      {t("chat.workspaceStripCliReady", { names: cliNames })}
-                    </span>
+              {/* Honest engine chip: "可用" (green) ONLY for engines the probe
+                  verified can run; otherwise the neutral "已安装" — installed is
+                  not "ready". Hidden on error so it never sits beside a failure
+                  card claiming the engine is fine. */}
+              {!hasError && !cliLoading && installedEngines.length > 0 && (
+                <span className="inline-flex min-w-0 items-center gap-1">
+                  <PlugZap className="size-3 shrink-0" />
+                  <span className="truncate">
+                    {usableNames
+                      ? t("chat.workspaceStripCliUsable", { names: usableNames })
+                      : t("chat.workspaceStripCliInstalled", { names: cliNames })}
                   </span>
-                )}
+                </span>
+              )}
             </div>
           </div>
         </div>
@@ -453,32 +462,10 @@ export default function ChatView() {
   // short-circuits, so it just becomes available to chat with again.
   const [reviving, setReviving] = useState(false);
   const [confirm, setConfirm] = useState<ConfirmActionState | null>(null);
-  const [cliReadiness, setCliReadiness] = useState<CliReadiness>({
-    loading: true,
-    installed: [],
-    missing: [],
-  });
-
-  useEffect(() => {
-    let cancelled = false;
-    api
-      .listPlugins()
-      .then((plugins) => {
-        if (cancelled) return;
-        setCliReadiness({
-          loading: false,
-          installed: plugins.filter((p) => p.installed === true),
-          missing: plugins.filter((p) => p.installed === false),
-        });
-      })
-      .catch(() => {
-        if (!cancelled)
-          setCliReadiness({ loading: false, installed: [], missing: [] });
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  // Real engine readiness: install info merged with the on-demand usability
+  // probe (`engine_probe.rs`). "installed" alone is NOT "usable" — the EmptyState
+  // and the strip render the honest verdict, never a fake "ready".
+  const readiness = useEngineReadiness();
 
   const reviveOrchestrator = useCallback(async () => {
     if (reviving) return;
@@ -542,10 +529,10 @@ export default function ChatView() {
       orch.last_error_kind ??
       (/(未登录|not logged in|\/login)/i.test(reason) ? "auth" : null);
     const loginCommand =
-      cliReadiness.installed.find((p) => p.id === orch.cli)?.install
+      readiness.engines.find((e) => e.id === orch.cli)?.install
         ?.login_command ?? null;
     return { agentId: orch.agent_id, reason, kind, loginCommand };
-  }, [activeMembers, agentStateById, cliReadiness]);
+  }, [activeMembers, agentStateById, readiness.engines]);
 
   // ── Orchestrator bootstrap (honest startup checklist) ─────────────────
   // P0-5/P0-6: an orchestrator that exists but hasn't produced its first
@@ -567,7 +554,7 @@ export default function ChatView() {
     );
     if (!orch) return null;
     const engineName =
-      cliReadiness.installed.find((p) => p.id === orch.cli)?.display_name ??
+      readiness.engines.find((e) => e.id === orch.cli)?.display_name ??
       orch.cli ??
       null;
     return {
@@ -576,7 +563,7 @@ export default function ChatView() {
       branchLabel: workspace.cwdBranch ?? null,
       engineName,
     };
-  }, [orchestratorFailure, activeMembers, cliReadiness, workspace.cwdBranch]);
+  }, [orchestratorFailure, activeMembers, readiness.engines, workspace.cwdBranch]);
 
   const [retrying, setRetrying] = useState(false);
   const retryOrchestrator = useCallback(async () => {
@@ -1017,7 +1004,7 @@ export default function ChatView() {
           memberCount={activeMembers.filter(agentIsWorkable).length}
           sourceCount={workspace.roots.length + 1}
           cwdBranch={workspace.cwdBranch}
-          cliReadiness={cliReadiness}
+          readiness={readiness}
           reviving={reviving}
           onRevive={reviveOrchestrator}
           hasError={orchestratorFailure != null}
@@ -1048,7 +1035,12 @@ export default function ChatView() {
           agentActivityById={agentActivityById}
           agentLiveStateById={agentStateById}
           reasoningById={reasoningById}
-          cliReadiness={cliReadiness}
+          cliReadiness={{
+            loading: readiness.loading,
+            probing: readiness.probing,
+            engines: readiness.engines,
+            onProbe: readiness.probe,
+          }}
           emptyStateOverride={
             orchestratorFailure ? (
               <OrchestratorFailureCard
