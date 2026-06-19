@@ -107,6 +107,13 @@ export default function GoalsRoute() {
   const budgetError = useMemo(() => {
     const raw = budget.trim();
     if (!raw) return null;
+    // Don't silently strip non-digits in onChange (a user typing "1,000" would
+    // watch it become "1000" with no idea why). Keep their input, flag it here.
+    if (!/^\d+$/.test(raw)) {
+      return t("goals.budgetNotNumeric", {
+        defaultValue: "只能填数字（不带逗号、空格或字母）",
+      });
+    }
     const n = Number(raw);
     if (!Number.isSafeInteger(n) || n > MAX_BUDGET_TOKENS) {
       return t("goals.budgetTooLarge", {
@@ -275,6 +282,7 @@ export default function GoalsRoute() {
                 value={objective}
                 onChange={(e) => setObjective(e.target.value)}
                 rows={3}
+                maxLength={4000}
                 className="resize-none rounded border border-border-subtle bg-surface-primary px-2 py-1.5 text-[13px] text-foreground-primary"
                 placeholder={t("goals.objectivePlaceholder")}
               />
@@ -287,6 +295,7 @@ export default function GoalsRoute() {
                 value={criteria}
                 onChange={(e) => setCriteria(e.target.value)}
                 rows={5}
+                maxLength={4000}
                 className="resize-none rounded border border-border-subtle bg-surface-primary px-2 py-1.5 text-[13px] text-foreground-primary"
                 placeholder={t("goals.criteriaPlaceholder")}
               />
@@ -297,7 +306,7 @@ export default function GoalsRoute() {
               </span>
               <input
                 value={budget}
-                onChange={(e) => setBudget(e.target.value.replace(/[^\d]/g, ""))}
+                onChange={(e) => setBudget(e.target.value)}
                 inputMode="numeric"
                 aria-invalid={budgetError ? true : undefined}
                 className={cn(

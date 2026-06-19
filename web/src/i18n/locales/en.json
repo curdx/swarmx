@@ -1160,6 +1160,7 @@
     },
     "evidenceKindHint": "Kind: note for progress · proof of completion · blocker for obstacles",
     "budgetTooLarge": "Budget too large — enter an integer no greater than 1 trillion",
+    "budgetNotNumeric": "Digits only (no commas, spaces, or letters)",
     "loadFailed": "Failed to load goals, please retry",
     "createFailed": "Failed to create goal, please retry",
     "statusFailed": "Failed to update status, please retry",

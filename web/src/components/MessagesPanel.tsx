@@ -1685,6 +1685,7 @@ export function MessagesPanel({
             <Textarea
               ref={composerRef}
               name="composer"
+              maxLength={16000}
               value={body}
               onChange={(e) => {
                 setBody(e.target.value);
