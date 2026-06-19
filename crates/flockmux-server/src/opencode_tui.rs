@@ -106,11 +106,83 @@ async fn newest_started_turn(c: &reqwest::Client, base: &str, workspace_dir: &st
         .max()
 }
 
+/// Newest `tokens.output` among this workspace's opencode sessions — proof the
+/// model actually PRODUCED a response (not just that a prompt was accepted). A
+/// logged-out / wedged opencode 401s on the model call and never accrues output
+/// tokens, so this staying 0 is how the probe tells "can't run" from "ran".
+async fn newest_output_tokens(c: &reqwest::Client, base: &str, workspace_dir: &str) -> i64 {
+    let Ok(resp) = c.get(format!("{base}/session")).send().await else {
+        return 0;
+    };
+    let Ok(arr) = resp.json::<serde_json::Value>().await else {
+        return 0;
+    };
+    arr.as_array()
+        .map(|sessions| {
+            sessions
+                .iter()
+                .filter(|s| {
+                    s.get("directory")
+                        .and_then(|d| d.as_str())
+                        .is_some_and(|d| dir_matches(d, workspace_dir))
+                })
+                .filter_map(|s| {
+                    s.get("tokens")
+                        .and_then(|t| t.get("output"))
+                        .and_then(|o| o.as_i64())
+                })
+                .max()
+                .unwrap_or(0)
+        })
+        .unwrap_or(0)
+}
+
 /// opencode reports canonical paths (`/private/tmp/...` on macOS) while flockmux
 /// may hold the un-canonicalised `/tmp/...`. Match on equality or either being a
 /// suffix of the other so the `/private` prefix difference doesn't break it.
 fn dir_matches(a: &str, b: &str) -> bool {
     a == b || a.ends_with(b) || b.ends_with(a)
+}
+
+/// Verified one-turn usability check for the engine probe. opencode isn't
+/// keystroke-driven, so the PTY answer-scan can't apply; instead we drive its
+/// `/tui` control API and read the session token counts, which is cleaner anyway
+/// (no terminal-echo to disambiguate). Submit `prompt`, (re)submit until a turn
+/// actually STARTS (a cold TUI silently drops an early submit), then wait for the
+/// model to PRODUCE OUTPUT. `Ok(true)` = output tokens appeared ⇒ the engine
+/// really completed a turn; `Ok(false)` = the deadline passed with no output
+/// (logged out / no quota / wedged). `workspace_dir` scopes everything to this
+/// agent's fresh session, so concurrent opencode agents can't satisfy it.
+pub async fn verify_one_turn(
+    port: u16,
+    workspace_dir: &str,
+    prompt: &str,
+    total: Duration,
+) -> Result<bool> {
+    let base = format!("http://127.0.0.1:{port}");
+    let c = client()?;
+    let start = Instant::now();
+    loop {
+        // Produced model output → it really ran a turn. Check first so we never
+        // submit again once the answer is in.
+        if newest_output_tokens(&c, &base, workspace_dir).await > 0 {
+            return Ok(true);
+        }
+        if start.elapsed() > total {
+            return Ok(false);
+        }
+        // No turn started yet → (re)submit (cold TUI drops early submits). Once a
+        // turn is in flight (input tokens registered) stop submitting and just
+        // wait for output, so we never queue a duplicate turn.
+        if newest_started_turn(&c, &base, workspace_dir)
+            .await
+            .unwrap_or(0)
+            == 0
+        {
+            let _ = clear_append_submit(&c, &base, prompt).await;
+        }
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
 }
 
 /// Append `text` to the agent's TUI prompt and submit it as a fresh turn, ONCE.

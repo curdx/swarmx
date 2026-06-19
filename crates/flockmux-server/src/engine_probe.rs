@@ -22,18 +22,21 @@
 //!   - **launch-only** (`observe`) — ShimReady + no auth banner + no early exit.
 //!     Token-free; authoritative for claude (ships a "Not logged in" needle) and
 //!     reasonix (no key ⇒ `serve` exits non-zero at launch).
-//!   - **verified one-turn** (`pty_one_turn_check`) — for keystroke engines
-//!     (claude/codex) that pass launch, actually send one trivial turn and watch
-//!     for the answer. This is what catches a logged-out codex: it comes up fine
-//!     and only 401s when a turn is attempted, so launch-only would wrongly read
-//!     it `Usable`. Spends a tiny amount of model tokens — the price of certainty.
+//!   - **verified one-turn** — for an engine that passes launch, actually send
+//!     one trivial turn and confirm the model responds. This catches a logged-out
+//!     codex/opencode: it comes up fine and only 401s when a turn is attempted,
+//!     so launch-only would wrongly read it `Usable`. Per channel:
+//!       * keystroke engines (claude/codex) → `pty_one_turn_check`: ask a random
+//!         arithmetic question, scan PTY output for the answer (not in the prompt,
+//!         so the TUI echo can't false-match).
+//!       * opencode (TUI HTTP control) → `opencode_one_turn_check`: drive `/tui`
+//!         and confirm the model produced output via the session token counts.
+//!     Spends a tiny amount of model tokens — the price of certainty. reasonix
+//!     (serve) keeps launch-only: no key ⇒ `serve` exits at launch, so it's
+//!     already authoritative.
 //!
-//! Remaining gap: opencode is driven over its TUI HTTP control API, not
-//! keystrokes, so its verified-turn path isn't wired yet — a logged-out opencode
-//! can still read `Usable` from launch-only. Its turn would go through
-//! `crate::opencode_tui` + a `/session` completion poll (a later refinement).
 //! Real-usage write-back (`record_live_verdict`) also keeps the cache fresh from
-//! live agents for free.
+//! live agents for free, so the manual probe is a fallback.
 
 use crate::plugins::CliPlugin;
 use crate::pty_stream::FetchResult;
@@ -329,18 +332,21 @@ pub async fn probe_one(
     // 4. Watch the same lifecycle channel live agents use.
     let verdict = observe(&mut rx, probe_timeout(&engine)).await;
 
-    // 4b. Verified one-turn check (keystroke engines only). Launch-only can't
-    //     tell a logged-out codex/opencode (comes up fine, 401s on the turn)
-    //     from a working one, so for a launch-Usable PTY engine we actually
-    //     complete one trivial turn. opencode (TUI HTTP) and reasonix (serve)
-    //     aren't keystroke-driven: opencode's verified turn is a later refinement
-    //     and reasonix's launch verdict is already authoritative (no key → it
-    //     exits at launch), so they keep the launch verdict.
-    let verdict = if verdict.state == ProbeState::Usable
-        && slot.tui_http_port().is_none()
-        && slot.serve_http_port().is_none()
-    {
-        pty_one_turn_check(&slot).await
+    // 4b. Verified one-turn check. Launch-only can't tell a logged-out
+    //     codex/opencode (comes up fine, 401s only when a turn is attempted)
+    //     from a working one, so for a launch-Usable engine we actually complete
+    //     one trivial turn — over the PTY for keystroke engines (claude/codex),
+    //     over the /tui HTTP control API for opencode. reasonix (serve) keeps its
+    //     launch verdict: no key → its `serve` exits at launch, so launch-only is
+    //     already authoritative and a turn adds nothing.
+    let verdict = if verdict.state == ProbeState::Usable {
+        if let Some(port) = slot.tui_http_port() {
+            opencode_one_turn_check(port, &slot.workspace).await
+        } else if slot.serve_http_port().is_some() {
+            verdict
+        } else {
+            pty_one_turn_check(&slot).await
+        }
     } else {
         verdict
     };
@@ -590,6 +596,44 @@ fn classify_turn(buf: &str, sum: &str) -> Option<Verdict> {
         });
     }
     None
+}
+
+/// Overall budget for opencode's verified turn. Its TUI cold-start + first model
+/// call is slow (the bootstrap path alone allows ~90s), so it gets a generous
+/// window before we call it can't-complete-a-turn.
+const OPENCODE_TURN_TIMEOUT: Duration = Duration::from_secs(75);
+
+/// Verified one-turn check for opencode. opencode is driven over its `/tui` HTTP
+/// control API, not keystrokes, so the PTY answer-scan doesn't apply — instead we
+/// submit a trivial turn and confirm the model produced output via the session
+/// token counts (see `opencode_tui::verify_one_turn`). That's actually cleaner
+/// than the PTY path: reading structured token counts needs no echo
+/// disambiguation. Detecting an auth banner (→ NeedsLogin) would need reading the
+/// session's message text; for now a logged-out opencode lands on NotUsable.
+async fn opencode_one_turn_check(port: u16, workspace_dir: &str) -> Verdict {
+    let prompt = "What is 318 plus 921? Reply with only the number.";
+    match crate::opencode_tui::verify_one_turn(port, workspace_dir, prompt, OPENCODE_TURN_TIMEOUT)
+        .await
+    {
+        Ok(true) => Verdict {
+            state: ProbeState::Usable,
+            reason: None,
+            kind: None,
+            method: "turn-ok",
+        },
+        Ok(false) => Verdict {
+            state: ProbeState::NotUsable,
+            reason: Some("启动正常但在超时内没完成一次对话（可能未登录 / 额度耗尽 / 配置不全）".into()),
+            kind: Some("turn-timeout".into()),
+            method: "turn-timeout",
+        },
+        Err(e) => Verdict {
+            state: ProbeState::NotUsable,
+            reason: Some(format!("opencode 验证回合失败：{e}")),
+            kind: Some("fatal".into()),
+            method: "turn-error",
+        },
+    }
 }
 
 /// Remove the probe's scratch: temp workspace + per-agent config dirs the
