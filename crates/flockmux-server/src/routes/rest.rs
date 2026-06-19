@@ -1577,7 +1577,42 @@ pub(crate) fn spawn_bootstrap_inject(
         if let Some(port) = tui_port {
             match crate::opencode_tui::deliver_bootstrap(port, &prompt, &workspace_dir).await {
                 Ok(()) => tracing::info!(agent = %agent_id, port, "bootstrap: opencode started its first turn (TUI HTTP)"),
-                Err(err) => tracing::warn!(agent = %agent_id, port, ?err, "bootstrap: opencode never started a turn (TUI HTTP)"),
+                Err(err) => {
+                    // opencode never started a turn within the 90s window — the
+                    // cold TUI is wedged. Don't just warn and leave a green
+                    // ShimReady dot + "暂无消息" (the worst engine to lie about
+                    // — cold opencode is the most failure-prone). Flip it to a
+                    // failure card the same way the HealthFail path does: persist
+                    // last_error AND publish the live Error state, so the user
+                    // gets an honest, actionable card instead of a forever-parked
+                    // "online" agent (the first-response watchdog otherwise races
+                    // a second 90s window before catching it).
+                    let reason =
+                        "opencode 启动后 90s 内没能发起第一次对话（TUI 卡住，可能未登录或配置不全）"
+                            .to_string();
+                    let at = now_ms();
+                    if let Err(e) = swarm
+                        .store()
+                        .record_agent_error(agent_id.clone(), reason.clone(), "fatal", at)
+                        .await
+                    {
+                        tracing::warn!(?e, agent = %agent_id, "opencode bootstrap: record_agent_error failed");
+                    }
+                    tracing::warn!(agent = %agent_id, port, ?err, "bootstrap: opencode never started a turn (TUI HTTP) — flipped to Error");
+                    swarm.publish_event(SwarmEvent::AgentState {
+                        agent_id: agent_id.clone(),
+                        state: AgentState::Error,
+                    });
+                    swarm.publish_event(SwarmEvent::AgentActivity {
+                        agent_id: agent_id.clone(),
+                        kind: "system".to_string(),
+                        label: reason,
+                        phase: "error".to_string(),
+                        seq: 0,
+                        duration_ms: None,
+                        at,
+                    });
+                }
             }
             return;
         }
