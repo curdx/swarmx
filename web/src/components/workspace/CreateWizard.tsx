@@ -547,6 +547,7 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
                     autoFocus
                     value={name}
                     onChange={(e) => setName(e.target.value)}
+                    maxLength={120}
                     placeholder={t("wizard.namePlaceholder")}
                     className="h-10"
                   />

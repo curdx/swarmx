@@ -320,6 +320,7 @@ function CronJobForm({
           name="cron-name"
           value={name}
           onChange={(e) => setName(e.target.value)}
+          maxLength={120}
           placeholder={t("cron.namePlaceholder")}
           className="min-h-8 rounded border border-border-subtle bg-surface-primary px-2 py-1 text-[13px]"
         />
@@ -331,6 +332,7 @@ function CronJobForm({
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
           rows={2}
+          maxLength={8000}
           placeholder={t("cron.promptPlaceholder")}
           className="resize-none rounded border border-border-subtle bg-surface-primary px-2 py-1 text-[13px]"
         />

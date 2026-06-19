@@ -1160,6 +1160,7 @@
     },
     "evidenceKindHint": "类型：记录(note) 进展 · 证明(proof) 完成 · 阻塞(blocker) 标记障碍",
     "budgetTooLarge": "预算过大，请输入不超过 1 万亿的整数",
+    "budgetNotNumeric": "只能填数字（不带逗号、空格或字母）",
     "loadFailed": "加载目标失败，请重试",
     "createFailed": "创建目标失败，请重试",
     "statusFailed": "状态更新失败，请重试",
