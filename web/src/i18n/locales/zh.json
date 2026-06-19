@@ -620,6 +620,20 @@
     "typingIndicator": "AI 正在输入"
   },
   "dag": {
+    "a11y": {
+      "nodeDefault": "按 Enter 或空格选中节点，方向键移动，Esc 取消。",
+      "nodeDisabled": "节点不可移动。",
+      "nodeMoved": "节点已{{dir}}至 {{x}}, {{y}}",
+      "dir": { "up": "上移", "down": "下移", "left": "左移", "right": "右移" },
+      "edgeDefault": "agent 间的 handoff 依赖连线。",
+      "controls": "画布缩放控制",
+      "zoomIn": "放大",
+      "zoomOut": "缩小",
+      "fitView": "适应画面",
+      "interactive": "切换交互模式",
+      "minimap": "缩略图",
+      "handle": "连接点"
+    },
     "title": "协作图",
     "subtitle": "{{count}} 活跃成员 · 边 = 交接依赖",
     "legend": "图例",

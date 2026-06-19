@@ -620,6 +620,20 @@
     "typingIndicator": "AI is typing"
   },
   "dag": {
+    "a11y": {
+      "nodeDefault": "Press Enter or Space to select a node, arrow keys to move, Esc to cancel.",
+      "nodeDisabled": "Node is not movable.",
+      "nodeMoved": "Node moved {{dir}} to {{x}}, {{y}}",
+      "dir": { "up": "up", "down": "down", "left": "left", "right": "right" },
+      "edgeDefault": "Handoff dependency edge between agents.",
+      "controls": "Canvas zoom controls",
+      "zoomIn": "Zoom in",
+      "zoomOut": "Zoom out",
+      "fitView": "Fit view",
+      "interactive": "Toggle interactive mode",
+      "minimap": "Minimap",
+      "handle": "Connection handle"
+    },
     "title": "Flow",
     "subtitle": "{{count}} live agent(s) · edges = handoff deps",
     "legend": "Legend",
