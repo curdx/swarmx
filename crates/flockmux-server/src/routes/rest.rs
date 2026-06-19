@@ -749,6 +749,8 @@ pub(crate) async fn spawn_with_bookkeeping(
         let store = state.store.clone();
         let swarm = state.swarm.clone();
         let agent_for_task = agent_id.clone();
+        // Engine id (= plugin id) for real-usage write-back into the probe cache.
+        let engine_for_task = result.slot.cli.clone();
         tokio::spawn(async move {
             loop {
                 match lifecycle_rx.recv().await {
@@ -761,6 +763,17 @@ pub(crate) async fn spawn_with_bookkeeping(
                             agent_id: agent_for_task.clone(),
                             state: AgentState::Ready,
                         });
+                        // Real-usage write-back: this engine just came up over the
+                        // production spawn path — record it Usable in the probe
+                        // cache so the readiness UI reflects it without a manual
+                        // probe (same launch-only bar the probe uses).
+                        crate::engine_probe::record_live_verdict(
+                            &engine_for_task,
+                            crate::engine_probe::ProbeState::Usable,
+                            None,
+                            None,
+                            "live-ready",
+                        );
                         // First-response watchdog. A "ready" shim only means the
                         // PTY came up — NOT that the agent can do work. If it
                         // produces no message, no tool activity and no token
@@ -866,6 +879,21 @@ pub(crate) async fn spawn_with_bookkeeping(
                         {
                             tracing::warn!(?e, agent = %agent_for_task, "record_agent_error failed");
                         }
+                        // Real-usage write-back: a live agent's auth/quota banner
+                        // is direct evidence the engine can't run as-is. "auth" →
+                        // NeedsLogin (UI offers a login command); anything else →
+                        // NotUsable.
+                        crate::engine_probe::record_live_verdict(
+                            &engine_for_task,
+                            if kind == "auth" {
+                                crate::engine_probe::ProbeState::NeedsLogin
+                            } else {
+                                crate::engine_probe::ProbeState::NotUsable
+                            },
+                            Some(reason.clone()),
+                            Some(kind.clone()),
+                            "live-health-needle",
+                        );
                         swarm.publish_event(SwarmEvent::AgentState {
                             agent_id: agent_for_task.clone(),
                             state: AgentState::Error,
