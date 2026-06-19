@@ -175,7 +175,8 @@
         "body": "Describe the task in plain English; the captain breaks it down and starts the right agents"
       }
     },
-    "sidebarEmpty": "No workspaces yet"
+    "sidebarEmpty": "No workspaces yet",
+    "sidebarBackendDown": "Backend unreachable — workspaces can't load right now"
   },
   "task": {
     "pending": "Waiting for AI…",
@@ -223,6 +224,7 @@
     "sending": "Sending…",
     "loading": "Loading…",
     "retry": "Retry",
+    "unknownError": "Unknown error",
     "noMatch": "No match",
     "all": "All",
     "allWorkspaces": "All workspaces",
@@ -414,6 +416,11 @@
     }
   },
   "chat": {
+    "modelDefault": "Default",
+    "modelSwitching": "Switching to {{label}}…",
+    "modelSwitchingRestart": "Switching to {{label}}, restarting captain…",
+    "modelSwitched": "Switched to {{label}}",
+    "modelSwitchFailed": "Model switch failed: {{msg}}",
     "verb": {
       "edit": "Editing {{file}}",
       "editGeneric": "Editing a file",

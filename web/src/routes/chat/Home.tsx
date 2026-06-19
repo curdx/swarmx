@@ -182,6 +182,7 @@ export default function ChatHome() {
           workspaces={workspaces}
           activeId={null}
           isLoading={!workspacesLoaded}
+          wsError={workspacesError}
           onOpenWizard={() => setWizardOpen(true)}
           onDelete={handleDeleteWorkspace}
           onRootsChanged={refreshWorkspaces}
@@ -252,6 +253,7 @@ export default function ChatHome() {
               workspaces={workspaces}
               activeId={null}
               isLoading={!workspacesLoaded}
+              wsError={workspacesError}
               onOpenWizard={() => {
                 setMobileNavOpen(false);
                 setWizardOpen(true);

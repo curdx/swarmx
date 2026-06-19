@@ -89,6 +89,9 @@ export interface WorkspaceShellData {
    *  loading" from "loaded, genuinely zero workspaces", so a stale URL can be
    *  normalized to /chat without bouncing a valid wsId mid-load. */
   wsLoaded: boolean;
+  /** True when the last listWorkspaces failed (backend unreachable) — lets the
+   *  sidebar show "连不上后端" instead of the fake "还没有工作空间". */
+  wsError: boolean;
   /** Kill the workspace's live agents, soft-delete it, optimistically drop it
    *  from local state. Returns a path to navigate to when the ACTIVE workspace
    *  was deleted (`/chat/<next>` or `/chat`), else `null` (no nav needed). */
@@ -122,6 +125,11 @@ export function useWorkspaceShellData(
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [workspaceRows, setWorkspaceRows] = useState<Workspace[]>([]);
   const [wsLoaded, setWsLoaded] = useState(false);
+  // True when the last listWorkspaces FAILED (backend unreachable). The sidebar's
+  // empty state is `workspaceRows.length === 0`, which a failed load also
+  // produces — without this flag the sidebar lies "还没有工作空间" when the real
+  // reason is the backend is down (P0-5 regression).
+  const [wsError, setWsError] = useState(false);
   const [liveMessage, setLiveMessage] = useState<MessageRecord | null>(null);
   const [liveRead, setLiveRead] = useState<LiveRead | null>(null);
   const [agentStateById, setAgentStateById] = useState<
@@ -154,10 +162,16 @@ export function useWorkspaceShellData(
   const refreshWorkspaces = useCallback(async () => {
     try {
       const items = await api.listWorkspaces();
-      if (mountedRef.current) setWorkspaceRows(items);
+      if (mountedRef.current) {
+        setWorkspaceRows(items);
+        setWsError(false);
+      }
     } catch (err) {
       // eslint-disable-next-line no-console
       console.warn("listWorkspaces failed", err);
+      // Flag the error so the sidebar says "连不上后端" instead of the fake
+      // "还没有工作空间" — a failed load must not look like an empty account.
+      if (mountedRef.current) setWsError(true);
     } finally {
       if (mountedRef.current) setWsLoaded(true);
     }
@@ -527,6 +541,7 @@ export function useWorkspaceShellData(
     refreshAgents,
     refreshWorkspaces,
     wsLoaded,
+    wsError,
     deleteWorkspace,
   };
 }

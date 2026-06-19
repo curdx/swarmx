@@ -415,6 +415,7 @@ export function WorkspaceList({
   activeId,
   activeThreadSlug,
   isLoading = false,
+  wsError = false,
   mobile = false,
   onOpenWizard,
   onDelete,
@@ -426,6 +427,9 @@ export function WorkspaceList({
   workspaces: WorkspaceSummary[];
   activeId: string | null;
   isLoading?: boolean;
+  /** The workspace list failed to load (backend down) — show "连不上后端"
+   *  instead of the fake "还没有工作空间" empty state. */
+  wsError?: boolean;
   mobile?: boolean;
   /** Slug of the active direction in the active workspace (`main` default).
    *  Highlights the current direction row in the active workspace's subtree. */
@@ -535,13 +539,22 @@ export function WorkspaceList({
             </p>
           </div>
         )}
-        {!isLoading && workspaces.length === 0 && (
-          // sidebar empty 只放一行安静提示，避免跟中间 Welcome 屏的大
-          // CTA 撞车。"+ 工作空间" 入口仍在 sidebar 顶部 (heading 旁的
-          // 小 + 按钮)，足够新建，不需要再画一个虚线大卡片。
-          <p className="mx-3 mt-2 font-caption text-[11px] leading-relaxed text-foreground-tertiary">
-            {t("welcome.sidebarEmpty")}
+        {!isLoading && wsError ? (
+          // Backend unreachable: the list is empty because we couldn't read it,
+          // NOT because the user has no workspaces. Say so, don't lie "还没有".
+          <p className="mx-3 mt-2 font-caption text-[11px] leading-relaxed text-state-warning">
+            {t("welcome.sidebarBackendDown", "连不上后端，工作空间暂时读不到")}
           </p>
+        ) : (
+          !isLoading &&
+          workspaces.length === 0 && (
+            // sidebar empty 只放一行安静提示，避免跟中间 Welcome 屏的大
+            // CTA 撞车。"+ 工作空间" 入口仍在 sidebar 顶部 (heading 旁的
+            // 小 + 按钮)，足够新建，不需要再画一个虚线大卡片。
+            <p className="mx-3 mt-2 font-caption text-[11px] leading-relaxed text-foreground-tertiary">
+              {t("welcome.sidebarEmpty")}
+            </p>
+          )
         )}
         {workspaces.map((ws) => {
           const active = ws.id === activeId;

@@ -354,32 +354,37 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
     submittingRef.current = true;
     setIsSubmitting(true);
     setError(null);
-    // Client-side precheck: a relative/garbage path can't be a workspace cwd.
-    // Catch it here with a clear hint instead of round-tripping for a 400
-    // (existence still needs the server — that path's error is translated below).
-    if (!/^(\/|[A-Za-z]:[\\/])/.test(mainPath)) {
-      setError(
-        t(
-          "wizard.errAbsolutePath",
-          "Please enter an absolute path (starting with /), e.g. /Users/you/code/project",
-        ),
-      );
-      return;
-    }
-    const checked = await Promise.all(
-      cleanDirs.map(async (d) => [d.id, await validatePath(d.path)] as const),
-    );
-    const nextChecks = Object.fromEntries(checked) as Record<number, PathValidationState>;
-    setPathChecks(nextChecks);
-    const firstInvalid = checked.find(([, res]) => res.state === "error");
-    if (firstInvalid && firstInvalid[1].state === "error") {
-      setError(firstInvalid[1].message);
-      return;
-    }
-    const startedAt = Date.now();
-    const wsName = name.trim();
     let created: Workspace | null = null;
+    // Everything from the path precheck onward runs INSIDE try/finally so the
+    // submit lock (submittingRef / isSubmitting) is ALWAYS released. A path that
+    // fails validation here used to `return` before the finally below, leaving
+    // the "创建" button wedged disabled forever even after the path was fixed
+    // (real-machine reproduced).
     try {
+      // Client-side precheck: a relative/garbage path can't be a workspace cwd.
+      // Catch it here with a clear hint instead of round-tripping for a 400
+      // (existence still needs the server — that path's error is translated below).
+      if (!/^(\/|[A-Za-z]:[\\/])/.test(mainPath)) {
+        setError(
+          t(
+            "wizard.errAbsolutePath",
+            "Please enter an absolute path (starting with /), e.g. /Users/you/code/project",
+          ),
+        );
+        return;
+      }
+      const checked = await Promise.all(
+        cleanDirs.map(async (d) => [d.id, await validatePath(d.path)] as const),
+      );
+      const nextChecks = Object.fromEntries(checked) as Record<number, PathValidationState>;
+      setPathChecks(nextChecks);
+      const firstInvalid = checked.find(([, res]) => res.state === "error");
+      if (firstInvalid && firstInvalid[1].state === "error") {
+        setError(firstInvalid[1].message);
+        return;
+      }
+      const startedAt = Date.now();
+      const wsName = name.trim();
       if (!hasInitSpell) {
         // Defensive guard only — the `init` spell is compiled into the server
         // binary now (spells::SpellRegistry::builtin), so on a healthy install
