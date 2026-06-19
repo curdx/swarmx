@@ -18,6 +18,7 @@ mod billing;
 // generic spawn pipeline never branches on a CLI id. See `cli/mod.rs`.
 mod cli;
 mod cron;
+mod engine_probe;
 mod models_config;
 mod opencode_tui;
 mod reasonix_serve;

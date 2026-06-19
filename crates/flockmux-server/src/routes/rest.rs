@@ -204,6 +204,27 @@ pub async fn list_plugins(State(state): State<AppState>) -> impl IntoResponse {
     Json(plugins)
 }
 
+/// `POST /api/plugins/probe` — kick a background real-usability probe of every
+/// engine: actually start each CLI over PTY and see whether it can run (not just
+/// "is the binary installed"). Returns 202 immediately; verdicts land in
+/// `~/.flockmux/engine-probe.json` as each completes (it's slow — opencode cold
+/// start alone is up to ~90s — so it must not block the request).
+pub async fn probe_engines(State(state): State<AppState>) -> impl IntoResponse {
+    let plugins: Vec<crate::plugins::CliPlugin> =
+        state.plugins.list().into_iter().cloned().collect();
+    let count = plugins.len();
+    let shim = state.shim_path.clone();
+    let mcp = state.mcp_bin.clone();
+    let url = state.server_url.clone();
+    tokio::spawn(async move {
+        crate::engine_probe::probe_all(&plugins, &shim, &mcp, &url).await;
+    });
+    (
+        StatusCode::ACCEPTED,
+        Json(serde_json::json!({ "status": "probing", "engines": count })),
+    )
+}
+
 async fn cli_plugin_info(p: &CliPlugin) -> CliPluginInfo {
     let resolved_path = crate::runtime_path::resolve_executable(&p.binary);
     let version = match resolved_path.as_deref() {
