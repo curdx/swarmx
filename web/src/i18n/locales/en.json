@@ -7,6 +7,12 @@
       "liveDetail": "This engine ran in a recent real task (live evidence; no separate turn check)",
       "launch": "Launch only",
       "launchDetail": "Only confirmed the process starts; no turn was run — a logged-out / bad-key / out-of-quota engine only fails when a turn is actually attempted"
+    },
+    "status": {
+      "needsLogin": "Needs login",
+      "notUsable": "Can't start",
+      "notInstalled": "Not installed",
+      "unverified": "Unverified"
     }
   },
   "backend": {

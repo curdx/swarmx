@@ -35,6 +35,26 @@ export function evidenceOf(
   }
 }
 
+/** i18n key for a one-word status of ANY engine — the evidence label when
+ *  usable (已验证回合 / 使用中 / 仅启动), else a state label. Used by the workspace
+ *  strip's hover tooltip to list every engine's verification at a glance. */
+export function engineStatusKey(
+  e: Pick<EngineReadiness, "state" | "method">,
+): string {
+  const ev = evidenceOf(e);
+  if (ev !== "none") return EVIDENCE_I18N[ev].label;
+  switch (e.state) {
+    case "needs_login":
+      return "engine.status.needsLogin";
+    case "not_usable":
+      return "engine.status.notUsable";
+    case "not_installed":
+      return "engine.status.notInstalled";
+    default:
+      return "engine.status.unverified"; // "unknown"
+  }
+}
+
 /** i18n keys for an evidence kind: a short chip label + a one-line detail
  *  (shown as a tooltip). Defined here so the chat + settings surfaces stay in
  *  sync. Components supply their own icons/tones. */
