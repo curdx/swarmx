@@ -927,7 +927,7 @@ mod model_overlay_tests {
 
 #[cfg(test)]
 mod locate_tests {
-    use super::which_in_path;
+    use super::which_in;
 
     #[test]
     fn finds_a_file_on_path() {
@@ -935,27 +935,19 @@ mod locate_tests {
         std::fs::create_dir_all(&dir).unwrap();
         let f = dir.join("flockmux-fake-bin");
         std::fs::write(&f, b"x").unwrap();
-        let prev = std::env::var_os("PATH");
-        std::env::set_var("PATH", &dir);
-        let found = which_in_path("flockmux-fake-bin");
-        // restore PATH before asserting so a failure can't poison other tests
-        match prev {
-            Some(p) => std::env::set_var("PATH", p),
-            None => std::env::remove_var("PATH"),
-        }
+        // Pass PATH explicitly — never touch the process-global env var, which
+        // would race the other parallel tests (the old set_var made CI flaky).
+        let found = which_in("flockmux-fake-bin", dir.as_os_str());
         std::fs::remove_dir_all(&dir).ok();
         assert_eq!(found, Some(f));
     }
 
     #[test]
     fn returns_none_for_absent() {
-        let prev = std::env::var_os("PATH");
-        std::env::set_var("PATH", std::env::temp_dir());
-        let r = which_in_path("flockmux-definitely-not-a-real-binary-xyz");
-        match prev {
-            Some(p) => std::env::set_var("PATH", p),
-            None => std::env::remove_var("PATH"),
-        }
+        let r = which_in(
+            "flockmux-definitely-not-a-real-binary-xyz",
+            std::env::temp_dir().as_os_str(),
+        );
         assert_eq!(r, None);
     }
 }
@@ -1278,8 +1270,15 @@ fn locate_sibling_bin(name: &str, env_override: &str) -> Result<PathBuf> {
 /// First `file` found on `$PATH`, if any. Lets an installed (cargo install /
 /// brew / packaged) sidecar binary be located when it's not next to the server.
 fn which_in_path(file: &str) -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    for dir in std::env::split_paths(&path) {
+    which_in(file, &std::env::var_os("PATH")?)
+}
+
+/// PATH lookup against an EXPLICIT path value — pure, so tests can exercise it
+/// without mutating the process-global `PATH` env var. That mutation races
+/// other tests under cargo's parallel runner (set_var is process-wide), and the
+/// resulting flakiness took down CI on an unrelated commit.
+fn which_in(file: &str, path: &std::ffi::OsStr) -> Option<PathBuf> {
+    for dir in std::env::split_paths(path) {
         let cand = dir.join(file);
         if cand.is_file() {
             return Some(cand);
