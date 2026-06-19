@@ -31,9 +31,12 @@
 //!         so the TUI echo can't false-match).
 //!       * opencode (TUI HTTP control) → `opencode_one_turn_check`: drive `/tui`
 //!         and confirm the model produced output via the session token counts.
-//!     Spends a tiny amount of model tokens — the price of certainty. reasonix
-//!     (serve) keeps launch-only: no key ⇒ `serve` exits at launch, so it's
-//!     already authoritative.
+//!       * reasonix (serve HTTP+SSE) → `reasonix_one_turn_check`: `POST /submit`
+//!         and watch `/events` for model output. (reasonix has no TUI — the PTY
+//!         carries only `serve` logs — so PTY/keystrokes don't apply.) Launch-only
+//!         here only catches a MISSING key; an INVALID/expired key binds fine and
+//!         only fails on the turn, which this catches.
+//!     Spends a tiny amount of model tokens — the price of certainty.
 //!
 //! Real-usage write-back (`record_live_verdict`) also keeps the cache fresh from
 //! live agents for free, so the manual probe is a fallback.
@@ -332,18 +335,21 @@ pub async fn probe_one(
     // 4. Watch the same lifecycle channel live agents use.
     let verdict = observe(&mut rx, probe_timeout(&engine)).await;
 
-    // 4b. Verified one-turn check. Launch-only can't tell a logged-out
-    //     codex/opencode (comes up fine, 401s only when a turn is attempted)
-    //     from a working one, so for a launch-Usable engine we actually complete
-    //     one trivial turn — over the PTY for keystroke engines (claude/codex),
-    //     over the /tui HTTP control API for opencode. reasonix (serve) keeps its
-    //     launch verdict: no key → its `serve` exits at launch, so launch-only is
-    //     already authoritative and a turn adds nothing.
+    // 4b. Verified one-turn check. Launch-only can't tell a logged-out / bad-key
+    //     engine (comes up fine, only fails WHEN a turn is attempted) from a
+    //     working one, so for a launch-Usable engine we actually complete one
+    //     trivial turn, over whatever channel that engine speaks:
+    //       - claude/codex → PTY keystrokes + scan output for the answer
+    //       - opencode     → /tui HTTP control + session output-token check
+    //       - reasonix     → serve HTTP /submit + SSE turn output check
+    //         (launch-only here only catches a MISSING key — `serve` exits; an
+    //         INVALID/expired key binds fine and only 401s on the turn, which is
+    //         exactly what this catches).
     let verdict = if verdict.state == ProbeState::Usable {
         if let Some(port) = slot.tui_http_port() {
             opencode_one_turn_check(port, &slot.workspace).await
-        } else if slot.serve_http_port().is_some() {
-            verdict
+        } else if let Some(port) = slot.serve_http_port() {
+            reasonix_one_turn_check(port).await
         } else {
             pty_one_turn_check(&slot).await
         }
@@ -632,6 +638,42 @@ async fn opencode_one_turn_check(port: u16, workspace_dir: &str) -> Verdict {
             reason: Some(format!("opencode 验证回合失败：{e}")),
             kind: Some("fatal".into()),
             method: "turn-error",
+        },
+    }
+}
+
+/// Overall budget for reasonix's verified turn. `serve` is already bound (launch
+/// passed), so this is just submit + the model's first response over SSE.
+const REASONIX_TURN_TIMEOUT: Duration = Duration::from_secs(45);
+
+/// Verified one-turn check for reasonix. reasonix has no TUI and no keystroke
+/// input — the PTY carries only `reasonix serve`'s logs — so the probe drives its
+/// HTTP+SSE control API (the same one the live driver uses): submit a trivial
+/// turn and watch `/events` for the model to produce output (see
+/// `reasonix_serve::verify_one_turn`). This is what catches an INVALID/expired
+/// key: `serve` binds fine (launch reads Usable) and only the model call fails —
+/// launch-only alone only catches a MISSING key (serve exits at launch).
+async fn reasonix_one_turn_check(port: u16) -> Verdict {
+    let prompt =
+        "What is 318 plus 921? Reply with only the number, nothing else.";
+    match crate::reasonix_serve::verify_one_turn(port, prompt, REASONIX_TURN_TIMEOUT).await {
+        crate::reasonix_serve::TurnProbe::Ok => Verdict {
+            state: ProbeState::Usable,
+            reason: None,
+            kind: None,
+            method: "turn-ok",
+        },
+        crate::reasonix_serve::TurnProbe::Auth(detail) => Verdict {
+            state: ProbeState::NeedsLogin,
+            reason: Some(format!("reasonix 凭据无效/未授权：{detail}")),
+            kind: Some("auth".into()),
+            method: "turn-auth",
+        },
+        crate::reasonix_serve::TurnProbe::NoOutput => Verdict {
+            state: ProbeState::NotUsable,
+            reason: Some("serve 启动正常但在超时内没产出一次模型回合（key 无效 / 额度耗尽 / 配置不全）".into()),
+            kind: Some("turn-timeout".into()),
+            method: "turn-timeout",
         },
     }
 }
