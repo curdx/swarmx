@@ -1061,8 +1061,8 @@ export function MessagesPanel({
   };
 
   // P0-9: ⌘/Ctrl+Enter while the captain is mid-reply = interrupt it, then send
-  // this message as a new instruction (a deliberate course-correction, distinct
-  // from Enter which just queues). Only fires when the captain is actually
+  // this message as a course-correction (distinct from a plain Enter, which
+  // sends without interrupting). Only fires when the captain is actually
   // running, so it never surprise-kills an idle turn.
   const interruptThenSend = async (agentId: string) => {
     markInterrupted(agentId); // optimistic clear of the cancelled turn
@@ -1075,13 +1075,15 @@ export function MessagesPanel({
   };
 
   const onComposerKey = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    // Desktop chat convention: Enter sends, Shift+Enter inserts newline.
+    // Universal chat convention: Enter sends, Shift+Enter inserts a newline.
     // On touch-first platforms the soft keyboard already exposes an explicit
     // send affordance, so Enter should stay as newline instead of surprise-send.
     const platform = getClientPlatformInfo();
     if (platform.isMobileLike) return;
     if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault();
+      // ⌘/Ctrl+Enter while the captain is mid-reply interrupts it first, then
+      // sends as a course-correction; plain Enter just sends.
       if (e.metaKey || e.ctrlKey) {
         const captain = explicitRecipient ?? defaultRecipient;
         const captainBusy =
@@ -1123,7 +1125,10 @@ export function MessagesPanel({
   const platform = getClientPlatformInfo();
   const sendHint = platform.isMobileLike
     ? t("messages.sendHintMobile")
-    : t("messages.sendHintDesktop", { enter: platform.enterKeyLabel });
+    : t("messages.sendHintDesktop", {
+        send: platform.sendKeyLabel,
+        newline: platform.newlineKeyLabel,
+      });
 
   return (
     // flex-1 + min-h-0 (not h-full): MessagesPanel must take the *remaining*

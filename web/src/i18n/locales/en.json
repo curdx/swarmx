@@ -979,7 +979,7 @@
     "details": "Details",
     "send": "Send",
     "sending": "Sending…",
-    "sendHintDesktop": "{{enter}} to send · Shift+{{enter}} for newline",
+    "sendHintDesktop": "{{send}} to send · {{newline}} for newline",
     "sendHintMobile": "Enter adds a new line · tap Send to send",
     "optimize": "Optimize input",
     "optimizeTooltip": "Let AI rewrite your input to be clearer (keeps technical details, invents nothing)",
