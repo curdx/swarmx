@@ -125,7 +125,6 @@ export const apiRoutes = {
     })}`),
     send: () => endpoint("messages.send", "POST", "/api/message"),
     markRead: () => endpoint("messages.markRead", "POST", "/api/message/read"),
-    unreadCount: (to: string) => endpoint("messages.unreadCount", "GET", `/api/message/unread_count${queryString({ to })}`),
   },
   recordings: {
     list: (agentId?: string) => endpoint("recordings.list", "GET", `/api/recording${queryString({ agent_id: agentId })}`),

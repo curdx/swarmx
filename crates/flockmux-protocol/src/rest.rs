@@ -360,13 +360,6 @@ pub struct MarkReadResponse {
     pub at: i64,
 }
 
-/// `GET /api/message/unread_count?to=<agent>` response.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UnreadCountResponse {
-    pub to: String,
-    pub count: i64,
-}
-
 /// One row from `GET /api/blackboard-history/*path`. `content` is omitted by
 /// default (`?include_content=true` to include) so listing 50 versions of a
 /// large file doesn't blow up the JSON payload.

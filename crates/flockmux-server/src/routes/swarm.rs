@@ -8,7 +8,7 @@ use axum::{
 };
 use flockmux_protocol::rest::{
     BlackboardEntry, BlackboardHistoryEntry, BlackboardSnapshot, MarkReadRequest, MarkReadResponse,
-    MessageRecord, SendMessageRequest, ThoughtTrace, ThoughtTraceStep, UnreadCountResponse,
+    MessageRecord, SendMessageRequest, ThoughtTrace, ThoughtTraceStep,
     WriteBlackboardRequest,
 };
 use flockmux_storage::{ListMessagesOpts, ThoughtTraceRecord as StoreThoughtTraceRecord};
@@ -221,21 +221,12 @@ pub async fn mark_messages_read(
     Ok(Json(MarkReadResponse { marked, at }))
 }
 
+/// Shared `?to=<agent_id>` query for the consume-wakes endpoint. (Was also used
+/// by the now-removed `unread_count` GET — that endpoint was dead: the web UI
+/// never called it and `wake-check` switched to `consume_wakes`. See M6f below.)
 #[derive(Debug, Deserialize)]
 pub struct UnreadCountQuery {
     pub to: String,
-}
-
-pub async fn unread_count(
-    State(state): State<AppState>,
-    Query(q): Query<UnreadCountQuery>,
-) -> Result<Json<UnreadCountResponse>, (StatusCode, Json<serde_json::Value>)> {
-    let count = state
-        .store
-        .count_unread(q.to.clone())
-        .await
-        .map_err(internal_err)?;
-    Ok(Json(UnreadCountResponse { to: q.to, count }))
 }
 
 /// M6f: atomically claim all pending wakes for an agent.

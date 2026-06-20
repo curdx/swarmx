@@ -4,8 +4,9 @@
 //!     dispatcher. Stdin = newline-delimited JSON-RPC, stdout = same,
 //!     stderr = tracing. EOF on stdin shuts the process down gracefully.
 //!   - **`wake-check`**: invoked by Claude Code / Codex CLI as a Stop hook.
-//!     Reads `/api/message/unread_count` and emits a single JSON line on
-//!     stdout that tells the CLI whether to keep the agent's turn going.
+//!     POSTs `/api/message/consume_wakes` (atomically claims pending wakes;
+//!     superseded the old `unread_count` GET, M6f) and emits a single JSON line
+//!     on stdout that tells the CLI whether to keep the agent's turn going.
 //!     Always exit 0; see `wake_check.rs` for the wire protocol.
 //!
 //! Identity (default mode):
