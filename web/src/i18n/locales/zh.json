@@ -144,7 +144,7 @@
   },
   "welcome": {
     "eyebrow": "多 agent 协作工作台",
-    "title": "让 Claude / Codex 在你的项目里协同工作",
+    "title": "让 Claude、Codex、OpenCode、Reasonix 在你的项目里组队协作",
     "subtitle": "把你已登录的 AI CLI 组成一支团队——你下达需求，它们自动分工、相互协作、完成交付。",
     "panelTitle": "首次进入通常这样开始",
     "primary": "新建工作空间",
@@ -167,8 +167,8 @@
         "body": "每个 agent 都在同一个工作空间里，可相互 @、互相提问"
       },
       "spell": {
-        "title": "声明式编排",
-        "body": "声明「谁负责什么、谁依赖谁」，团队照这张图自动协作"
+        "title": "队长动态调度",
+        "body": "队长边做边拆：按任务实时派生需要的成员、自动协调依赖，不用你预先画流程图"
       },
       "auto": {
         "title": "自然语言派发任务",
