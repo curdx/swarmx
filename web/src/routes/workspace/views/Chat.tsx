@@ -774,24 +774,19 @@ export default function ChatView() {
           resp.agents.find((a) => a.role === "orchestrator") ?? resp.agents[0];
         if (orch) {
           // Persist the user's message to the freshly-spawned orchestrator so it
-          // shows in chat AND lands in its mailbox; then nudge it to read now
-          // (sendMessage only persists, doesn't wake).
+          // shows in chat AND lands in its mailbox. The server's POST /api/message
+          // handler auto-wakes the recipient when an EXTERNAL sender (user/system)
+          // messages a LIVE agent (W0-2) — the orchestrator was just spawned by the
+          // spell above, so it's registered and gets woken by this send alone.
+          // We therefore DO NOT also call api.wakeAgent here: that produced a
+          // double-kick (auto-wake + explicit wake ~20ms apart → two identical
+          // "操作员唤醒" notes in the captain's mailbox, the exact regression W0-2
+          // removed from MessagesPanel's live-send path). One source of wake only.
           await api.sendMessage({
             from: "user",
             to: orch.agent_id,
             kind: "note",
             body,
-          });
-          // Surface a failed nudge — the message is persisted, but if the wake
-          // doesn't land the captain may never come read it ("我跟 AI 说了话它
-          // 干坐着"). Don't let that fail look identical to success.
-          api.wakeAgent(orch.agent_id).catch((e) => {
-            toast.error(
-              t("agent.wakeFailed", {
-                msg: (e as Error)?.message ?? "",
-                defaultValue: "唤醒失败：{{msg}}",
-              }),
-            );
           });
         }
         refreshAgents();
