@@ -71,7 +71,6 @@ pub fn router() -> Router<AppState> {
         )
         .route("/api/debug/log", post(super::swarm::web_debug_log))
         .route("/api/message/read", post(super::swarm::mark_messages_read))
-        .route("/api/message/unread_count", get(super::swarm::unread_count))
         .route(
             "/api/message/consume_wakes",
             post(super::swarm::consume_wakes),

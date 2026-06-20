@@ -32,7 +32,6 @@ import type {
   FileListResp,
   FileReadResp,
   TasksResponse,
-  UnreadCountResponse,
   UsagePricingResponse,
   UsagePricingRule,
   UsageSummary,
@@ -298,8 +297,6 @@ export const api = {
     requestEndpoint<MessageRecord>(apiRoutes.messages.send(), req),
   markMessagesRead: (to: string, ids: number[]) =>
     requestEndpoint<MarkReadResponse>(apiRoutes.messages.markRead(), { to, ids }),
-  unreadCount: (to: string) =>
-    requestEndpoint<UnreadCountResponse>(apiRoutes.messages.unreadCount(to)),
   listBlackboard: () =>
     requestEndpoint<BlackboardEntry[]>(apiRoutes.blackboard.list()),
   readBlackboard: (path: string) =>

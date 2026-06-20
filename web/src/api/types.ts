@@ -267,11 +267,6 @@ export interface MarkReadResponse {
   at: number;
 }
 
-export interface UnreadCountResponse {
-  to: string;
-  count: number;
-}
-
 export interface BlackboardHistoryEntry {
   id: number;
   agent_id: string | null;
