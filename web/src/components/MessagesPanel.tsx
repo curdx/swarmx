@@ -492,10 +492,27 @@ export function MessagesPanel({
   // workspaceAgentIds 限定当前房间：message 命中 from 或 to 在集合内才显示。
   // user/system 不在 agent 集合里，但与他们配对的另一头一定是 agent_id，所以
   // 单条规则就够，不用为 user/system 开特例。
-  const wsSet = useMemo(
-    () => (workspaceAgentIds ? new Set(workspaceAgentIds) : null),
-    [workspaceAgentIds],
-  );
+  // VANISH GUARD: an EMPTY (but non-null) agent set would make `passesScope`
+  // reject every message — the whole chat blanks ("已发送的消息和回复突然消失").
+  // That only happens transiently: a refetch race, reconnect, or any upstream
+  // that briefly recomputes `workspaceAgentIds` to `[]` while the conversation
+  // is still on screen. An empty roster with a non-empty chat is never a real
+  // "hide everything" — the message authors ARE this room's agents. So treat an
+  // empty set like `null` (no agent-set scoping); the hard thread gate below
+  // still isolates directions, and cross-workspace live messages still can't
+  // leak (their thread_id ≠ activeThreadId). Logged so we catch it if it fires.
+  const wsSet = useMemo(() => {
+    if (!workspaceAgentIds || workspaceAgentIds.length === 0) {
+      if (workspaceAgentIds && itemsRef.current.length > 0) {
+        dlog("scope.emptyAgentSet", {
+          itemCount: itemsRef.current.length,
+          threadId: activeThreadId ?? null,
+        });
+      }
+      return null;
+    }
+    return new Set(workspaceAgentIds);
+  }, [workspaceAgentIds, activeThreadId]);
   // Room/thread scope gate, WITHOUT the text filter. A message passing this is
   // structurally part of THIS chat (right room + direction, not internal noise).
   // Extracted so jump-to-parent / jump-to-unread can tell "hidden by the text
