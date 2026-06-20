@@ -334,9 +334,17 @@ export function MessagesPanel({
       const next = preserved.length
         ? [...rowsAsc, ...preserved].sort((a, b) => a.id - b.id)
         : rowsAsc;
-      // Truly-dropped = was local, not in the merged result. With the merge this
-      // should always be []; a non-empty value here is a real regression signal.
-      const dropped = prev.filter((m) => !next.some((n) => n.id === m.id)).map((m) => m.id);
+      // Anything local that isn't in the merged result was dropped. Most drops
+      // are EXPECTED and correct: on a direction switch the previous thread's
+      // messages (and any cross-thread message the global live-feed transiently
+      // appended) leave this view. The only drop that signals a real bug is one
+      // whose thread MATCHES the active direction — that's a same-thread message
+      // vanishing, the exact "回复消失" symptom. So we log both: `droppedIds` for
+      // visibility, `lostSameThread` as the actual regression signal (want []).
+      const dropped = prev.filter((m) => !next.some((n) => n.id === m.id));
+      const lostSameThread = dropped
+        .filter((m) => (m.thread_id ?? null) === (activeThreadId ?? null))
+        .map((m) => m.id);
       dlog("refresh.merge", {
         reason,
         threadId: activeThreadId ?? null,
@@ -344,7 +352,8 @@ export function MessagesPanel({
         serverCount: rowsAsc.length,
         nextCount: next.length,
         preservedIds: preserved.map((m) => m.id),
-        droppedIds: dropped,
+        droppedIds: dropped.map((m) => m.id),
+        lostSameThread,
         addedCount: next.filter((m) => !prevIds.has(m.id)).length,
       });
       setItems(next);
