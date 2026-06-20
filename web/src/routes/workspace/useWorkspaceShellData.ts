@@ -30,6 +30,7 @@ import type {
 import { useSwarmFeed } from "../../hooks/useSwarmFeed";
 import { accentToCssVar, splitWorkspacePath } from "../../lib/workspace";
 import { agentInThread, mainThreadOf } from "../../lib/thread";
+import { dlog } from "../../lib/debugLog";
 import type { ReasoningSummary } from "../../components/MessagesPanel";
 import type { WorkspaceSummary } from "./types";
 
@@ -299,6 +300,13 @@ export function useWorkspaceShellData(
             meta: ev.meta ?? null,
             thought_trace: ev.thought_trace ?? null,
           };
+          dlog("ws.message", {
+            id: ev.id,
+            from: ev.from_agent,
+            to: ev.to_agent,
+            kind: ev.kind,
+            thread: ev.thread_id ?? null,
+          });
           setLiveMessage(rec);
           idToFromRef.current.set(ev.id, ev.from_agent);
           // F4: this agent's reply landed — the persisted thought_trace on the

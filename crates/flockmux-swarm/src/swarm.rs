@@ -449,7 +449,11 @@ impl Swarm {
         }
 
         // Broadcast first so subscribers see it even if delivery fails.
-        let _ = self.events_tx.send(SwarmEvent::Message {
+        // `receiver_count()` BEFORE the send tells us how many /ws/swarm clients
+        // are attached at broadcast time — `0` here is the smoking gun for "the
+        // message was stored but no live UI was subscribed to receive it".
+        let subscribers = self.events_tx.receiver_count();
+        let broadcast = self.events_tx.send(SwarmEvent::Message {
             id: record.id,
             from_agent: record.from_agent.clone(),
             to_agent: record.to_agent.clone(),
@@ -461,6 +465,22 @@ impl Swarm {
             meta: record.meta.clone(),
             thought_trace: record.thought_trace.as_ref().map(trace_to_protocol),
         });
+        // One line per send (user→agent, agent→user, agent→agent all funnel
+        // here), at INFO so it survives the default filter. This is the backend
+        // anchor of the cross-boundary timeline in `~/.flockmux/logs`.
+        tracing::info!(
+            target: "flockmux::msg",
+            id = record.id,
+            from = %record.from_agent,
+            to = %record.to_agent,
+            kind = %record.kind,
+            thread = ?record.thread_id,
+            body_len = record.body.len(),
+            in_reply_to = ?record.in_reply_to,
+            subscribers,
+            broadcast_ok = broadcast.is_ok(),
+            "send_message stored+broadcast",
+        );
 
         // Try the in-memory inbox; if absent or full, the message stays in
         // SQLite and a future inbox will replay via `list_messages`.

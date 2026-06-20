@@ -69,6 +69,7 @@ pub fn router() -> Router<AppState> {
             "/api/message",
             get(super::swarm::list_messages).post(super::swarm::send_message),
         )
+        .route("/api/debug/log", post(super::swarm::web_debug_log))
         .route("/api/message/read", post(super::swarm::mark_messages_read))
         .route("/api/message/unread_count", get(super::swarm::unread_count))
         .route(

@@ -49,7 +49,7 @@ echo "▶ starting backend on :$BPORT (isolated data: $DATA)…"
 nohup env FLOCKMUX_PORT="$BPORT" FLOCKMUX_SERVER_URL="http://127.0.0.1:$BPORT" \
   FLOCKMUX_DB_PATH="$DATA/d.db" FLOCKMUX_WORKSPACES_DIR="$DATA/ws" \
   FLOCKMUX_BLACKBOARD_DIR="$DATA/bb" FLOCKMUX_RECORDINGS_DIR="$DATA/rec" \
-  RUST_LOG="warn,flockmux_server=info" \
+  RUST_LOG="${RUST_LOG:-warn,flockmux_server=info}" \
   "$ROOT/target/debug/flockmux-server" > "$DATA/backend.log" 2>&1 &
 echo $! > "$PIDFILE"
 

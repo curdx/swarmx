@@ -36,6 +36,10 @@ pub async fn ws_swarm(ws: WebSocketUpgrade, State(state): State<AppState>) -> im
 async fn handle(socket: WebSocket, state: AppState) {
     let (mut sender, mut receiver) = socket.split();
     let mut rx = state.swarm.subscribe();
+    // Subscriber attach/detach is half of the "was anyone listening when the
+    // message broadcast?" question (the other half is `subscribers=` on the
+    // flockmux::msg send line). INFO so it shares the default-filter timeline.
+    tracing::info!(target: "flockmux::ws", "ws/swarm subscriber attached");
     let mut heartbeat = tokio::time::interval(HEARTBEAT);
     // First tick fires immediately; skip it so we don't ping the instant a
     // client connects, and never let a stall queue up a burst of pings.
@@ -47,6 +51,19 @@ async fn handle(socket: WebSocket, state: AppState) {
             // Broadcast event → forward to the client.
             recv = rx.recv() => match recv {
                 Ok(ev) => {
+                    // Log the moment a Message event is actually forwarded to
+                    // THIS client — pairs with the frontend's `ws.message`
+                    // breadcrumb to prove a stored+broadcast message reached the
+                    // socket (vs. lagged/dropped before render).
+                    if let flockmux_swarm::SwarmEvent::Message { id, from_agent, to_agent, .. } = &ev {
+                        tracing::info!(
+                            target: "flockmux::ws",
+                            id = *id,
+                            from = %from_agent,
+                            to = %to_agent,
+                            "ws/swarm forwarding Message to client",
+                        );
+                    }
                     let payload = match serde_json::to_string(&ev) {
                         Ok(s) => s,
                         Err(e) => {

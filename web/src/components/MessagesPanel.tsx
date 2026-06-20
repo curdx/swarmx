@@ -90,6 +90,7 @@ import { useRoleLookup } from "../lib/useRoleLookup";
 import { useComposerDraft } from "../lib/useComposerDraft";
 import { useScrollMarkRead } from "../lib/useScrollMarkRead";
 import { usePendingResponders } from "../lib/usePendingResponders";
+import { dlog } from "../lib/debugLog";
 import { useInterruptControls } from "../lib/useInterruptControls";
 import { useVirtualizer } from "@tanstack/react-virtual";
 
@@ -282,27 +283,80 @@ export function MessagesPanel({
   // render with the right avatar colour even after agents die.
   const roleLookup = useRoleLookup(activeMembers);
 
+  // Mirror of `items` for read-only diagnostics OUTSIDE a setState updater.
+  // dlog() must never live inside a setItems((prev) => …) callback: React
+  // StrictMode double-invokes updaters in dev to check purity, which would
+  // double-fire every breadcrumb and muddy the timeline. We compute the
+  // append/dedup decision against this ref, then keep the updater pure.
+  const itemsRef = useRef<MessageRecord[]>(items);
+  useEffect(() => {
+    itemsRef.current = items;
+  }, [items]);
+
   // ── data loaders ──────────────────────────────────────────────────────
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (reason = "mount/thread") => {
     try {
       // P1-04: scope history to the active direction so a quiet thread's older
       // messages aren't pushed out of the global 200-row window — and re-pull
       // when the direction changes (activeThreadId in deps) instead of showing a
       // stale/empty room after a switch.
+      dlog("refresh.start", { reason, threadId: activeThreadId ?? null });
       const rows = await api.listMessages({
         limit: 200,
         thread_id: activeThreadId ?? undefined,
       });
       // server orders DESC by id; reverse to chat-style chronological.
-      setItems(rows.slice().reverse());
+      const rowsAsc = rows.slice().reverse();
+      const prev = itemsRef.current;
+      const prevIds = new Set(prev.map((m) => m.id));
+      const serverIds = new Set(rowsAsc.map((m) => m.id));
+      const maxServerId = rowsAsc.reduce((mx, m) => Math.max(mx, m.id), 0);
+      // RACE FIX (was: wholesale `setItems(rowsAsc)`): a plain replace clobbers
+      // any message that arrived on the WS *after* this fetch's server snapshot
+      // but *before* its response landed — the captain's reply or our own echo
+      // would silently vanish ("回复消失") until the next refresh. The list also
+      // wholesale-refreshes on mount, direction switch, reconnect, and the
+      // manual button, so the overlap window recurs constantly in real use.
+      //
+      // Instead, MERGE: take the server rows as the source of truth, then
+      // preserve any local message the server result couldn't have seen — same
+      // direction, not already in the result, and newer than the newest server
+      // row (the `id > maxServerId` guard means we never resurrect a stale or
+      // cross-thread row, so a genuine direction switch still reads as a clean
+      // replace). Persisted messages always come back from the server; this only
+      // rescues the in-flight-race victims.
+      const preserved = prev.filter(
+        (m) =>
+          !serverIds.has(m.id) &&
+          (m.thread_id ?? null) === (activeThreadId ?? null) &&
+          m.id > maxServerId,
+      );
+      const next = preserved.length
+        ? [...rowsAsc, ...preserved].sort((a, b) => a.id - b.id)
+        : rowsAsc;
+      // Truly-dropped = was local, not in the merged result. With the merge this
+      // should always be []; a non-empty value here is a real regression signal.
+      const dropped = prev.filter((m) => !next.some((n) => n.id === m.id)).map((m) => m.id);
+      dlog("refresh.merge", {
+        reason,
+        threadId: activeThreadId ?? null,
+        prevCount: prev.length,
+        serverCount: rowsAsc.length,
+        nextCount: next.length,
+        preservedIds: preserved.map((m) => m.id),
+        droppedIds: dropped,
+        addedCount: next.filter((m) => !prevIds.has(m.id)).length,
+      });
+      setItems(next);
       setError(null);
     } catch (e) {
+      dlog("refresh.error", { reason, error: (e as Error).message });
       setError((e as Error).message);
     }
   }, [activeThreadId]);
 
   useEffect(() => {
-    refresh();
+    refresh("mount/thread");
   }, [refresh]);
 
   // A3: the swarm feed is broadcast-only with no resume (see useSwarmFeed), so
@@ -315,7 +369,8 @@ export function MessagesPanel({
   const prevFeedStatusRef = useRef(feedStatus);
   useEffect(() => {
     if (prevFeedStatusRef.current !== "open" && feedStatus === "open") {
-      refresh();
+      dlog("feed.reconnect", { from: prevFeedStatusRef.current, to: feedStatus });
+      refresh("ws-reconnect");
     }
     prevFeedStatusRef.current = feedStatus;
   }, [feedStatus, refresh]);
@@ -399,6 +454,14 @@ export function MessagesPanel({
 
   useEffect(() => {
     if (!liveMessage) return;
+    const dup = itemsRef.current.some((m) => m.id === liveMessage.id);
+    dlog(dup ? "live.dedup" : "live.append", {
+      id: liveMessage.id,
+      from: liveMessage.from_agent,
+      to: liveMessage.to_agent,
+      thread: liveMessage.thread_id ?? null,
+      listCount: dup ? itemsRef.current.length : itemsRef.current.length + 1,
+    });
     setItems((prev) =>
       prev.some((m) => m.id === liveMessage.id) ? prev : [...prev, liveMessage],
     );
@@ -735,6 +798,12 @@ export function MessagesPanel({
       return;
     }
     setSending(true);
+    dlog("send.start", {
+      to: recipient.agent_id,
+      bodyLen: trimmed.length,
+      inReplyTo: inReplyTo ?? null,
+      recipientBusy,
+    });
     try {
       const rec = await api.sendMessage({
         from: USER_SENDER,
@@ -743,6 +812,14 @@ export function MessagesPanel({
         body: trimmed,
         in_reply_to: inReplyTo ?? undefined,
       });
+      dlog("send.ok", { id: rec.id, to: rec.to_agent, thread: rec.thread_id ?? null });
+      {
+        const dup = itemsRef.current.some((m) => m.id === rec.id);
+        dlog(dup ? "send.optimistic.dedup" : "send.optimistic.append", {
+          id: rec.id,
+          listCount: dup ? itemsRef.current.length : itemsRef.current.length + 1,
+        });
+      }
       setItems((prev) =>
         prev.some((m) => m.id === rec.id) ? prev : [...prev, rec],
       );
@@ -761,6 +838,7 @@ export function MessagesPanel({
       setOptimizeNote(null);
       composerRef.current?.focus();
     } catch (e) {
+      dlog("send.error", { to: recipient.agent_id, error: (e as Error).message });
       setError((e as Error).message);
     } finally {
       setSending(false);
@@ -1245,7 +1323,7 @@ export function MessagesPanel({
         <Button
           variant="ghost"
           size="icon"
-          onClick={refresh}
+          onClick={() => refresh("manual")}
           title={t("messages.refresh")}
           className="size-8 text-foreground-tertiary"
         >
