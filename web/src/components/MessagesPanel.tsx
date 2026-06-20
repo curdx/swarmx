@@ -59,7 +59,12 @@ import type {
   ThoughtTraceStep,
 } from "../api/types";
 import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
+// 聊天输入框用业界标准的 react-textarea-autosize 自动撑高，而不是手搓
+// scrollHeight：它内部用 ResizeObserver 同时处理「值变化 / 宽度变化 / 挂载」，
+// 不用在每个改 body 的地方手动调高度（漏调一处 = 高度卡住不回弹，就是之前
+// 输入框忽高忽低的根因）。shadcn `Textarea` 自带的 `field-sizing-content` 在
+// 老 WKWebView（装包后的旧 macOS 用户）不支持，所以 composer 不能只靠它。
+import TextareaAutosize from "react-textarea-autosize";
 import {
   Popover,
   PopoverContent,
@@ -1010,7 +1015,6 @@ export function MessagesPanel({
       if (res.changed && res.optimized && res.optimized !== body) {
         setPreOptimize(body);
         setBody(res.optimized);
-        requestAnimationFrame(() => autoGrow(composerRef.current));
       } else {
         // Already clear — tell the user nothing changed (don't fake an edit).
         setOptimizeNote(t("messages.optimizeNoChange"));
@@ -1035,7 +1039,6 @@ export function MessagesPanel({
     setBody(preOptimize);
     setPreOptimize(null);
     setOptimizeNote(null);
-    requestAnimationFrame(() => autoGrow(composerRef.current));
     composerRef.current?.focus();
   };
 
@@ -1044,7 +1047,6 @@ export function MessagesPanel({
       if (!prev) return path;
       return prev + (/\s$/.test(prev) ? "" : "\n") + path;
     });
-    requestAnimationFrame(() => autoGrow(composerRef.current));
   };
 
   // Upload one image and RETURN its saved path; throws on failure. The caller
@@ -1153,7 +1155,6 @@ export function MessagesPanel({
         .replace(/\n{3,}/g, "\n\n")
         .trim();
     });
-    requestAnimationFrame(() => autoGrow(composerRef.current));
   };
 
   const startReply = (m: MessageRecord) => {
@@ -1265,13 +1266,6 @@ export function MessagesPanel({
     jumpToMessage(firstUnread.id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jumpUnreadTick]);
-
-  // Auto-grow composer (max ~5 lines).
-  const autoGrow = (el: HTMLTextAreaElement | null) => {
-    if (!el) return;
-    el.style.height = "auto";
-    el.style.height = `${Math.min(el.scrollHeight, 140)}px`;
-  };
 
   // P0-9: ⌘/Ctrl+Enter while the captain is mid-reply = interrupt it, then send
   // this message as a course-correction (distinct from a plain Enter, which
@@ -1511,7 +1505,6 @@ export function MessagesPanel({
                 onPickStarter={(text) => {
                   setBody(text);
                   requestAnimationFrame(() => {
-                    autoGrow(composerRef.current);
                     composerRef.current?.focus();
                   });
                 }}
@@ -1950,14 +1943,13 @@ export function MessagesPanel({
           <div className="relative min-w-0 flex-1">
             {/* default recipient = orchestrator/scout; an inline `@<role>`
                 routes to a specific worker (explicitRecipient wins in send()). */}
-            <Textarea
+            <TextareaAutosize
               ref={composerRef}
               name="composer"
               maxLength={16000}
               value={body}
               onChange={(e) => {
                 setBody(e.target.value);
-                autoGrow(e.target);
                 // User is editing — cancel any in-flight 「优化」. Its result was
                 // computed against the PRE-edit text (a stale closure of `body`);
                 // letting it land would `setBody(res.optimized)` and clobber what
@@ -1975,8 +1967,12 @@ export function MessagesPanel({
               aria-label={t("messages.composerLabel")}
               placeholder={composerPlaceholder}
               disabled={!canCompose}
-              rows={1}
-              className="min-w-0 flex-1 resize-none rounded-2xl px-3 py-2 pr-[7.25rem] pb-12 font-body text-[13px] leading-snug"
+              minRows={1}
+              maxRows={5}
+              // 复刻 shadcn Textarea 的视觉基类（边框/聚焦环/placeholder/禁用态），
+              // 因为换成 TextareaAutosize 后不再继承它；只去掉它的 field-sizing /
+              // min-h（高度交给 autosize 管），保留 composer 自己的 rounded/padding。
+              className="flex min-w-0 flex-1 resize-none rounded-2xl border border-input bg-transparent px-3 py-2 pr-[7.25rem] pb-12 font-body text-[13px] leading-snug outline-none transition-colors placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:bg-input/50 disabled:opacity-50 dark:bg-input/30 dark:disabled:bg-input/80"
             />
             <div className="pointer-events-none absolute inset-x-2 bottom-2 flex items-center justify-end gap-1.5">
               {/* 「优化」 — 次级 ghost action，保留在输入框里但弱于发送。 */}
