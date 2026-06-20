@@ -134,6 +134,50 @@ pub async fn send_message(
     }))
 }
 
+/// One structured event from the web UI's debug logger (`web/src/lib/debugLog.ts`).
+/// We don't model the payload — it's free-form diagnostic context per `ev`.
+#[derive(Debug, Deserialize)]
+pub struct WebDebugEvent {
+    /// Client-side wall clock (ms) when the event happened.
+    pub ts: Option<f64>,
+    /// Per-page monotonic counter so ordering survives same-ms events.
+    pub seq: Option<u64>,
+    /// Short event tag, e.g. "send.start", "refresh.replace", "live.append".
+    pub ev: String,
+    #[serde(default)]
+    pub data: serde_json::Value,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct WebDebugBatch {
+    pub events: Vec<WebDebugEvent>,
+}
+
+/// `POST /api/debug/log` — sink for the web UI's chat-lifecycle breadcrumbs.
+///
+/// The whole point: front-end events land in the SAME `tracing` stream (and so
+/// the same `~/.flockmux/logs/flockmux.log` file) as the backend's, interleaved
+/// in arrival order. That gives one timeline for "user sent → reached backend →
+/// stored → broadcast → echoed back → rendered", so a dropped message shows
+/// exactly which hop lost it. Logged on the `flockmux::web` target at INFO so it
+/// always survives the default `info,flockmux=debug` filter.
+pub async fn web_debug_log(
+    State(_state): State<AppState>,
+    Json(batch): Json<WebDebugBatch>,
+) -> StatusCode {
+    for e in batch.events {
+        tracing::info!(
+            target: "flockmux::web",
+            seq = e.seq.unwrap_or(0),
+            client_ts = e.ts.unwrap_or(0.0),
+            ev = %e.ev,
+            data = %e.data,
+            "WEB",
+        );
+    }
+    StatusCode::NO_CONTENT
+}
+
 fn storage_trace_to_rest(trace: &StoreThoughtTraceRecord) -> ThoughtTrace {
     let summary =
         serde_json::from_str::<Vec<flockmux_storage::ThoughtTraceStep>>(&trace.summary_json)

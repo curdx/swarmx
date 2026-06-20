@@ -6,6 +6,7 @@ import {
   type PendingResponder,
   type VanishedTurn,
 } from "./pendingResponders";
+import { dlog } from "./debugLog";
 
 /**
  * The pending-responder / vanished-turn state machine, lifted out of
@@ -76,6 +77,12 @@ export function usePendingResponders(input: {
       const key = `${v.agentId}:${v.trigger.id}`;
       if (loggedVanishedRef.current.has(key)) continue;
       loggedVanishedRef.current.add(key);
+      dlog("turn.vanished", {
+        agentId: v.agentId,
+        triggerId: v.trigger.id,
+        state: agentLiveStateById?.[v.agentId]?.state ?? null,
+        reason: v.reason ?? null,
+      });
       console.warn(
         `[flockmux] 队长本轮中断:agent=${v.agentId} 收到任务#${v.trigger.id} 后进入 ` +
           `${agentLiveStateById?.[v.agentId]?.state ?? "?"} 终态,未产出回复` +
