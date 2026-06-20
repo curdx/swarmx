@@ -2914,71 +2914,26 @@ pub struct OptimizePromptResponse {
     pub changed: bool,
 }
 
-/// Per-stream cap (bytes) for an optimize/print child's stdout & stderr.
-/// `wait_with_output()` buffers to EOF unbounded — a runaway or malicious CLI
-/// emitting gigabytes would OOM the server. A correct rewrite is a few KB; 1 MiB
-/// is generous headroom while bounding worst-case memory to ~2 MiB (out+err).
-const OPTIMIZE_OUTPUT_CAP: u64 = 1024 * 1024;
+// (Removed `wait_with_capped_output` + `OPTIMIZE_OUTPUT_CAP`: both the optimize
+// and blackboard-compact paths now drive a real interactive claude over PTY via
+// `crate::pty_query` for interactive-subscription billing, so there is no longer
+// a `claude -p` child whose pipes need bounded draining.)
 
-/// Drain a child's piped stdout & stderr concurrently with `wait()`, each read
-/// capped at `OPTIMIZE_OUTPUT_CAP` bytes. Replaces `child.wait_with_output()`,
-/// which has no size limit. Both pipes must be drained concurrently with the
-/// wait or a child filling one pipe past its OS buffer would deadlock; the two
-/// `.take(cap)` readers + the wait run on one task each via `tokio::join!`.
-/// Output past the cap is silently dropped (the child keeps running until exit;
-/// `kill_on_drop` / the surrounding timeout still bound its lifetime).
-async fn wait_with_capped_output(
-    mut child: tokio::process::Child,
-) -> std::io::Result<std::process::Output> {
-    use tokio::io::AsyncReadExt;
-
-    let mut stdout_pipe = child.stdout.take();
-    let mut stderr_pipe = child.stderr.take();
-
-    let read_capped = |pipe: Option<tokio::process::ChildStdout>| async move {
-        let mut buf = Vec::new();
-        if let Some(p) = pipe {
-            // `.take(cap)` stops at the limit even for an endless stream.
-            let _ = p.take(OPTIMIZE_OUTPUT_CAP).read_to_end(&mut buf).await;
-        }
-        buf
-    };
-    let read_capped_err = |pipe: Option<tokio::process::ChildStderr>| async move {
-        let mut buf = Vec::new();
-        if let Some(p) = pipe {
-            let _ = p.take(OPTIMIZE_OUTPUT_CAP).read_to_end(&mut buf).await;
-        }
-        buf
-    };
-
-    let (status, stdout, stderr) = tokio::join!(
-        child.wait(),
-        read_capped(stdout_pipe.take()),
-        read_capped_err(stderr_pipe.take()),
-    );
-
-    Ok(std::process::Output {
-        status: status?,
-        stdout,
-        stderr,
-    })
-}
-
-/// POST /api/prompt/optimize — one-shot, headless prompt rewrite for the chat
-/// composer's 「优化」 button.
+/// POST /api/prompt/optimize — one-shot prompt rewrite for the chat composer's
+/// 「优化」 button.
 ///
-/// Historically this endpoint ran `claude -p` (print mode). Claude's current
-/// billing docs treat print/SDK usage as a separate Agent SDK credit surface,
-/// so flockmux disables this by default to preserve the interactive
-/// subscription-PTY promise. Users can opt in with
-/// `FLOCKMUX_ALLOW_CLAUDE_PRINT=1`.
+/// Billing: this used to shell out to `claude -p` (print mode), which bills to
+/// the Agent-SDK credit pool even under an OAuth subscription (claude-code
+/// #43333/#37686; codified 2026-06-15) — so it had to sit behind an opt-in gate.
+/// It now drives a REAL interactive claude over a PTY ([`crate::pty_query`]),
+/// exactly like every other flockmux agent, so the rewrite bills to the user's
+/// *interactive* subscription. No opt-in needed; the gate is gone.
 ///
 /// SAFETY: this rewrites a DRAFT the user has not sent yet, so claude must never
-/// *act* on it. We therefore (1) do NOT pass `--dangerously-skip-permissions`
-/// (in headless mode un-granted tool calls are denied, not executed), and
-/// (2) run in a throwaway temp cwd so there is nothing of the user's project to
-/// touch. A 45s timeout with kill_on_drop bounds the worst case to a clean
-/// "timeout" error — never a destructive action.
+/// *act* on it. The throwaway claude spawns into a temp workspace (nothing of the
+/// user's project to touch) and is killed after the single turn; the meta-prompt
+/// asks only for a text rewrite, no tool use. A bounded timeout caps the worst
+/// case to a clean "timeout" → fall back to the original draft.
 pub async fn optimize_prompt(
     State(state): State<AppState>,
     Json(req): Json<OptimizePromptRequest>,
@@ -2995,19 +2950,8 @@ pub async fn optimize_prompt(
         .into_response();
     }
 
-    if !crate::billing::claude_print_opt_in_enabled() {
-        return (
-            StatusCode::PAYMENT_REQUIRED,
-            Json(json!({
-                "error": crate::billing::claude_print_block_message("提示词优化")
-            })),
-        )
-            .into_response();
-    }
-
-    // The rewrite is CLI-agnostic; always drive it with claude's print mode.
-    let (binary, plugin_id) = match state.plugins.get("claude") {
-        Some(p) => (p.binary.clone(), p.id.clone()),
+    let plugin = match state.plugins.get("claude") {
+        Some(p) => p.clone(),
         None => {
             return (
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -3019,98 +2963,51 @@ pub async fn optimize_prompt(
 
     // Small/fast tier so the rewrite stays snappy and cheap, decoupled from the
     // (heavier) orchestrator model.
-    let model = { state.models.read().await.resolve(&plugin_id, Some("haiku")) };
+    let model = { state.models.read().await.resolve(&plugin.id, Some("haiku")) };
 
-    let prompt = format!("{OPTIMIZE_META_PROMPT}\n\n<用户原始输入>\n{input}\n</用户原始输入>");
+    let task = format!("{OPTIMIZE_META_PROMPT}\n\n<用户原始输入>\n{input}\n</用户原始输入>");
 
-    let mut cmd = tokio::process::Command::new(&binary);
-    cmd.arg("-p").arg(&prompt);
-    // P1-40: ask for structured output so we can read `is_error` — an exit-0
-    // refusal/error from claude must NOT be injected into the composer as if it
-    // were the optimized prompt. (Older CLIs without this flag fall back to
-    // raw-stdout parsing below.)
-    cmd.arg("--output-format").arg("json");
-    if let Some(m) = &model {
-        cmd.arg("--model").arg(m);
-    }
-    cmd.current_dir(std::env::temp_dir())
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .kill_on_drop(true);
+    // Drive a throwaway interactive claude over PTY (subscription billing). A
+    // cold TUI start + one short turn fits comfortably in 60s.
+    let outcome = crate::pty_query::claude_one_shot(
+        &plugin,
+        &state.shim_path,
+        &state.mcp_bin,
+        &state.server_url,
+        model,
+        &task,
+        std::time::Duration::from_secs(60),
+    )
+    .await;
 
-    let child = match cmd.spawn() {
-        Ok(c) => c,
+    let text = match outcome {
+        Ok(t) => t,
+        // Recoverable: no usable result → hand back the original draft unchanged
+        // rather than an error toast (the button is best-effort).
+        Err(crate::pty_query::OneShotError::Timeout) => {
+            return Json(OptimizePromptResponse {
+                optimized: original,
+                changed: false,
+            })
+            .into_response();
+        }
+        // Actionable: surface login / startup failures honestly.
+        Err(crate::pty_query::OneShotError::Auth) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({ "error": "优化失败：claude 未登录或未授权，请先在终端 `claude` 登录" })),
+            )
+                .into_response();
+        }
         Err(e) => {
             return (
                 StatusCode::BAD_GATEWAY,
-                Json(json!({ "error": format!("无法启动 claude：{e}（请确认已安装并登录）") })),
+                Json(json!({ "error": format!("优化失败：{e}") })),
             )
                 .into_response();
         }
     };
 
-    let out =
-        match tokio::time::timeout(std::time::Duration::from_secs(45), wait_with_capped_output(child))
-            .await
-        {
-            Ok(Ok(o)) => o,
-            Ok(Err(e)) => {
-                return (
-                    StatusCode::BAD_GATEWAY,
-                    Json(json!({ "error": format!("claude 执行失败：{e}") })),
-                )
-                    .into_response();
-            }
-            Err(_) => {
-                return (
-                    StatusCode::GATEWAY_TIMEOUT,
-                    Json(json!({ "error": "优化超时（claude 无响应）" })),
-                )
-                    .into_response();
-            }
-        };
-
-    if !out.status.success() {
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        let detail = stderr
-            .lines()
-            .map(str::trim)
-            .filter(|l| !l.is_empty())
-            .last()
-            .unwrap_or("claude 返回非零状态");
-        return (
-            StatusCode::BAD_GATEWAY,
-            Json(json!({ "error": format!("优化失败：{detail}") })),
-        )
-            .into_response();
-    }
-
-    // P1-40: `--output-format json` yields `{"is_error":bool,"result":"…",…}`.
-    // Parse it so an exit-0 refusal/error becomes a real 502 instead of being
-    // injected as the "optimized" prompt. Fall back to raw stdout if the CLI is
-    // old and didn't honor the flag (then it's just plain text as before).
-    let raw_stdout = String::from_utf8_lossy(&out.stdout);
-    let text: String = match serde_json::from_str::<serde_json::Value>(raw_stdout.trim()) {
-        Ok(v) => {
-            if v.get("is_error").and_then(|b| b.as_bool()).unwrap_or(false) {
-                let detail = v
-                    .get("result")
-                    .and_then(|r| r.as_str())
-                    .unwrap_or("claude 报告了错误");
-                return (
-                    StatusCode::BAD_GATEWAY,
-                    Json(json!({ "error": format!("优化失败：{detail}") })),
-                )
-                    .into_response();
-            }
-            v.get("result")
-                .and_then(|r| r.as_str())
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| raw_stdout.to_string())
-        }
-        Err(_) => raw_stdout.to_string(),
-    };
     let cleaned = strip_code_fences(text.trim());
     if cleaned.is_empty() {
         // Never hand back an empty composer — fall back to the original.
@@ -3183,18 +3080,8 @@ pub async fn compact_blackboard(
         .into_response();
     }
 
-    if !crate::billing::claude_print_opt_in_enabled() {
-        return (
-            StatusCode::PAYMENT_REQUIRED,
-            Json(json!({
-                "error": crate::billing::claude_print_block_message("黑板压缩")
-            })),
-        )
-            .into_response();
-    }
-
-    let (binary, plugin_id) = match state.plugins.get("claude") {
-        Some(p) => (p.binary.clone(), p.id.clone()),
+    let plugin = match state.plugins.get("claude") {
+        Some(p) => p.clone(),
         None => {
             return (
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -3203,66 +3090,48 @@ pub async fn compact_blackboard(
                 .into_response();
         }
     };
-    let model = { state.models.read().await.resolve(&plugin_id, Some("haiku")) };
-    let prompt = format!("{COMPACT_META_PROMPT}\n\n<台账>\n{content}\n</台账>");
+    let model = { state.models.read().await.resolve(&plugin.id, Some("haiku")) };
+    let task = format!("{COMPACT_META_PROMPT}\n\n<台账>\n{content}\n</台账>");
 
-    let mut cmd = tokio::process::Command::new(&binary);
-    cmd.arg("-p").arg(&prompt);
-    if let Some(m) = &model {
-        cmd.arg("--model").arg(m);
-    }
-    cmd.current_dir(std::env::temp_dir())
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .kill_on_drop(true);
-
-    let child = match cmd.spawn() {
-        Ok(c) => c,
+    // Same migration as optimize_prompt: drive a real interactive claude over PTY
+    // (subscription billing) instead of `claude -p`, so no opt-in gate is needed.
+    // A ledger summary is bigger than a composer rewrite, hence a longer budget.
+    let outcome = crate::pty_query::claude_one_shot(
+        &plugin,
+        &state.shim_path,
+        &state.mcp_bin,
+        &state.server_url,
+        model,
+        &task,
+        std::time::Duration::from_secs(120),
+    )
+    .await;
+    let summary = match outcome {
+        Ok(t) => strip_code_fences(t.trim()).to_string(),
+        Err(crate::pty_query::OneShotError::Timeout) => {
+            // No usable summary → leave the ledger untouched (non-destructive).
+            return Json(json!({
+                "ok": true, "changed": false,
+                "before_tokens": before_tokens, "after_tokens": before_tokens,
+                "note": "no smaller summary produced"
+            }))
+            .into_response();
+        }
+        Err(crate::pty_query::OneShotError::Auth) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({ "error": "压缩失败：claude 未登录或未授权，请先在终端 `claude` 登录" })),
+            )
+                .into_response();
+        }
         Err(e) => {
             return (
                 StatusCode::BAD_GATEWAY,
-                Json(json!({ "error": format!("无法启动 claude：{e}（请确认已安装并登录）") })),
+                Json(json!({ "error": format!("压缩失败：{e}") })),
             )
                 .into_response();
         }
     };
-    let out =
-        match tokio::time::timeout(std::time::Duration::from_secs(90), child.wait_with_output())
-            .await
-        {
-            Ok(Ok(o)) => o,
-            Ok(Err(e)) => {
-                return (
-                    StatusCode::BAD_GATEWAY,
-                    Json(json!({ "error": format!("claude 执行失败：{e}") })),
-                )
-                    .into_response();
-            }
-            Err(_) => {
-                return (
-                    StatusCode::GATEWAY_TIMEOUT,
-                    Json(json!({ "error": "压缩超时（claude 无响应）" })),
-                )
-                    .into_response();
-            }
-        };
-    if !out.status.success() {
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        let detail = stderr
-            .lines()
-            .map(str::trim)
-            .filter(|l| !l.is_empty())
-            .last()
-            .unwrap_or("claude 返回非零状态");
-        return (
-            StatusCode::BAD_GATEWAY,
-            Json(json!({ "error": format!("压缩失败：{detail}") })),
-        )
-            .into_response();
-    }
-
-    let summary = strip_code_fences(String::from_utf8_lossy(&out.stdout).trim()).to_string();
     if summary.is_empty() || summary.chars().count() >= before_chars {
         // Don't replace with an empty / bigger result.
         return Json(json!({
