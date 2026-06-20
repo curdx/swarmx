@@ -391,7 +391,13 @@ impl Store {
         // the boot log. Lazy creation lets WAL get set by the first checkout
         // and persisted to the file before any sibling connection appears.
         let pool = Pool::builder()
-            .max_size(8)
+            // WAL allows many concurrent readers + one writer; SQLite
+            // connections are cheap (a few KB each). 8 was the global ceiling on
+            // DB concurrency — under a multi-agent swarm (each agent's transcript
+            // tailer + message writes + usage rows) it gets saturated and new
+            // checkouts block in `pool.get()`. 16 gives read headroom; writes
+            // still serialize on the single WAL writer regardless.
+            .max_size(16)
             .min_idle(Some(0))
             .connection_customizer(Box::new(Customizer))
             .build(manager)

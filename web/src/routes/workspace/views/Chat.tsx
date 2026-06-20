@@ -852,7 +852,15 @@ export default function ChatView() {
     setRecentMessages((prev) => {
       const have = new Set(prev.map((m) => m.id));
       const fresh = liveMessages.filter((m) => !have.has(m.id));
-      return fresh.length === 0 ? prev : [...prev, ...fresh];
+      if (fresh.length === 0) return prev;
+      // Bounded like the other live caches (MessagesPanel / SwarmPanel /
+      // useWorkspaceShellData all slice(-200)). This is a *derived* cache that
+      // only feeds statusDot's "last inbound/outbound per agent" — it never
+      // needs more than the recent tail. Without the cap it grew unbounded for
+      // the whole session, and statusDot scans it per-member per-render, so the
+      // member sidebar got O(members × session-length) and degraded over time.
+      const next = [...prev, ...fresh];
+      return next.length > 200 ? next.slice(-200) : next;
     });
   }, [liveMessages]);
   // worker 心跳 — orchestrator 让每个 worker 每完成一步覆写
