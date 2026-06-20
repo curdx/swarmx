@@ -156,6 +156,20 @@ fn patch_claude_trust_at(cfg: &Path, workspace: &Path) -> Result<()> {
     write_json_atomic(cfg, &root)
 }
 
+/// The `flockmux-swarm` MCP entry for one agent. Shared by the local-scope
+/// patch and the per-agent config so the two channels never drift.
+fn swarm_mcp_entry(agent_id: &str, mcp_bin: &Path, server_url: &str) -> Value {
+    json!({
+        "type": "stdio",
+        "command": mcp_bin.to_string_lossy(),
+        "args": ["--agent-id", agent_id],
+        "env": {
+            "FLOCKMUX_AGENT_ID": agent_id,
+            "FLOCKMUX_SERVER_URL": server_url,
+        }
+    })
+}
+
 /// Mark `flockmux-swarm` as a local-scope MCP server in
 /// `~/.claude.json projects.<workspace>.mcpServers`. We use *local* scope (per
 /// project, baked into `~/.claude.json`) rather than *project* scope
@@ -215,15 +229,7 @@ fn patch_claude_mcp_at(
         .as_object_mut()
         .context(".claude.json mcpServers is not an object")?;
 
-    let desired = json!({
-        "type": "stdio",
-        "command": mcp_bin.to_string_lossy(),
-        "args": ["--agent-id", agent_id],
-        "env": {
-            "FLOCKMUX_AGENT_ID": agent_id,
-            "FLOCKMUX_SERVER_URL": server_url,
-        }
-    });
+    let desired = swarm_mcp_entry(agent_id, mcp_bin, server_url);
 
     if mcp_servers.get("flockmux-swarm") == Some(&desired) {
         return Ok(());
@@ -292,21 +298,62 @@ fn write_per_agent_mcp_config(agent_id: &str, mcp_bin: &Path, server_url: &str) 
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let body = json!({
-        "mcpServers": {
-            "flockmux-swarm": {
-                "type": "stdio",
-                "command": mcp_bin.to_string_lossy(),
-                "args": ["--agent-id", agent_id],
-                "env": {
-                    "FLOCKMUX_AGENT_ID": agent_id,
-                    "FLOCKMUX_SERVER_URL": server_url,
-                }
-            }
-        }
-    });
+    // `--strict-mcp-config` makes claude read ONLY this file, ignoring
+    // `~/.claude.json` entirely. So to let a swarm worker actually USE the
+    // user's own MCP servers (context7, …) — the ones they enabled in the
+    // dashboard's MCP panel, written to user scope — we copy that user-scope
+    // `mcpServers` block in here, then force-overwrite flockmux-swarm with THIS
+    // agent's entry (never inherit a stale/foreign swarm id — that was the M6b
+    // shared-cwd collision). claude tolerates an MCP server that fails to
+    // connect, so inheriting a broken one degrades that one tool, not the agent.
+    let body = per_agent_mcp_body(read_user_scope_mcp_servers(), agent_id, mcp_bin, server_url);
     write_json_atomic(&path, &body)?;
     Ok(path)
+}
+
+/// User-scope MCP servers from `~/.claude.json`'s top-level `mcpServers` (where
+/// `claude mcp add --scope user` writes). Empty map if the file is absent /
+/// unparseable / has no such block — inheriting nothing is the safe floor.
+fn read_user_scope_mcp_servers() -> serde_json::Map<String, Value> {
+    match home_path().map(|h| h.join(".claude.json")) {
+        Some(cfg) => read_user_scope_mcp_servers_at(&cfg),
+        None => Default::default(),
+    }
+}
+
+/// Pure read of the TOP-LEVEL `mcpServers` (user scope) from a given config
+/// path. Deliberately NOT `projects.<ws>.mcpServers` (local scope) — only the
+/// user-scope block, which is what `claude mcp add --scope user` and the
+/// dashboard MCP panel write, should be inherited by every worker.
+fn read_user_scope_mcp_servers_at(cfg: &Path) -> serde_json::Map<String, Value> {
+    let Ok(bytes) = fs::read(cfg) else {
+        return Default::default();
+    };
+    serde_json::from_slice::<Value>(&bytes)
+        .ok()
+        .as_ref()
+        .and_then(|v| v.get("mcpServers"))
+        .and_then(|m| m.as_object())
+        .cloned()
+        .unwrap_or_default()
+}
+
+/// Build the per-agent `--mcp-config` body: the inherited user-scope servers
+/// plus a guaranteed-correct per-agent flockmux-swarm. Pure (no IO) so the merge
+/// rule is unit-tested. Any `flockmux-swarm` from the user scope is dropped first
+/// so ONLY this agent's entry survives (no cross-agent identity leak).
+fn per_agent_mcp_body(
+    mut servers: serde_json::Map<String, Value>,
+    agent_id: &str,
+    mcp_bin: &Path,
+    server_url: &str,
+) -> Value {
+    servers.remove("flockmux-swarm");
+    servers.insert(
+        "flockmux-swarm".into(),
+        swarm_mcp_entry(agent_id, mcp_bin, server_url),
+    );
+    json!({ "mcpServers": Value::Object(servers) })
 }
 
 /// Computes the path `write_per_agent_mcp_config()` writes to without touching
@@ -391,6 +438,113 @@ mod tests {
                 ["hasTrustDialogAccepted"],
             json!(true)
         );
+    }
+
+    // ── per-agent MCP body: inherit user-scope + force-correct swarm ─────
+
+    #[test]
+    fn per_agent_body_inherits_user_servers_and_overrides_swarm() {
+        let mcp_bin = std::path::Path::new("/opt/flockmux-mcp");
+        let user: serde_json::Map<String, Value> = serde_json::from_value(json!({
+            "context7": {
+                "type": "stdio",
+                "command": "npx",
+                "args": ["-y", "@upstash/context7-mcp"],
+            },
+            // A STALE swarm entry pointing at someone else's agent: it must be
+            // dropped, not leak into this agent's config (the M6b collision).
+            "flockmux-swarm": {
+                "type": "stdio",
+                "command": "/old/flockmux-mcp",
+                "args": ["--agent-id", "OTHER-AGENT"],
+            },
+        }))
+        .unwrap();
+
+        let body = per_agent_mcp_body(user, "agent-A", mcp_bin, "http://127.0.0.1:7777");
+        let servers = body["mcpServers"].as_object().unwrap();
+
+        // The user's own server is inherited verbatim (worker can now use it).
+        assert_eq!(servers["context7"]["command"], json!("npx"));
+        assert_eq!(
+            servers["context7"]["args"],
+            json!(["-y", "@upstash/context7-mcp"])
+        );
+        // flockmux-swarm is force-overwritten with THIS agent + THIS binary,
+        // never the stale OTHER-AGENT entry.
+        assert_eq!(
+            servers["flockmux-swarm"]["command"],
+            json!("/opt/flockmux-mcp")
+        );
+        assert_eq!(
+            servers["flockmux-swarm"]["args"],
+            json!(["--agent-id", "agent-A"])
+        );
+        assert_eq!(
+            servers["flockmux-swarm"]["env"]["FLOCKMUX_AGENT_ID"],
+            json!("agent-A")
+        );
+    }
+
+    #[test]
+    fn per_agent_body_with_no_user_servers_has_only_swarm() {
+        let body = per_agent_mcp_body(
+            serde_json::Map::new(),
+            "solo",
+            std::path::Path::new("/m"),
+            "http://x",
+        );
+        let servers = body["mcpServers"].as_object().unwrap();
+        assert_eq!(servers.len(), 1);
+        assert!(servers.contains_key("flockmux-swarm"));
+    }
+
+    #[test]
+    fn read_user_scope_takes_top_level_not_project_scope() {
+        let dir = tempdir().unwrap();
+        let cfg = dir.path().join(".claude.json");
+        fs::write(
+            &cfg,
+            serde_json::to_vec(&json!({
+                // user scope (top-level) — THIS is what every worker inherits.
+                "mcpServers": {
+                    "context7": { "type": "stdio", "command": "npx" },
+                    "chrome-devtools": { "type": "stdio", "command": "npx" },
+                },
+                // local/project scope — must NOT be inherited: it carries the
+                // per-workspace flockmux-swarm with a possibly-foreign agent id.
+                "projects": {
+                    "/some/ws": {
+                        "mcpServers": {
+                            "flockmux-swarm": { "command": "/x", "args": ["--agent-id", "OTHER"] }
+                        }
+                    }
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let got = read_user_scope_mcp_servers_at(&cfg);
+        assert!(got.contains_key("context7"));
+        assert!(got.contains_key("chrome-devtools"));
+        // Project-scope entries are invisible here (we read only top level).
+        assert_eq!(got.len(), 2);
+    }
+
+    #[test]
+    fn read_user_scope_empty_when_absent_or_no_block() {
+        let dir = tempdir().unwrap();
+        // Missing file -> empty (inherit nothing; safe floor).
+        assert!(read_user_scope_mcp_servers_at(&dir.path().join("nope.json")).is_empty());
+        // Present but no mcpServers block -> empty.
+        let cfg = dir.path().join(".claude.json");
+        fs::write(
+            &cfg,
+            serde_json::to_vec(&json!({ "projects": {} })).unwrap(),
+        )
+        .unwrap();
+        assert!(read_user_scope_mcp_servers_at(&cfg).is_empty());
     }
 
     // ── claude MCP local-scope patch ─────────────────────────────────────

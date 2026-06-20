@@ -1,8 +1,8 @@
 //! Codex CLI adapter — everything codex needs that no other CLI does, in one
 //! place. Pre-spawn patches target `~/.codex/config.toml` (trust + global MCP),
 //! `~/.codex/version.json` (dismiss the update nag), a per-agent `CODEX_HOME`
-//! (an isolated config carrying ONLY flockmux-swarm, so a headless worker
-//! doesn't stall on the user's personal MCP servers), and
+//! (a config that INHERITS the user's MCP servers plus a per-agent
+//! flockmux-swarm — codex's 10s startup_timeout skips any that stall), and
 //! `<ws>/.codex/hooks.json` (wake Stop-hook, seconds timeout). At spawn it
 //! injects `--dangerously-bypass-hook-trust` (when the binary supports it) and
 //! points the child at its per-agent `CODEX_HOME`.
@@ -45,12 +45,13 @@ impl CliAdapter for CodexAdapter {
                 tracing::warn!(?err, cli = %plugin.id, "codex auto-dismiss-update patch failed");
             }
         }
-        // 3. MCP: preferred path is a per-agent CODEX_HOME with ONLY
-        //    flockmux-swarm (so the worker doesn't inherit the user's personal
-        //    ~/.codex MCP servers, which stall a headless worker at startup);
-        //    `contribute_env` sets CODEX_HOME when the per-agent config exists.
-        //    The global block is a fallback for a worker that (for any reason)
-        //    falls back to ~/.codex.
+        // 3. MCP: preferred path is a per-agent CODEX_HOME that INHERITS the
+        //    user's ~/.codex MCP servers (context7, …) plus a per-agent
+        //    flockmux-swarm; codex's default 10s startup_timeout_sec skips any
+        //    inherited server that stalls, so the worker can't hang on a heavy
+        //    one. `contribute_env` sets CODEX_HOME when the per-agent config
+        //    exists. The global block is a fallback for a worker that (for any
+        //    reason) falls back to ~/.codex.
         if plugin.auto_inject_mcp {
             if let Err(err) = write_codex_per_agent_home(&ctx.agent_id, workspace, &ctx.mcp_bin) {
                 tracing::warn!(?err, "codex: per-agent CODEX_HOME write failed");
@@ -101,11 +102,11 @@ impl CliAdapter for CodexAdapter {
         env: &mut HashMap<String, String>,
     ) {
         // Point the worker at its per-agent CODEX_HOME (written by pre_spawn) so
-        // it loads an ISOLATED config with ONLY flockmux-swarm — not the user's
-        // personal ~/.codex MCP servers (chrome-devtools, pencil, …), which
-        // stall a headless worker at startup. Mirrors claude's
-        // `--strict-mcp-config`. Gated on the per-agent config.toml existing;
-        // otherwise codex falls back to the global ~/.codex (still has the block).
+        // it loads a per-agent config: the user's ~/.codex MCP servers inherited
+        // (context7, …) plus this agent's own flockmux-swarm. codex's 10s
+        // startup_timeout skips any inherited server that stalls. Gated on the
+        // per-agent config.toml existing; otherwise codex falls back to the
+        // global ~/.codex (still has the block).
         if !plugin.auto_inject_mcp {
             return;
         }
@@ -288,36 +289,42 @@ fn render_codex_mcp_section(mcp_bin: &Path) -> String {
 }
 
 /// Per-agent `CODEX_HOME` directory. `contribute_env` points the codex worker at
-/// this via the `CODEX_HOME` env so it loads an ISOLATED config instead of the
-/// user's global `~/.codex` — which carries the user's personal MCP servers
-/// (chrome-devtools, pencil, …). Those heavy/interactive servers stall a
-/// headless worker at startup ("Starting MCP servers (n/4)… Reconnecting…").
-/// Mirrors claude's `--strict-mcp-config` isolation. Also read by the transcript
-/// tailer to find this worker's rollout JSONL.
+/// this via the `CODEX_HOME` env so it loads a PER-AGENT config (the user's
+/// `~/.codex` MCP servers inherited, plus this agent's own flockmux-swarm)
+/// instead of sharing the global `~/.codex` — sharing it would leak one agent's
+/// swarm identity into another (the per-agent swarm entry must be unique). Also
+/// read by the transcript tailer to find this worker's rollout JSONL.
 pub fn codex_per_agent_home_path(agent_id: &str) -> Option<PathBuf> {
     home_path().map(|h| h.join(".flockmux").join("codex-home").join(agent_id))
 }
 
-/// Remove every `[mcp_servers...]` AND `[projects...]` section from a codex
-/// `config.toml`, keeping the preamble and all OTHER sections (model /
-/// model_providers / endpoint settings the worker still needs) intact.
+/// Sanitize the user's `~/.codex/config.toml` for a worker's isolated
+/// `CODEX_HOME`: KEEP their personal `[mcp_servers.*]` (so the worker inherits
+/// context7 etc.) and all model/provider settings, but strip the two section
+/// kinds that must NOT be inherited verbatim:
 ///
-/// - mcp_servers: the user's personal servers stall a headless worker.
-/// - projects: these are per-dir trust entries. A worker only needs its OWN
-///   workspace trusted (re-appended by the caller). Stripping them also avoids
-///   a `duplicate key` crash when the workspace was already trusted globally
-///   (the trust patch) in the config we copy from.
+/// - `[mcp_servers.flockmux-swarm]`: re-appended per-agent with THIS agent's id
+///   (never inherit a stale/foreign one — the M6b collision), and keeping it
+///   would `duplicate key` crash against the re-append.
+/// - `[projects...]`: per-dir trust entries. A worker only needs its OWN
+///   workspace trusted (re-appended by the caller); inheriting them also
+///   `duplicate key` crashes against the trust patch.
+///
+/// Inherited heavy servers can't hang the worker: codex's default
+/// `startup_timeout_sec = 10` skips any server that doesn't come up in time, so
+/// a slow/broken server degrades to "unavailable", not a stalled startup.
 ///
 /// String-based so the user's formatting and other config survive verbatim.
-fn strip_codex_mcp_sections(text: &str) -> String {
+fn prune_codex_config_for_inherit(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut skipping = false;
     for line in text.split_inclusive('\n') {
         let t = line.trim_end_matches(['\n', '\r']).trim();
         if t.starts_with('[') && t.ends_with(']') {
-            // New section header: skip mcp_servers + projects tables.
-            skipping = t.starts_with("[mcp_servers]")
-                || t.starts_with("[mcp_servers.")
+            // New section header: drop only our own swarm entry + trust tables;
+            // every other [mcp_servers.*] is KEPT so the worker inherits it.
+            skipping = t == "[mcp_servers.flockmux-swarm]"
+                || t.starts_with("[mcp_servers.flockmux-swarm.")
                 || t.starts_with("[projects]")
                 || t.starts_with("[projects.");
         }
@@ -329,9 +336,10 @@ fn strip_codex_mcp_sections(text: &str) -> String {
 }
 
 /// Write the per-agent `CODEX_HOME`: an isolated `config.toml` (the user's
-/// config minus their `mcp_servers`, plus ONLY flockmux-swarm + this
-/// workspace's trust), a symlink to the shared `auth.json` (so token refreshes
-/// stay shared), and a copy of the already-dismissed `version.json`. Idempotent.
+/// config with their `mcp_servers` INHERITED — our own stale swarm entry + trust
+/// tables pruned — plus this agent's flockmux-swarm + this workspace's trust), a
+/// symlink to the shared `auth.json` (so token refreshes stay shared), and a
+/// copy of the already-dismissed `version.json`. Idempotent.
 fn write_codex_per_agent_home(agent_id: &str, workspace: &Path, mcp_bin: &Path) -> Result<()> {
     let home = codex_per_agent_home_path(agent_id)
         .context("home not found; cannot write per-agent codex home")?;
@@ -343,8 +351,9 @@ fn write_codex_per_agent_home(agent_id: &str, workspace: &Path, mcp_bin: &Path) 
         _ => String::new(),
     };
 
-    // Base = user's config minus their MCP servers; then append ours + trust.
-    let mut cfg = strip_codex_mcp_sections(&user_cfg_text)
+    // Base = user's config with their MCP servers INHERITED (minus our own
+    // swarm entry + trust tables); then append our per-agent swarm + trust.
+    let mut cfg = prune_codex_config_for_inherit(&user_cfg_text)
         .trim_end()
         .to_string();
     if !cfg.is_empty() {
@@ -455,7 +464,7 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
-    fn strip_codex_mcp_sections_drops_mcp_and_projects_keeps_provider() {
+    fn prune_keeps_user_mcp_inherits_but_drops_swarm_and_projects() {
         let cfg = "\
 model = \"gpt-5.5\"\n\
 model_provider = \"custom\"\n\
@@ -463,24 +472,26 @@ model_provider = \"custom\"\n\
 [model_providers.custom]\n\
 base_url = \"https://nowcoding.ai/v1\"\n\
 \n\
-[mcp_servers.chrome-devtools]\n\
+[mcp_servers.context7]\n\
 command = \"npx\"\n\
-args = [\"chrome-devtools-mcp@latest\"]\n\
+args = [\"-y\", \"@upstash/context7-mcp\"]\n\
 \n\
 [mcp_servers.flockmux-swarm]\n\
 command = \"/old/path\"\n\
 \n\
 [projects.\"/some/dir\"]\n\
 trust_level = \"trusted\"\n";
-        let out = strip_codex_mcp_sections(cfg);
+        let out = prune_codex_config_for_inherit(cfg);
         // model + custom provider survive (worker still reaches the model)
         assert!(out.contains("model = \"gpt-5.5\""));
         assert!(out.contains("[model_providers.custom]"));
         assert!(out.contains("nowcoding.ai"));
-        // ALL mcp_servers (incl. stale flockmux-swarm) AND all projects gone —
-        // the latter prevents the duplicate-key crash on re-append.
-        assert!(!out.contains("[mcp_servers"));
-        assert!(!out.contains("chrome-devtools"));
+        // The user's OWN mcp server is INHERITED — the worker can now use it.
+        assert!(out.contains("[mcp_servers.context7]"));
+        assert!(out.contains("@upstash/context7-mcp"));
+        // Our own stale swarm entry AND all projects are dropped — the latter
+        // prevents the duplicate-key crash on re-append.
+        assert!(!out.contains("[mcp_servers.flockmux-swarm]"));
         assert!(!out.contains("/old/path"));
         assert!(!out.contains("[projects"));
         assert!(!out.contains("/some/dir"));
