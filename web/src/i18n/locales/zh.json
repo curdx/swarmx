@@ -935,6 +935,8 @@
     "newMessages": "{{count}} 条新消息",
     "read": "已读",
     "jumpParent": "跳转到被回复的消息",
+    "jumpLatest": "回到最新",
+    "jumpLatestCount": "{{count}} 条新消息",
     "reply": "回复",
     "markRead": "标记为已读",
     "replying": "正在回复 #{{id}}",

@@ -935,6 +935,8 @@
     "newMessages": "{{count}} new",
     "read": "read",
     "jumpParent": "Jump to parent",
+    "jumpLatest": "Jump to latest",
+    "jumpLatestCount": "{{count}} new",
     "reply": "Reply",
     "markRead": "Mark read",
     "replying": "Replying to #{{id}}",

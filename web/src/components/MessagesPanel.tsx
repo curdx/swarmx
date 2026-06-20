@@ -664,12 +664,18 @@ export function MessagesPanel({
   // scroll and gate the auto-scroll on it — someone who just sent is at the
   // bottom, so their own message still lands in view.
   const isNearBottomRef = useRef(true);
+  // Reactive mirror of "is the user scrolled up away from the bottom", driving
+  // the floating 「回到最新」 button. A ref alone can't trigger a re-render, so we
+  // keep a state copy updated from the same scroll handler.
+  const [scrolledUp, setScrolledUp] = useState(false);
   useEffect(() => {
     const el = listRef.current;
     if (!el) return;
     const onScroll = () => {
-      isNearBottomRef.current =
+      const nearBottom =
         el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+      isNearBottomRef.current = nearBottom;
+      setScrolledUp(!nearBottom);
     };
     el.addEventListener("scroll", onScroll, { passive: true });
     onScroll();
@@ -679,7 +685,20 @@ export function MessagesPanel({
   // its latest message regardless of where you were scrolled in the last one.
   useEffect(() => {
     isNearBottomRef.current = true;
+    setScrolledUp(false);
   }, [activeThreadId]);
+
+  // Jump back to the newest message and re-pin to the bottom. Used by the
+  // floating button that appears whenever the user has scrolled up — so an
+  // incoming reply that landed below the fold (the "左侧回复消失" complaint) is
+  // one click away instead of silently off-screen.
+  const jumpToLatest = useCallback(() => {
+    isNearBottomRef.current = true;
+    setScrolledUp(false);
+    if (rows.length > 0) {
+      virtualizer.scrollToIndex(rows.length - 1, { align: "end" });
+    }
+  }, [rows.length, virtualizer]);
 
   // Auto-scroll to bottom on new items / live message / new pending bubble.
   // Virtualized: scroll the last row into view (align: end) rather than poking
@@ -773,6 +792,15 @@ export function MessagesPanel({
     // P0-11: never fire while an attachment failed to upload (Enter bypasses the
     // disabled send button, so guard here too).
     if (failedAttachments.length > 0) return;
+    // Sending is an explicit "I want to see this land" action — always re-pin to
+    // the bottom, even if the user had scrolled up to read history. Without this,
+    // a send while scrolled up drops the new message (and its reply) below the
+    // fold with the viewport frozen up top, so it looks like "我发了消息但聊天面板
+    // 没显示". Set synchronously BEFORE any await so it's true before the
+    // optimistic/WS message-add fires the auto-scroll effect. The "don't yank the
+    // view" guard still applies to INCOMING messages (isNearBottomRef stays false
+    // there), so reading history is only interrupted by your own sends.
+    isNearBottomRef.current = true;
     // @mention wins over the default orchestrator recipient.
     const recipient = explicitRecipient ?? defaultRecipient;
     // P0-9: if the captain is mid-turn, this message queues to its mailbox and
@@ -861,6 +889,9 @@ export function MessagesPanel({
   const resend = async (text: string) => {
     const trimmed = text.trim();
     if (!trimmed || sending) return;
+    // Same as send(): an explicit resend should re-pin to the bottom so the
+    // re-delivered message and its reply are visible, not stranded below the fold.
+    isNearBottomRef.current = true;
     // P2: capture the recipient up-front so an unmount mid-flight doesn't read a
     // stale ref, and guard every post-await setState with mountedRef — the
     // send can resolve after the panel is gone / the user已切房间.
@@ -1347,6 +1378,9 @@ export function MessagesPanel({
       )}
 
       {/* ── bubble list ──────────────────────────────────────────────── */}
+      {/* relative wrapper so the floating 「回到最新」 button can anchor to the
+          viewport's bottom-right instead of scrolling away with the content. */}
+      <div className="relative flex min-h-0 flex-1 flex-col">
       <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
         {rows.length === 0 &&
           (emptyStateOverride ??
@@ -1675,6 +1709,26 @@ export function MessagesPanel({
               再加文字提示反而冗余、翻译尴尬。awaitingAgents 仍然
               算出来供成员列表等其它地方用。 */}
         </div>
+      </div>
+        {/* Floating jump-to-latest: shown only when scrolled up. An incoming
+            reply that landed below the fold is now one click away instead of
+            silently off-screen ("左侧回复消失"). Shows the unread count when
+            there are unseen replies. */}
+        {scrolledUp && rows.length > 0 && (
+          <button
+            type="button"
+            onClick={jumpToLatest}
+            className="absolute bottom-3 right-4 z-10 flex items-center gap-1 rounded-full border border-border-subtle bg-surface-elevated px-3 py-1.5 text-[11px] font-medium text-foreground-secondary shadow-md transition-colors hover:bg-surface-tertiary"
+          >
+            <ChevronDown className="size-3.5" />
+            {unreadCount > 0
+              ? t("messages.jumpLatestCount", {
+                  count: unreadCount,
+                  defaultValue: "{{count}} 条新消息",
+                })
+              : t("messages.jumpLatest", { defaultValue: "回到最新" })}
+          </button>
+        )}
       </div>
 
       {/* ── Task activity (chat 内联状态卡片，"AI 正在派活...") ─────── */}
