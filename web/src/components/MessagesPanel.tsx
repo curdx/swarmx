@@ -577,7 +577,7 @@ export function MessagesPanel({
   );
   const visible = useMemo(() => {
     const f = filter.toLowerCase();
-    return items.filter((m) => {
+    const filtered = items.filter((m) => {
       if (!passesScope(m)) return false;
       if (!f) return true;
       return (
@@ -586,6 +586,14 @@ export function MessagesPanel({
         m.body.toLowerCase().includes(f)
       );
     });
+    // Sort by chronology. `items` is append-order: refresh() yields an id-sorted
+    // prefix, but live.append pushes WS arrivals in DELIVERY order — and the
+    // server broadcasts concurrent/bursty messages out of id-order (a captain
+    // firing several replies, or multiple agents answering at once). Without
+    // this sort they render scrambled, and buildRows' `sent_at` gap goes
+    // negative. Sort by sent_at (matches the shown timestamps) with id as a
+    // stable tiebreaker for same-millisecond messages.
+    return filtered.sort((a, b) => a.sent_at - b.sent_at || a.id - b.id);
   }, [items, filter, passesScope]);
   const rows = useMemo(() => buildRows(visible), [visible]);
 
