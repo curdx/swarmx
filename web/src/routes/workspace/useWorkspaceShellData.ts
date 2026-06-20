@@ -232,6 +232,31 @@ export function useWorkspaceShellData(
     refreshWorkspaces();
   }, [refreshAgents, recomputeUnread, refreshWorkspaces]);
 
+  // Self-heal the "连不上后端" banner. `wsError` is set by a SINGLE failed
+  // listWorkspaces — which can be a mere transient: the webview was App-Napped
+  // (window hidden to tray), the backend was briefly busy mid-spawn, a fetch
+  // raced a reconnect. Without a retry the banner sticks until a thread_changed
+  // event or remount, so a 5-second blip reads as "the backend is down" for
+  // minutes. While in the error state, re-poll until the backend answers (each
+  // failure is an instant loopback connection-refused, so the poll is cheap),
+  // and also re-check the moment the window/tab becomes visible again.
+  useEffect(() => {
+    if (!wsError) return;
+    const id = window.setInterval(() => {
+      void refreshWorkspaces();
+    }, 3000);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void refreshWorkspaces();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", onVisible);
+    return () => {
+      window.clearInterval(id);
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onVisible);
+    };
+  }, [wsError, refreshWorkspaces]);
+
   const refreshTimerRef = useRef<number | null>(null);
   const scheduleRefresh = useCallback(() => {
     if (refreshTimerRef.current != null) {
