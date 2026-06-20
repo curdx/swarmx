@@ -284,6 +284,19 @@ pub fn spawn_agent(
             );
             continue;
         }
+        // Claude Code runtime/nesting markers (CLAUDECODE, CLAUDE_CODE_*,
+        // CLAUDE_EFFORT) ALSO match the `CLAUDE_` provider prefix, but they are
+        // NOT provider creds — they're harness markers the outer Claude Code
+        // sets. If the flockmux server was itself launched from inside a Claude
+        // Code session (or these are exported globally), forwarding them makes
+        // the spawned `claude` believe it is a NESTED child session: it then
+        // refuses to write its own `~/.claude/projects/<cwd>/<id>.jsonl`
+        // transcript — which silently breaks usage/cost collection for the
+        // captain (the tailer never finds a file) and risks nested-session
+        // hangs. Strip them so every spawned claude is a clean top-level run.
+        if is_claude_code_nesting_marker(&k) {
+            continue;
+        }
         if ["ANTHROPIC_", "OPENAI_", "CLAUDE_", "DEEPSEEK_"]
             .iter()
             .any(|p| k.starts_with(p))
@@ -438,6 +451,17 @@ fn env_blocked(plugin: &CliPlugin, key: &str) -> bool {
         .blocked_env_prefixes
         .iter()
         .any(|p| !p.is_empty() && key.starts_with(p))
+}
+
+/// Claude Code's own harness/nesting markers, which a spawned `claude` must
+/// NOT inherit (see the call site in `build_command` for the full rationale:
+/// inheriting them flips claude into nested-child mode and suppresses its
+/// session transcript, breaking usage collection). These all happen to match
+/// the `CLAUDE_` provider-cred prefix, so they need an explicit exclusion.
+/// `CLAUDECODE` lacks the underscore and wouldn't match the prefix anyway, but
+/// is listed here as defense in case the prefix list changes.
+fn is_claude_code_nesting_marker(key: &str) -> bool {
+    key == "CLAUDECODE" || key == "CLAUDE_EFFORT" || key.starts_with("CLAUDE_CODE")
 }
 
 /// Server-side OSC scanner. Identical algorithm to the M2 client-side
@@ -1158,6 +1182,40 @@ mod billing_policy_tests {
             FORWARDED_ENV_KEYS.contains(&"LOGNAME"),
             "LOGNAME must stay forwarded alongside USER"
         );
+    }
+
+    #[test]
+    fn claude_code_nesting_markers_are_excluded_from_forwarding() {
+        // These flip a spawned `claude` into nested-child mode, where it stops
+        // writing its session transcript — which silently breaks usage/cost
+        // collection for the captain. They match the `CLAUDE_` provider prefix,
+        // so without an explicit exclusion they'd leak whenever the server was
+        // launched from inside a Claude Code session.
+        for marker in [
+            "CLAUDECODE",
+            "CLAUDE_CODE_ENTRYPOINT",
+            "CLAUDE_CODE_EXECPATH",
+            "CLAUDE_CODE_SESSION_ID",
+            "CLAUDE_CODE_CHILD_SESSION",
+            "CLAUDE_EFFORT",
+        ] {
+            assert!(
+                is_claude_code_nesting_marker(marker),
+                "{marker} must be stripped, not forwarded to the spawned CLI"
+            );
+        }
+        // Real provider creds/config must STILL pass the prefix forward.
+        for cred in [
+            "ANTHROPIC_API_KEY",
+            "ANTHROPIC_BASE_URL",
+            "CLAUDE_CONFIG_DIR",
+            "DEEPSEEK_API_KEY",
+        ] {
+            assert!(
+                !is_claude_code_nesting_marker(cred),
+                "{cred} is real config and must keep being forwarded"
+            );
+        }
     }
 
     fn minimal_plugin(id: &str) -> CliPlugin {
