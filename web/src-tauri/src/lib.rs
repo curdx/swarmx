@@ -324,12 +324,35 @@ fn restart_backend(_app: tauri::AppHandle) -> Result<(), String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
-        .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_notification::init());
+
+    // Native-app feel (release only): kill the browser-chrome shortcuts that
+    // give away "this is a webpage" — reload (Cmd/Ctrl+R), find-in-page
+    // (Cmd/Ctrl+F), print (Cmd/Ctrl+P), downloads, and devtools. We do NOT
+    // disable ZOOM (Cmd/Ctrl+±) — native apps like VSCode/Slack zoom too, so
+    // it's not a tell — and we deliberately leave CONTEXT_MENU to the
+    // selection-aware right-click handler in main.tsx (a blanket block would
+    // kill Paste/Cut inside inputs). In debug we add nothing so reload/find/
+    // devtools stay available, matching the PROD gate on that JS handler.
+    #[cfg(not(debug_assertions))]
+    let builder = builder.plugin(
+        tauri_plugin_prevent_default::Builder::new()
+            .with_flags(
+                tauri_plugin_prevent_default::Flags::RELOAD
+                    | tauri_plugin_prevent_default::Flags::FIND
+                    | tauri_plugin_prevent_default::Flags::PRINT
+                    | tauri_plugin_prevent_default::Flags::DOWNLOADS
+                    | tauri_plugin_prevent_default::Flags::DEV_TOOLS,
+            )
+            .build(),
+    );
+
+    builder
         .manage(ServerSidecar::new())
         .invoke_handler(tauri::generate_handler![restart_backend])
         .setup(|app| {

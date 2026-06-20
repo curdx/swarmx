@@ -229,6 +229,19 @@ html, body, #root {
   background: var(--color-surface-primary);
   color: var(--color-foreground-primary);
   font-family: var(--font-body);
+  /* Native-app feel: kill the rubber-band overscroll bounce. In a desktop
+   * app the trackpad "pull past the edge → blank gap springs back" is a pure
+   * webpage tell; `none` pins the page while inner scroll containers keep
+   * their own (intended) scrolling. */
+  overscroll-behavior: none;
+}
+
+/* No ghost drag-image when dragging icons / images / links — another web
+ * giveaway. Real drag-and-drop targets opt back in with [draggable="true"]. */
+img,
+a,
+svg {
+  -webkit-user-drag: none;
 }
 
 /* ── Native-app feel: 默认可选 + chrome 标记不可选 ──────────────────────
