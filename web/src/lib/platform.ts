@@ -56,11 +56,18 @@ export function getClientPlatformInfo(): ClientPlatformInfo {
   // iPadOS Safari can report itself as Mac; treat "Mac + touch" as iPad/iOS.
   const isIOS =
     /\b(iPhone|iPad|iPod)\b/i.test(ua) ||
-    (/\bMac\b/i.test(platform) && hasTouchPoints);
+    (/Mac/i.test(platform) && hasTouchPoints);
   const isAndroid = /\bAndroid\b/i.test(ua) || /\bAndroid\b/i.test(platform);
   const isWindows =
     /\bWindows\b/i.test(platform) || /\bWindows NT\b/i.test(ua);
-  const isMac = !isIOS && /\bMac\b/i.test(platform);
+  // NOTE: substring /Mac/i, NOT /\bMac\b/i. macOS reports navigator.platform
+  // as "MacIntel" (Apple Silicon too) and userAgentData.platform as "macOS";
+  // in both the char after "Mac" is a letter, so a trailing \b word-boundary
+  // never matches and EVERY Mac was misdetected as os="other" → the desktop
+  // send-hint showed "Enter" instead of "Return". MDN's own example uses
+  // navigator.platform.startsWith("Mac"); we use /Mac/i because `platform`
+  // here is a (possibly space-prefixed) concatenation, so startsWith won't do.
+  const isMac = !isIOS && /Mac/i.test(platform);
   const isLinux =
     !isAndroid && /\bLinux\b/i.test(platform + " " + ua);
 
