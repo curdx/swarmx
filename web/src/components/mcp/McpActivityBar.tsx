@@ -1,9 +1,12 @@
 /**
  * McpActivityBar — 最外层应用导航菜单，常驻在 AppShell 内容区最左。横排菜单项
  * (图标 + 文字)，可展开/收起成纯图标窄条(状态存 localStorage)：
- *   - 顶部组 → MCP / 文件 / 终端 / 定时 / 任务 / 用量(各自独立页面)
+ *   - 顶部组 → 对话 / 文件 / 终端 / MCP / 定时 / 目标 / 任务 / 用量(各自独立页面)
  *   - 底部分组 → 设置
  *   - 最底     → 菜单展开/收起开关
+ *
+ * 「对话」打头：它是产品主入口(工作空间聊天)，其余都是围绕它的工具页；以前主入口
+ * 在这条栏里没有锚点(只能点 logo)，且在 /chat 时全栏无 active 高亮。
  *
  * 这些页面以前只能 ⌘K 或直接敲 URL 到达(发现性差)；放进常驻左栏作为 app-level
  * 入口。图标/标签与 CommandPalette 的 NAV 保持一致。
@@ -21,6 +24,7 @@ import {
   Clock,
   Flag,
   FolderTree,
+  MessageSquare,
   Settings,
   Terminal,
 } from "lucide-react";
@@ -42,9 +46,16 @@ const NAV: ReadonlyArray<{
   fallback: string;
   icon: ComponentType<{ className?: string }>;
 }> = [
-  { href: "/mcp", labelKey: "mcp.title", fallback: "MCP", icon: Blocks },
+  // Chat (the workspace surface) leads — it's the product's primary feature and
+  // every other page is a tool around it. Without this anchor the only way back
+  // to a conversation from a tool page was the logo, and no rail item was ever
+  // active on /chat. `startsWith("/chat")` keeps it lit across the Flow/Ledger/
+  // Replays sub-tabs too. MCP is a power-user setup surface, so it sits with the
+  // other workspace tools rather than heading the list.
+  { href: "/chat", labelKey: "nav.chat", fallback: "对话", icon: MessageSquare },
   { href: "/files", labelKey: "nav.files", fallback: "文件", icon: FolderTree },
   { href: "/terminal", labelKey: "nav.terminal", fallback: "终端", icon: Terminal },
+  { href: "/mcp", labelKey: "mcp.title", fallback: "MCP", icon: Blocks },
   { href: "/cron", labelKey: "nav.cron", fallback: "定时", icon: Clock },
   { href: "/goals", labelKey: "nav.goals", fallback: "目标", icon: Flag },
   { href: "/tasks", labelKey: "nav.tasks", fallback: "任务", icon: ClipboardList },
@@ -124,7 +135,7 @@ export function McpActivityBar() {
       )}
     >
       <div className="flex flex-col gap-1">
-        {/* 顶部组：MCP / 文件 / 终端 / 定时 / 任务 / 用量 */}
+        {/* 顶部组：对话 / 文件 / 终端 / MCP / 定时 / 目标 / 任务 / 用量 */}
         {NAV.map(({ href, labelKey, fallback, icon: Icon }) => {
           const label = t(labelKey, fallback);
           return withTip(
