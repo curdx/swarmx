@@ -89,6 +89,7 @@ import {
 import { useRoleLookup } from "../lib/useRoleLookup";
 import { useComposerDraft } from "../lib/useComposerDraft";
 import { useScrollMarkRead } from "../lib/useScrollMarkRead";
+import { countsAsUserUnread } from "../lib/unread";
 import { usePendingResponders } from "../lib/usePendingResponders";
 import { dlog } from "../lib/debugLog";
 import { useInterruptControls } from "../lib/useInterruptControls";
@@ -676,9 +677,14 @@ export function MessagesPanel({
     let firstId: number | null = null;
     let count = 0;
     for (const m of visible) {
+      // Use the SHARED countsAsUserUnread so this divider/count can never drift
+      // from the top-bar tally (useWorkspaceShellData) — they must agree or the
+      // badge lies (the honesty red line). It folds in the from=system / kind=
+      // wake / meta.subtype=completion exclusions; we add the context checks the
+      // tally owns at its own call site (to=user, unread, not our own message).
       const isUnreadAgent =
         m.from_agent !== USER_SENDER &&
-        m.from_agent !== SYSTEM_SENDER &&
+        countsAsUserUnread(m.from_agent, m.kind, m.meta) &&
         m.read_at === null &&
         m.to_agent === USER_SENDER;
       if (isUnreadAgent) {
@@ -736,11 +742,26 @@ export function MessagesPanel({
   //   - failedAttachments: a failed upload in room A silently BLOCKS sending in
   //     room B (send() early-returns + the button disables) while showing A's
   //     stray thumbnail — a "can't send and don't know why" trap.
+  //   - the 「优化」 (AI rewrite) triple — an in-flight optimize request, plus
+  //     preOptimize / optimizeNote. optimize()'s post-await guard only checks
+  //     mountedRef + signal.aborted, NEITHER of which a room switch trips (same
+  //     instance, no remount, controller never aborted), so an A-room rewrite
+  //     would land in B's draft (the room-dimension twin of the 9a0fc4a
+  //     "optimize overwrites typing" bug, which only fixed the typing axis).
+  //     Aborting here is what actually makes optimize()'s "room-switch cancels
+  //     this one" comment true; clearing preOptimize/optimizeNote stops B's undo
+  //     banner from restoring A's pre-optimize text. uploadingImage is reset too
+  //     so B doesn't inherit A's stuck "uploading…" skeleton (its finally only
+  //     resets when still in the same room).
   // The draft body itself is deliberately NOT reset here — it's persisted
   // per-room by useComposerDraft (keyed on workspaceSlug+activeThreadId).
   useEffect(() => {
     setInReplyTo(null);
     setFailedAttachments([]);
+    optimizeAbortRef.current?.abort();
+    setPreOptimize(null);
+    setOptimizeNote(null);
+    setUploadingImage(false);
   }, [activeThreadId, workspaceSlug]);
 
   // Jump back to the newest message and re-pin to the bottom. Used by the
