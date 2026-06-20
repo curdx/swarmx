@@ -152,6 +152,12 @@ export function useWorkspaceShellData(
   >({});
   const [unreadByFrom, setUnreadByFrom] = useState<Record<string, number>>({});
   const idToFromRef = useRef<Map<number, string>>(new Map());
+  // The set of message ids we actually counted toward the user's unread badge
+  // (agent→user, countsAsUserUnread). Decrement-on-read must only subtract ids
+  // that were counted — otherwise an AGENT reading its own inbox (agent↔agent
+  // traffic flowing through the same message_read event) would zero out the
+  // user's real unread for that sender, making the badge lie "0 unread".
+  const countedUnreadRef = useRef<Set<number>>(new Set());
 
   // F19: drop async results that resolve after the Shell unmounts.
   const mountedRef = useRef(true);
@@ -195,13 +201,25 @@ export function useWorkspaceShellData(
       const rows = await api.listMessages({ limit: 200 });
       const counts: Record<string, number> = {};
       const ids = new Map<number, string>();
+      const counted = new Set<number>();
       for (const m of rows) {
         ids.set(m.id, m.from_agent);
-        if (m.read_at === null && countsAsUserUnread(m.from_agent, m.kind, m.meta)) {
+        // `to_agent === "user"` is REQUIRED here: listMessages returns the whole
+        // recent stream including agent↔agent traffic. Without this gate the
+        // full recompute counts coordination replies as the user's unread —
+        // over-reporting, and disagreeing with the live increment (which already
+        // gates on to_agent), so the badge flickers between two wrong values.
+        if (
+          m.to_agent === "user" &&
+          m.read_at === null &&
+          countsAsUserUnread(m.from_agent, m.kind, m.meta)
+        ) {
           counts[m.from_agent] = (counts[m.from_agent] ?? 0) + 1;
+          counted.add(m.id);
         }
       }
       idToFromRef.current = ids;
+      countedUnreadRef.current = counted;
       if (mountedRef.current) setUnreadByFrom(counts);
     } catch {
       /* best-effort */
@@ -336,6 +354,7 @@ export function useWorkspaceShellData(
             });
           }
           if (ev.to_agent === "user" && countsAsUserUnread(ev.from_agent, ev.kind, ev.meta)) {
+            countedUnreadRef.current.add(ev.id);
             setUnreadByFrom((prev) => ({
               ...prev,
               [ev.from_agent]: (prev[ev.from_agent] ?? 0) + 1,
@@ -348,6 +367,11 @@ export function useWorkspaceShellData(
           setUnreadByFrom((prev) => {
             const next = { ...prev };
             for (const id of ev.ids) {
+              // Only subtract ids we actually counted as USER unread. Skips
+              // agent↔agent reads and non-counted (wake/system/completion) ids,
+              // so an agent reading its mailbox can't deflate the user's badge.
+              if (!countedUnreadRef.current.has(id)) continue;
+              countedUnreadRef.current.delete(id);
               const from = idToFromRef.current.get(id);
               if (!from) continue;
               const cur = next[from] ?? 0;
