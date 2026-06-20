@@ -1099,15 +1099,22 @@ export function MessagesPanel({
 
   // Remove an image path token from the draft (the ✕ on a composer thumbnail).
   const removeComposerImage = (path: string) => {
-    setBody((prev) =>
-      prev
-        .split(path)
-        .join("")
-        .replace(/`+/g, (m) => (m.length >= 2 ? "" : m))
-        .replace(/\n{3,}/g, "\n\n")
+    setBody((prev) => {
+      // Remove ONLY this exact image token — backtick-wrapped (`/x y.png`) or
+      // bare (/x.png) — never a naive `split(path)` (which also hits a longer
+      // path that contains this one as a substring) and never the old
+      // `replace(/`+/, "")` that stripped ALL backtick runs, destroying any
+      // markdown code fence in the user's draft. The lookbehind mirrors
+      // imagePaths' extractor; the trailing `(?![\w.])` stops a shorter path
+      // from matching the prefix of a longer one.
+      const esc = path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const re = new RegExp("`" + esc + "`|(?<![\\w:/])" + esc + "(?![\\w.])", "g");
+      return prev
+        .replace(re, "")
         .replace(/[ \t]+\n/g, "\n")
-        .trim(),
-    );
+        .replace(/\n{3,}/g, "\n\n")
+        .trim();
+    });
     requestAnimationFrame(() => autoGrow(composerRef.current));
   };
 
