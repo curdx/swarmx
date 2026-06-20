@@ -14,16 +14,16 @@ describe("buildRows", () => {
     expect(rows[0].showDividerBefore).toBe(false);
   });
 
-  it("collapses the header for consecutive same-sender messages in the gap", () => {
+  it("shows a header on every message (no run collapsing) so each is attributed", () => {
     const rows = buildRows([
       msg({ id: 1, from_agent: "x", sent_at: 1000 }),
       msg({ id: 2, from_agent: "x", sent_at: 2000 }),
     ]);
-    expect(rows[1].showHeader).toBe(false);
+    expect(rows[1].showHeader).toBe(true);
     expect(rows[1].showDividerBefore).toBe(false);
   });
 
-  it("re-shows the header when the sender changes", () => {
+  it("shows the header when the sender changes too", () => {
     const rows = buildRows([
       msg({ id: 1, from_agent: "x", sent_at: 1000 }),
       msg({ id: 2, from_agent: "y", sent_at: 2000 }),

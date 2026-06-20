@@ -38,6 +38,7 @@ export function formatClock(ms: number): string {
   return new Date(ms).toLocaleTimeString([], {
     hour: "2-digit",
     minute: "2-digit",
+    second: "2-digit",
   });
 }
 
@@ -73,19 +74,21 @@ export function formatElapsed(ms: number): string {
 }
 
 /**
- * Group messages into rows: collapse the avatar/name header for consecutive
- * same-sender messages, and insert a time-divider when the gap between adjacent
- * messages exceeds {@link GROUP_GAP_MS}.
+ * Build render rows. EVERY message shows its own sender header (avatar + name +
+ * h:m:s timestamp) — we deliberately do NOT collapse a run of same-sender
+ * messages, because when an agent (e.g. the captain) fires many messages, the
+ * collapsed follow-ups lost all attribution: the user couldn't tell who sent
+ * them without scrolling up to the run's first message. Per-message headers keep
+ * "who + when" visible on every bubble. A time-divider is still inserted when
+ * the gap between adjacent messages exceeds {@link GROUP_GAP_MS}.
  */
 export function buildRows(items: MessageRecord[]): Row[] {
   const rows: Row[] = [];
   let prev: MessageRecord | null = null;
   for (const msg of items) {
     const gap = prev ? msg.sent_at - prev.sent_at : Infinity;
-    const sameSender = prev?.from_agent === msg.from_agent;
     const showDividerBefore = prev !== null && gap > GROUP_GAP_MS;
-    const showHeader = !sameSender || showDividerBefore;
-    rows.push({ msg, showHeader, showDividerBefore });
+    rows.push({ msg, showHeader: true, showDividerBefore });
     prev = msg;
   }
   return rows;
