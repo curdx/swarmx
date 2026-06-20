@@ -39,7 +39,7 @@
     "needsNode": "需 Node.js LTS",
     "nodeMissing": "未检测到 Node.js — npx 类 MCP（含 chrome-devtools）无法运行，请先安装 Node.js LTS。",
     "realWriteHint": "开关直接改 claude / codex 的 MCP 配置（用户级，对所有工作区的 agent 生效）。更多 MCP 陆续接入。",
-    "userScopeWarning": "这里的开关会写入用户级 claude / codex 配置，并对所有工作区和正在运行的 agent 生效。启用或关闭前请确认当前项目可信。",
+    "userScopeWarning": "这里的开关会写入用户级 claude / codex 配置。启用后，flockmux 此后新建的 agent（队长与 worker）会自动继承并可调用这些 MCP；已在运行的 agent 需重建后才生效。启用或关闭前请确认当前项目可信。",
     "enableTitle": "启用这个 MCP？",
     "enableDesc": "会写入该 CLI 的用户级配置，对所有工作区的 agent 生效。请只在信任当前本机项目与该 MCP server 时启用。",
     "enableConfirm": "启用",

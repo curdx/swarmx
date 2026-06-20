@@ -39,7 +39,7 @@
     "needsNode": "needs Node.js LTS",
     "nodeMissing": "Node.js not detected — npx-based MCP servers (incl. chrome-devtools) can't run. Install Node.js LTS first.",
     "realWriteHint": "Toggles write directly to claude / codex MCP config (user scope, applies to all workspaces' agents). More MCP servers coming.",
-    "userScopeWarning": "These toggles write to user-level claude / codex config and affect every workspace plus running agents. Enable or disable only when you trust this local project.",
+    "userScopeWarning": "These toggles write to user-level claude / codex config. Once enabled, agents flockmux spawns afterward (captain and workers) inherit and can call these MCP servers; already-running agents pick them up only after being recreated. Enable or disable only when you trust this local project.",
     "enableTitle": "Enable this MCP?",
     "enableDesc": "This writes to the CLI's user-level config and applies to agents in every workspace. Enable only when you trust this local project and MCP server.",
     "enableConfirm": "Enable",
