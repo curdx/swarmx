@@ -449,7 +449,7 @@ export default function ChatView() {
     threadMembers: activeMembers,
     allAliveAgents,
     threadAgentIds,
-    liveMessage,
+    liveMessages,
     liveRead,
     agentStateById,
     agentActivityById,
@@ -848,11 +848,13 @@ export default function ChatView() {
     };
   }, [workspace.id]);
   useEffect(() => {
-    if (!liveMessage) return;
-    setRecentMessages((prev) =>
-      prev.some((m) => m.id === liveMessage.id) ? prev : [...prev, liveMessage],
-    );
-  }, [liveMessage]);
+    if (liveMessages.length === 0) return;
+    setRecentMessages((prev) => {
+      const have = new Set(prev.map((m) => m.id));
+      const fresh = liveMessages.filter((m) => !have.has(m.id));
+      return fresh.length === 0 ? prev : [...prev, ...fresh];
+    });
+  }, [liveMessages]);
   // worker 心跳 — orchestrator 让每个 worker 每完成一步覆写
   // `<workspace_id>/<role>.progress.md`,我们订阅这些 key 实时显示在右栏。
   // 同样的数据 Ledger 视图也用,但 chat 这边给个 slim 列表,用户不用切 tab。
@@ -929,15 +931,22 @@ export default function ChatView() {
   // 显示。
   const lastUserMsgRef = useRef<{ at: number; body: string; id: number } | null>(null);
   useEffect(() => {
-    if (!liveMessage) return;
-    if (liveMessage.from_agent === "user") {
+    if (liveMessages.length === 0) return;
+    // Take the most-recent user message in this batch (highest id).
+    let latestUser: MessageRecord | null = null;
+    for (const m of liveMessages) {
+      if (m.from_agent === "user" && (!latestUser || m.id > latestUser.id)) {
+        latestUser = m;
+      }
+    }
+    if (latestUser) {
       lastUserMsgRef.current = {
-        at: liveMessage.sent_at,
-        body: liveMessage.body.slice(0, 32),
-        id: liveMessage.id,
+        at: latestUser.sent_at,
+        body: latestUser.body.slice(0, 32),
+        id: latestUser.id,
       };
     }
-  }, [liveMessage]);
+  }, [liveMessages]);
 
   // allAliveAgents 出现新 agent → 如果最近 15s 内有 user msg → 创建/更新
   // spawning task；新 agent 进入 ready 时升 task 状态
@@ -1061,7 +1070,7 @@ export default function ChatView() {
             accurate ✓/◐/○ from plan.json, not guessed from prose. */}
         {plan && <PlanStickyCard plan={plan} />}
         <MessagesPanel
-          liveMessage={liveMessage}
+          liveMessages={liveMessages}
           liveRead={liveRead}
           unreadByFrom={activeWorkspaceUnread}
           activeMembers={activeMembers}

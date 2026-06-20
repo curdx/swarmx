@@ -36,7 +36,10 @@ const TAB_LABELS: Record<Tab, { key: string; zh: string }> = {
 export function SwarmPanel() {
   const { t } = useTranslation();
   const [tab, setTab] = useState<Tab>("messages");
-  const [liveMessage, setLiveMessage] = useState<MessageRecord | null>(null);
+  // Append-only bounded buffer (not a single slot) so a batch of messages
+  // arriving in one React tick all reach the chat — see the same fix in
+  // useWorkspaceShellData. A single `liveMessage` setter kept only the last.
+  const [liveMessages, setLiveMessages] = useState<MessageRecord[]>([]);
   const [liveRead, setLiveRead] = useState<{
     ids: number[];
     to_agent: string;
@@ -94,7 +97,10 @@ export function SwarmPanel() {
             meta: ev.meta ?? null,
             thought_trace: ev.thought_trace ?? null,
           };
-          setLiveMessage(rec);
+          setLiveMessages((prev) => {
+            const next = [...prev, rec];
+            return next.length > 200 ? next.slice(-200) : next;
+          });
           idToFromRef.current.set(ev.id, ev.from_agent);
           // Every newly arrived message is unread by definition — the agent
           // who eventually reads it will trigger `message_read` to decrement.
@@ -189,7 +195,7 @@ export function SwarmPanel() {
       <div style={body}>
         {tab === "messages" && (
           <MessagesPanel
-            liveMessage={liveMessage}
+            liveMessages={liveMessages}
             liveRead={liveRead}
             unreadByFrom={unreadByFrom}
           />

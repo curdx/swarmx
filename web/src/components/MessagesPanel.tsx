@@ -99,8 +99,10 @@ const ChatMarkdown = lazy(() =>
 );
 
 interface Props {
-  /** Latest swarm `message` event observed by the parent (or null). */
-  liveMessage: MessageRecord | null;
+  /** Append-only bounded buffer of live swarm `message` events from the parent.
+   *  An array (not a single slot) so a batch of messages arriving in one React
+   *  tick all reach `items` — a single-value relay kept only the last. */
+  liveMessages: MessageRecord[];
   /** Latest swarm `message_read` event observed by the parent (or null). */
   liveRead: { ids: number[]; to_agent: string; at: number } | null;
   /** Parent-maintained unread tally keyed by from_agent. */
@@ -197,7 +199,7 @@ export interface ReasoningSummary {
 }
 
 export function MessagesPanel({
-  liveMessage,
+  liveMessages,
   liveRead,
   unreadByFrom,
   activeMembers = [],
@@ -462,19 +464,27 @@ export function MessagesPanel({
   }, [agentActivityById]);
 
   useEffect(() => {
-    if (!liveMessage) return;
-    const dup = itemsRef.current.some((m) => m.id === liveMessage.id);
-    dlog(dup ? "live.dedup" : "live.append", {
-      id: liveMessage.id,
-      from: liveMessage.from_agent,
-      to: liveMessage.to_agent,
-      thread: liveMessage.thread_id ?? null,
-      listCount: dup ? itemsRef.current.length : itemsRef.current.length + 1,
+    if (liveMessages.length === 0) return;
+    // Merge the WHOLE buffer by id (idempotent dedup), so a batch that arrived
+    // in one tick all lands — not just the last one. Re-runs are cheap: already
+    // present ids are skipped.
+    const have = new Set(itemsRef.current.map((m) => m.id));
+    const fresh = liveMessages.filter((m) => !have.has(m.id));
+    if (fresh.length === 0) {
+      dlog("live.dedup", { ids: liveMessages.map((m) => m.id) });
+      return;
+    }
+    dlog("live.append", {
+      ids: fresh.map((m) => m.id),
+      count: fresh.length,
+      listCount: itemsRef.current.length + fresh.length,
     });
-    setItems((prev) =>
-      prev.some((m) => m.id === liveMessage.id) ? prev : [...prev, liveMessage],
-    );
-  }, [liveMessage]);
+    setItems((prev) => {
+      const seen = new Set(prev.map((m) => m.id));
+      const add = liveMessages.filter((m) => !seen.has(m.id));
+      return add.length === 0 ? prev : [...prev, ...add];
+    });
+  }, [liveMessages]);
 
   useEffect(() => {
     if (!liveRead) return;
@@ -1187,9 +1197,17 @@ export function MessagesPanel({
   // 文字过滤藏住 — jumpToMessage 会清掉过滤再跳,不再静默无反应 (P2)。
   useEffect(() => {
     if (!jumpUnreadTick) return;
+    // Use the SAME "unread" definition as the in-list divider/count
+    // (firstUnreadId): agent→user, read_at null, scope-visible — and NOT
+    // system/blackboard noise. Diverging predicates made the toolbar badge and
+    // this jump disagree ("badge says N unread" but jump toasts "none left").
     const firstUnread = items.find(
       (m) =>
-        m.read_at === null && m.to_agent === USER_SENDER && passesScope(m),
+        m.from_agent !== USER_SENDER &&
+        m.from_agent !== SYSTEM_SENDER &&
+        m.read_at === null &&
+        m.to_agent === USER_SENDER &&
+        passesScope(m),
     );
     if (!firstUnread) {
       toast.message(

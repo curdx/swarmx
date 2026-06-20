@@ -107,8 +107,9 @@ export interface ShellOutletContext {
   /** Historical id set (alive + killed) of agents in the ACTIVE direction.
    *  MessagesPanel filters by it so each direction is a self-contained room. */
   threadAgentIds: string[];
-  /** Latest swarm message event, or null. Child re-broadcasts. */
-  liveMessage: MessageRecord | null;
+  /** Append-only bounded buffer of live swarm messages. Children merge by id —
+   *  never a single slot (batched arrivals would overwrite all but the last). */
+  liveMessages: MessageRecord[];
   /** Latest message_read event, or null. */
   liveRead: { ids: number[]; to_agent: string; at: number } | null;
   /** Per-agent live state + latest activity from the swarm WS, keyed by
@@ -197,7 +198,7 @@ export default function WorkspaceShell() {
     workspaceAgentIds,
     threadAgentIds,
     threadMembers,
-    liveMessage,
+    liveMessages,
     liveRead,
     agentStateById,
     agentActivityById,
@@ -531,7 +532,7 @@ export default function WorkspaceShell() {
     allAliveAgents,
     workspaceAgentIds,
     threadAgentIds,
-    liveMessage,
+    liveMessages,
     liveRead,
     agentStateById,
     agentActivityById,

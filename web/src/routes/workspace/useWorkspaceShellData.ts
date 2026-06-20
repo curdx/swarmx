@@ -67,7 +67,7 @@ export interface WorkspaceShellData {
   threadAgentIds: string[];
   /** Alive agents in the active direction (subset of `activeWs.members`). */
   threadMembers: AgentInfo[];
-  liveMessage: MessageRecord | null;
+  liveMessages: MessageRecord[];
   liveRead: LiveRead | null;
   /** Per-agent live state + latest activity, accumulated incrementally from
    *  the swarm WS (NOT from REST — `AgentInfo` carries no state/activity).
@@ -131,7 +131,9 @@ export function useWorkspaceShellData(
   // produces — without this flag the sidebar lies "还没有工作空间" when the real
   // reason is the backend is down (P0-5 regression).
   const [wsError, setWsError] = useState(false);
-  const [liveMessage, setLiveMessage] = useState<MessageRecord | null>(null);
+  // Lossless append-only buffer of live WS messages (bounded). Consumers merge
+  // by id — never a single `liveMessage` slot that batched arrivals overwrite.
+  const [liveMessages, setLiveMessages] = useState<MessageRecord[]>([]);
   const [liveRead, setLiveRead] = useState<LiveRead | null>(null);
   const [agentStateById, setAgentStateById] = useState<
     Record<string, AgentLiveState>
@@ -307,7 +309,19 @@ export function useWorkspaceShellData(
             kind: ev.kind,
             thread: ev.thread_id ?? null,
           });
-          setLiveMessage(rec);
+          // LOSSLESS relay: APPEND via a functional updater, never overwrite a
+          // single slot. When several messages land in one React batch (a burst
+          // of replies, a worker reporting, rapid sends), a `setLiveMessage(rec)`
+          // single-value setter keeps only the LAST — the rest never reach the
+          // chat's append effect and vanish from the UI until a refresh. A
+          // functional append is applied once per call even when batched, so all
+          // N survive. Bounded so a long session can't grow it unbounded; the
+          // consumer drains it into `items` after each commit, so the cap never
+          // drops an unconsumed message in any realistic burst.
+          setLiveMessages((prev) => {
+            const next = [...prev, rec];
+            return next.length > 200 ? next.slice(-200) : next;
+          });
           idToFromRef.current.set(ev.id, ev.from_agent);
           // F4: this agent's reply landed — the persisted thought_trace on the
           // message takes over, so drop its in-flight live reasoning (keyed by
@@ -539,7 +553,7 @@ export function useWorkspaceShellData(
     workspaceAgentIds,
     threadAgentIds,
     threadMembers,
-    liveMessage,
+    liveMessages,
     liveRead,
     agentStateById,
     agentActivityById,
