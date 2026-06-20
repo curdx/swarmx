@@ -397,7 +397,9 @@ export default function CronRoute() {
   }, [runResult]);
   useEffect(() => {
     if (!confirmDel) return;
-    const id = setTimeout(() => setConfirmDel(null), 3500);
+    // Give the user a comfortable window to land the second (confirm) click
+    // before the button reverts to its idle "Delete" label.
+    const id = setTimeout(() => setConfirmDel(null), 6000);
     return () => clearTimeout(id);
   }, [confirmDel]);
 

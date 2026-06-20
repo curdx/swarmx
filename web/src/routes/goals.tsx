@@ -279,6 +279,8 @@ export default function GoalsRoute() {
                 {t("goals.objective")}
               </span>
               <textarea
+                id="goal-objective"
+                name="objective"
                 value={objective}
                 onChange={(e) => setObjective(e.target.value)}
                 rows={3}
@@ -292,6 +294,8 @@ export default function GoalsRoute() {
                 {t("goals.criteria")}
               </span>
               <textarea
+                id="goal-criteria"
+                name="criteria"
                 value={criteria}
                 onChange={(e) => setCriteria(e.target.value)}
                 rows={5}
@@ -305,6 +309,8 @@ export default function GoalsRoute() {
                 {t("goals.budget")}
               </span>
               <input
+                id="goal-budget"
+                name="budget"
                 value={budget}
                 onChange={(e) => setBudget(e.target.value)}
                 inputMode="numeric"
