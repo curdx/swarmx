@@ -775,9 +775,16 @@ export function MessagesPanel({
     const m = body.match(/(?:^|\s)@(\S+)/);
     if (!m) return null;
     const tok = m[1].toLowerCase();
+    // Only route to a LIVE worker. Matching a killed/exited agent would send the
+    // message to a mailbox no one reads — it persists but is never delivered, so
+    // the user thinks it went through (silent loss). Excluding the dead here
+    // makes resolution fall through to the default orchestrator instead.
+    const live = activeMembers.filter(
+      (a) => a.killed_at == null && a.shim_exit == null,
+    );
     return (
-      activeMembers.find((a) => a.role.toLowerCase() === tok) ??
-      activeMembers.find((a) => a.agent_id.toLowerCase().startsWith(tok)) ??
+      live.find((a) => a.role.toLowerCase() === tok) ??
+      live.find((a) => a.agent_id.toLowerCase().startsWith(tok)) ??
       null
     );
   }, [body, activeMembers]);
@@ -818,6 +825,12 @@ export function MessagesPanel({
     // view" guard still applies to INCOMING messages (isNearBottomRef stays false
     // there), so reading history is only interrupted by your own sends.
     isNearBottomRef.current = true;
+    // Clear any active text filter: with a stale filter, a just-sent message
+    // that doesn't match the filter is hidden from `visible` — the user sends
+    // and sees nothing, indistinguishable from a failed send. Sending is an
+    // explicit "show me the conversation" action, so drop the filter so the new
+    // message (and its reply) are actually visible.
+    if (filter) setFilter("");
     // @mention wins over the default orchestrator recipient.
     const recipient = explicitRecipient ?? defaultRecipient;
     // P0-9: if the captain is mid-turn, this message queues to its mailbox and
@@ -907,8 +920,10 @@ export function MessagesPanel({
     const trimmed = text.trim();
     if (!trimmed || sending) return;
     // Same as send(): an explicit resend should re-pin to the bottom so the
-    // re-delivered message and its reply are visible, not stranded below the fold.
+    // re-delivered message and its reply are visible, not stranded below the fold,
+    // and clear a stale filter that would otherwise hide the re-sent message.
     isNearBottomRef.current = true;
+    if (filter) setFilter("");
     // P2: capture the recipient up-front so an unmount mid-flight doesn't read a
     // stale ref, and guard every post-await setState with mountedRef — the
     // send can resolve after the panel is gone / the user已切房间.
