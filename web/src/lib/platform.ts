@@ -20,7 +20,12 @@ export interface ClientPlatformInfo {
   isApple: boolean;
   isMobileLike: boolean;
   modifierKeyLabel: string;
-  enterKeyLabel: string;
+  /** Chord to SEND the composer (Enter, per universal chat convention),
+   *  rendered with the native key glyph on Mac: "↩" on macOS, "Enter" else. */
+  sendKeyLabel: string;
+  /** Chord that inserts a newline (Shift+Enter): "⇧↩" on macOS,
+   *  "Shift+Enter" elsewhere. */
+  newlineKeyLabel: string;
 }
 
 interface NavigatorWithUAData extends Navigator {
@@ -37,7 +42,8 @@ export function getClientPlatformInfo(): ClientPlatformInfo {
       isApple: false,
       isMobileLike: false,
       modifierKeyLabel: "Ctrl",
-      enterKeyLabel: "Enter",
+      sendKeyLabel: "Enter",
+      newlineKeyLabel: "Shift+Enter",
     };
   }
 
@@ -98,7 +104,11 @@ export function getClientPlatformInfo(): ClientPlatformInfo {
     isApple,
     isMobileLike,
     modifierKeyLabel: isApple ? "⌘" : "Ctrl",
-    enterKeyLabel: os === "mac" ? "Return" : "Enter",
+    // Native macOS glyphs (⇧ U+21E7, ↩ U+21A9) — Apple shows key symbols, never
+    // spelled-out words. Enter sends / Shift+Enter newlines (universal chat
+    // convention); non-Apple desktops keep the familiar spelled-out form.
+    sendKeyLabel: isApple ? "↩" : "Enter",
+    newlineKeyLabel: isApple ? "⇧↩" : "Shift+Enter",
   };
 }
 

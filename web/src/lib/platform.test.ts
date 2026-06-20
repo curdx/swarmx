@@ -28,7 +28,8 @@ describe("getClientPlatformInfo — macOS detection (regression: \\bMac\\b never
     const p = getClientPlatformInfo();
     expect(p.os).toBe("mac");
     expect(p.isApple).toBe(true);
-    expect(p.enterKeyLabel).toBe("Return");
+    expect(p.sendKeyLabel).toBe("↩");
+    expect(p.newlineKeyLabel).toBe("⇧↩");
     expect(p.modifierKeyLabel).toBe("⌘");
   });
 
@@ -43,7 +44,8 @@ describe("getClientPlatformInfo — macOS detection (regression: \\bMac\\b never
     });
     const p = getClientPlatformInfo();
     expect(p.os).toBe("mac");
-    expect(p.enterKeyLabel).toBe("Return");
+    expect(p.sendKeyLabel).toBe("↩");
+    expect(p.newlineKeyLabel).toBe("⇧↩");
   });
 });
 
@@ -60,7 +62,8 @@ describe("getClientPlatformInfo — other platforms keep 'Enter'", () => {
     const p = getClientPlatformInfo();
     expect(p.os).toBe("windows");
     expect(p.isApple).toBe(false);
-    expect(p.enterKeyLabel).toBe("Enter");
+    expect(p.sendKeyLabel).toBe("Enter");
+    expect(p.newlineKeyLabel).toBe("Shift+Enter");
   });
 
   it("Linux → linux + Enter", () => {
@@ -73,7 +76,8 @@ describe("getClientPlatformInfo — other platforms keep 'Enter'", () => {
     });
     const p = getClientPlatformInfo();
     expect(p.os).toBe("linux");
-    expect(p.enterKeyLabel).toBe("Enter");
+    expect(p.sendKeyLabel).toBe("Enter");
+    expect(p.newlineKeyLabel).toBe("Shift+Enter");
   });
 
   it("iPadOS (reports MacIntel + touch) → ios, not mac", () => {
