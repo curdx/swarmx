@@ -39,3 +39,7 @@ tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 # 桌面通知：新消息时弹系统通知（受设置页「新消息桌面通知」开关控制）。
 tauri-plugin-notification = "2"
+# 原生感：禁掉浏览器 chrome 快捷键 (Cmd/Ctrl+R 刷新 / +F 网页查找 / +P 打印 /
+# 下载 / devtools) —— 这些在桌面 app 里是纯「这是网页」破绽。仅 release 启用
+# (见 lib.rs)，CONTEXT_MENU 故意不交给它 (main.tsx 有跟随 user-select 的智能右键)。
+tauri-plugin-prevent-default = "5"
