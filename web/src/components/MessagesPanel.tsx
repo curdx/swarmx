@@ -1482,7 +1482,33 @@ export function MessagesPanel({
       <div className="relative flex min-h-0 flex-1 flex-col">
       <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
         {rows.length === 0 &&
-          (emptyStateOverride ??
+          (filter ? (
+            // An active text filter hid every row. Showing the empty state /
+            // bootstrap ("队长正在上岗") here LIES: it implies no messages / a
+            // booting captain even when the room is full and just filtered. The
+            // user explicitly filtered, so show a "no matches" notice with a
+            // one-click clear instead — for any filter, room empty or not.
+            <div className="mt-10 flex flex-col items-center gap-2 text-center">
+              <p className="font-caption text-xs text-foreground-tertiary">
+                {t("messages.filterNoMatch", {
+                  defaultValue: '没有匹配「{{q}}」的消息',
+                  q: filter,
+                })}
+              </p>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setFilter("");
+                  setFilterOpen(false);
+                }}
+                className="h-7 text-xs text-accent-primary"
+              >
+                {t("messages.clearFilter")}
+              </Button>
+            </div>
+          ) : (
+            emptyStateOverride ??
             (cliReadiness ? (
               <EmptyState
                 cliReadiness={cliReadiness}
@@ -1498,7 +1524,8 @@ export function MessagesPanel({
               <p className="mt-10 text-center font-caption text-xs text-foreground-tertiary">
                 {t("messages.empty")}
               </p>
-            )))}
+            ))
+          ))}
         <div
           className="relative mx-auto w-full max-w-[1040px]"
           style={{ height: virtualizer.getTotalSize() }}

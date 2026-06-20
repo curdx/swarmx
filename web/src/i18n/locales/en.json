@@ -942,6 +942,7 @@
     "replying": "Replying to #{{id}}",
     "cancelReply": "Cancel reply",
     "clearFilter": "Clear filter",
+    "filterNoMatch": "No messages match “{{q}}”",
     "composerLabel": "Chat input",
     "composerPlaceholder": "Say something to the AI…",
     "composerPlaceholderEmpty": "No AI members in this workspace yet…",

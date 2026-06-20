@@ -942,6 +942,7 @@
     "replying": "正在回复 #{{id}}",
     "cancelReply": "取消回复",
     "clearFilter": "清除过滤",
+    "filterNoMatch": "没有匹配「{{q}}」的消息",
     "composerLabel": "聊天输入",
     "composerPlaceholder": "向 AI 描述你的需求…",
     "composerPlaceholderEmpty": "该工作空间还没有 AI 成员…",
