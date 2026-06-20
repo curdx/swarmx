@@ -7,7 +7,6 @@
 use crate::plugins::{BillingSurface, CliPlugin};
 
 pub const PAID_TRANSPORT_ENV: &str = "FLOCKMUX_ALLOW_PAID_TRANSPORT";
-pub const CLAUDE_PRINT_ENV: &str = "FLOCKMUX_ALLOW_CLAUDE_PRINT";
 
 pub fn env_truthy(name: &str) -> bool {
     std::env::var(name)
@@ -18,10 +17,6 @@ pub fn env_truthy(name: &str) -> bool {
 
 pub fn paid_transport_opt_in_enabled() -> bool {
     env_truthy(PAID_TRANSPORT_ENV)
-}
-
-pub fn claude_print_opt_in_enabled() -> bool {
-    env_truthy(CLAUDE_PRINT_ENV)
 }
 
 pub fn enforce_spawn_billing_policy(plugin: &CliPlugin) -> Result<(), String> {
@@ -42,13 +37,6 @@ pub fn enforce_spawn_billing_policy(plugin: &CliPlugin) -> Result<(), String> {
     Ok(())
 }
 
-pub fn claude_print_block_message(action: &str) -> String {
-    format!(
-        "{action}默认禁用：它会调用 `claude -p`，该路径可能消耗 Claude Agent SDK/API 额度而不是交互式订阅额度。\
-         若你明确接受这个计费面，设置 {CLAUDE_PRINT_ENV}=1 后重启 flockmux。"
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -60,12 +48,5 @@ mod tests {
         std::env::set_var("__FLOCKMUX_TEST_TRUTHY", "0");
         assert!(!env_truthy("__FLOCKMUX_TEST_TRUTHY"));
         std::env::remove_var("__FLOCKMUX_TEST_TRUTHY");
-    }
-
-    #[test]
-    fn claude_print_message_names_the_single_gate() {
-        let msg = claude_print_block_message("提示词优化");
-        assert!(msg.contains("claude -p"));
-        assert!(msg.contains(CLAUDE_PRINT_ENV));
     }
 }

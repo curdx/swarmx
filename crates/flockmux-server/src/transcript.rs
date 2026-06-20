@@ -265,6 +265,23 @@ fn claude_file(cwd: &Path, session_id: Option<&str>) -> Option<PathBuf> {
     }
 }
 
+/// The EXACT transcript path claude will write for `--session-id <sid>` run in
+/// `cwd`, WITHOUT gating on the file existing yet (unlike [`claude_file`]). Used
+/// by the one-shot PTY query ([`crate::pty_query`]), which forces the session id
+/// at spawn and then polls this path for the assistant's verbatim answer — the
+/// transcript is the clean channel (no TUI ANSI/redraw artifacts) the PTY screen
+/// isn't.
+pub(crate) fn claude_transcript_path(cwd: &Path, session_id: &str) -> Option<PathBuf> {
+    let home = std::env::var_os("HOME")?;
+    Some(
+        Path::new(&home)
+            .join(".claude")
+            .join("projects")
+            .join(encode_cwd(cwd))
+            .join(format!("{session_id}.jsonl")),
+    )
+}
+
 /// claude encodes the cwd into a directory name by replacing `/`, `.`, `_`, `\`
 /// with `-` (case preserved). Lossy + collision-prone, so this is ONLY used
 /// forward (known cwd → dir name), never reversed. Mirrors cc-trace's

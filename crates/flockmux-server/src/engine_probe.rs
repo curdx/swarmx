@@ -701,7 +701,11 @@ async fn reasonix_one_turn_check(port: u16) -> Verdict {
 /// Remove the probe's scratch: temp workspace + per-agent config dirs the
 /// adapters write under `~/.flockmux/` (reasonix HOME, opencode/codex config,
 /// the swarm MCP entry, the wake throttle file). Best-effort; missing is fine.
-fn cleanup(tmp: &Path, agent_id: Option<&str>) {
+///
+/// `pub(crate)` so the one-shot PTY query path ([`crate::pty_query`]) — which
+/// spawns a throwaway claude the same way the probe does — reuses the exact
+/// same scratch teardown instead of duplicating the path list.
+pub(crate) fn cleanup(tmp: &Path, agent_id: Option<&str>) {
     let _ = std::fs::remove_dir_all(tmp);
     let (Some(id), Ok(home)) = (agent_id, std::env::var("HOME")) else {
         return;
