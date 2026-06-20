@@ -516,7 +516,7 @@
     "jumpUnread": "Jump to first unread",
     "members": "Members",
     "selectWorkspace": "Pick a workspace to see its members",
-    "noMembers": "No AI members in this workspace yet",
+    "noMembers": "No AI is online here right now.",
     "reviveOrchestrator": "Wake the captain",
     "reviving": "Waking…",
     "pmBadge": "Captain",
