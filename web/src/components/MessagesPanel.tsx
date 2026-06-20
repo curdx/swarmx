@@ -715,6 +715,21 @@ export function MessagesPanel({
     setScrolledUp(false);
   }, [activeThreadId]);
 
+  // Room-switch reset of PER-ROOM transient state. MessagesPanel is NOT
+  // remounted on a direction/workspace switch (same instance, changed props),
+  // so any of these left over from the previous room leak into the next:
+  //   - inReplyTo: would send the new room's message with `in_reply_to` pointing
+  //     at a message in the OLD room (a cross-room reply chain).
+  //   - failedAttachments: a failed upload in room A silently BLOCKS sending in
+  //     room B (send() early-returns + the button disables) while showing A's
+  //     stray thumbnail — a "can't send and don't know why" trap.
+  // The draft body itself is deliberately NOT reset here — it's persisted
+  // per-room by useComposerDraft (keyed on workspaceSlug+activeThreadId).
+  useEffect(() => {
+    setInReplyTo(null);
+    setFailedAttachments([]);
+  }, [activeThreadId, workspaceSlug]);
+
   // Jump back to the newest message and re-pin to the bottom. Used by the
   // floating button that appears whenever the user has scrolled up — so an
   // incoming reply that landed below the fold (the "左侧回复消失" complaint) is
@@ -1893,6 +1908,12 @@ export function MessagesPanel({
               onChange={(e) => {
                 setBody(e.target.value);
                 autoGrow(e.target);
+                // User is editing — cancel any in-flight 「优化」. Its result was
+                // computed against the PRE-edit text (a stale closure of `body`);
+                // letting it land would `setBody(res.optimized)` and clobber what
+                // the user just typed. Aborting makes the awaited call return a
+                // no-op instead.
+                if (optimizeAbortRef.current) optimizeAbortRef.current.abort();
                 // User edited the draft — the prior rewrite's undo no longer
                 // applies; drop the affordances so they don't go stale.
                 if (preOptimize !== null) setPreOptimize(null);
