@@ -516,7 +516,7 @@
     "jumpUnread": "跳转到第一条未读",
     "members": "成员",
     "selectWorkspace": "选中一个工作空间查看成员",
-    "noMembers": "该工作空间还没有 AI 成员",
+    "noMembers": "当前没有在线的 AI。",
     "reviveOrchestrator": "唤醒队长",
     "reviving": "唤醒中…",
     "pmBadge": "队长",
