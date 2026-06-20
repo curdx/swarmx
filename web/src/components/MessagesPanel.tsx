@@ -238,6 +238,11 @@ export function MessagesPanel({
   // (below) also clears it.
   const draftKey = `flockmux:draft:v1:${workspaceSlug ?? "_"}:${activeThreadId ?? "main"}`;
   const [body, setBody] = useComposerDraft(draftKey);
+  // Always-current draftKey, read AFTER an await to tell whether the user
+  // switched rooms mid-upload (an in-flight image upload that resolves after a
+  // switch must not append its path into a different room's draft).
+  const draftKeyRef = useRef(draftKey);
+  draftKeyRef.current = draftKey;
   // 「优化」 button: the rewrite is reversible (preOptimize holds the pre-rewrite
   // draft for one-click undo); optimizeNote shows a transient "already clear".
   const [optimizing, setOptimizing] = useState(false);
@@ -1038,12 +1043,13 @@ export function MessagesPanel({
     requestAnimationFrame(() => autoGrow(composerRef.current));
   };
 
-  // Upload one image; throws on failure so the caller can decide whether to
-  // append the path (success) or surface a retry (failure).
-  const uploadOneImage = async (f: File): Promise<void> => {
+  // Upload one image and RETURN its saved path; throws on failure. The caller
+  // appends the path (guarding against a room switch mid-upload) — keeping the
+  // append out of here so the room check lives next to the setState.
+  const uploadOneImage = async (f: File): Promise<string> => {
     const guessExt = (f.type.split("/")[1] || "png").replace("jpeg", "jpg");
     const { path } = await api.uploadAttachment(f, f.name || `pasted.${guessExt}`);
-    appendPath(path);
+    return path;
   };
 
   // Paste/drop a clipboard image → upload → append its saved path to the draft.
@@ -1054,13 +1060,21 @@ export function MessagesPanel({
   const handleImageFiles = async (files: File[]) => {
     const imgs = files.filter((f) => f.type.startsWith("image/"));
     if (imgs.length === 0) return false;
+    // Capture the room this upload belongs to. If the user switches direction/
+    // workspace before it resolves, the result (path or failure) belongs to the
+    // OLD room — dropping it beats writing it into whatever room is now on screen.
+    const startKey = draftKeyRef.current;
+    const stillHere = () => mountedRef.current && draftKeyRef.current === startKey;
     setUploadingImage(true);
     setError(null);
     try {
       for (const f of imgs) {
         try {
-          await uploadOneImage(f);
+          const path = await uploadOneImage(f);
+          if (!stillHere()) return;
+          appendPath(path);
         } catch {
+          if (!stillHere()) return;
           setFailedAttachments((prev) => [
             ...prev,
             { id: String(++attachIdRef.current), name: f.name || "image", file: f },
@@ -1069,7 +1083,7 @@ export function MessagesPanel({
       }
       composerRef.current?.focus();
     } finally {
-      setUploadingImage(false);
+      if (stillHere()) setUploadingImage(false);
     }
     return true;
   };
@@ -1077,8 +1091,13 @@ export function MessagesPanel({
   const retryAttachment = async (id: string) => {
     const item = failedAttachments.find((a) => a.id === id);
     if (!item) return;
+    const startKey = draftKeyRef.current;
     try {
-      await uploadOneImage(item.file);
+      const path = await uploadOneImage(item.file);
+      // Same room-switch guard as handleImageFiles: don't append into another
+      // room or mutate a room the user already left.
+      if (!mountedRef.current || draftKeyRef.current !== startKey) return;
+      appendPath(path);
       setFailedAttachments((prev) => prev.filter((a) => a.id !== id));
     } catch {
       /* still failing — keep the red thumb so the user can retry again */
