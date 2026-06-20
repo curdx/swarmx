@@ -90,6 +90,7 @@ import { useRoleLookup } from "../lib/useRoleLookup";
 import { useComposerDraft } from "../lib/useComposerDraft";
 import { useScrollMarkRead } from "../lib/useScrollMarkRead";
 import { countsAsUserUnread } from "../lib/unread";
+import { mergeServerSnapshot } from "../lib/messageMerge";
 import { usePendingResponders } from "../lib/usePendingResponders";
 import { dlog } from "../lib/debugLog";
 import { useInterruptControls } from "../lib/useInterruptControls";
@@ -316,55 +317,24 @@ export function MessagesPanel({
       // server orders DESC by id; reverse to chat-style chronological.
       const rowsAsc = rows.slice().reverse();
       const prev = itemsRef.current;
-      const prevIds = new Set(prev.map((m) => m.id));
-      const serverIds = new Set(rowsAsc.map((m) => m.id));
-      const maxServerId = rowsAsc.reduce((mx, m) => Math.max(mx, m.id), 0);
-      // RACE FIX (was: wholesale `setItems(rowsAsc)`): a plain replace clobbers
-      // any message that arrived on the WS *after* this fetch's server snapshot
-      // but *before* its response landed — the captain's reply or our own echo
-      // would silently vanish ("回复消失") until the next refresh. The list also
-      // wholesale-refreshes on mount, direction switch, reconnect, and the
-      // manual button, so the overlap window recurs constantly in real use.
-      //
-      // Instead, MERGE: take the server rows as the source of truth, then
-      // preserve any local message the server result couldn't have seen — same
-      // direction, not already in the result, and newer than the newest server
-      // row (the `id > maxServerId` guard means we never resurrect a stale or
-      // cross-thread row, so a genuine direction switch still reads as a clean
-      // replace). Persisted messages always come back from the server; this only
-      // rescues the in-flight-race victims.
-      const preserved = prev.filter(
-        (m) =>
-          !serverIds.has(m.id) &&
-          (m.thread_id ?? null) === (activeThreadId ?? null) &&
-          m.id > maxServerId,
-      );
-      const next = preserved.length
-        ? [...rowsAsc, ...preserved].sort((a, b) => a.id - b.id)
-        : rowsAsc;
-      // Anything local that isn't in the merged result was dropped. Most drops
-      // are EXPECTED and correct: on a direction switch the previous thread's
-      // messages (and any cross-thread message the global live-feed transiently
-      // appended) leave this view. The only drop that signals a real bug is one
-      // whose thread MATCHES the active direction — that's a same-thread message
-      // vanishing, the exact "回复消失" symptom. So we log both: `droppedIds` for
-      // visibility, `lostSameThread` as the actual regression signal (want []).
-      const dropped = prev.filter((m) => !next.some((n) => n.id === m.id));
-      const lostSameThread = dropped
-        .filter((m) => (m.thread_id ?? null) === (activeThreadId ?? null))
-        .map((m) => m.id);
+      // MERGE (not wholesale replace): server rows are truth, but preserve any
+      // in-flight-race victim the snapshot couldn't have seen. Pure + unit-tested
+      // in lib/messageMerge — see its doc for the minServerId window rule and why
+      // a direction switch still reads as a clean replace. `lostSameThread` is
+      // the "回复消失" regression signal (want []).
+      const merged = mergeServerSnapshot(prev, rowsAsc, activeThreadId ?? null);
       dlog("refresh.merge", {
         reason,
         threadId: activeThreadId ?? null,
         prevCount: prev.length,
         serverCount: rowsAsc.length,
-        nextCount: next.length,
-        preservedIds: preserved.map((m) => m.id),
-        droppedIds: dropped.map((m) => m.id),
-        lostSameThread,
-        addedCount: next.filter((m) => !prevIds.has(m.id)).length,
+        nextCount: merged.next.length,
+        preservedIds: merged.preservedIds,
+        droppedIds: merged.droppedIds,
+        lostSameThread: merged.lostSameThread,
+        addedCount: merged.addedCount,
       });
-      setItems(next);
+      setItems(merged.next);
       setError(null);
     } catch (e) {
       dlog("refresh.error", { reason, error: (e as Error).message });
