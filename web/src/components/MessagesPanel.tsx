@@ -407,7 +407,12 @@ export function MessagesPanel({
       let changed = false;
       const next = prev.map((m) => {
         const trace = m.thought_trace;
-        if (!trace || m.to_agent !== USER_SENDER) return m;
+        // Never backfill a message the user has ALREADY read — silently growing
+        // its 思考摘要 in place rewrites finished, displayed content out from
+        // under them. The grace-window gate below only looks at settle TIME, not
+        // at read state: an UNREAD just-settled turn is the legit backfill case
+        // (a tool event that landed a beat after the reply), a READ one never is.
+        if (!trace || m.to_agent !== USER_SENDER || m.read_at !== null) return m;
         const terminalStatus =
           trace.status === "done" ||
           trace.status === "expired" ||
