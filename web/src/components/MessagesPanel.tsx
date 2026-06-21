@@ -1608,7 +1608,7 @@ export function MessagesPanel({
                       if (el) rowRefs.current.set(m.id, el);
                       else rowRefs.current.delete(m.id);
                     }}
-                    className="group/msg mx-auto flex w-full max-w-[min(1200px,92%)] flex-col items-end px-6 py-2.5"
+                    className="group/msg mx-auto flex w-full max-w-[92%] flex-col items-end px-6 py-2.5"
                     title={`#${m.id} · ${m.kind} · ${formatFullStamp(m.sent_at)}`}
                   >
                     <div className="mb-1 flex items-center gap-2 pr-1">
@@ -1678,7 +1678,7 @@ export function MessagesPanel({
                     if (el) rowRefs.current.set(m.id, el);
                     else rowRefs.current.delete(m.id);
                   }}
-                  className="group/msg mx-auto grid w-full max-w-[min(1200px,92%)] grid-cols-[36px_minmax(0,1fr)] gap-3 px-6 py-2.5"
+                  className="group/msg mx-auto grid w-full max-w-[92%] grid-cols-[36px_minmax(0,1fr)] gap-3 px-6 py-2.5"
                   title={`#${m.id} · ${m.kind} · ${formatFullStamp(m.sent_at)}`}
                 >
                   <div className="flex justify-center pt-1">
@@ -1778,7 +1778,7 @@ export function MessagesPanel({
             );
           })}
         </div>
-        <div className="mx-auto flex w-full max-w-[min(1200px,92%)] flex-col gap-0.5 px-6">
+        <div className="mx-auto flex w-full max-w-[92%] flex-col gap-0.5 px-6">
           {pendingResponders.map(({ agentId, trigger }) => (
             <PendingBubble
               key={`pending-${agentId}`}
@@ -1833,13 +1833,13 @@ export function MessagesPanel({
       </div>
 
       {/* ── Task activity (chat 内联状态卡片，"AI 正在派活...") ─────── */}
-      <div className="mx-auto w-full max-w-[min(1200px,92%)] px-6">
+      <div className="mx-auto w-full max-w-[92%] px-6">
         {taskActivityBelow}
       </div>
 
       {/* ── composer ─────────────────────────────────────────────────── */}
       <div className="flex shrink-0 flex-col gap-1.5 border-t border-border-subtle bg-surface-secondary px-3 py-2.5">
-        <div className="mx-auto flex w-full max-w-[min(1200px,92%)] flex-col gap-1.5 px-6">
+        <div className="mx-auto flex w-full max-w-[92%] flex-col gap-1.5 px-6">
         {inReplyTo != null && (
           <div className="flex items-center gap-2 self-start rounded-md bg-accent-primary-soft px-2 py-1 text-[11px] text-accent-primary-deep">
             <CornerUpLeft className="size-3" />
