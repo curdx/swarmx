@@ -216,9 +216,12 @@ pub async fn deliver_bootstrap(port: u16, text: &str, workspace_dir: &str) -> Re
     // effort + a ~24k-char bootstrap can take 45-60s+ before the turn registers).
     // Keep retrying across the whole first-response watchdog window — if opencode
     // hasn't started a turn by then it really is wedged and the watchdog's failure
-    // card is the right outcome.
+    // card is the right outcome. MUST match the opencode arm of
+    // `routes::rest::first_response_watchdog_ms` (the coupled "did opencode start
+    // its first turn" pair) — otherwise one declares failure while the other is
+    // still waiting.
     let start = Instant::now();
-    let overall = Duration::from_secs(90);
+    let overall = Duration::from_secs(150);
     let mut last_err: Option<anyhow::Error> = None;
     loop {
         // Check BEFORE (re)submitting so a turn that already started is never
