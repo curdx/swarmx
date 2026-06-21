@@ -1923,10 +1923,17 @@ export function MessagesPanel({
             ))}
           </div>
         )}
-        <div className="flex items-end gap-2">
-          {/* Composer actions live inside the input shell so sending feels like
-              a direct continuation of writing, not a detached toolbar action. */}
-          <div className="relative min-w-0 flex-1">
+        {/* Input shell: border/focus-ring live on this flex row, not on the
+            textarea. Textarea is borderless flex-1; the actions ride inline at
+            the bottom-right (items-end) so a short message no longer reserves an
+            empty bottom row — buttons follow the last line, ChatGPT/Claude-style. */}
+        <div
+          className={cn(
+            "flex items-end gap-1.5 rounded-2xl border border-input bg-transparent px-2.5 py-1.5 transition-colors focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/50 dark:bg-input/30",
+            !canCompose &&
+              "cursor-not-allowed bg-input/50 opacity-50 dark:bg-input/80",
+          )}
+        >
             {/* default recipient = orchestrator/scout; an inline `@<role>`
                 routes to a specific worker (explicitRecipient wins in send()). */}
             <TextareaAutosize
@@ -1958,9 +1965,9 @@ export function MessagesPanel({
               // 复刻 shadcn Textarea 的视觉基类（边框/聚焦环/placeholder/禁用态），
               // 因为换成 TextareaAutosize 后不再继承它；只去掉它的 field-sizing /
               // min-h（高度交给 autosize 管），保留 composer 自己的 rounded/padding。
-              className="block w-full resize-none rounded-2xl border border-input bg-transparent px-3 py-2 pr-[7.25rem] pb-12 font-body text-[13px] leading-snug outline-none transition-colors placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:bg-input/50 disabled:opacity-50 dark:bg-input/30 dark:disabled:bg-input/80"
+              className="block min-w-0 flex-1 resize-none bg-transparent px-1 py-1 font-body text-[13px] leading-snug outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50"
             />
-            <div className="pointer-events-none absolute inset-x-2 bottom-2 flex items-center justify-end gap-1.5">
+            <div className="flex shrink-0 items-center gap-1.5">
               {/* 「优化」 — 次级 ghost action，保留在输入框里但弱于发送。 */}
               <Button
                 variant="ghost"
@@ -1996,7 +2003,6 @@ export function MessagesPanel({
                 <Send className="size-4" />
               </Button>
             </div>
-          </div>
         </div>
         {/* Hint row: left carries the optimize undo / "no change" feedback,
             right keeps the Enter-to-send hint. */}
