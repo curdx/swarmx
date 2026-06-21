@@ -1353,7 +1353,7 @@ export function MessagesPanel({
           refresh) read as one quiet toolbar under the tabs. */}
       <div className="flex shrink-0 items-center gap-1 px-3 py-1">
         {filterOpen ? (
-          <div className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-md bg-surface-tertiary px-2.5">
+          <div className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-md bg-surface-tertiary px-2.5 transition-shadow focus-within:ring-2 focus-within:ring-ring/50">
             <Search className="size-3.5 text-foreground-tertiary" />
             <input
               autoFocus
@@ -1516,11 +1516,11 @@ export function MessagesPanel({
             ))
           ))}
         <div
-          className="relative mx-auto w-full max-w-[1040px]"
+          className="relative w-full"
           style={{ height: virtualizer.getTotalSize() }}
         >
           {virtualizer.getVirtualItems().map((vi) => {
-            const { msg: m, showHeader, showDividerBefore } = rows[vi.index];
+            const { msg: m, showDividerBefore } = rows[vi.index];
             const isUser = m.from_agent === USER_SENDER;
             const isSystem = m.from_agent === SYSTEM_SENDER;
             // A worker's farewell/completion (from=worker, meta.subtype=
@@ -1528,6 +1528,9 @@ export function MessagesPanel({
             // normal bubble — so "X 交付完成" reads as a structured event.
             const isDelivery = m.meta?.subtype === "completion";
             const role = resolveRole(m.from_agent, roleLookup);
+            const isCaptain = ["orchestrator", "captain", "self"].includes(
+              role.toLowerCase(),
+            );
             const isUnread =
               !isUser &&
               !isSystem &&
@@ -1535,7 +1538,6 @@ export function MessagesPanel({
               m.read_at === null &&
               m.to_agent === USER_SENDER;
             const highlighted = highlightId === m.id;
-            const isFirstRow = rows[0].msg.id === m.id;
             const reasoning = reasoningByMessageId.get(m.id);
             // Slack-style "new messages" divider, rendered once before the
             // first unread agent turn instead of marking each one.
@@ -1583,13 +1585,13 @@ export function MessagesPanel({
               );
             }
 
-            // ── User turn: right-aligned, solid accent bubble ────────────
-            // Accent-blue + white text (iMessage/Linear convention). The
-            // earlier neutral-grey experiment failed: two pale grey bubbles on
-            // a white canvas read as muddy and low-contrast. A confident accent
-            // fill makes "mine vs theirs" unmistakable at a glance and is the
-            // higher-contrast, more polished choice — colour is reinforced by
-            // alignment + "我" label + tail shape, never the only signal.
+            // ── User turn: right-aligned accent bubble ───────────────────
+            // Hybrid layout: the user keeps the iMessage-style right-aligned
+            // accent bubble (conversational, unmistakably "mine"), while agents
+            // get a wide left card so their code/tables breathe (below). "Mine
+            // vs theirs" reads from side + bubble colour, the strongest signal.
+            // The sender/time header sits ABOVE the bubble, right-aligned, to
+            // mirror the agent's left-aligned header.
             if (isUser) {
               return (
                 <div
@@ -1599,71 +1601,68 @@ export function MessagesPanel({
                   className="absolute left-0 top-0 w-full"
                   style={{ transform: `translateY(${vi.start}px)` }}
                 >
+                  {showDividerBefore && <TimeDivider ms={m.sent_at} />}
+                  {newDivider}
                   <div
-                    className={cn(
-                      "flex flex-col items-end",
-                      !isFirstRow && (showHeader ? "pt-3" : "pt-2"),
-                    )}
+                    ref={(el) => {
+                      if (el) rowRefs.current.set(m.id, el);
+                      else rowRefs.current.delete(m.id);
+                    }}
+                    className="group/msg mx-auto flex w-full max-w-[min(1200px,92%)] flex-col items-end px-6 py-2.5"
+                    title={`#${m.id} · ${m.kind} · ${formatFullStamp(m.sent_at)}`}
                   >
-                    {showDividerBefore && <TimeDivider ms={m.sent_at} />}
-                    {newDivider}
-                    <div className="flex w-full max-w-[min(82%,780px)] flex-col items-end">
-                    {showHeader && (
-                      <span className="mb-0.5 px-1 font-heading text-[11px] font-semibold text-foreground-tertiary">
-                        {t("messages.you")}
-                      </span>
-                    )}
-                    <div
-                      ref={(el) => {
-                        if (el) rowRefs.current.set(m.id, el);
-                        else rowRefs.current.delete(m.id);
-                      }}
-                      className={cn(
-                        "group/bubble relative rounded-2xl rounded-br-sm bg-accent-primary px-3 py-1.5 text-foreground-on-accent shadow-sm transition-colors",
-                        highlighted &&
-                          "ring-2 ring-accent-primary ring-offset-1 ring-offset-surface-primary",
-                      )}
-                      title={`#${m.id} · ${m.kind} · ${formatFullStamp(m.sent_at)}`}
-                    >
-                      {m.in_reply_to != null && (
-                        <button
-                          onClick={() => jumpToParent(m.in_reply_to!)}
-                          className="mb-1 flex min-h-8 items-center gap-0.5 rounded bg-white/15 px-2 py-1 text-[10px] text-foreground-on-accent/85 hover:bg-white/25"
-                          title={t("messages.jumpParent")}
-                        >
-                          <CornerUpLeft className="size-2.5" />#{m.in_reply_to}
-                        </button>
-                      )}
-                      <p className="selectable whitespace-pre-wrap break-words font-body text-[13px] leading-snug">
-                        {m.body}
-                      </p>
-                      <ImageAttachments paths={extractImagePaths(m.body)} />
-                      <span className="float-right ml-2 mt-0.5 inline-block font-caption text-[10px] tabular-nums text-foreground-on-accent/70">
-                        {formatClock(m.sent_at)}
-                      </span>
-                      <div className="pointer-events-none absolute -top-3 left-0 flex items-center gap-1 opacity-0 transition-opacity group-hover/bubble:pointer-events-auto group-hover/bubble:opacity-100">
+                    <div className="mb-1 flex items-center gap-2 pr-1">
+                      <div className="flex items-center gap-1 opacity-0 transition-opacity group-hover/msg:opacity-100">
                         <button
                           onClick={() => startReply(m)}
-                          className="min-h-8 rounded-full border border-border-subtle bg-surface-elevated px-2.5 py-1 text-[10px] text-foreground-secondary shadow-sm hover:bg-surface-tertiary"
+                          className="min-h-7 rounded-full border border-border-subtle bg-surface-elevated px-2.5 py-1 text-[10px] text-foreground-secondary shadow-sm hover:bg-surface-tertiary"
                           title={t("messages.reply")}
                         >
                           {t("messages.reply")}
                         </button>
                       </div>
+                      <span className="font-heading text-[12.5px] font-semibold text-foreground-secondary">
+                        {t("messages.you")}
+                      </span>
+                      <span className="font-caption text-[10.5px] tabular-nums text-foreground-tertiary">
+                        {formatClock(m.sent_at)}
+                      </span>
                     </div>
+                    <div className="flex max-w-[min(86%,600px)] flex-col items-end">
+                      {m.in_reply_to != null && (
+                        <button
+                          onClick={() => jumpToParent(m.in_reply_to!)}
+                          className="mb-1 flex min-h-7 items-center gap-0.5 rounded bg-surface-tertiary px-2 py-1 text-[10px] text-foreground-tertiary hover:bg-surface-secondary"
+                          title={t("messages.jumpParent")}
+                        >
+                          <CornerUpLeft className="size-2.5" />#{m.in_reply_to}
+                        </button>
+                      )}
+                      <div
+                        className={cn(
+                          "rounded-2xl rounded-br-md bg-accent-primary px-3.5 py-2 text-foreground-on-accent shadow-sm",
+                          highlighted &&
+                            "ring-2 ring-accent-primary ring-offset-2 ring-offset-surface-primary",
+                        )}
+                      >
+                        <p className="selectable whitespace-pre-wrap break-words font-body text-[14px] leading-[1.65]">
+                          {m.body}
+                        </p>
+                        <ImageAttachments paths={extractImagePaths(m.body)} />
+                      </div>
                     </div>
                   </div>
                 </div>
               );
             }
 
-            // ── Agent turn: left-aligned, light contained bubble ─────────
-            // Messenger pairing with the user's neutral bubble — agent gets a
-            // light surface-secondary bubble + hairline border + bottom-left
-            // tail. Authorship by alignment + bubble shade + a role header
-            // sitting ABOVE the bubble (mirrors the user's "我" label). Unread
-            // is the in-header dot + the once-per-thread "new messages"
-            // divider — never a per-row coloured border.
+            // ── Agent turn: avatar + name header + WIDE left card ────────
+            // The hybrid's payoff: the agent keeps a conversational left card
+            // (tail mirrors the user's bubble) but it spans the full content
+            // column, so ChatMarkdown's code blocks / tables breathe instead of
+            // being crammed into a narrow bubble. Authorship reads from the
+            // coloured role avatar + name header; unread = the in-header dot +
+            // the once-per-thread "new messages" divider.
             return (
               <div
                 key={vi.key}
@@ -1672,81 +1671,90 @@ export function MessagesPanel({
                 className="absolute left-0 top-0 w-full"
                 style={{ transform: `translateY(${vi.start}px)` }}
               >
+                {showDividerBefore && <TimeDivider ms={m.sent_at} />}
+                {newDivider}
                 <div
-                  className={cn(
-                    "flex flex-col",
-                    !isFirstRow && (showHeader ? "pt-3" : "pt-2"),
-                  )}
+                  ref={(el) => {
+                    if (el) rowRefs.current.set(m.id, el);
+                    else rowRefs.current.delete(m.id);
+                  }}
+                  className="group/msg mx-auto grid w-full max-w-[min(1200px,92%)] grid-cols-[36px_minmax(0,1fr)] gap-3 px-6 py-2.5"
+                  title={`#${m.id} · ${m.kind} · ${formatFullStamp(m.sent_at)}`}
                 >
-                  {showDividerBefore && <TimeDivider ms={m.sent_at} />}
-                  {newDivider}
-                  <div className="group/msg flex gap-3">
-                  {/* 28px gutter: role avatar on the group head, a hover-only
-                      timestamp on collapsed follow-ups (Slack pattern). */}
-                  <div className="flex w-8 shrink-0 justify-center">
-                    {showHeader ? (
-                      <button
-                        type="button"
-                        onClick={() => onOpenAgent?.(m.from_agent)}
-                        className={cn(
-                          "flex size-8 items-center justify-center rounded-full text-xs font-medium text-foreground-on-accent shadow-sm transition-transform hover:scale-105",
-                          roleColor(role),
-                        )}
-                        title={`${role} · ${m.from_agent}`}
-                      >
-                        {role.charAt(0).toUpperCase()}
-                      </button>
-                    ) : (
-                      <span className="mt-1 select-none font-caption text-[9px] leading-none tabular-nums text-foreground-tertiary opacity-0 transition-opacity group-hover/msg:opacity-100">
-                        {formatClock(m.sent_at)}
-                      </span>
-                    )}
+                  <div className="flex justify-center pt-1">
+                    <button
+                      type="button"
+                      onClick={() => onOpenAgent?.(m.from_agent)}
+                      className={cn(
+                        "flex size-9 items-center justify-center rounded-full text-[13px] font-semibold text-foreground-on-accent shadow-sm transition-transform hover:scale-105",
+                        roleColor(role),
+                        isCaptain &&
+                          "ring-2 ring-state-warning ring-offset-2 ring-offset-surface-primary",
+                      )}
+                      title={`${role} · ${m.from_agent}`}
+                    >
+                      {role.charAt(0).toUpperCase()}
+                    </button>
                   </div>
 
-                  <div className="flex min-w-0 w-full max-w-[min(82%,820px)] flex-col items-start">
-                    {showHeader && (
-                      <div className="mb-0.5 flex items-baseline gap-2 px-0.5">
-                        <span className="font-heading text-[13px] font-semibold text-foreground-primary">
-                          {roleDisplayName(role)}
+                  <div className="min-w-0">
+                    <div className="mb-1 flex items-center gap-2 pl-0.5">
+                      <span className="font-heading text-[13px] font-semibold text-foreground-primary">
+                        {roleDisplayName(role)}
+                      </span>
+                      {isCaptain && (
+                        <span className="rounded-full bg-status-warning-soft px-2 py-px font-caption text-[10px] font-semibold text-status-warning">
+                          {t("chat.captainBadge", "长驻")}
                         </span>
-                        <span className="font-caption text-[10px] tabular-nums text-foreground-tertiary">
-                          {formatClock(m.sent_at)}
-                        </span>
+                      )}
+                      <span className="font-caption text-[10.5px] tabular-nums text-foreground-tertiary">
+                        {formatClock(m.sent_at)}
+                      </span>
+                      {isUnread && (
+                        <span
+                          className="size-1.5 rounded-full bg-accent-primary"
+                          aria-hidden
+                        />
+                      )}
+                      <div className="ml-auto flex items-center gap-1 opacity-0 transition-opacity group-hover/msg:opacity-100">
+                        <button
+                          onClick={() => startReply(m)}
+                          className="min-h-7 rounded-full border border-border-subtle bg-surface-elevated px-2.5 py-1 text-[10px] text-foreground-secondary shadow-sm hover:bg-surface-tertiary"
+                          title={t("messages.reply")}
+                        >
+                          {t("messages.reply")}
+                        </button>
                         {isUnread && (
-                          <span
-                            className="size-1.5 rounded-full bg-accent-primary"
-                            aria-hidden
-                          />
+                          <button
+                            onClick={() => markRead(m)}
+                            disabled={marking === m.id}
+                            className="min-h-7 rounded-full border border-border-subtle bg-surface-elevated px-2.5 py-1 text-[10px] text-foreground-secondary shadow-sm hover:bg-surface-tertiary disabled:opacity-50"
+                            title={t("messages.markRead")}
+                          >
+                            ✓
+                          </button>
                         )}
                       </div>
-                    )}
+                    </div>
 
                     <div
-                      ref={(el) => {
-                        if (el) rowRefs.current.set(m.id, el);
-                        else rowRefs.current.delete(m.id);
-                      }}
                       className={cn(
-                        "group/bubble relative min-w-0 rounded-2xl rounded-bl-sm border border-border-subtle bg-surface-secondary px-3 py-2 shadow-sm transition-colors",
+                        "rounded-2xl rounded-tl-md border border-border-subtle bg-surface-secondary px-3.5 py-2.5 shadow-sm",
                         highlighted &&
-                          "ring-2 ring-accent-primary ring-offset-1 ring-offset-surface-primary",
+                          "ring-2 ring-accent-primary ring-offset-2 ring-offset-surface-primary",
                       )}
-                      title={`#${m.id} · ${m.kind} · ${formatFullStamp(m.sent_at)}`}
                     >
                       {m.in_reply_to != null && (
                         <button
                           onClick={() => jumpToParent(m.in_reply_to!)}
-                          className="mb-1 flex min-h-8 items-center gap-0.5 rounded bg-surface-tertiary px-2 py-1 text-[10px] text-foreground-tertiary hover:bg-surface-secondary"
+                          className="mb-1.5 flex min-h-7 items-center gap-0.5 rounded bg-surface-tertiary px-2 py-1 text-[10px] text-foreground-tertiary hover:bg-surface-secondary"
                           title={t("messages.jumpParent")}
                         >
                           <CornerUpLeft className="size-2.5" />#{m.in_reply_to}
                         </button>
                       )}
                       {reasoning && (
-                        <ReasoningDisclosure
-                          summary={reasoning}
-                          status="done"
-                        />
+                        <ReasoningDisclosure summary={reasoning} status="done" />
                       )}
                       {/* Agent output is GFM markdown (headings/lists/code/
                           tables) — render it, don't show literal `##`/```. */}
@@ -1763,36 +1771,14 @@ export function MessagesPanel({
                         />
                       </Suspense>
                       <ImageAttachments paths={extractImagePaths(m.body)} />
-
-                      {/* hover-only actions — top-right of the turn */}
-                      <div className="pointer-events-none absolute -top-2 right-0 flex items-center gap-1 opacity-0 transition-opacity group-hover/bubble:pointer-events-auto group-hover/bubble:opacity-100">
-                        <button
-                          onClick={() => startReply(m)}
-                          className="min-h-8 rounded-full border border-border-subtle bg-surface-elevated px-2.5 py-1 text-[10px] text-foreground-secondary shadow-sm hover:bg-surface-tertiary"
-                          title={t("messages.reply")}
-                        >
-                          {t("messages.reply")}
-                        </button>
-                        {isUnread && (
-                          <button
-                            onClick={() => markRead(m)}
-                            disabled={marking === m.id}
-                            className="min-h-8 rounded-full border border-border-subtle bg-surface-elevated px-2.5 py-1 text-[10px] text-foreground-secondary shadow-sm hover:bg-surface-tertiary disabled:opacity-50"
-                            title={t("messages.markRead")}
-                          >
-                            ✓
-                          </button>
-                        )}
-                      </div>
                     </div>
                   </div>
-                </div>
                 </div>
               </div>
             );
           })}
         </div>
-        <div className="mx-auto flex w-full max-w-[1040px] flex-col gap-0.5">
+        <div className="mx-auto flex w-full max-w-[min(1200px,92%)] flex-col gap-0.5 px-6">
           {pendingResponders.map(({ agentId, trigger }) => (
             <PendingBubble
               key={`pending-${agentId}`}
@@ -1847,13 +1833,13 @@ export function MessagesPanel({
       </div>
 
       {/* ── Task activity (chat 内联状态卡片，"AI 正在派活...") ─────── */}
-      <div className="mx-auto w-full max-w-[1040px] px-4">
+      <div className="mx-auto w-full max-w-[min(1200px,92%)] px-6">
         {taskActivityBelow}
       </div>
 
       {/* ── composer ─────────────────────────────────────────────────── */}
       <div className="flex shrink-0 flex-col gap-1.5 border-t border-border-subtle bg-surface-secondary px-3 py-2.5">
-        <div className="mx-auto flex w-full max-w-[1040px] flex-col gap-1.5">
+        <div className="mx-auto flex w-full max-w-[min(1200px,92%)] flex-col gap-1.5 px-6">
         {inReplyTo != null && (
           <div className="flex items-center gap-2 self-start rounded-md bg-accent-primary-soft px-2 py-1 text-[11px] text-accent-primary-deep">
             <CornerUpLeft className="size-3" />
