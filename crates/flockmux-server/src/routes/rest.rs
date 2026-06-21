@@ -1576,7 +1576,25 @@ pub(crate) fn spawn_bootstrap_inject(
         };
         if let Some(port) = tui_port {
             match crate::opencode_tui::deliver_bootstrap(port, &prompt, &workspace_dir).await {
-                Ok(()) => tracing::info!(agent = %agent_id, port, "bootstrap: opencode started its first turn (TUI HTTP)"),
+                Ok(()) => {
+                    tracing::info!(agent = %agent_id, port, "bootstrap: opencode started its first turn (TUI HTTP)");
+                    // Feed the first-response watchdog a real liveness signal.
+                    // opencode (TUI) has no transcript tailer, so it never emits
+                    // the message/activity/usage the watchdog watches for — a
+                    // slow-but-fine cold start (45-60s+) was otherwise misflagged
+                    // "启动后无响应（可能未登录或卡住）" at 90s even while working
+                    // (live-observed). deliver_bootstrap returns Ok ONLY once
+                    // opencode provably started a turn, so stamp that instant as
+                    // activity → agent_silent_since_ready() goes false → no false
+                    // fire. (The clear-on-send path still covers a >90s turn.)
+                    if let Err(e) = swarm
+                        .store()
+                        .touch_agent_activity(agent_id.clone(), now_ms())
+                        .await
+                    {
+                        tracing::debug!(?e, agent = %agent_id, "opencode bootstrap: touch_agent_activity failed");
+                    }
+                }
                 Err(err) => {
                     // opencode never started a turn within the 90s window — the
                     // cold TUI is wedged. Don't just warn and leave a green
