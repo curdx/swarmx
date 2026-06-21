@@ -143,10 +143,11 @@
     "about": "关于"
   },
   "welcome": {
-    "eyebrow": "多 agent 协作工作台",
-    "title": "让 Claude、Codex、OpenCode、Reasonix 在你的项目里组队协作",
-    "subtitle": "把你已登录的 AI CLI 组成一支团队——你下达需求，它们自动分工、相互协作、完成交付。",
+    "eyebrow": "AI 团队协作工作台",
+    "title": "派一支 AI 团队，在你的项目里分工干完一件事",
+    "subtitle": "复用你已装好、已登录的 AI 编码 CLI（Claude、Codex、OpenCode、Reasonix…），把它们编成一支团队：你提需求，队长拆解派工，成员各自动手、互相协作，最后交付——全程在本地运行，沿用你现有的订阅。",
     "panelTitle": "首次进入通常这样开始",
+    "stepsBadge": "3 步",
     "primary": "新建工作空间",
     "secondary": "查阅文档了解原理",
     "step1": {
@@ -163,16 +164,16 @@
     },
     "highlight": {
       "chat": {
-        "title": "对话式协作",
-        "body": "每个 agent 都在同一个工作空间里，可相互 @、互相提问"
+        "title": "成员同处一室",
+        "body": "所有成员共享同一个工作空间，可相互 @、互相提问——不是各开各的窗口"
       },
       "spell": {
         "title": "队长动态调度",
         "body": "队长边做边拆：按任务实时派生需要的成员、自动协调依赖，不用你预先画流程图"
       },
       "auto": {
-        "title": "自然语言派发任务",
-        "body": "用自然语言描述任务，自动匹配编排并启动"
+        "title": "复用你的本地 CLI",
+        "body": "直接拉起你电脑上已登录的 claude / codex 等，沿用现成的订阅与凭证——flockmux 从不读取或保存你的 token"
       }
     },
     "sidebarEmpty": "还没有工作空间",
@@ -416,6 +417,7 @@
     }
   },
   "chat": {
+    "captainBadge": "长驻",
     "modelDefault": "默认",
     "modelSwitching": "正在切换到 {{label}}…",
     "modelSwitchingRestart": "正在切换到 {{label}} 并重启队长…",

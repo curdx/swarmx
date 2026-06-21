@@ -58,7 +58,7 @@ export function Welcome({ onCreateWorkspace }: Props) {
                   {t("welcome.panelTitle", "首次进入通常这样开始")}
                 </span>
                 <span className="rounded-full bg-surface-tertiary px-2 py-0.5 font-caption text-[10px] text-foreground-tertiary">
-                  3 steps
+                  {t("welcome.stepsBadge", "3 步")}
                 </span>
               </div>
               {["welcome.step1", "welcome.step2", "welcome.step3"].map((key, index) => (

@@ -221,7 +221,7 @@ export default function ReplaysView() {
           header already shows the workspace name / path / unread; this
           row is view-internal toolbar only. */}
       <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border-subtle bg-surface-secondary px-4 py-2 md:h-11 md:flex-nowrap md:px-5 md:py-0">
-        <div className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-md bg-surface-primary px-3 md:w-60 md:flex-none">
+        <div className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-md bg-surface-primary px-3 transition-shadow focus-within:ring-2 focus-within:ring-ring/50 md:w-60 md:flex-none">
           <Search className="size-3.5 text-foreground-tertiary" />
           <input
             name="replay-search"
