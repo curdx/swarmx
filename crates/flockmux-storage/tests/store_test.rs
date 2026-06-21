@@ -2217,3 +2217,86 @@ async fn agent_silent_since_ready_reflects_signs_of_life() {
         "token usage alone must read as alive"
     );
 }
+
+// ── dangling in_reply_to is dropped, not FK-500'd (QA 2026-06-21) ──────────
+// An LLM worker can set `in_reply_to` to a message id that doesn't exist
+// (hallucinated, cross-thread, or not-yet-committed). The column is
+// `REFERENCES messages(id)`, so a raw insert fails the FK constraint and 500s
+// the whole send — losing the agent's reply (live-observed: an opencode worker
+// got four 500s before a retry landed). insert_message_threaded must sanitize a
+// missing parent to NULL so the message still delivers, unthreaded.
+#[tokio::test]
+async fn dangling_in_reply_to_is_dropped_not_errored() {
+    let (_dir, store) = fresh_store().await;
+    let parent = store
+        .insert_message_threaded(
+            NewMessage {
+                from_agent: "user".into(),
+                to_agent: "claude-aaaa".into(),
+                kind: "task".into(),
+                body: "parent".into(),
+                sent_at: ts(1),
+                in_reply_to: None,
+                meta: None,
+            },
+            Some("t-1".into()),
+        )
+        .await
+        .unwrap();
+
+    // A valid reply keeps its linkage.
+    let valid = store
+        .insert_message_threaded(
+            NewMessage {
+                from_agent: "claude-aaaa".into(),
+                to_agent: "user".into(),
+                kind: "reply".into(),
+                body: "valid reply".into(),
+                sent_at: ts(2),
+                in_reply_to: Some(parent.id),
+                meta: None,
+            },
+            Some("t-1".into()),
+        )
+        .await
+        .expect("valid in_reply_to must insert");
+    assert_eq!(valid.in_reply_to, Some(parent.id), "valid parent ref preserved");
+
+    // A dangling reply must NOT error, and the bad ref is dropped to NULL.
+    let dangling = store
+        .insert_message_threaded(
+            NewMessage {
+                from_agent: "claude-aaaa".into(),
+                to_agent: "user".into(),
+                kind: "reply".into(),
+                body: "reply to a ghost".into(),
+                sent_at: ts(3),
+                in_reply_to: Some(999_999),
+                meta: None,
+            },
+            Some("t-1".into()),
+        )
+        .await
+        .expect("dangling in_reply_to must NOT fail the insert");
+    assert_eq!(
+        dangling.in_reply_to, None,
+        "non-existent parent ref must be dropped to NULL, not persisted"
+    );
+
+    // The dangling-ref message is actually delivered, not silently lost.
+    let all = store
+        .list_messages(ListMessagesOpts {
+            to_agent: Some("user".into()),
+            from_agent: None,
+            thread_id: None,
+            only_undelivered: false,
+            limit: 200,
+        })
+        .await
+        .unwrap();
+    assert!(
+        all.iter()
+            .any(|m| m.id == dangling.id && m.in_reply_to.is_none()),
+        "the dangling-ref message must be delivered with a NULL parent"
+    );
+}
