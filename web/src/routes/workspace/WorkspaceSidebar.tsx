@@ -992,7 +992,7 @@ export function WorkspaceList({
               </span>
             </div>
           )}
-          {/* Open an EXISTING branch as a direction (flockmux's worktree-native
+          {/* Open an EXISTING branch as a direction (swarmx's worktree-native
            *  "switch branch": attach a worktree, never an in-place checkout that
            *  would disrupt a running agent). Branches already checked out
            *  elsewhere are filtered out server-side. */}

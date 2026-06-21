@@ -8,7 +8,7 @@
  */
 import type { Workspace } from "@/api/types";
 
-const KEY = "flockmux:activeWorkspace";
+const KEY = "swarmx:activeWorkspace";
 
 export function getActiveWorkspaceId(): string | null {
   try {

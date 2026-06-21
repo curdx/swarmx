@@ -123,7 +123,7 @@ jobs:
 
           certificate_path="$RUNNER_TEMP/developer-id-application.p12"
           certificate_base64_path="$RUNNER_TEMP/developer-id-application.p12.base64"
-          keychain_path="$RUNNER_TEMP/flockmux-signing.keychain-db"
+          keychain_path="$RUNNER_TEMP/swarmx-signing.keychain-db"
 
           printf '%s' "$APPLE_CERTIFICATE" > "$certificate_base64_path"
           openssl base64 -d -A -in "$certificate_base64_path" -out "$certificate_path"
@@ -235,7 +235,7 @@ jobs:
       - name: Upload desktop artifacts
         uses: actions/upload-artifact@v5
         with:
-          name: flockmux-${{ matrix.target }}
+          name: swarmx-${{ matrix.target }}
           path: |
             release-assets/${{ matrix.target }}/*
           if-no-files-found: error
@@ -269,7 +269,7 @@ jobs:
 
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             release_tag="$GITHUB_REF_NAME"
-            release_title="flockmux $GITHUB_REF_NAME"
+            release_title="swarmx $GITHUB_REF_NAME"
             release_channel="正式版本 $GITHUB_REF_NAME"
             stability_note="这是固定版本，适合日常使用和问题复现。"
             release_flags=(--latest)
@@ -284,7 +284,7 @@ jobs:
             fi
           else
             release_tag="nightly"
-            release_title="flockmux nightly"
+            release_title="swarmx nightly"
             release_channel="nightly 预览版"
             stability_note="这是 main 分支的滚动构建，会被每次成功打包覆盖；需要稳定版本时请使用 v* 正式 Release。"
             release_flags=(--prerelease --latest=false)
@@ -342,7 +342,7 @@ jobs:
           cat > release-notes.md <<EOF_NOTES
           ## 版本说明
 
-          这是 flockmux 桌面端的 **$release_channel**，由 GitHub Actions 从源码自动打包。
+          这是 swarmx 桌面端的 **$release_channel**，由 GitHub Actions 从源码自动打包。
 
           $stability_note
 

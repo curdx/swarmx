@@ -6,7 +6,7 @@
 # 5188) with a throwaway /tmp data dir, so it never collides with a long-lived
 # `:7777` + `:5173` dev session you're already running. The frontend is real
 # Vite dev (hot-reload), proxying /api + /ws to the isolated backend via the
-# `FLOCKMUX_BACKEND` override (see web/vite.config.ts).
+# `SWARMX_BACKEND` override (see web/vite.config.ts).
 #
 # Why this exists: API/curl tests miss UI-only failures (a backend capability
 # with no UI entry point; a flow that only breaks through the rendered app). The
@@ -19,9 +19,9 @@
 # Open http://localhost:5188 once it's up.
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-BPORT="${FLOCKMUX_TEST_BACKEND_PORT:-7788}"
-FPORT="${FLOCKMUX_TEST_FRONTEND_PORT:-5188}"
-DATA="${FLOCKMUX_TEST_DATA:-/tmp/flockmux-teststack}"
+BPORT="${SWARMX_TEST_BACKEND_PORT:-7788}"
+FPORT="${SWARMX_TEST_FRONTEND_PORT:-5188}"
+DATA="${SWARMX_TEST_DATA:-/tmp/swarmx-teststack}"
 PIDFILE="$DATA/pids"
 
 stop() {
@@ -43,20 +43,20 @@ mkdir -p "$DATA"/{ws,bb,rec}
 cd "$ROOT"
 
 echo "▶ building backend (cargo)…"
-cargo build -p flockmux-server -q || { echo "✗ cargo build failed"; exit 1; }
+cargo build -p swarmx-server -q || { echo "✗ cargo build failed"; exit 1; }
 
 echo "▶ starting backend on :$BPORT (isolated data: $DATA)…"
-nohup env FLOCKMUX_PORT="$BPORT" FLOCKMUX_SERVER_URL="http://127.0.0.1:$BPORT" \
-  FLOCKMUX_DB_PATH="$DATA/d.db" FLOCKMUX_WORKSPACES_DIR="$DATA/ws" \
-  FLOCKMUX_BLACKBOARD_DIR="$DATA/bb" FLOCKMUX_RECORDINGS_DIR="$DATA/rec" \
-  RUST_LOG="${RUST_LOG:-warn,flockmux_server=info}" \
-  "$ROOT/target/debug/flockmux-server" > "$DATA/backend.log" 2>&1 &
+nohup env SWARMX_PORT="$BPORT" SWARMX_SERVER_URL="http://127.0.0.1:$BPORT" \
+  SWARMX_DB_PATH="$DATA/d.db" SWARMX_WORKSPACES_DIR="$DATA/ws" \
+  SWARMX_BLACKBOARD_DIR="$DATA/bb" SWARMX_RECORDINGS_DIR="$DATA/rec" \
+  RUST_LOG="${RUST_LOG:-warn,swarmx_server=info}" \
+  "$ROOT/target/debug/swarmx-server" > "$DATA/backend.log" 2>&1 &
 echo $! > "$PIDFILE"
 
 echo "▶ starting Vite dev on :$FPORT (proxy → :$BPORT)…"
 cd "$ROOT/web"
-[ -d node_modules ] || npm_config_cache=/tmp/.npm-flockmux npm install
-nohup env FLOCKMUX_BACKEND="127.0.0.1:$BPORT" \
+[ -d node_modules ] || npm_config_cache=/tmp/.npm-swarmx npm install
+nohup env SWARMX_BACKEND="127.0.0.1:$BPORT" \
   npx vite --port "$FPORT" --strictPort > "$DATA/frontend.log" 2>&1 &
 echo $! >> "$PIDFILE"
 

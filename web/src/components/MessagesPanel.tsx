@@ -243,7 +243,7 @@ export function MessagesPanel({
   // saved on switch + tab-close, cleared on send. The state + persistence
   // effects live in useComposerDraft; the key is computed here because send
   // (below) also clears it.
-  const draftKey = `flockmux:draft:v1:${workspaceSlug ?? "_"}:${activeThreadId ?? "main"}`;
+  const draftKey = `swarmx:draft:v1:${workspaceSlug ?? "_"}:${activeThreadId ?? "main"}`;
   const [body, setBody] = useComposerDraft(draftKey);
   // Always-current draftKey, read AFTER an await to tell whether the user
   // switched rooms mid-upload (an in-flight image upload that resolves after a
@@ -2418,7 +2418,7 @@ function PendingDot({ delayMs }: { delayMs: number }) {
     <span
       className="block size-1.5 rounded-full bg-foreground-tertiary"
       style={{
-        animation: "flockmuxTypingDot 1s ease-in-out infinite",
+        animation: "swarmxTypingDot 1s ease-in-out infinite",
         animationDelay: `${delayMs}ms`,
       }}
     />

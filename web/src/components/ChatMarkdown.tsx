@@ -52,7 +52,7 @@ function extractText(node: ReactNode): string {
 }
 
 // In-srcdoc CSP for the HTML preview: allow inline styles/scripts (they run in a
-// null origin, can't touch flockmux) + images + a small whitelist of common
+// null origin, can't touch swarmx) + images + a small whitelist of common
 // CDNs agents reach for, but block all network egress (connect-src 'none') so a
 // previewed page can't exfiltrate. Mirrors Claude Artifacts' CDN-whitelist +
 // no-network stance.
@@ -350,7 +350,7 @@ function unwrapOuterMarkdownFence(s: string): string {
 // Guard rail: a pathologically long bubble (an agent pastes a multi-MB blob,
 // or echoes a huge tool result) would otherwise render to thousands of DOM
 // nodes and freeze the tab. Cap the markdown we feed react-markdown and show an
-// honest notice — flockmux normally renders short labels, not raw payloads, so
+// honest notice — swarmx normally renders short labels, not raw payloads, so
 // this only ever trips on outliers, but the freeze it prevents is total.
 const MAX_RENDER_CHARS = 100_000;
 

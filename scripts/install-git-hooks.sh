@@ -13,7 +13,7 @@ hook="$repo_root/.git/hooks/pre-commit"
 
 cat > "$hook" <<'EOF'
 #!/usr/bin/env bash
-# flockmux pre-commit — mechanical cross-file invariant guards.
+# swarmx pre-commit — mechanical cross-file invariant guards.
 # Installed by scripts/install-git-hooks.sh. Logic in scripts/harness-check.mjs.
 set -euo pipefail
 command -v node >/dev/null 2>&1 || {

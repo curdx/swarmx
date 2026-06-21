@@ -1,0 +1,9 @@
+[package]
+name = "swarmx-shim"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "swarmx-shim"
+path = "src/main.rs"

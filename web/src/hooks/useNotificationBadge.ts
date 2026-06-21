@@ -4,7 +4,7 @@
  *
  * 方向必须跟通知中心一致。早先红点用一个独立的「seenAt 时间戳」：popover
  * 一打开就 setSeenAt(now) 把红点抹掉，可通知中心仍按 id 维度的「已读集合」
- * （localStorage `flockmux:notif:read:v1`）算未读 —— 于是出现「红点没了但
+ * （localStorage `swarmx:notif:read:v1`）算未读 —— 于是出现「红点没了但
  * 中心还显示一堆未读」的自相矛盾（瞄一眼 ≠ 读过）。
  *
  * 现在红点直接以中心的「已读集合」为唯一真相：useSwarmFeed 收到 message /
@@ -22,7 +22,7 @@ import { useSwarmFeed } from "./useSwarmFeed";
 import { isHiddenWake } from "@/lib/notif";
 
 // 与 /notifications 共用的「已读集合」key —— 红点的唯一真相,保证方向一致。
-const READ_KEY = "flockmux:notif:read:v1";
+const READ_KEY = "swarmx:notif:read:v1";
 
 function readReadSet(): Set<string> {
   try {

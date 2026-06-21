@@ -114,7 +114,7 @@ export function AppShell() {
               <Boxes className="size-4" strokeWidth={2.25} />
             </span>
             <span className="font-mono text-[15px] font-semibold tracking-tight text-foreground-primary">
-              flockmux
+              swarmx
             </span>
           </Link>
 

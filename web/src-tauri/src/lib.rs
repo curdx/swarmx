@@ -1,13 +1,13 @@
-// flockmux-tauri desktop shell entry.
+// swarmx-tauri desktop shell entry.
 //
 // Sidecar policy:
 //   * release build:  Tauri owns the lifecycle of the bundled
-//                     flockmux-server binary — spawn at startup,
+//                     swarmx-server binary — spawn at startup,
 //                     SUPERVISE it (back-off respawn on crash), and
 //                     terminate it when the app exits (closing the main
 //                     window hides to tray; real quit is the tray's Quit).
 //   * debug build:    we DON'T spawn — local dev workflow expects the
-//                     developer to run `cargo run -p flockmux-server`
+//                     developer to run `cargo run -p swarmx-server`
 //                     in a separate terminal so server changes
 //                     hot-reload without a Tauri rebuild.
 //
@@ -112,10 +112,10 @@ fn start_sidecar(app: &tauri::AppHandle) {
     let my_gen = state.generation.fetch_add(1, Ordering::SeqCst) + 1;
     let attempt = state.attempts.fetch_add(1, Ordering::SeqCst) + 1;
 
-    let cmd = match app.shell().sidecar("flockmux-server") {
+    let cmd = match app.shell().sidecar("swarmx-server") {
         Ok(c) => c,
         Err(e) => {
-            log::error!("failed to locate flockmux-server sidecar: {e}");
+            log::error!("failed to locate swarmx-server sidecar: {e}");
             let _ = app.emit(
                 "backend-sidecar-down",
                 SidecarDown {
@@ -133,17 +133,17 @@ fn start_sidecar(app: &tauri::AppHandle) {
     // CLI plugins (embedded in the server binary via include_str!), this is a
     // runtime JS file opencode itself loads, so it MUST ship as a bundle
     // resource and be located by absolute path. pre_spawn reads
-    // FLOCKMUX_OPENCODE_PLUGIN to write it into each opencode worker's config;
+    // SWARMX_OPENCODE_PLUGIN to write it into each opencode worker's config;
     // without it, installed-app opencode workers lose auto-wake + activity
     // streaming (the dev-only CARGO_MANIFEST_DIR fallback doesn't exist on a
     // user's machine). Best-effort: a missing resource warns + degrades, never
     // blocks startup.
     let cmd = match app.path().resource_dir() {
         Ok(dir) => {
-            let plugin = dir.join("cli-plugins/opencode/flockmux-wake.js");
+            let plugin = dir.join("cli-plugins/opencode/swarmx-wake.js");
             if plugin.is_file() {
                 cmd.env(
-                    "FLOCKMUX_OPENCODE_PLUGIN",
+                    "SWARMX_OPENCODE_PLUGIN",
                     plugin.to_string_lossy().to_string(),
                 )
             } else {
@@ -155,7 +155,7 @@ fn start_sidecar(app: &tauri::AppHandle) {
             }
         }
         Err(e) => {
-            log::warn!("resource_dir() failed ({e}); FLOCKMUX_OPENCODE_PLUGIN unset");
+            log::warn!("resource_dir() failed ({e}); SWARMX_OPENCODE_PLUGIN unset");
             cmd
         }
     };
@@ -163,13 +163,13 @@ fn start_sidecar(app: &tauri::AppHandle) {
     let (mut rx, child) = match cmd.spawn() {
         Ok(v) => v,
         Err(e) => {
-            log::error!("failed to spawn flockmux-server sidecar: {e}");
+            log::error!("failed to spawn swarmx-server sidecar: {e}");
             handle_sidecar_gone(app, my_gen, 0, format!("启动后端失败：{e}"));
             return;
         }
     };
     log::info!(
-        "flockmux-server sidecar started (pid={}, attempt={})",
+        "swarmx-server sidecar started (pid={}, attempt={})",
         child.pid(),
         attempt
     );
@@ -204,7 +204,7 @@ fn start_sidecar(app: &tauri::AppHandle) {
                 CommandEvent::Error(err) => {
                     // Stream-level error: record it, but let Terminated (or the
                     // stream closing below) drive the respawn decision.
-                    log::error!("flockmux-server sidecar error: {err}");
+                    log::error!("swarmx-server sidecar error: {err}");
                     if tail.len() == 20 {
                         tail.pop_front();
                     }
@@ -213,7 +213,7 @@ fn start_sidecar(app: &tauri::AppHandle) {
                 CommandEvent::Terminated(payload) => {
                     let trail = tail.iter().cloned().collect::<Vec<_>>().join("\n");
                     log::error!(
-                        "flockmux-server sidecar terminated (code={:?}, signal={:?})\n\
+                        "swarmx-server sidecar terminated (code={:?}, signal={:?})\n\
                          stderr tail:\n{trail}",
                         payload.code,
                         payload.signal
@@ -276,7 +276,7 @@ fn handle_sidecar_gone(app: &tauri::AppHandle, my_gen: u64, ran_ms: u128, messag
         // "Restart backend" starts from a clean slate.
         state.attempts.store(0, Ordering::SeqCst);
         log::error!(
-            "flockmux-server sidecar gave up after {MAX_SIDECAR_ATTEMPTS} rapid attempts; \
+            "swarmx-server sidecar gave up after {MAX_SIDECAR_ATTEMPTS} rapid attempts; \
              waiting for a manual restart"
         );
     } else {
@@ -318,7 +318,7 @@ fn restart_backend(_app: tauri::AppHandle) -> Result<(), String> {
     }
     #[cfg(debug_assertions)]
     {
-        Err("dev 模式下后端由你手动 `cargo run -p flockmux-server` 运行，不能从这里重启".into())
+        Err("dev 模式下后端由你手动 `cargo run -p swarmx-server` 运行，不能从这里重启".into())
     }
 }
 
@@ -365,7 +365,7 @@ pub fn run() {
             }
 
             // ── System tray ──────────────────────────────────────────
-            let show = MenuItemBuilder::with_id("show", "Show flockmux").build(app)?;
+            let show = MenuItemBuilder::with_id("show", "Show swarmx").build(app)?;
             let hide = MenuItemBuilder::with_id("hide", "Hide window").build(app)?;
             let quit = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
             let menu = MenuBuilder::new(app).items(&[&show, &hide, &quit]).build()?;
@@ -429,7 +429,7 @@ pub fn run() {
                 // body (which would outlive `state` — E0597).
                 let child = state.child.lock().unwrap().take();
                 if let Some(child) = child {
-                    log::info!("terminating flockmux-server sidecar on app exit");
+                    log::info!("terminating swarmx-server sidecar on app exit");
                     let _ = child.kill();
                 }
             }

@@ -1,14 +1,14 @@
 +++
 id = "orchestrator"
 name = "Orchestrator"
-description = "用户在 flockmux workspace 里的常驻智能调度员 —— Magentic-One 双 ledger 模式,看任务规模动态决定自己干 / 派 1 个 / 派一群 worker。"
+description = "用户在 swarmx workspace 里的常驻智能调度员 —— Magentic-One 双 ledger 模式,看任务规模动态决定自己干 / 派 1 个 / 派一群 worker。"
 default_cli = "claude"
 artifact_paths = []
 handoff_signal = ""
 
 system_prompt_template = """
 You are the **ORCHESTRATOR** — the user's only point of contact in this
-flockmux workspace, and the only agent that thinks about the *whole*
+swarmx workspace, and the only agent that thinks about the *whole*
 task. You stay on duty for the entire life of this workspace. Your
 job is to translate the user's natural language into work that gets
 done, by combining three things:
@@ -441,7 +441,7 @@ If any answer is "no" — fix it before STOP.
 
 # orchestrator role
 
-Magentic-One 双 ledger orchestrator for flockmux. Replaces the previous
+Magentic-One 双 ledger orchestrator for swarmx. Replaces the previous
 scout (one-shot greet) + planner (one-shot route) + role-specific
 business agents (one-shot work). One orchestrator stays alive for the
 workspace's lifetime, maintains plan + progress on blackboard, decides

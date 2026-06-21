@@ -1,7 +1,7 @@
 name: CI
 
 # Gate every push / PR on the test suite. Two broken tests
-# (flockmux-mcp tools_list, flockmux-storage orphan-recordings) shipped on
+# (swarmx-mcp tools_list, swarmx-storage orphan-recordings) shipped on
 # main precisely because nothing ran `cargo test` before merge — this is the
 # guard against that recurring.
 
@@ -66,27 +66,27 @@ jobs:
           # global WebSocket (used by the .mjs smokes) is stable on Node 22.
           node-version: 22
       - name: Build server
-        run: cargo build -p flockmux-server --locked
+        run: cargo build -p swarmx-server --locked
       - name: Boot isolated server + run directions smoke
         # No real CLI needed: directions-smoke drives create/rename/delete over
         # REST and asserts the ThreadChanged broadcasts on /ws/swarm. Data dirs
-        # are throwaway (FLOCKMUX_*), so nothing touches a real ~/.flockmux. The
+        # are throwaway (SWARMX_*), so nothing touches a real ~/.swarmx. The
         # agent-spawning smokes (swarm/resume/stress) need claude/codex on PATH +
         # login, so they stay manual — see scripts/golden-cli-test.sh.
         run: |
           set -euo pipefail
           D="$(mktemp -d)"
-          FLOCKMUX_PORT=7799 FLOCKMUX_SERVER_URL=http://127.0.0.1:7799 \
-            FLOCKMUX_DB_PATH="$D/d.db" FLOCKMUX_WORKSPACES_DIR="$D/ws" \
-            FLOCKMUX_BLACKBOARD_DIR="$D/bb" FLOCKMUX_RECORDINGS_DIR="$D/rec" \
-            RUST_LOG=error ./target/debug/flockmux-server &
+          SWARMX_PORT=7799 SWARMX_SERVER_URL=http://127.0.0.1:7799 \
+            SWARMX_DB_PATH="$D/d.db" SWARMX_WORKSPACES_DIR="$D/ws" \
+            SWARMX_BLACKBOARD_DIR="$D/bb" SWARMX_RECORDINGS_DIR="$D/rec" \
+            RUST_LOG=error ./target/debug/swarmx-server &
           SRV=$!
           trap 'kill "$SRV" 2>/dev/null || true' EXIT
           for _ in $(seq 1 60); do
             curl -sf http://127.0.0.1:7799/api/workspaces >/dev/null 2>&1 && break
             sleep 0.5
           done
-          FLOCKMUX_PORT=7799 node scripts/directions-smoke.mjs
+          SWARMX_PORT=7799 node scripts/directions-smoke.mjs
 
   web:
     name: Web (typecheck · build)
@@ -150,9 +150,9 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - uses: Swatinem/rust-cache@v2
       - name: Build server + shim + mcp
-        # The server locates flockmux-shim / flockmux-mcp at boot and fails to
+        # The server locates swarmx-shim / swarmx-mcp at boot and fails to
         # start without them, so build all three (not just the server).
-        run: cargo build -p flockmux-server -p flockmux-shim -p flockmux-mcp --locked
+        run: cargo build -p swarmx-server -p swarmx-shim -p swarmx-mcp --locked
       - name: Install web deps
         run: npm ci
         working-directory: web
@@ -164,16 +164,16 @@ jobs:
         # The server MUST start in the same step as the test run: a background
         # process spawned in a separate step is reaped when that step ends, so
         # vite's /api proxy would then hit a dead 7777 (ECONNREFUSED). Throwaway
-        # data dirs (FLOCKMUX_*) so the run never touches a real ~/.flockmux;
+        # data dirs (SWARMX_*) so the run never touches a real ~/.swarmx;
         # Playwright's webServer brings up vite itself.
         working-directory: web
         run: |
           set -euo pipefail
           D="$(mktemp -d)"
-          FLOCKMUX_PORT=7777 FLOCKMUX_DB_PATH="$D/d.db" \
-            FLOCKMUX_WORKSPACES_DIR="$D/ws" FLOCKMUX_BLACKBOARD_DIR="$D/bb" \
-            FLOCKMUX_RECORDINGS_DIR="$D/rec" RUST_LOG=error \
-            "$GITHUB_WORKSPACE/target/debug/flockmux-server" &
+          SWARMX_PORT=7777 SWARMX_DB_PATH="$D/d.db" \
+            SWARMX_WORKSPACES_DIR="$D/ws" SWARMX_BLACKBOARD_DIR="$D/bb" \
+            SWARMX_RECORDINGS_DIR="$D/rec" RUST_LOG=error \
+            "$GITHUB_WORKSPACE/target/debug/swarmx-server" &
           SRV=$!
           trap 'kill "$SRV" 2>/dev/null || true' EXIT
           for _ in $(seq 1 60); do

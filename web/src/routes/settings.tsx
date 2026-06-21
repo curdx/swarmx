@@ -2,7 +2,7 @@
  * Preferences — Pencil frame nJqkA.
  *
  * Left nav (200) + right detail. Persistence is localStorage only —
- * flockmux-storage has no kv settings table yet; the existing crates
+ * swarmx-storage has no kv settings table yet; the existing crates
  * own session state, not user prefs. When that table lands we'll
  * promote read/write to api.getSettings / api.putSettings without
  * changing this surface.
@@ -84,7 +84,7 @@ import {
 import { cn } from "@/lib/cn";
 import { formatShortcutChord, getClientPlatformInfo } from "@/lib/platform";
 
-const STORAGE_KEY = "flockmux:settings:v1";
+const STORAGE_KEY = "swarmx:settings:v1";
 
 type Lang = "zh" | "en";
 type Theme = "light" | "dark" | "system";
@@ -248,7 +248,7 @@ export default function SettingsRoute() {
             );
           })}
           <div className="ml-auto hidden px-3 pt-4 font-caption text-[10px] text-foreground-tertiary lg:mt-auto lg:block">
-            <p className="font-mono">flockmux</p>
+            <p className="font-mono">swarmx</p>
             <p>v{__APP_VERSION__}</p>
           </div>
         </aside>
@@ -1191,11 +1191,11 @@ function PluginsPanel() {
 
 // ── Privacy panel ───────────────────────────────────────────────────────
 
-function flockmuxLocalStorageKeys(): string[] {
+function swarmxLocalStorageKeys(): string[] {
   const keys: string[] = [];
   for (let i = 0; i < window.localStorage.length; i++) {
     const k = window.localStorage.key(i);
-    if (k && k.startsWith("flockmux:")) keys.push(k);
+    if (k && k.startsWith("swarmx:")) keys.push(k);
   }
   return keys;
 }
@@ -1207,7 +1207,7 @@ function PrivacyPanel() {
 
   const exportJson = () => {
     const data: Record<string, unknown> = {};
-    for (const k of flockmuxLocalStorageKeys()) {
+    for (const k of swarmxLocalStorageKeys()) {
       const raw = window.localStorage.getItem(k);
       if (raw == null) continue;
       try {
@@ -1222,7 +1222,7 @@ function PrivacyPanel() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `flockmux-local-${new Date().toISOString().slice(0, 10)}.json`;
+    a.download = `swarmx-local-${new Date().toISOString().slice(0, 10)}.json`;
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -1230,7 +1230,7 @@ function PrivacyPanel() {
   };
 
   const clearAllNow = () => {
-    const keys = flockmuxLocalStorageKeys();
+    const keys = swarmxLocalStorageKeys();
     for (const k of keys) window.localStorage.removeItem(k);
     setToast(t("settings.privacy.cleared", { count: keys.length }));
     // P1-27: clearing localStorage alone is a half-truth — the live in-memory
@@ -1309,15 +1309,15 @@ interface CrateInfo {
   desc: string;
 }
 const CRATES: CrateInfo[] = [
-  { name: "flockmux-server", desc: "axum HTTP/WS gateway · :7777" },
-  { name: "flockmux-pty", desc: "portable-pty bridge + WebSocket frame protocol" },
-  { name: "flockmux-shim", desc: "wraps claude/codex CLIs · injects hooks + MCP" },
-  { name: "flockmux-mcp", desc: "MCP server exposed to each agent (swarm bridge)" },
-  { name: "flockmux-swarm", desc: "blackboard + mailbox + wake coordinator" },
-  { name: "flockmux-storage", desc: "rusqlite-backed message/recording/event store" },
-  { name: "flockmux-recorder", desc: "asciicast v2 writer for every PTY" },
-  { name: "flockmux-protocol", desc: "wire types shared client/server/shim" },
-  { name: "flockmux-cli", desc: "(stub) future `flockmux up` launcher" },
+  { name: "swarmx-server", desc: "axum HTTP/WS gateway · :7777" },
+  { name: "swarmx-pty", desc: "portable-pty bridge + WebSocket frame protocol" },
+  { name: "swarmx-shim", desc: "wraps claude/codex CLIs · injects hooks + MCP" },
+  { name: "swarmx-mcp", desc: "MCP server exposed to each agent (swarm bridge)" },
+  { name: "swarmx-swarm", desc: "blackboard + mailbox + wake coordinator" },
+  { name: "swarmx-storage", desc: "rusqlite-backed message/recording/event store" },
+  { name: "swarmx-recorder", desc: "asciicast v2 writer for every PTY" },
+  { name: "swarmx-protocol", desc: "wire types shared client/server/shim" },
+  { name: "swarmx-cli", desc: "(stub) future `swarmx up` launcher" },
 ];
 
 const DEPS: { name: string; ver: string; what: string }[] = [

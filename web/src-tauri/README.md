@@ -1,7 +1,7 @@
-# flockmux-tauri
+# swarmx-tauri
 
-Tauri 2.x desktop shell for flockmux. Bundles the React frontend (`web/`)
-and the `flockmux-server` binary into a single .app / .exe / .AppImage.
+Tauri 2.x desktop shell for swarmx. Bundles the React frontend (`web/`)
+and the `swarmx-server` binary into a single .app / .exe / .AppImage.
 
 ## Layout
 
@@ -11,14 +11,14 @@ web/src-tauri/
 │                          repo root cargo workspace)
 ├── tauri.conf.json     ← productName, devUrl, externalBin, icons
 ├── src/
-│   ├── main.rs         ← thin wrapper, calls flockmux_tauri_lib::run()
+│   ├── main.rs         ← thin wrapper, calls swarmx_tauri_lib::run()
 │   └── lib.rs          ← Tauri Builder + tray + (release) sidecar spawn
 ├── capabilities/
-│   └── default.json    ← shell:allow-spawn for the flockmux-server sidecar
+│   └── default.json    ← shell:allow-spawn for the swarmx-server sidecar
 ├── scripts/
 │   └── build-sidecar.sh
 ├── binaries/           ← (.gitignore) staged sidecar binaries per target
-│                          triple, e.g. flockmux-server-aarch64-apple-darwin
+│                          triple, e.g. swarmx-server-aarch64-apple-darwin
 └── icons/              ← Tauri-generated app icons
 ```
 
@@ -29,7 +29,7 @@ in their own shell):
 
 ```bash
 # terminal 1 — backend
-cargo run -p flockmux-server
+cargo run -p swarmx-server
 
 # terminal 2 — Tauri shell + vite
 cd web
@@ -44,8 +44,8 @@ Sidecar must be staged once before `tauri build` so it gets bundled:
 
 ```bash
 cd web
-npm run sidecar:release   # builds flockmux-server in release mode,
-                          # copies to binaries/flockmux-server-<host triple>
+npm run sidecar:release   # builds swarmx-server in release mode,
+                          # copies to binaries/swarmx-server-<host triple>
 npm run tauri:build       # bundles .app / .dmg / etc.
 ```
 

@@ -29,7 +29,7 @@ async function deleteBlackboard(path: string): Promise<void> {
     res = await fetch(url, { method: "DELETE" });
   } catch (e) {
     const friendly = i18n.t("blackboard.connectFail", {
-      defaultValue: "连接不上本地服务（127.0.0.1:7777），请确认 flockmux 正在运行",
+      defaultValue: "连接不上本地服务（127.0.0.1:7777），请确认 swarmx 正在运行",
     });
     throw new ApiError(0, friendly, `${friendly}（DELETE ${url}：${(e as Error)?.message ?? e}）`);
   }

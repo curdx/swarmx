@@ -1,6 +1,6 @@
 /target
 **/*.rs.bk
-# Cargo.lock is committed — flockmux ships binaries, and locked deps make
+# Cargo.lock is committed — swarmx ships binaries, and locked deps make
 # `cargo build` reproducible across machines. (Skipped only for pure-library
 # crates, which this workspace isn't.)
 
@@ -12,7 +12,7 @@
 
 # data
 /data
-/.flockmux
+/.swarmx
 /.secrets/
 *.sqlite
 *.sqlite-journal
@@ -31,7 +31,7 @@
 # local scratch (screenshots, manual repro, etc.)
 /.tmp
 /.tmp-screenshots
-/.flockmux-ui-screens
+/.swarmx-ui-screens
 
 # per-user MCP / Claude Code state (different on every machine)
 /.mcp.json

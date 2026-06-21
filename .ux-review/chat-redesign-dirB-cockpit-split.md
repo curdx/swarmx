@@ -4,7 +4,7 @@ I'll write the complete design directly as my response.
 
 ---
 
-# flockmux 聊天窗口重设计：驾驶舱 / 透明优先
+# swarmx 聊天窗口重设计：驾驶舱 / 透明优先
 
 ## 1. 一句话主张
 
@@ -171,7 +171,7 @@ I'll write the complete design directly as my response.
 
 ### diff / 变更（右面板主场）
 变更 tab = 文件列表 + side-by-side diff。**门控移到合并前**（rCoding 共识：gate 从 before-write 移到 before-merge，per-file accept 摘樱桃）：
-- **行级评论**：点行「在这评审」→ inline「告诉队长改这里」→ 作为带 file:line 上下文的消息发给成员（flockmux 史上第一个评审面）。
+- **行级评论**：点行「在这评审」→ inline「告诉队长改这里」→ 作为带 file:line 上下文的消息发给成员（swarmx 史上第一个评审面）。
 - **合并门**：`[合并回 main]` 被「所有文件已看过」勾选 + rebase✓ + 测试○ + 评论已解决○ 门控。冲突时自动派合并解决成员，活动流实时显示。
 
 ---
@@ -311,7 +311,7 @@ I'll write the complete design directly as my response.
 ---
 
 **关键文件引用**（均为绝对路径）：
-- 对话渲染主体：`/Users/wdx/opc/flockmux-core/.claude/worktrees/funny-raman-47113f/web/src/.../MessagesPanel.tsx`、`ChatMarkdown.tsx`
+- 对话渲染主体：`/Users/wdx/opc/swarmx-core/.claude/worktrees/funny-raman-47113f/web/src/.../MessagesPanel.tsx`、`ChatMarkdown.tsx`
 - 成员栏/钻取抽屉（待重构为右面板）：`Chat.tsx`、`AgentDrawer.tsx`、`TaskActivity.tsx`、`OrchestratorFailureCard.tsx`、`ModelPicker.tsx`
-- 后端事件源：`/Users/wdx/opc/flockmux-core/.claude/worktrees/funny-raman-47113f/crates/flockmux-protocol/src/ws_swarm.rs`、`crates/flockmux-server/src/transcript.rs`、`crates/flockmux-swarm/src/swarm.rs`
+- 后端事件源：`/Users/wdx/opc/swarmx-core/.claude/worktrees/funny-raman-47113f/crates/swarmx-protocol/src/ws_swarm.rs`、`crates/swarmx-server/src/transcript.rs`、`crates/swarmx-swarm/src/swarm.rs`
 - 重设计决策底本：`.ux-review/final-redesign.md`

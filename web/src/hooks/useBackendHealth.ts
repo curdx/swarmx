@@ -1,7 +1,7 @@
 /**
  * useBackendHealth — surface the bundled backend sidecar's liveness to the UI.
  *
- * In a release Tauri build the desktop shell owns the flockmux-server sidecar
+ * In a release Tauri build the desktop shell owns the swarmx-server sidecar
  * and supervises it (see web/src-tauri/src/lib.rs). When that process dies it
  * emits `backend-sidecar-down` (with a stderr tail + whether an auto-restart is
  * still pending) and, once a (re)spawn succeeds, `backend-sidecar-up`.

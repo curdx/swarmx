@@ -52,7 +52,7 @@ const ACK_BYTES = 5 * 1024;
 const ACK_INTERVAL_MS = 50;
 const RESIZE_DEBOUNCE_MS = 150;
 
-const lastSeqKey = (agentId: string) => `flockmux:lastSeq:${agentId}`;
+const lastSeqKey = (agentId: string) => `swarmx:lastSeq:${agentId}`;
 const readLastSeq = (agentId: string): number => {
   try {
     const v = window.sessionStorage.getItem(lastSeqKey(agentId));

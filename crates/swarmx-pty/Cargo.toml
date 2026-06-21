@@ -1,0 +1,22 @@
+[package]
+name = "swarmx-pty"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+portable-pty.workspace = true
+tokio.workspace = true
+bytes.workspace = true
+tracing.workspace = true
+parking_lot.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+swarmx-protocol = { path = "../swarmx-protocol" }
+
+[target.'cfg(unix)'.dependencies]
+# Signal the child's whole process *group* on kill so the real CLI
+# (a grandchild of the server, spawned under swarmx-shim) is reaped
+# too. `portable_pty::Child::kill` only SIGKILLs the shim pid and would
+# leave the real claude/codex reparented to init, still burning tokens.
+libc = "0.2"

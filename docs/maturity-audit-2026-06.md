@@ -1,4 +1,4 @@
-# flockmux 生产就绪 / 成熟度审计与施工清单（2026-06）
+# swarmx 生产就绪 / 成熟度审计与施工清单（2026-06）
 
 > 生成日期：2026-06-11
 > 生成方式：10 维度多 agent 评估（69 个 agent、约 1700 次工具调用，58 条差距**全部经独立 agent 反向核实**，0 条被驳回）。
@@ -22,7 +22,7 @@
 
 ## 一句话结论
 
-flockmux 已经是一个"工程素养明显在线"的成熟原型——后端健壮性（背压 / 进程组回收 / 事务化迁移）和单一 README 质量都超出原型水准——但它离"成熟软件"还差**三类不可见的安全网**：**数据无任何备份 / 损坏防护**、**长生命周期子进程死了 / 卡了基本发现不了**、以及**前端 2.7 万行几乎零自动化测试且唯一的 e2e 套件根本不进 CI**。这三者叠加在一个正在做"状态诚实化"改造的项目上，恰好是回归最容易无声溜进生产的地方。
+swarmx 已经是一个"工程素养明显在线"的成熟原型——后端健壮性（背压 / 进程组回收 / 事务化迁移）和单一 README 质量都超出原型水准——但它离"成熟软件"还差**三类不可见的安全网**：**数据无任何备份 / 损坏防护**、**长生命周期子进程死了 / 卡了基本发现不了**、以及**前端 2.7 万行几乎零自动化测试且唯一的 e2e 套件根本不进 CI**。这三者叠加在一个正在做"状态诚实化"改造的项目上，恰好是回归最容易无声溜进生产的地方。
 
 ## 成熟度概览
 
@@ -57,11 +57,11 @@ flockmux 已经是一个"工程素养明显在线"的成熟原型——后端健
 
 ### 坎 1 · 数据库没有任何安全网：无备份、无损坏检测、迁移无降级防护（DPM-1/2/4）
 
-全库是单文件 `~/.flockmux/flockmux.db`，对 SQLite 零备份 / 导出 / 恢复（前端"Export JSON"只导 localStorage）。`Store::open` 任何 `SQLITE_CORRUPT`/`NOTADB` 都直接 `?` 冒泡导致启动崩溃，无 `quick_check`、无降级、无空库重建。迁移全是 `if current < N` 单向前滚，且 `current_version` 只取 `MAX(version)`——**旧二进制打开被新版升过级的库会静默跳过所有迁移、继续按旧 schema 跑**。断电 / 磁盘满写坏 WAL / 手抖删文件都是高频场景，任意一种都意味着数据一次性永久丢失或启动直接崩溃。
+全库是单文件 `~/.swarmx/swarmx.db`，对 SQLite 零备份 / 导出 / 恢复（前端"Export JSON"只导 localStorage）。`Store::open` 任何 `SQLITE_CORRUPT`/`NOTADB` 都直接 `?` 冒泡导致启动崩溃，无 `quick_check`、无降级、无空库重建。迁移全是 `if current < N` 单向前滚，且 `current_version` 只取 `MAX(version)`——**旧二进制打开被新版升过级的库会静默跳过所有迁移、继续按旧 schema 跑**。断电 / 磁盘满写坏 WAL / 手抖删文件都是高频场景，任意一种都意味着数据一次性永久丢失或启动直接崩溃。
 
 ### 坎 2 · 子进程死了 / 卡了基本发现不了——状态可能永久卡在"alive"（OBS-01/03、EH-01）
 
-`is_alive()`/`pid()` 在 flockmux-pty 写好了但**全 server 零调用点**。PTY EOF 路径只 `stream.close()`+`drop(recorder)`，**不补发 `ShimExit`**。唯一的 liveness 检查是首响看门狗——ShimReady 后 sleep 90 秒只开一枪；HealthScanner 也只覆盖启动 45 秒后就 latch 停扫。一个先正常产出、然后中途卡死的 agent，过了这两个窗口后 UI 会一直显示绿点 +「正在响应」无任何告警——这正是"诚实化"改造要消灭的假状态。叠加：server 被 SIGKILL/OOM 后重启，DB 没存 PID，上一批 claude/codex 被 init 收养继续烧 token 无法回收。
+`is_alive()`/`pid()` 在 swarmx-pty 写好了但**全 server 零调用点**。PTY EOF 路径只 `stream.close()`+`drop(recorder)`，**不补发 `ShimExit`**。唯一的 liveness 检查是首响看门狗——ShimReady 后 sleep 90 秒只开一枪；HealthScanner 也只覆盖启动 45 秒后就 latch 停扫。一个先正常产出、然后中途卡死的 agent，过了这两个窗口后 UI 会一直显示绿点 +「正在响应」无任何告警——这正是"诚实化"改造要消灭的假状态。叠加：server 被 SIGKILL/OOM 后重启，DB 没存 PID，上一批 claude/codex 被 init 收养继续烧 token 无法回收。
 
 ### 坎 3 · 前端 2.7 万行近乎零自动化测试，唯一 e2e 套件不进 CI（T1/T2/FE-01）
 
@@ -81,7 +81,7 @@ flockmux 已经是一个"工程素养明显在线"的成熟原型——后端健
 
 ### 坎 7 · 配置无集中化 + 无 doctor 自检 + Tauri 关窗不杀 server（CFG-01/03/06）
 
-25 个 `FLOCKMUX_*` 全靠散落的 `std::env::var`（48 处 / 17 文件），无 config 模块 / 文件 / CLI 参数，无 doctor/preflight/health 端点。最尖锐的是 `web/src-tauri/src/lib.rs` 注释承诺"关窗即终止 server sidecar"，但全文件**搜不到任何 `RunEvent`/`on_window_event`/`.kill`**——关窗后 server 及其 PTY agent 成孤儿继续烧 token，再次打开还可能因 7777 端口被占而 bind 失败。
+25 个 `SWARMX_*` 全靠散落的 `std::env::var`（48 处 / 17 文件），无 config 模块 / 文件 / CLI 参数，无 doctor/preflight/health 端点。最尖锐的是 `web/src-tauri/src/lib.rs` 注释承诺"关窗即终止 server sidecar"，但全文件**搜不到任何 `RunEvent`/`on_window_event`/`.kill`**——关窗后 server 及其 PTY agent 成孤儿继续烧 token，再次打开还可能因 7777 端口被占而 bind 失败。
 
 ---
 
@@ -94,36 +94,36 @@ flockmux 已经是一个"工程素养明显在线"的成熟原型——后端健
 #### [x] P0-1 · 迁移前 DB 快照 + 损坏检测兜底 ✅ 已完成（亲验：corrupt→archive→rebuild + snapshot 可用 + prune 测试通过）
 
 - **关联差距**：DPM-1、DPM-2
-- **涉及文件**：`crates/flockmux-storage/src/store.rs`（`Store::open`，约 224–245 行）、`crates/flockmux-storage/src/schema.rs`（`run_migrations`，约 39 行起）
+- **涉及文件**：`crates/swarmx-storage/src/store.rs`（`Store::open`，约 224–245 行）、`crates/swarmx-storage/src/schema.rs`（`run_migrations`，约 39 行起）
 - **目标**：让"数据库损坏 / 迁移出错"从「永久丢数据 / 启动即崩」降级为「自动快照可回滚 / 隔离坏库重建」。
 - **实现要点**：
-  1. `Store::open` 打开连接后、跑迁移前，先 `PRAGMA quick_check`；非 `ok` 则把坏库 `rename` 为 `flockmux.db.corrupt-<version>`（用 schema 版本或固定后缀，**不可用 `Date::now`**），归档后新建空库，并通过 `tracing::warn!` + 返回值让上层明确告知用户。
-  2. 在 `run_migrations` 里、每次真正要执行迁移前，对当前库做一致性快照：`VACUUM INTO 'flockmux.db.pre-v<N>.bak'`（N=目标版本）。仅在有迁移要跑时才快照，避免每次启动都拷贝。
+  1. `Store::open` 打开连接后、跑迁移前，先 `PRAGMA quick_check`；非 `ok` 则把坏库 `rename` 为 `swarmx.db.corrupt-<version>`（用 schema 版本或固定后缀，**不可用 `Date::now`**），归档后新建空库，并通过 `tracing::warn!` + 返回值让上层明确告知用户。
+  2. 在 `run_migrations` 里、每次真正要执行迁移前，对当前库做一致性快照：`VACUUM INTO 'swarmx.db.pre-v<N>.bak'`（N=目标版本）。仅在有迁移要跑时才快照，避免每次启动都拷贝。
   3. 旧快照保留策略：只留最近 2~3 个 `.bak`，多余的清掉。
 - **验收标准**：
-  - 准备一个故意损坏的 `flockmux.db`（如写入随机字节），启动 server **不 panic**，而是归档坏库 + 重建空库 + 打出可操作的 warn 日志。
-  - 触发一次 schema 迁移后，数据目录出现 `flockmux.db.pre-v<N>.bak`，且能用 `sqlite3` 正常打开。
-  - 新增单测覆盖：损坏库 → 隔离重建；迁移前 → 生成快照。`cargo test -p flockmux-storage` 通过。
+  - 准备一个故意损坏的 `swarmx.db`（如写入随机字节），启动 server **不 panic**，而是归档坏库 + 重建空库 + 打出可操作的 warn 日志。
+  - 触发一次 schema 迁移后，数据目录出现 `swarmx.db.pre-v<N>.bak`，且能用 `sqlite3` 正常打开。
+  - 新增单测覆盖：损坏库 → 隔离重建；迁移前 → 生成快照。`cargo test -p swarmx-storage` 通过。
 - **依赖**：无（建议与 P0-2 合并一次提交，同在 storage）
 - **预估**：1–2 天
 
 #### [x] P0-2 · 迁移上界守卫 ✅ 已完成（亲验：超前版本拒绝启动 + 幂等 + 数组化重构，rejects_database_newer_than_binary 通过）
 
 - **关联差距**：DPM-4
-- **涉及文件**：`crates/flockmux-storage/src/schema.rs`（`run_migrations` / `current_version`，约 39–127 行）
+- **涉及文件**：`crates/swarmx-storage/src/schema.rs`（`run_migrations` / `current_version`，约 39–127 行）
 - **目标**：防止**旧二进制打开被新版升过级的库**时静默跳过迁移、继续按旧 schema 跑导致数据写坏。
-- **实现要点**：在代码里定义一个常量 `LATEST_MIGRATION: i64`（= 代码内置的最大迁移号）。`run_migrations` 开头读出库的 `current_version`，若 `current_version > LATEST_MIGRATION`，**拒绝启动**并返回明确错误："数据库版本 vX 高于本二进制支持的 vY，请升级 flockmux"。
+- **实现要点**：在代码里定义一个常量 `LATEST_MIGRATION: i64`（= 代码内置的最大迁移号）。`run_migrations` 开头读出库的 `current_version`，若 `current_version > LATEST_MIGRATION`，**拒绝启动**并返回明确错误："数据库版本 vX 高于本二进制支持的 vY，请升级 swarmx"。
 - **验收标准**：
   - 把测试库的 `schema_version` 手动设为 `LATEST_MIGRATION + 1`，启动 server 返回清晰错误并退出，**不写任何表**。
   - 正常版本（`<= LATEST`）启动不受影响。
-  - 单测覆盖"超前版本拒绝启动"。`cargo test -p flockmux-storage` 通过。
+  - 单测覆盖"超前版本拒绝启动"。`cargo test -p swarmx-storage` 通过。
 - **依赖**：无
 - **预估**：2 小时
 
 #### [x] P0-3 · EOF 补发 ShimExit + 周期 reaper（接上已写好的 `is_alive()`）✅ 核心完成
 
 - **关联差距**：OBS-01、OBS-03、EH-01
-- **涉及文件**：`crates/flockmux-server/src/spawn.rs`（EOF 分支约 414–420 行、HealthScanner 约 600–610 行）、`crates/flockmux-pty/src/lib.rs`（`is_alive`/`pid`，约 166–172 行）、孤儿清扫与 agents 注册表相关模块、migration 0013（`last_activity_at`）
+- **涉及文件**：`crates/swarmx-server/src/spawn.rs`（EOF 分支约 414–420 行、HealthScanner 约 600–610 行）、`crates/swarmx-pty/src/lib.rs`（`is_alive`/`pid`，约 166–172 行）、孤儿清扫与 agents 注册表相关模块、migration 0013（`last_activity_at`）
 - **目标**：消灭"进程已死 / 已卡，UI 仍显示绿点 +『正在响应』"的永久假状态——这是诚实化主线的核心拼图。
 - **实现要点**：
   1. **EOF 补发退出**：在 spawn.rs EOF 分支（`stream.close()` 之后），用 `try_wait`/`is_alive` 取真实退出码，合成一个 `ShimExit` 事件广播出去，让前端状态翻为 exited。
@@ -137,12 +137,12 @@ flockmux 已经是一个"工程素养明显在线"的成熟原型——后端健
   - 新增测试覆盖 EOF → ShimExit 合成、reaper 翻状态逻辑。`cargo test --workspace` 通过。
 - **依赖**：无（pid 持久化若需加列，注意走正式 migration + 同步更新两个 MessageRecord DTO，见 harness-check）
 - **预估**：1–2 天
-- **实际交付（亲验）**：新增 `crates/flockmux-server/src/reaper.rs` —— 每 5s 遍历 registry，对真死（`is_alive()`=false）且未记录退出的 agent 补发合成 ShimExit（取真实退出码 `PtyBridge::try_exit_code()`）→ 复用现有 ShimExit 链路持久化 `shim_exit` + 推送 `AgentState`。3 个测试通过（死进程检测 / 非零码 / 活进程不动），彻底消灭"永久 alive 绿点"，延迟 ≤5s（满足验收 ≤10s）。EOF 即时补发被 reaper 覆盖（仅 5s→1s 延迟优化，未单列）。**空闲 stalled 看门狗**（活着但卡住，易误报，与"诚实化"冲突需谨慎设计）与**崩溃后 pid 真实回收**（pid 复用误杀风险；UI 假状态已由现有 `mark_orphan_agents_killed` 孤儿清扫处理，残留进程烧 token 是独立问题）评估后暂缓为带风险的 follow-up，不纳入本次确定性交付。
+- **实际交付（亲验）**：新增 `crates/swarmx-server/src/reaper.rs` —— 每 5s 遍历 registry，对真死（`is_alive()`=false）且未记录退出的 agent 补发合成 ShimExit（取真实退出码 `PtyBridge::try_exit_code()`）→ 复用现有 ShimExit 链路持久化 `shim_exit` + 推送 `AgentState`。3 个测试通过（死进程检测 / 非零码 / 活进程不动），彻底消灭"永久 alive 绿点"，延迟 ≤5s（满足验收 ≤10s）。EOF 即时补发被 reaper 覆盖（仅 5s→1s 延迟优化，未单列）。**空闲 stalled 看门狗**（活着但卡住，易误报，与"诚实化"冲突需谨慎设计）与**崩溃后 pid 真实回收**（pid 复用误杀风险；UI 假状态已由现有 `mark_orphan_agents_killed` 孤儿清扫处理，残留进程烧 token 是独立问题）评估后暂缓为带风险的 follow-up，不纳入本次确定性交付。
 
 #### [x] P0-4 · files API 默认拒绝 + 敏感路径黑名单 + 全局 loopback 中间件 ✅ 已完成（亲验：is_sensitive + host_loopback_gate 测试通过，226 测试无回归）
 
 - **关联差距**：SEC-1、SEC-3
-- **涉及文件**：`crates/flockmux-server/src/routes/files.rs`（约 14、185 行）、`crates/flockmux-server/src/main.rs`（`require_local_origin`，约 631–644 行）
+- **涉及文件**：`crates/swarmx-server/src/routes/files.rs`（约 14、185 行）、`crates/swarmx-server/src/main.rs`（`require_local_origin`，约 631–644 行）
 - **目标**：堵住"任意本机进程把 server 当任意文件读取预言机"的面。
 - **实现要点**：
   1. **files API 改默认拒绝**：无 `workspace_id` 时不再不受限，而是回退到"已注册 workspace 根集合"之内；对 `~/.ssh`、`~/.aws`、`*token*`、`*credential*`、`*.pem`、`.env` 等做硬黑名单（即便在 workspace 内也拒绝）。
@@ -152,7 +152,7 @@ flockmux 已经是一个"工程素养明显在线"的成熟原型——后端健
   - 不带 `workspace_id` 请求 `/api/files/read?path=~/.ssh/id_rsa` 返回 403/拒绝，而非文件内容。
   - 带合法 `workspace_id` 读 workspace 内普通文件仍正常。
   - 用 `..` 拼接试图逃出 workspace 被拒。
-  - 新增集成测试覆盖上述三种情况。`cargo test -p flockmux-server` 通过。
+  - 新增集成测试覆盖上述三种情况。`cargo test -p swarmx-server` 通过。
 - **依赖**：无
 - **预估**：半天
 
@@ -163,7 +163,7 @@ flockmux 已经是一个"工程素养明显在线"的成熟原型——后端健
 - **目标**：兑现"关窗即终止 server sidecar"的注释承诺，防孤儿进程继续烧 token + 7777 端口被占导致下次启动 bind 失败。
 - **实现要点**：把 spawn 的 `CommandChild` 存进 Tauri `State`（而非 drop）；在 `tauri::Builder` 注册 `RunEvent::ExitRequested` 或 `on_window_event(CloseRequested)`，回调里显式 `child.kill()`。注意进程组：若 server 自身还 spawn 了 agent，确保 kill 能级联（配合 P0-3 的 pgid 回收）。
 - **验收标准**：
-  - 打开 Tauri app → 关窗 → `ps aux | grep flockmux-server` 无残留进程。
+  - 打开 Tauri app → 关窗 → `ps aux | grep swarmx-server` 无残留进程。
   - 关窗后立即重开 app，不出现 7777 端口 bind 失败。
 - **依赖**：与 P0-3 的进程回收互补（建议 P0-3 先行）
 - **预估**：半天
@@ -188,12 +188,12 @@ flockmux 已经是一个"工程素养明显在线"的成熟原型——后端健
 
 #### [x] P1-1 · Playwright e2e 接入 CI 硬门禁 ✅ 已接入（playwright.config 加 webServer 自启 vite + ci.yml e2e job 启隔离后端 + Chrome；headless 稳定性待 CI 首次运行确认）
 
-> **实际交付**：`web/playwright.config.ts` 加 `webServer`（CI 自启 vite dev server，本地复用已有）；`ci.yml` 新增 `e2e` job——build server + 启隔离后端（FLOCKMUX_* 临时目录，同 smoke job 模式，因 e2e 首个用例真实命中 `/api/workspaces`）+ `playwright install chrome` + `npm run test:e2e` 硬门禁。本地未跑（需 Chrome + dev server + 7777 后端，环境变量过多易误导），配置为 playwright 标准用法，headless 稳定性以 CI 首次运行为准。
+> **实际交付**：`web/playwright.config.ts` 加 `webServer`（CI 自启 vite dev server，本地复用已有）；`ci.yml` 新增 `e2e` job——build server + 启隔离后端（SWARMX_* 临时目录，同 smoke job 模式，因 e2e 首个用例真实命中 `/api/workspaces`）+ `playwright install chrome` + `npm run test:e2e` 硬门禁。本地未跑（需 Chrome + dev server + 7777 后端，环境变量过多易误导），配置为 playwright 标准用法，headless 稳定性以 CI 首次运行为准。
 
 - **关联差距**：T1、FE-01
 - **涉及文件**：`.github/workflows/ci.yml`（web job，约 91–107 行）、`web/tests/e2e/app-qa.spec.ts`、`web/playwright.config.*`
 - **目标**：把已写好的高价值 e2e 从"本地能跑、PR 不跑"的死资产变成活门禁。
-- **实现要点**：在 ci.yml 的 web job（或新 job）里，`npm ci` 后跑 `npx playwright install --with-deps` 再 `npm run test:e2e`；e2e 需要的 dev server / 后端用 playwright 的 `webServer` 配置或脚本拉起（参考现有 smoke job 用 `FLOCKMUX_*` 隔离数据目录的做法）。设为硬门禁（不要 `continue-on-error`）。
+- **实现要点**：在 ci.yml 的 web job（或新 job）里，`npm ci` 后跑 `npx playwright install --with-deps` 再 `npm run test:e2e`；e2e 需要的 dev server / 后端用 playwright 的 `webServer` 配置或脚本拉起（参考现有 smoke job 用 `SWARMX_*` 隔离数据目录的做法）。设为硬门禁（不要 `continue-on-error`）。
 - **验收标准**：
   - 故意改坏一处被 e2e 覆盖的行为，CI 的 web/e2e job **变红**。
   - 正常代码 CI 绿。
@@ -234,33 +234,33 @@ flockmux 已经是一个"工程素养明显在线"的成熟原型——后端健
 #### [x] P1-4 · spawn env allowlist 回归测试 ✅ 已完成（亲验：forwarded_env_keeps_macos_keychain_vars 通过；抽出 FORWARDED_ENV_KEYS 常量）
 
 - **关联差距**：T4
-- **涉及文件**：`crates/flockmux-server/src/spawn.rs`（env allowlist 构造处）、对应测试模块
+- **涉及文件**：`crates/swarmx-server/src/spawn.rs`（env allowlist 构造处）、对应测试模块
 - **目标**：把已知的登录 bug（macOS Keychain 需要 `USER` 等环境变量进入 spawn allowlist）钉死，防回归。
 - **实现要点**：给 spawn 的环境变量 allowlist 构造逻辑加单测，断言 `USER`、`HOME`、`PATH` 等关键变量必然在白名单内；如有 per-agent 注入（如 `CODEX_HOME`）也断言不被丢。
 - **验收标准**：
   - 单测断言 allowlist 含 `USER`/`HOME`/`PATH`；删掉 `USER` 注入能让单测变红。
-  - `cargo test -p flockmux-server` 通过。
+  - `cargo test -p swarmx-server` 通过。
 - **依赖**：无
 - **预估**：半天
 
-#### [x] P1-5 · 集中 Config + doctor 子命令 ✅ 核心完成（亲验：`flockmux-server doctor` 真实诊断出 shim/mcp/CLI ✓ + 端口占用 ✗；启动加 effective config dump）
+#### [x] P1-5 · 集中 Config + doctor 子命令 ✅ 核心完成（亲验：`swarmx-server doctor` 真实诊断出 shim/mcp/CLI ✓ + 端口占用 ✗；启动加 effective config dump）
 
-> **实际交付（亲验）**：`flockmux-server doctor` 子命令——红/绿体检 shim/mcp 二进制、claude/codex 是否在 PATH、端口是否空闲、数据目录是否可写，失败退出非零并给可操作提示；实跑准确报出"port 7777 已占用"。启动序列加 `effective config` 一行 dump（port/server_url/db/各数据目录/retention），配合 docs/configuration.md 让配置可发现。**全量 Config::from_env 重构（48 处散落 env::var → 集中 struct）属渐进式重构**，审计原文亦建议"逐步"，未在本次一次性完成。
+> **实际交付（亲验）**：`swarmx-server doctor` 子命令——红/绿体检 shim/mcp 二进制、claude/codex 是否在 PATH、端口是否空闲、数据目录是否可写，失败退出非零并给可操作提示；实跑准确报出"port 7777 已占用"。启动序列加 `effective config` 一行 dump（port/server_url/db/各数据目录/retention），配合 docs/configuration.md 让配置可发现。**全量 Config::from_env 重构（48 处散落 env::var → 集中 struct）属渐进式重构**，审计原文亦建议"逐步"，未在本次一次性完成。
 
 - **关联差距**：CFG-01、CFG-03
-- **涉及文件**：新增 `crates/flockmux-server/src/config.rs`（或类似）、`crates/flockmux-server/src/main.rs`、散落的 `std::env::var` 调用点（48 处 / 17 文件）、`crates/flockmux-cli`
+- **涉及文件**：新增 `crates/swarmx-server/src/config.rs`（或类似）、`crates/swarmx-server/src/main.rs`、散落的 `std::env::var` 调用点（48 处 / 17 文件）、`crates/swarmx-cli`
 - **目标**：让配置可发现、首启可自检。
 - **实现要点**：
-  1. 引入 `Config::from_env()` 集中读取所有 `FLOCKMUX_*`，带默认值；启动时 `tracing::info!` dump 一份 effective config（脱敏）。逐步把散落的 `env::var` 改为读 `Config`。
-  2. 加 `flockmux-server doctor`（或 CLI 子命令）：一次性体检 shim 是否构建、claude/codex 是否在 PATH 且已登录、端口是否可用、DB 是否可打开，输出可操作的红 / 绿清单。
+  1. 引入 `Config::from_env()` 集中读取所有 `SWARMX_*`，带默认值；启动时 `tracing::info!` dump 一份 effective config（脱敏）。逐步把散落的 `env::var` 改为读 `Config`。
+  2. 加 `swarmx-server doctor`（或 CLI 子命令）：一次性体检 shim 是否构建、claude/codex 是否在 PATH 且已登录、端口是否可用、DB 是否可打开，输出可操作的红 / 绿清单。
 - **验收标准**：
-  - `flockmux-server doctor` 在缺 shim / 未登录 / 端口占用时分别给出明确的失败项与修复建议。
+  - `swarmx-server doctor` 在缺 shim / 未登录 / 端口占用时分别给出明确的失败项与修复建议。
   - 启动日志能看到 effective config dump。
   - 至少核心路径（端口、DB、shim）改为从 `Config` 读取。
 - **依赖**：无
 - **预估**：1–2 天
 
-#### [x] P1-6 · prune 挂周期任务 ✅ 已完成（main.rs 每 6h 周期 prune_expired，FLOCKMUX_RETENTION_DAYS=0 时跳过；server 编译通过）
+#### [x] P1-6 · prune 挂周期任务 ✅ 已完成（main.rs 每 6h 周期 prune_expired，SWARMX_RETENTION_DAYS=0 时跳过；server 编译通过）
 
 - **关联差距**：PERF-01
 - **涉及文件**：现有 prune / 清理逻辑所在模块、cron / interval tick 注册处
@@ -315,17 +315,17 @@ flockmux 已经是一个"工程素养明显在线"的成熟原型——后端健
 
 - **关联差距**：DOC-02、DOC-03
 - **涉及文件**：`README.md` / `README.zh-CN.md`（或新增 `docs/configuration.md`）、新增根目录 `LICENSE`
-- **目标**：26 个 `FLOCKMUX_*` 可查；MIT 声明有实体文件（当前 Cargo 声明 MIT 但无 LICENSE 文件）。
-- **实现要点**：grep 出全部 `FLOCKMUX_*`（配合 P1-5 的 Config 列表），做成"变量 | 默认值 | 作用"表格；补一份标准 MIT `LICENSE` 全文（作者署名与 Cargo.toml 一致）。
+- **目标**：26 个 `SWARMX_*` 可查；MIT 声明有实体文件（当前 Cargo 声明 MIT 但无 LICENSE 文件）。
+- **实现要点**：grep 出全部 `SWARMX_*`（配合 P1-5 的 Config 列表），做成"变量 | 默认值 | 作用"表格；补一份标准 MIT `LICENSE` 全文（作者署名与 Cargo.toml 一致）。
 - **验收标准**：
-  - 文档里每个 `FLOCKMUX_*` 都有条目；与代码实际读取的变量集合一致（可加 harness-check 守卫）。
+  - 文档里每个 `SWARMX_*` 都有条目；与代码实际读取的变量集合一致（可加 harness-check 守卫）。
   - 根目录有 `LICENSE`，GitHub 能识别 license 类型。
 - **依赖**：P1-5（变量清单最准）
 - **预估**：半天
 
 #### [x] P1-11 · MCP key 改走环境变量 / stdin（不再明文命令行参数）✅ 经反向核实 SEC-4 不成立 —— 现状已安全，无需改动
 
-> **核实结论（诚实化）**：grep `spawn.rs` 的全部 argv 构造，命令行参数只有 `--mcp-config <file>` / `--strict-mcp-config` / `--session-id` / `--dangerously-bypass-hook-trust`——**没有任何 `--api-key` 或凭证明文**。CLI 登录态走 `pre_spawn.rs` 的 **symlink → shared auth.json**（flockmux 不碰 key 值）；provider 凭证（ANTHROPIC_*/OPENAI_*）走 **env allowlist**（spawn.rs provider 前缀，`ps aux` 看不到 env 值）；flockmux-mcp 连 loopback server **无需 key**（grep auth/token/Authorization 全空）。故审计 SEC-4「凭证以 `--api-key` 明文参数传递、ps 可见」**在当前代码中不成立**——这是审计的一个假阳性。进一步 stdin 化受限于上游 CLI（claude/codex 从 env 读 key，不支持 stdin），且收益边际（env 已优于命令行）。**不做无意义改动。**
+> **核实结论（诚实化）**：grep `spawn.rs` 的全部 argv 构造，命令行参数只有 `--mcp-config <file>` / `--strict-mcp-config` / `--session-id` / `--dangerously-bypass-hook-trust`——**没有任何 `--api-key` 或凭证明文**。CLI 登录态走 `pre_spawn.rs` 的 **symlink → shared auth.json**（swarmx 不碰 key 值）；provider 凭证（ANTHROPIC_*/OPENAI_*）走 **env allowlist**（spawn.rs provider 前缀，`ps aux` 看不到 env 值）；swarmx-mcp 连 loopback server **无需 key**（grep auth/token/Authorization 全空）。故审计 SEC-4「凭证以 `--api-key` 明文参数传递、ps 可见」**在当前代码中不成立**——这是审计的一个假阳性。进一步 stdin 化受限于上游 CLI（claude/codex 从 env 读 key，不支持 stdin），且收益边际（env 已优于命令行）。**不做无意义改动。**
 
 - **关联差距**：SEC-4
 - **涉及文件**：MCP / spawn 中以 `--api-key` 传凭证处
@@ -344,7 +344,7 @@ flockmux 已经是一个"工程素养明显在线"的成熟原型——后端健
 #### [x] P2-1 · CatchPanicLayer + 优雅关停 ✅ 已完成（亲验：tower-http catch-panic 编译 + SIGTERM 优雅关停实跑确认 exit 144）
 
 - **关联差距**：EH-02、EH-01
-- **涉及文件**：`crates/flockmux-server/src/main.rs`（router 组装、shutdown signal）
+- **涉及文件**：`crates/swarmx-server/src/main.rs`（router 组装、shutdown signal）
 - **目标**：单个 handler panic 返回 500 而非断连整个连接；server 收到 SIGTERM/SIGINT 时优雅关停（flush、关 PTY、落盘）。
 - **实现要点**：给 axum router 套 `tower_http::catch_panic::CatchPanicLayer`；用 `axum::serve(...).with_graceful_shutdown(...)` 接信号，关停时回收 PTY / 子进程。
 - **验收标准**：构造一个会 panic 的 handler，请求返回 500 且连接 / 其他请求不受影响；`SIGTERM` 后进程干净退出无残留子进程。
@@ -353,7 +353,7 @@ flockmux 已经是一个"工程素养明显在线"的成熟原型——后端健
 
 #### [x] P2-2 · MessagesPanel 拆 god component ✅ 完成 — 7 刀拆完（3 纯函数层+5 hook），2351 → 1990 行（-15.4%）
 
-> **已完成 7 步（亲验，已上 main）**：① 分组/格式化/role 纯函数 → `lib/messageRows.ts` + 8 vitest（149fa58）；② `useRoleLookup` hook（2e18e74）；③ composer 草稿 → `useComposerDraft` hook + `draftStore.ts` 纯函数 + 7 vitest（c1bc14e）；④ **诚实性核心**——"正在响应"气泡何时显示/放弃、何算"消失的回合"两段最 load-bearing 的推断 → `lib/pendingResponders.ts` 纯函数（`derivePendingResponders`/`deriveVanishedTurns`/`computeAliveIds`/`isInterrupted`，clock 注入）+ 17 vitest 覆盖全部不变式（alive+未答→显示；已答→清；error/exited/shim/killed→剔；>180s 真静默→剔但新 activity 续命；中断精确 id→剔但新 id 重开；最早优先稳定排序；vanished：死且未答→卡、已答/被取代/被打断→无卡、error→label vs exit→null）。`PENDING_SILENCE_GIVEUP_MS` 单一真相也随之移入（原来组件里重复定义）。memo 只保留 React deps（含有意的 5s-tick dep + eslint-disable，逐字保留）。**关键方法论延伸**：连这类"涉及时序/存活推断"的逻辑也能纯函数化——把 `now` 注入、把存活集合抽成 `Set`，时序就变成可单测的纯输入输出；第三份方法论胜利。**这一刀首次启用真实环境验证**（用户授权"碰真实目录"）：起隔离后端（data 全在 `/tmp`，不污染真实 `~/.flockmux`）+ 真实小项目 → spawn 真实 claude orchestrator → MessagesPanel 渲染真实 chat 视图、**零 console 错误**（抽出的 memo 驱动真实"队长上岗"路径不崩）。2351 → 2142 行，四步全绿。⑤ **scroll-mark-read 整段搬进 hook**——F5 auto-mark-read 的 state+effect（`pendingReadRef`/`flushTimerRef`/IntersectionObserver/400ms debounce/foreground gate/两个 cleanup）全部移入 `useScrollMarkRead`（returns void，`listRef`/`rowRefs` 仍组件持有、传入），存取规则抽成纯 `markReadBatch.ts`（`collectObservableIds`/`applyMarkedRead`）+ 5 vitest。**首个真正搬 state/effect 的 hook**（前两个 hook 也搬了，但这次是独立大段）。live 验证：真实队长回复后，agent→user 消息（id=10）被 auto-mark-read 正确标已读、system→claude 消息（id=9，to≠user）正确不标——`collectObservableIds` 的过滤在真实流里生效；`inErrorFallback=false` 确认组件正常。2142 → 2076 行，五步全绿。**踩坑记录**：编辑触发 vite HMR 热替换时，旧组件 unmount 的旧 cleanup 引用了刚删除的 `flushTimerRef` 绑定 → 控制台一次性 `ReferenceError`；纯开发态 HMR 边界现象（生产无 HMR、新代码 grep 零引用、reload 后正常），非缺陷。⑥ **纠缠核心整体搬进 hook**——interruptedTriggers state、5s give-up tick、两个 derivation memo、once-per-turn vanished warn、markInterrupted 全部移入 `usePendingResponders`，返回 `{pendingResponders, vanishedTurns, markInterrupted}`；组件 9 个消费点（runningMembers/auto-scroll/stopMember/stopAllRunning/send/interruptThenSend/onComposerKey/2 处 JSX）只读返回值。**最关键**：`markInterrupted↔pendingResponders↔interruptedTriggers` 的循环依赖整个封进 hook 内自洽（plain state 喂 memo，React 容忍），组件不再触碰。live 验证打满：真实 claude 队长响应中气泡显示 → 回复后清除 → 点「停」触发 markInterrupted **乐观清除**（气泡+打断按钮立即消失、不等后端，因 isInterrupted 在 hook 内重算剔除）；inErrorFallback 全程 false。2076 → 2004 行，六步全绿。⑦ **stop 控件收口**——`stopMenuOpen`/`interruptingId`/`stopMember`/`stopAllRunning` 搬进 `useInterruptControls`（输入 markInterrupted+runningMembers），verbatim 等价搬迁；`queuedHint` 按分析留组件（writer 在 send()、是 send-side chip 非 stop-core）。纯重构零逻辑改动：tsc + react-hooks lint（守 hooks 顺序）+ 46 vitest + harness + 逐行等价审查（markInterrupted 路径第⑥刀已 live 验证，纯包装不重复 spawn）。2004 → 1990 行。**总账（P2-2 收口）**：god component **2351 → 1990 行（−15.4%）**，拆出 4 个纯函数模块（messageRows / draftStore / pendingResponders / markReadBatch，共 37 vitest）+ 5 个 hook（useRoleLookup / useComposerDraft / useScrollMarkRead / usePendingResponders / useInterruptControls）；诚实性逻辑全部纯函数化 + 单测，关键 hook 经真实 claude orchestrator live 验证（气泡显示/清除、auto-mark-read 过滤、打断乐观清除）。**方法论沉淀**：能纯函数化的（含时序/存活推断，靠 now 注入 + Set 抽取）一律抽纯函数 + vitest、无需 spawn；只有真正 DOM/交互/循环依赖的 hook 才 live 验证。
+> **已完成 7 步（亲验，已上 main）**：① 分组/格式化/role 纯函数 → `lib/messageRows.ts` + 8 vitest（149fa58）；② `useRoleLookup` hook（2e18e74）；③ composer 草稿 → `useComposerDraft` hook + `draftStore.ts` 纯函数 + 7 vitest（c1bc14e）；④ **诚实性核心**——"正在响应"气泡何时显示/放弃、何算"消失的回合"两段最 load-bearing 的推断 → `lib/pendingResponders.ts` 纯函数（`derivePendingResponders`/`deriveVanishedTurns`/`computeAliveIds`/`isInterrupted`，clock 注入）+ 17 vitest 覆盖全部不变式（alive+未答→显示；已答→清；error/exited/shim/killed→剔；>180s 真静默→剔但新 activity 续命；中断精确 id→剔但新 id 重开；最早优先稳定排序；vanished：死且未答→卡、已答/被取代/被打断→无卡、error→label vs exit→null）。`PENDING_SILENCE_GIVEUP_MS` 单一真相也随之移入（原来组件里重复定义）。memo 只保留 React deps（含有意的 5s-tick dep + eslint-disable，逐字保留）。**关键方法论延伸**：连这类"涉及时序/存活推断"的逻辑也能纯函数化——把 `now` 注入、把存活集合抽成 `Set`，时序就变成可单测的纯输入输出；第三份方法论胜利。**这一刀首次启用真实环境验证**（用户授权"碰真实目录"）：起隔离后端（data 全在 `/tmp`，不污染真实 `~/.swarmx`）+ 真实小项目 → spawn 真实 claude orchestrator → MessagesPanel 渲染真实 chat 视图、**零 console 错误**（抽出的 memo 驱动真实"队长上岗"路径不崩）。2351 → 2142 行，四步全绿。⑤ **scroll-mark-read 整段搬进 hook**——F5 auto-mark-read 的 state+effect（`pendingReadRef`/`flushTimerRef`/IntersectionObserver/400ms debounce/foreground gate/两个 cleanup）全部移入 `useScrollMarkRead`（returns void，`listRef`/`rowRefs` 仍组件持有、传入），存取规则抽成纯 `markReadBatch.ts`（`collectObservableIds`/`applyMarkedRead`）+ 5 vitest。**首个真正搬 state/effect 的 hook**（前两个 hook 也搬了，但这次是独立大段）。live 验证：真实队长回复后，agent→user 消息（id=10）被 auto-mark-read 正确标已读、system→claude 消息（id=9，to≠user）正确不标——`collectObservableIds` 的过滤在真实流里生效；`inErrorFallback=false` 确认组件正常。2142 → 2076 行，五步全绿。**踩坑记录**：编辑触发 vite HMR 热替换时，旧组件 unmount 的旧 cleanup 引用了刚删除的 `flushTimerRef` 绑定 → 控制台一次性 `ReferenceError`；纯开发态 HMR 边界现象（生产无 HMR、新代码 grep 零引用、reload 后正常），非缺陷。⑥ **纠缠核心整体搬进 hook**——interruptedTriggers state、5s give-up tick、两个 derivation memo、once-per-turn vanished warn、markInterrupted 全部移入 `usePendingResponders`，返回 `{pendingResponders, vanishedTurns, markInterrupted}`；组件 9 个消费点（runningMembers/auto-scroll/stopMember/stopAllRunning/send/interruptThenSend/onComposerKey/2 处 JSX）只读返回值。**最关键**：`markInterrupted↔pendingResponders↔interruptedTriggers` 的循环依赖整个封进 hook 内自洽（plain state 喂 memo，React 容忍），组件不再触碰。live 验证打满：真实 claude 队长响应中气泡显示 → 回复后清除 → 点「停」触发 markInterrupted **乐观清除**（气泡+打断按钮立即消失、不等后端，因 isInterrupted 在 hook 内重算剔除）；inErrorFallback 全程 false。2076 → 2004 行，六步全绿。⑦ **stop 控件收口**——`stopMenuOpen`/`interruptingId`/`stopMember`/`stopAllRunning` 搬进 `useInterruptControls`（输入 markInterrupted+runningMembers），verbatim 等价搬迁；`queuedHint` 按分析留组件（writer 在 send()、是 send-side chip 非 stop-core）。纯重构零逻辑改动：tsc + react-hooks lint（守 hooks 顺序）+ 46 vitest + harness + 逐行等价审查（markInterrupted 路径第⑥刀已 live 验证，纯包装不重复 spawn）。2004 → 1990 行。**总账（P2-2 收口）**：god component **2351 → 1990 行（−15.4%）**，拆出 4 个纯函数模块（messageRows / draftStore / pendingResponders / markReadBatch，共 37 vitest）+ 5 个 hook（useRoleLookup / useComposerDraft / useScrollMarkRead / usePendingResponders / useInterruptControls）；诚实性逻辑全部纯函数化 + 单测，关键 hook 经真实 claude orchestrator live 验证（气泡显示/清除、auto-mark-read 过滤、打断乐观清除）。**方法论沉淀**：能纯函数化的（含时序/存活推断，靠 now 注入 + Set 抽取）一律抽纯函数 + vitest、无需 spawn；只有真正 DOM/交互/循环依赖的 hook 才 live 验证。
 
 - **关联差距**：FE-03
 - **涉及文件**：`web/src/**/MessagesPanel*`（约 2351 行的巨型组件）
@@ -378,20 +378,20 @@ flockmux 已经是一个"工程素养明显在线"的成熟原型——后端健
 #### [x] P2-4 · 录制文件单文件上限 / 轮转 ✅ 已完成（亲验：writer_stops_at_size_cap 测试通过；RecorderConfig.max_bytes 软上限 64MiB 默认）
 
 - **关联差距**：PERF-03
-- **涉及文件**：`crates/flockmux-recorder/src/**`
+- **涉及文件**：`crates/swarmx-recorder/src/**`
 - **目标**：防单个 asciinema 录制文件无限增长。
 - **实现要点**：记 `bytes_written`，超软上限则轮转 / 截断并标记；可配置上限（接 P1-5 Config）。
 - **验收标准**：超长会话不会产出单个超大录制文件；轮转后仍可播放。
 - **依赖**：无
 - **预估**：半天
 
-#### [x] P2-5 · 日志文件落盘 + 轮转 ✅ 已完成（亲验：~/.flockmux/logs/flockmux.log.2026-06-12 真实落盘 2918 字节，daily rolling）
+#### [x] P2-5 · 日志文件落盘 + 轮转 ✅ 已完成（亲验：~/.swarmx/logs/swarmx.log.2026-06-12 真实落盘 2918 字节，daily rolling）
 
 - **关联差距**：OBS-05
-- **涉及文件**：`crates/flockmux-server/src/main.rs`（tracing-subscriber 初始化）
+- **涉及文件**：`crates/swarmx-server/src/main.rs`（tracing-subscriber 初始化）
 - **目标**：崩溃后有历史日志可查，而非只在终端。
-- **实现要点**：用 `tracing-appender` 的 `rolling::daily` 把日志同时写到 `~/.flockmux/logs/`；保留 N 天。
-- **验收标准**：运行后 `~/.flockmux/logs/` 有按日期滚动的日志文件。
+- **实现要点**：用 `tracing-appender` 的 `rolling::daily` 把日志同时写到 `~/.swarmx/logs/`；保留 N 天。
+- **验收标准**：运行后 `~/.swarmx/logs/` 有按日期滚动的日志文件。
 - **依赖**：无
 - **预估**：半天
 
@@ -400,7 +400,7 @@ flockmux 已经是一个"工程素养明显在线"的成熟原型——后端健
 > **实际交付（亲验）**：tower-http `SetRequestIdLayer`(MakeRequestUuid) + `TraceLayer::make_span_with`（把 x-request-id 读进 `http` span 的 `request_id` 字段）+ `PropagateRequestIdLayer`（回传 response）。axum 是 inside-out 应用 layer——首次顺序放反、response 没带 id，修正为 Propagate(inner)→TraceLayer→SetRequestId(outer) 后实跑确认 response 带 `x-request-id: <uuid>`，227 server 测试无回归。HTTP span 已让 handler 内所有日志共享 request_id；逐 fn `#[instrument]`（后台 task 脱离 HTTP span 才需要）作为可选细化，未强求。
 
 - **关联差距**：OBS-04
-- **涉及文件**：`crates/flockmux-server/src/main.rs`、关键 handler / spawn 路径
+- **涉及文件**：`crates/swarmx-server/src/main.rs`、关键 handler / spawn 路径
 - **目标**：跨异步任务串联一次请求 / 一个 agent 生命周期的日志。
 - **实现要点**：加 request-id 中间件（`tower_http::request_id`）；给 spawn、迁移、WS 广播等关键路径函数加 `#[tracing::instrument]`，带上 agent_id / request_id 字段。
 - **验收标准**：日志里能用一个 id 串起某请求 / 某 agent 的完整链路。
@@ -409,7 +409,7 @@ flockmux 已经是一个"工程素养明显在线"的成熟原型——后端健
 
 #### [x] P2-7 · Windows 路径用 `dirs` crate / 明确标注不支持 ✅ 已完成（选「明确标注」：docs/configuration.md 加 Platform support 章节）
 
-> **核实后的选择**：审计给的两个选项里选「明确标注 Windows 不支持」而非「dirs crate 抹平 $HOME」——因为核实发现 Windows 不可用**不只是 home 路径问题**：`flockmux-pty` 的进程组回收（`killpg` + SIGTERM/SIGKILL）是 Unix-only（非 unix 只杀直接 shim child，会漏掉 grandchild CLI）。仅修 home 路径会给人"Windows 可用"的错觉。诚实标注 = macOS/Linux 支持、Windows 实验性。
+> **核实后的选择**：审计给的两个选项里选「明确标注 Windows 不支持」而非「dirs crate 抹平 $HOME」——因为核实发现 Windows 不可用**不只是 home 路径问题**：`swarmx-pty` 的进程组回收（`killpg` + SIGTERM/SIGKILL）是 Unix-only（非 unix 只杀直接 shim child，会漏掉 grandchild CLI）。仅修 home 路径会给人"Windows 可用"的错觉。诚实标注 = macOS/Linux 支持、Windows 实验性。
 
 - **关联差距**：CFG-07
 - **涉及文件**：依赖 `$HOME` / 硬编码路径分隔符处
@@ -452,4 +452,4 @@ flockmux 已经是一个"工程素养明显在线"的成熟原型——后端健
 
 ## 一句总评
 
-后端工程直觉明显过硬（背压、进程组、事务化迁移这些"难而正确"的事都做对了），真正的差距集中在**不可见的安全网**——数据、进程、测试这三层"平时看不见、出事才致命"的兜底。把上面 P0 + 5 件事做完，flockmux 就能从"作者本人能稳定跑"跨到"敢发给陌生人长期跑"。
+后端工程直觉明显过硬（背压、进程组、事务化迁移这些"难而正确"的事都做对了），真正的差距集中在**不可见的安全网**——数据、进程、测试这三层"平时看不见、出事才致命"的兜底。把上面 P0 + 5 件事做完，swarmx 就能从"作者本人能稳定跑"跨到"敢发给陌生人长期跑"。

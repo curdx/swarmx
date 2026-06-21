@@ -8,7 +8,7 @@
 //      AND does NOT contain any other agent's marker.
 //   6. Cleanup: DELETE each agent.
 //
-// Run: node /tmp/flockmux-stress-6.mjs
+// Run: node /tmp/swarmx-stress-6.mjs
 
 const BASE = "http://127.0.0.1:7777";
 const WS_BASE = "ws://127.0.0.1:7777";

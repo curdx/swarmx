@@ -1,0 +1,43 @@
+[package]
+name = "swarmx-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "swarmx-server"
+path = "src/main.rs"
+
+[dependencies]
+axum.workspace = true
+tower.workspace = true
+tower-http.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tracing-appender.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+bytes.workspace = true
+dashmap.workspace = true
+uuid.workspace = true
+parking_lot.workspace = true
+futures = "0.3"
+swarmx-protocol = { path = "../swarmx-protocol" }
+swarmx-pty = { path = "../swarmx-pty" }
+swarmx-storage = { path = "../swarmx-storage" }
+swarmx-swarm = { path = "../swarmx-swarm" }
+swarmx-recorder = { path = "../swarmx-recorder" }
+sha2 = { workspace = true }
+fs2 = "0.4"
+libc = "0.2"
+# Loopback HTTP client for driving opencode's TUI control API (/tui/*). Same
+# pin/feature set as swarmx-mcp; http:// only, so no TLS features needed.
+reqwest = { version = "0.12", default-features = false, features = ["json"] }
+
+[dev-dependencies]
+tempfile = "3"

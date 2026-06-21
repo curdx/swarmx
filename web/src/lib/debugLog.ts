@@ -5,12 +5,12 @@
 // browser state → REST → backend store → broadcast → WS → back into browser
 // state → render. Console logs alone only see the browser half. So every
 // breadcrumb here ALSO ships to `POST /api/debug/log`, where the backend folds
-// it into the SAME `tracing` stream (and `~/.flockmux/logs/flockmux.log`) as
-// its own `flockmux::msg` / `flockmux::ws` lines. One file, one timeline, so a
+// it into the SAME `tracing` stream (and `~/.swarmx/logs/swarmx.log`) as
+// its own `swarmx::msg` / `swarmx::ws` lines. One file, one timeline, so a
 // dropped message tells you exactly which hop lost it.
 //
 // Enabled in dev by default; in any build it can be forced on/off with
-// `localStorage["flockmux:debug"] = "1" | "0"`.
+// `localStorage["swarmx:debug"] = "1" | "0"`.
 
 import { HTTP_BASE } from "./apiBase";
 
@@ -29,7 +29,7 @@ let flushTimer: ReturnType<typeof setTimeout> | null = null;
 
 function enabled(): boolean {
   try {
-    const override = localStorage.getItem("flockmux:debug");
+    const override = localStorage.getItem("swarmx:debug");
     if (override === "1") return true;
     if (override === "0") return false;
   } catch {

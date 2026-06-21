@@ -3,11 +3,11 @@
 # binaries/<name>-<target-triple> so `tauri build` can pick them up via
 # the externalBin manifest entries.
 #
-# Why three: flockmux-server is the HTTP/WS entry point, but it spawns
-# flockmux-shim for every agent (which in turn loads flockmux-mcp via the
+# Why three: swarmx-server is the HTTP/WS entry point, but it spawns
+# swarmx-shim for every agent (which in turn loads swarmx-mcp via the
 # MCP config). All three resolve siblings off `current_exe()` parent, so
 # Tauri must drop them in the same Contents/MacOS dir or swarm runs die
-# with "flockmux-shim not found".
+# with "swarmx-shim not found".
 #
 # Usage:
 #   ./scripts/build-sidecar.sh                    # debug profile (fast iteration)
@@ -34,7 +34,7 @@ fi
 
 mkdir -p "$HERE/binaries"
 
-CRATES=(flockmux-server flockmux-shim flockmux-mcp)
+CRATES=(swarmx-server swarmx-shim swarmx-mcp)
 
 CARGO_ARGS=(build)
 for c in "${CRATES[@]}"; do

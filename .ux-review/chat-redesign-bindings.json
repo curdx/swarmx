@@ -6,14 +6,14 @@
         "uiElement": "用户消息气泡",
         "source": "messages 表 (from_agent='user', kind=任意)",
         "persistence": "persisted",
-        "file": "web/src/components/MessagesPanel.tsx:1211-1268, crates/flockmux-storage/src/store.rs:1070-1081",
+        "file": "web/src/components/MessagesPanel.tsx:1211-1268, crates/swarmx-storage/src/store.rs:1070-1081",
         "notes": "右对齐、accent实底。kind 字段无特殊约束（目前多为 'user'）；meta 仅用于系统消息，用户消息为 null"
       },
       {
         "uiElement": "队长消息气泡（strong contrast 正文 + 折叠思考块）",
         "source": "messages 表 (from_agent=orchestrator, kind='message' 或类似) + thought_trace 字段",
         "persistence": "persisted",
-        "file": "web/src/components/MessagesPanel.tsx:1278-1380 (agent turn rendering), web/src/api/types.ts:177-189 (ThoughtTrace schema), crates/flockmux-storage/src/models.rs:264-267",
+        "file": "web/src/components/MessagesPanel.tsx:1278-1380 (agent turn rendering), web/src/api/types.ts:177-189 (ThoughtTrace schema), crates/swarmx-storage/src/models.rs:264-267",
         "notes": "thought_trace 是完整结构化字段（status/summary/started_at），ReasoningDisclosure 默认收起折叠。现状：思考与结论混在同一气泡（诊断1），需提升队长气泡对比度"
       },
       {
@@ -27,56 +27,56 @@
         "uiElement": "系统事件卡（派工/交付/计划/失败/模型切换/回退/隔离）",
         "source": "messages 表 (kind='system', meta 含 subtype 标签)",
         "persistence": "persisted",
-        "file": "crates/flockmux-storage/src/store.rs:1070 (INSERT INTO messages kind,meta), crates/flockmux-storage/migrations/0012_message_meta.sql, crates/flockmux-protocol/src/ws_swarm.rs:31-38 (meta 注释示例)",
+        "file": "crates/swarmx-storage/src/store.rs:1070 (INSERT INTO messages kind,meta), crates/swarmx-storage/migrations/0012_message_meta.sql, crates/swarmx-protocol/src/ws_swarm.rs:31-38 (meta 注释示例)",
         "notes": "关键发现：messages 表已有 kind + meta 两列（迁移 0012），系统卡可直接落 kind='system' + structured meta。现状 meta 只用于 wake/completion 两种（设计注释给了例子），后端在 wake.rs:389, 633, 849 处示范了插入逻辑。缺失：派工/交付/失败/模型切换等事件的具体 subtype 值定义与落库逻辑"
       },
       {
         "uiElement": "队长 typing 行（入流律最小实现）",
         "source": "messages.thought_trace.status + 首个 AgentActivity",
         "persistence": "live-only",
-        "file": "web/src/components/MessagesPanel.tsx:1670-1708 (PendingBubble), web/src/api/types.ts:454-462 (AgentActivity), crates/flockmux-protocol/src/ws_swarm.rs:81-97",
+        "file": "web/src/components/MessagesPanel.tsx:1670-1708 (PendingBubble), web/src/api/types.ts:454-462 (AgentActivity), crates/swarmx-protocol/src/ws_swarm.rs:81-97",
         "notes": "PendingBubble 目前只绑 PendingBubble 触发消息的 thought_trace，无绑 AgentActivity live 流。1-2s 首卡需要 spawn 同步落占位消息（25d0启动中），不能只依赖 WS 流"
       },
       {
         "uiElement": "成员心跳活态行（正在 <用户动词>）",
         "source": "agents.last_activity_at + AgentActivity WS 流的最新事件",
         "persistence": "persisted",
-        "file": "web/src/api/types.ts:454-462, crates/flockmux-storage/src/store.rs:438-452 (touch_agent_activity), crates/flockmux-storage/migrations/0013_agent_last_activity.sql",
+        "file": "web/src/api/types.ts:454-462, crates/swarmx-storage/src/store.rs:438-452 (touch_agent_activity), crates/swarmx-storage/migrations/0013_agent_last_activity.sql",
         "notes": "agents 表已有 last_activity_at（迁移0013），live state 从 WS AgentActivity 补充。现状问题：AgentState 死亡（Error/Exited，ws_swarm.rs:102-118）后 PendingBubble 仍挂 60s，因为前端没绑 AgentState 变更。设计改进：绑 AgentState，agent 死即移除活态行"
       },
       {
         "uiElement": "时间分隔 + 未读徽章",
         "source": "messages.sent_at + messages.read_at",
         "persistence": "persisted",
-        "file": "web/src/components/MessagesPanel.tsx:1189 (TimeDivider), crates/flockmux-storage/src/store.rs:1531-1575 (mark_read, count_unread)",
+        "file": "web/src/components/MessagesPanel.tsx:1189 (TimeDivider), crates/swarmx-storage/src/store.rs:1531-1575 (mark_read, count_unread)",
         "notes": "现状：count_unread 是简单聚合（COUNT WHERE read_at IS NULL）。设计精确化：GROUP BY from_agent,thread_id WHERE to_agent=user AND read_at IS NULL，重连即拉，避免系统噪声数进徽章"
       },
       {
         "uiElement": "启动清单卡（实时消费 bootstrap 事件）",
         "source": "messages 表 (kind='system', meta.subtype='bootstrap' 各阶段) + AgentState 转换审计",
         "persistence": "persisted",
-        "file": "crates/flockmux-server/src/routes/rest.rs:33 (FIRST_RESPONSE_WATCHDOG_MS=90_000), crates/flockmux-server/src/routes/rest.rs:710-730 (看门狗 record_agent_error)",
+        "file": "crates/swarmx-server/src/routes/rest.rs:33 (FIRST_RESPONSE_WATCHDOG_MS=90_000), crates/swarmx-server/src/routes/rest.rs:710-730 (看门狗 record_agent_error)",
         "notes": "missing：bootstrap 事件链（隔离/登录/启动引擎/等待响应）的落库逻辑与 subtype 定义。现状：spawn 直接投消息，无占位卡。设计改进：spawn 同步落 25d0启动中 占位卡（kind=system, meta={subtype:'bootstrap_start'}），后续每步失败或 90s 看门狗触发原地翻转为失败卡"
       },
       {
         "uiElement": "失败卡（单一真相源，永不消失）",
         "source": "agents.last_error + agents.last_error_kind + agents.last_error_at",
         "persistence": "persisted",
-        "file": "web/src/components/workspace/OrchestratorFailureCard.tsx, crates/flockmux-storage/src/models.rs:52-65 (last_error*, 迁移0022), crates/flockmux-server/src/routes/rest.rs:710-730, 786",
+        "file": "web/src/components/workspace/OrchestratorFailureCard.tsx, crates/swarmx-storage/src/models.rs:52-65 (last_error*, 迁移0022), crates/swarmx-server/src/routes/rest.rs:710-730, 786",
         "notes": "agents 表已有 last_error/last_error_kind/last_error_at（迁移0022）。现状 OrchestratorFailureCard 直接读这三字段。改进需求：失败事件也入流一张 kind=system 卡片（meta.subtype='agent_error'），这样刷新后流内卡片完整可重放，而非仅靠 agents 表上的标记"
       },
       {
         "uiElement": "派工卡（左色条，展开成小团队树）",
         "source": "workers 表 (role/depends_on/produces/consumes) + 派工消息（待定 subtype）",
         "persistence": "missing",
-        "file": "web/src/api/types.ts:92 (DAG 字段), web/src/lib/dagEdgeDerivation.ts, crates/flockmux-storage/src/models.rs (workers 表定义, 暂未详读)",
+        "file": "web/src/api/types.ts:92 (DAG 字段), web/src/lib/dagEdgeDerivation.ts, crates/swarmx-storage/src/models.rs (workers 表定义, 暂未详读)",
         "notes": "missing：派工事件无持久化消息入流。现状：workers 表有派工元数据（role/depends/produces），但无对应的 kind=system 消息记录。设计需新建：派工消息 (kind='system', meta={subtype:'dispatch', agent_role:..., parent_agent:..., status:'started'|'done'}) 落库，后续通过 AgentActivity WS 流补充执行细节"
       },
       {
         "uiElement": "交付卡（N 文件 +x−y + 测试输出折叠）",
         "source": "blackboard_ops 表 (worktree diff) + thread.dirty/ahead/behind",
         "persistence": "missing",
-        "file": "crates/flockmux-storage/src/models.rs (BlackboardOpRecord 暂未详读), crates/flockmux-storage/src/models.rs:ThreadRecord:77-78 (isolation/branch 字段)",
+        "file": "crates/swarmx-storage/src/models.rs (BlackboardOpRecord 暂未详读), crates/swarmx-storage/src/models.rs:ThreadRecord:77-78 (isolation/branch 字段)",
         "notes": "missing：交付事件无持久化。现状：worktree diff 来自 workers 表关联的 PTY 输出（非数据库），thread 有 dirty/ahead/behind 枚举但无事件记录。设计需新建：交付消息 (kind='system', meta={subtype:'delivery', files:[{path, +x, -y}], test_output:...}) 落库"
       },
       {
@@ -104,7 +104,7 @@
         "uiElement": "Composer 打断/排队状态",
         "source": "messages 表（pending chip）+ 状态内存（非持久化）",
         "persistence": "live-only",
-        "file": "web/src/components/MessagesPanel.tsx:263 (草稿存储), 设计文档 §4.4, crates/flockmux-server/src/routes/rest.rs:1806, 1824, 1861 (interrupt/resume/interrupt_all 端点)",
+        "file": "web/src/components/MessagesPanel.tsx:263 (草稿存储), 设计文档 §4.4, crates/swarmx-server/src/routes/rest.rs:1806, 1824, 1861 (interrupt/resume/interrupt_all 端点)",
         "notes": "pending chip 目前仅活在内存，页面刷新即丢。interrupt/resume 端点已有（rest.rs）。改进需求：pending 消息应入 messages 表 (kind='pending', body=用户输入 snippet) 作为占位，便于重连重放"
       }
     ],
@@ -122,17 +122,17 @@
     "reusable": [
       {
         "name": "messages 表 kind + meta 结构",
-        "file": "crates/flockmux-storage/src/store.rs:1070-1081, crates/flockmux-storage/migrations/0012_message_meta.sql",
+        "file": "crates/swarmx-storage/src/store.rs:1070-1081, crates/swarmx-storage/migrations/0012_message_meta.sql",
         "gives": "已有持久化框架；系统卡可直接复用 INSERT INTO messages (kind='system', meta={...}) 逻辑，无需新表"
       },
       {
         "name": "wake 消息生成示范",
-        "file": "crates/flockmux-server/src/wake.rs:389-396, 849-858, 633",
+        "file": "crates/swarmx-server/src/wake.rs:389-396, 849-858, 633",
         "gives": "展示了 kind='wake' + meta={subtype:'wake', reason, key} 的生成、broadcast、存储全链路；派工/交付/失败卡可复用此模式"
       },
       {
         "name": "touch_agent_activity 持久化模式",
-        "file": "crates/flockmux-storage/src/store.rs:438-452, crates/flockmux-storage/migrations/0013_agent_last_activity.sql",
+        "file": "crates/swarmx-storage/src/store.rs:438-452, crates/swarmx-storage/migrations/0013_agent_last_activity.sql",
         "gives": "agents 表单行 UPDATE 的高频、幂等更新模式；AgentActivity 持久化可复用类似逻辑（新表 agent_activities，单行按 seq 去重）"
       },
       {
@@ -152,12 +152,12 @@
       },
       {
         "name": "interrupt/resume/interrupt_all 端点",
-        "file": "crates/flockmux-server/src/routes/rest.rs:1806, 1824, 1861",
+        "file": "crates/swarmx-server/src/routes/rest.rs:1806, 1824, 1861",
         "gives": "打断/排队两态的后端支点已全（interrupt_one_inner 逻辑完整），Composer UI 仅需接线"
       },
       {
         "name": "mark_read 与 count_unread 端点",
-        "file": "crates/flockmux-storage/src/store.rs:1531-1575",
+        "file": "crates/swarmx-storage/src/store.rs:1531-1575",
         "gives": "未读统计基础已有，精确化需补 GROUP BY from_agent,thread_id 查询"
       }
     ]
@@ -169,63 +169,63 @@
         "uiElement": "队长typing行（初始状态占位）",
         "source": "SwarmEvent::AgentState { state: Spawning } 立即发送 (rest.rs:670-672) + 后续 ShimReady → AgentState::Ready (rest.rs:687-695) + AgentActivity { kind='system', label, phase='running' }",
         "persistence": "persisted",
-        "file": "crates/flockmux-server/src/routes/rest.rs:670-672,687-695",
+        "file": "crates/swarmx-server/src/routes/rest.rs:670-672,687-695",
         "notes": "spawn时同步发Spawning事件；不等tailer。待验证：现有前端是否绑到AgentActivity.label翻译用户动词（设计要求'思考…→派工…→合并结果…'），还是只读状态；thought_trace.status字段在类型定义中可用"
       },
       {
         "uiElement": "成员心跳活态行（动词+计时+文件数）",
         "source": "AgentActivity { label, phase, duration_ms, at } 来自ws_swarm.rs广播; 补充AgentInfo.last_activity_at (store.rs:438-452 touch_agent_activity) + AgentState enum (ws_swarm.rs:102-117 七态：Spawning/Ready/Thinking/Idle/WaitingDep/Error/Exited)",
         "persistence": "live-only",
-        "file": "crates/flockmux-protocol/src/ws_swarm.rs:74-97,102-117; crates/flockmux-storage/src/store.rs:438-452",
+        "file": "crates/swarmx-protocol/src/ws_swarm.rs:74-97,102-117; crates/swarmx-storage/src/store.rs:438-452",
         "notes": "AgentActivity仅在广播通道活跃时可见（drops frames under flood）；last_activity_at是持久化的单一时刻戳，用于45s无活动判断。**关键缺口**：current AgentInfo.last_activity_at用于判断'wedged' vs 'idle'，但未被前端绑定到'上次输出'时间。需新增GET /api/agent/:id/activity回程DB查询，或在WS重连时补充历史拉取"
       },
       {
         "uiElement": "45s无活动降级（灰色警告文本）",
         "source": "AgentInfo.last_activity_at与当前时间比较；设计要求判断逻辑在前端(45s阈值)或绑backend后端驱动的字段",
         "persistence": "persisted",
-        "file": "crates/flockmux-storage/src/store.rs:438-444 (last_activity_at); web/src/api/types.ts:123 (AgentInfo.last_activity_at)",
+        "file": "crates/swarmx-storage/src/store.rs:438-444 (last_activity_at); web/src/api/types.ts:123 (AgentInfo.last_activity_at)",
         "notes": "**missing backend signal**: 无专门后端字段或事件表示'45s无活动'；纯前端时间比较逻辑。设计原则要求所有状态源自服务器事实，建议添加AgentActivity周期性heartbeat或Activity status enum"
       },
       {
         "uiElement": "死即移除（绑AgentState）",
         "source": "AgentState::Error (rest.rs:731-734 watchdog或非零shim_exit) + AgentState::Exited (rest.rs:766-774); WS广播AgentState事件，前端订阅useSwarmFeed驱动重渲染",
         "persistence": "persisted",
-        "file": "crates/flockmux-server/src/routes/rest.rs:731-774; crates/flockmux-protocol/src/ws_swarm.rs:13 (AgentState event); web/src/api/types.ts:429-441 (SwarmAgentState enum)",
+        "file": "crates/swarmx-server/src/routes/rest.rs:731-774; crates/swarmx-protocol/src/ws_swarm.rs:13 (AgentState event); web/src/api/types.ts:429-441 (SwarmAgentState enum)",
         "notes": "前端通过AgentLiveState.state获取最新AgentState；当state === 'error' | 'exited'时，活态行应从成员列消失。**设计验证**：诊断2称PendingBubble静默挂60s，根因是未绑AgentState。现有代码已有AgentState广播，需前端绑定检查"
       },
       {
         "uiElement": "派工卡展开=活动时间线（折叠→展开）",
         "source": "GET /api/agent/:id/activity（rest.rs:1125-1136）返回swarm.recent_activity(agent_id)，缓存在内存ring；WS流上AgentActivity事件逐条附加",
         "persistence": "live-only",
-        "file": "crates/flockmux-server/src/routes/rest.rs:1125-1136; web/src/components/agent/AgentActivityLog.tsx (假设存在，需验证)",
+        "file": "crates/swarmx-server/src/routes/rest.rs:1125-1136; web/src/components/agent/AgentActivityLog.tsx (假设存在，需验证)",
         "notes": "**硬依赖缺口**：design §6 P1明确指出GET /api/agent/:id/activity 'served from in-memory ring，冷加载后变空白'。需改为DB查询或补充持久化。现有实现仅在tailer运行时回填（transcript ring），服务器重启即丢失"
       },
       {
         "uiElement": "断线兜底（WS重连后回填活动）",
         "source": "WS重连时前端调用GET /api/agent/:id/activity，配合GET /api/agent/:id拉回AgentInfo（含last_activity_at）",
         "persistence": "missing",
-        "file": "crates/flockmux-server/src/routes/rest.rs:1125-1136; web/src/api/http.ts (假设有重连逻辑)",
+        "file": "crates/swarmx-server/src/routes/rest.rs:1125-1136; web/src/api/http.ts (假设有重连逻辑)",
         "notes": "**P1必做**：当前GET /api/agent/:id/activity只读in-memory ring（诊断3），重连后无数据。设计要求'先打GET /api/agent/:id/activity回填再接流'，前提是该端点持久化。需后端改动：转向SQLiteagent_activity表（待创建）或扩展messages表存系统事件"
       },
       {
         "uiElement": "首卡占位即时落地（spawn时同步发◐启动中）",
         "source": "SwarmEvent::AgentState { state: Spawning } 在spawn_with_bookkeeping中同步发(rest.rs:670-672)，不等tailer；后续ShimReady/ShimExit链式触发事件",
         "persistence": "persisted",
-        "file": "crates/flockmux-server/src/routes/rest.rs:538-673",
+        "file": "crates/swarmx-server/src/routes/rest.rs:538-673",
         "notes": "**设计验证**：rest.rs:670-672确认已同步发Spawning事件，符合设计'不等700ms tailer，同步落占位卡'。前端需绑定Spawning→Ready→Thinking的状态转移链，渲染启动清单卡消费事件"
       },
       {
         "uiElement": "90s看门狗（FIRST_RESPONSE_WATCHDOG_MS）",
         "source": "rest.rs:33常量90_000ms；rest.rs:709-752后台任务ShimReady后90s检查agent_silent_since_ready()；若真则record_agent_error('watchdog') + 发AgentState::Error + AgentActivity{ phase='error' }",
         "persistence": "persisted",
-        "file": "crates/flockmux-server/src/routes/rest.rs:33,687-752",
+        "file": "crates/swarmx-server/src/routes/rest.rs:33,687-752",
         "notes": "**设计验证**：watchdog真的会firerecord_agent_error('watchdog')，发Error事件。诊断2称看门狗'提供事实背书'——代码确认。前端绑定Error状态+看门狗原因字段即可消除'绿点撒谎'问题"
       },
       {
         "uiElement": "队长thought_trace（思考摘要折叠块）",
         "source": "Message.thought_trace（来自SwarmEvent::Message，rest协议定义）；在PendingBubble中消费(MessagesPanel.tsx:1687-1708)",
         "persistence": "persisted",
-        "file": "crates/flockmux-protocol/src/ws_swarm.rs:39-41 (Message.thought_trace); web/src/components/MessagesPanel.tsx:1687-1708",
+        "file": "crates/swarmx-protocol/src/ws_swarm.rs:39-41 (Message.thought_trace); web/src/components/MessagesPanel.tsx:1687-1708",
         "notes": "已有前端绑定，但设计要求'改：提对比度'+'思考块不混入结论'，涉及ChatMarkdown改动（优先级P0 M级）"
       },
       {
@@ -246,7 +246,7 @@
         "uiElement": "现在live区（right panel顶置two-signal）",
         "source": "AgentLiveState.activity（最新AgentActivity）+ AgentInfo.last_activity_at（上次输出时间）",
         "persistence": "derived",
-        "file": "web/src/api/types.ts:469-472; crates/flockmux-storage/src/store.rs:438-444",
+        "file": "web/src/api/types.ts:469-472; crates/swarmx-storage/src/store.rs:438-444",
         "notes": "**新建组件** + **后端补充**：two-signal='动词+计时'需将duration_ms/at与now比较；'上次输出'需last_activity_at。后端已有last_activity_at字段但未充分利用"
       }
     ],
@@ -283,12 +283,12 @@
       },
       {
         "name": "swarm.recent_activity()",
-        "file": "crates/flockmux-server/src/routes/rest.rs:1135",
+        "file": "crates/swarmx-server/src/routes/rest.rs:1135",
         "gives": "内存ring查询逻辑；当转向DB查询时可参考结构体字段，保持API返回类型不变"
       },
       {
         "name": "thought_trace / ThoughtTraceStep",
-        "file": "crates/flockmux-protocol/src/rest.rs (定义); web/src/components/MessagesPanel.tsx:1689-1708 (消费)",
+        "file": "crates/swarmx-protocol/src/rest.rs (定义); web/src/components/MessagesPanel.tsx:1689-1708 (消费)",
         "gives": "思考块数据结构+渲染逻辑；已完整，P0仅需改对比度和折叠默认态"
       }
     ]
@@ -328,35 +328,35 @@
         "uiElement": "成员心跳活态行 - \"正在 <用户动词>\" + 计时 + 文件数",
         "source": "AgentActivity (from /ws/swarm) + last_activity_at (persisted in agents table)",
         "persistence": "live-only",
-        "file": "crates/flockmux-protocol/src/ws_swarm.rs:74-97（AgentActivity kind=tool|system, label, phase, seq, duration_ms），crates/flockmux-storage/src/store.rs:438-444（touch_agent_activity 更新 agents.last_activity_at），crates/flockmux-storage/migrations/0013_agent_last_activity.sql",
+        "file": "crates/swarmx-protocol/src/ws_swarm.rs:74-97（AgentActivity kind=tool|system, label, phase, seq, duration_ms），crates/swarmx-storage/src/store.rs:438-444（touch_agent_activity 更新 agents.last_activity_at），crates/swarmx-storage/migrations/0013_agent_last_activity.sql",
         "notes": "✓/◐ 混合。AgentActivity.label 是现成的「一行动词」（如 \"编辑 src/foo.rs\"），无需逆向 worktree 操作日志。WS 流是 lossy（broadcast channel drops frames），冷加载重连时需先拉 `GET /api/agent/:id/activity` 回填——但该端点当前仅读 in-memory ring（诊断 3）。P1 需改成走 DB 查询而非 ring。45s 无输出降级为 ⚠ 灰点需用 last_activity_at 时间戳判定。"
       },
       {
         "uiElement": "系统事件卡（派工/交付/失败/模型切换）",
         "source": "messages.kind + messages.meta (JSON structured payload)",
         "persistence": "persisted",
-        "file": "crates/flockmux-storage/migrations/0012_message_meta.sql（messages.meta TEXT），crates/flockmux-storage/src/models.rs:248-265（MessageRecord.meta: Option<serde_json::Value>），crates/flockmux-protocol/src/ws_swarm.rs:31-38（SwarmEvent.Message.meta），web/src/api/types.ts:143-150（MessageMeta 类型）",
+        "file": "crates/swarmx-storage/migrations/0012_message_meta.sql（messages.meta TEXT），crates/swarmx-storage/src/models.rs:248-265（MessageRecord.meta: Option<serde_json::Value>），crates/swarmx-protocol/src/ws_swarm.rs:31-38（SwarmEvent.Message.meta），web/src/api/types.ts:143-150（MessageMeta 类型）",
         "notes": "✓ 基础设施完整但未使用。messages.kind 已有 wake/reply/note；meta 已有 subtype/reason/key 等字段（wake 用途），无派工/交付/失败等新 subtype。后端当前仅在 wake 消息塞 meta，P1 需扩展为 dispatch/delivery/failure/model_change 各一个。前端 MessagesPanel 仅过滤 kind=wake（第 528 行），需新增派工卡渲染分支。"
       },
       {
         "uiElement": "队长 typing 行 - \"思考… → 派工… → 合并结果…\"",
         "source": "thought_trace.status + 首个 AgentActivity (first activity after user msg)",
         "persistence": "live-only",
-        "file": "crates/flockmux-protocol/src/rest.rs（ThoughtTrace 定义），web/src/api/types.ts:160-171（ThoughtTraceRecord），web/src/components/MessagesPanel.tsx:571-640（traceToSummary 逻辑）",
+        "file": "crates/swarmx-protocol/src/rest.rs（ThoughtTrace 定义），web/src/api/types.ts:160-171（ThoughtTraceRecord），web/src/components/MessagesPanel.tsx:571-640（traceToSummary 逻辑）",
         "notes": "✗ thought_trace.status 无实现。protocol 有 ThoughtTrace（started_at, completed_at, summary 步骤），但无 status enum（thinking/dispatching/merging）。需后端补充状态枚举或改用 started_at/completed_at 推断阶段。首个 AgentActivity 可作为 proof-of-life，但需确保它 1-2s 内到达（诊断 2——现状 typing bubble 挂 60s）。"
       },
       {
         "uiElement": "失败卡 - 单一真相源（不重复、不截断）",
         "source": "agents.last_error + agents.last_error_kind + agents.last_error_at",
         "persistence": "persisted",
-        "file": "crates/flockmux-storage/migrations/0022_agent_last_error.sql（三个新字段），crates/flockmux-server/src/routes/rest.rs:711-730（record_agent_error 记录，含 watchdog），web/src/api/types.ts:129-134（AgentInfo 字段），web/src/components/workspace/OrchestratorFailureCard.tsx（失败卡渲染，需泛化）",
+        "file": "crates/swarmx-storage/migrations/0022_agent_last_error.sql（三个新字段），crates/swarmx-server/src/routes/rest.rs:711-730（record_agent_error 记录，含 watchdog），web/src/api/types.ts:129-134（AgentInfo 字段），web/src/components/workspace/OrchestratorFailureCard.tsx（失败卡渲染，需泛化）",
         "notes": "✓ 持久化完整。缺失的是 UI 分支。record_agent_error 在 rest.rs 已调用（看门狗:33,711-730；interrupt 失败时:786）。OrchestratorFailureCard 当前仅服务 orchestrator；需改为泛用卡（任意 agent_id），每个失败 agent 一张。乐队栏仅显 ✕ 点，详细文本单独在流内一张卡。"
       },
       {
         "uiElement": "启动清单卡 - ✓隔离/✓登录/◐启动引擎/○等待首响",
         "source": "缺失 - 无 BootstrapStage 事件流。agent.spawned_at + 首个 AgentActivity timestamp + 看门狗触发时间",
         "persistence": "missing",
-        "file": "crates/flockmux-server/src/routes/rest.rs:33（FIRST_RESPONSE_WATCHDOG_MS=90_000）、:711-730（watchdog 触发 record_agent_error），crates/flockmux-storage/src/store.rs:416（spawned_at 查询），web/src/components/TaskActivity.tsx（任务卡状态机，可复用骨架）",
+        "file": "crates/swarmx-server/src/routes/rest.rs:33（FIRST_RESPONSE_WATCHDOG_MS=90_000）、:711-730（watchdog 触发 record_agent_error），crates/swarmx-storage/src/store.rs:416（spawned_at 查询），web/src/components/TaskActivity.tsx（任务卡状态机，可复用骨架）",
         "notes": "◐ P0 前端 + P1 后端。前端可用 agent.spawned_at / first AgentActivity.at / last_error_at 推断清单卡事件序列（同步落一张◐占位卡）。后端需补充 BootstrapStage 枚举事件（隔离/登录/启动/响应各一张），或改 spawn 时同步投一张 kind=system meta={subtype:bootstrap,stage:spawning} 占位消息。看门狗已 fire record_agent_error，不需改动。"
       },
       {
@@ -370,7 +370,7 @@
         "uiElement": "收件箱未读徽章 - 精确端点（不含系统噪声）",
         "source": "缺失 - 当前仅 SELECT COUNT(*) FROM messages WHERE to_agent=? AND read_at IS NULL",
         "persistence": "persisted",
-        "file": "crates/flockmux-storage/src/store.rs:1561-1577（unread_count 查询无 GROUP BY）",
+        "file": "crates/swarmx-storage/src/store.rs:1561-1577（unread_count 查询无 GROUP BY）",
         "notes": "◐ 需优化。诊断 6 要求精确计数（不进噪声 wake/blackboard）。建议改为 `SELECT COUNT(DISTINCT from_agent) FROM messages WHERE to_agent=? AND read_at IS NULL AND kind NOT IN ('wake','...')`。当前已过滤 wake（MessagesPanel 第 528 行），但 count API 无过滤。"
       }
     ],
@@ -434,7 +434,7 @@
         "uiElement": "Diff file list (file-level changes summary)",
         "source": "GET /api/workspaces/:id/threads/:tid/diff → ThreadDiff.files: string[]",
         "persistence": "persisted",
-        "file": "crates/flockmux-server/src/routes/workspaces.rs:816-821; web/src/api/types.ts:366-375",
+        "file": "crates/swarmx-server/src/routes/workspaces.rs:816-821; web/src/api/types.ts:366-375",
         "notes": "Backend returns repo-relative changed file paths via crate::worktree::diff_summary(). No file-level metadata (insertions/deletions/status) — only filenames. Per-file detailed diffs must be computed client-side or via new endpoint."
       },
       {
@@ -462,7 +462,7 @@
         "uiElement": "Merge gate condition: 'rebase possible' (rebase✓)",
         "source": "derived from worktree state",
         "persistence": "live-only",
-        "file": "crates/flockmux-server/src/routes/workspaces.rs:860-865",
+        "file": "crates/swarmx-server/src/routes/workspaces.rs:860-865",
         "notes": "Computed synchronously in merge_thread_handler: checks working_dirty() + current_branch(). Not pre-computed or persisted — only shown on POST attempt. Should call /diff before [合并] to let UI preflight-check base_dirty."
       },
       {
@@ -483,28 +483,28 @@
         "uiElement": "Merge result (clean vs conflict resolution)",
         "source": "POST /api/workspaces/:id/threads/:tid/merge → MergeResult",
         "persistence": "persisted",
-        "file": "crates/flockmux-server/src/routes/workspaces.rs:882-896; web/src/api/types.ts:377-382",
+        "file": "crates/swarmx-server/src/routes/workspaces.rs:882-896; web/src/api/types.ts:377-382",
         "notes": "Returns MergeResult enum: Merged{files: count} or Resolving{agent_id, files: conflicted_paths}. On conflict, spawns merge resolver agent. Thread branch is cleared post-merge (worktree only)."
       },
       {
         "uiElement": "Thread dirty/ahead/behind flags (sidebar indicators)",
         "source": "ThreadInfo.dirty / ThreadInfo.ahead / ThreadInfo.behind (computed at list time)",
         "persistence": "live-only",
-        "file": "crates/flockmux-server/src/routes/workspaces.rs:51-53 (stub) + list_workspaces_handler computes; web/src/api/types.ts:354-360",
+        "file": "crates/swarmx-server/src/routes/workspaces.rs:51-53 (stub) + list_workspaces_handler computes; web/src/api/types.ts:354-360",
         "notes": "Computed by worktree module (current_branch, diff_summary, working_dirty) on each GET /threads call. Not persisted. Ahead/behind: null for main/shared thread or non-git cwd."
       },
       {
         "uiElement": "System event cards for dispatch/delivery/handoff (enters message flow)",
         "source": "messages table: kind='system' + meta JSON (§4.3 §6 P1)",
         "persistence": "persisted",
-        "file": "crates/flockmux-storage/src/migrations/0012_message_meta.sql; models.rs:227-244 (NewMessage); store.rs:1070-1080 (INSERT)",
+        "file": "crates/swarmx-storage/src/migrations/0012_message_meta.sql; models.rs:227-244 (NewMessage); store.rs:1070-1080 (INSERT)",
         "notes": "Ready to accept: kind='system' + meta={subtype, ...}. Already persists via messages.kind + messages.meta. Example: {subtype: 'dispatch', recipient: 'tester', task: '...'}. Design §6 P1 says drop these into kind=system messages — schema is already there, just need emit points in rest.rs spawn/handoff handlers."
       },
       {
         "uiElement": "交付卡 (delivery card): N files +x/-y + test output",
         "source": "derived from worktree diff + swarm completion event",
         "persistence": "live-only",
-        "file": "crates/flockmux-server/src/routes/workspaces.rs:800-821; worktree module (diff_summary)",
+        "file": "crates/swarmx-server/src/routes/workspaces.rs:800-821; worktree module (diff_summary)",
         "notes": "Not yet a system event. Design §4.3: '交付卡：N 文件 +x/−y + 测试输出折叠 + [查看变更]'. Requires: post-dispatch completion event that includes file count + test summary meta, persisted as kind=system message to enable cold reload."
       },
       {
@@ -518,14 +518,14 @@
         "uiElement": "Rebase status (in merge handler)",
         "source": "computed in merge_thread_handler at call time",
         "persistence": "live-only",
-        "file": "crates/flockmux-server/src/routes/workspaces.rs:859-866",
+        "file": "crates/swarmx-server/src/routes/workspaces.rs:859-866",
         "notes": "Checks base branch, merges via crate::worktree::merge_into_base(). No persistent rebase queue or partial merge state — merge is atomic (succeeds or fails with user-facing error)."
       },
       {
         "uiElement": "Model tier/reasoning effort override per thread",
         "source": "ThreadInfo.model_tier / ThreadInfo.reasoning_effort + PUT endpoint",
         "persistence": "persisted",
-        "file": "crates/flockmux-server/src/routes/workspaces.rs (set_thread_model_handler); web/src/api/types.ts:349-352",
+        "file": "crates/swarmx-server/src/routes/workspaces.rs (set_thread_model_handler); web/src/api/types.ts:349-352",
         "notes": "Changeable via UI, persisted to thread row. Not directly part of merge gate but controls which model runs tests / resolves conflicts."
       }
     ],
@@ -543,22 +543,22 @@
     "reusable": [
       {
         "name": "ThreadDiff endpoint + worktree module",
-        "file": "crates/flockmux-server/src/routes/workspaces.rs:791-822",
+        "file": "crates/swarmx-server/src/routes/workspaces.rs:791-822",
         "gives": "File-level diff (filenames, base_dirty status). Can extend to include hunk metadata."
       },
       {
         "name": "merge_thread_handler + MergeOutcome handling",
-        "file": "crates/flockmux-server/src/routes/workspaces.rs:839-897",
+        "file": "crates/swarmx-server/src/routes/workspaces.rs:839-897",
         "gives": "Clean/conflict detection and merge resolver spawning. Can gate this on pre-checks (file accept, test pass, etc.)."
       },
       {
         "name": "MessageRecord + meta JSON column",
-        "file": "crates/flockmux-storage/src/models.rs:248-268, migrations/0012_message_meta.sql",
+        "file": "crates/swarmx-storage/src/models.rs:248-268, migrations/0012_message_meta.sql",
         "gives": "Schema ready for system event persistence. kind='system' + meta={subtype, ...} is the single-truth-source pattern."
       },
       {
         "name": "AgentState + last_activity_at",
-        "file": "crates/flockmux-protocol/src/ws_swarm.rs:102-118, migrations/0013_agent_last_activity.sql",
+        "file": "crates/swarmx-protocol/src/ws_swarm.rs:102-118, migrations/0013_agent_last_activity.sql",
         "gives": "Agent state tracking for activity indicators. Can extend to track test runner state."
       },
       {
@@ -592,7 +592,7 @@
         "uiElement": "发消息直接投递 vs 队列缓存",
         "source": "MessagesPanel.tsx:792-806 api.sendMessage()直接调swarm.rs:72-106 send_message()持久化→message表；随后api.wakeAgent()唤醒。无QUEUE表或缓冲态",
         "persistence": "persisted",
-        "file": "web/src/components/MessagesPanel.tsx:792-806 + crates/flockmux-server/src/routes/swarm.rs:72-106",
+        "file": "web/src/components/MessagesPanel.tsx:792-806 + crates/swarmx-server/src/routes/swarm.rs:72-106",
         "notes": "sendMessage直接写messages表（kind可选，meta可选），无intermediate queue state。设计要求的'Enter=排队显示pending chip'对应的是客户端UI态（pending responder inference，MessagesPanel.tsx:672-706），不是后端queue表。后端目前无queue机制，所有消息即时落库。pending chip是纯前端推断（last_received.time > last_sent.time且在60s窗口内），不驱动后端排队门控"
       },
       {
@@ -606,19 +606,19 @@
         "uiElement": "优化提示词 ✦ → 就地改写+undo",
         "source": "rest.rs:2392-2432 POST /api/prompt/optimize；Claude print mode return OptimizePromptResponse{optimized,changed}。Composer未接显示UI或undo逻辑",
         "persistence": "live-only",
-        "file": "crates/flockmux-server/src/routes/rest.rs:2392-2432",
+        "file": "crates/swarmx-server/src/routes/rest.rs:2392-2432",
         "notes": "端点已实现，但Composer无UI按钮或状态管理来显示optimized结果。设计要求的'✦优化就地改写+undo'对应的是前端状态（显示diff→接受/拒绝→setBody）。后端无undo history，仅单次rewrite。需前端补：(1)显示optimize按钮(当body长度>8) (2)调POST /api/prompt/optimize (3)状态管理preOptimize(保存原文for undo) (4)diff展示→接受则setBody"
       },
       {
         "uiElement": "附件上传+失败回滚 📎 缩略图→红框'未上传'",
         "source": "rest.rs:2838-2893 POST /api/attachment?name=<basename>；返回{path}。前端无上传失败处理或回滚UI",
         "persistence": "missing",
-        "file": "crates/flockmux-server/src/routes/rest.rs:2838-2893",
+        "file": "crates/swarmx-server/src/routes/rest.rs:2838-2893",
         "notes": "上传端点已实现（sniff image type + 25MB cap + 原子写）。设计要求的'上传失败→缩略图变红框「未上传」+禁发送'尚未实现。需前端补：(1)per-attachment上传状态机（pending/success/failed）(2)error时缩略图红框+重试button (3)只要有failed attachment就disable发送。后端无失败恢复逻辑（write失败就500），需前端client-side retry"
       },
       {
         "uiElement": "草稿持久化（会话,收件人）keyed + 切无活队长显式提示",
-        "source": "MessagesPanel.tsx:263-289 draftKey = `flockmux:draft:v1:${workspaceSlug}:${activeThreadId}` → localStorage；设计要求的'启动队长'提示尚未实现",
+        "source": "MessagesPanel.tsx:263-289 draftKey = `swarmx:draft:v1:${workspaceSlug}:${activeThreadId}` → localStorage；设计要求的'启动队长'提示尚未实现",
         "persistence": "persisted",
         "file": "web/src/components/MessagesPanel.tsx:263-289",
         "notes": "草稿持久化已完整实现（localStorage per workspace+thread）。缺的是设计要求的'切到无活队长会话时显式提示「发送将启动队长」而非静默bootstrap'。需在composerPlaceholder或send前校验recipient，若onSend则alert"
@@ -627,70 +627,70 @@
         "uiElement": "打断按钮 ■停 + 确认弹窗 → interrupt端点",
         "source": "AgentDrawer.tsx:234-274 togglePause()→api.interruptAgent/resumeAgent。rest.rs:1806-1852 POST /api/agent/:id/interrupt|resume。Composer无独立'打断▾'按钮",
         "persistence": "persisted",
-        "file": "web/src/components/agent/AgentDrawer.tsx:234-274 + crates/flockmux-server/src/routes/rest.rs:1806-1852",
+        "file": "web/src/components/agent/AgentDrawer.tsx:234-274 + crates/swarmx-server/src/routes/rest.rs:1806-1852",
         "notes": "打断UI已在AgentDrawer（:444 pause button），对应的interrupt/resume端点已实现。设计要求在Composer右侧加'[打断▾]'button对应「每个在跑成员有独立Stop」。需前端：(1)Composer探测activeMembers中paused/thinking的agents (2)列出'[打断 成员名▾]'dropdown (3)点击→confirm dialog→api.interruptAgent。后端interrupt逻辑完整（send Ctrl-C+pause flag）"
       },
       {
         "uiElement": "interrupt_all 端点（workspace级批量打断）",
         "source": "rest.rs:1854-1920 POST /api/agent/interrupt-all?workspace_id=<id>",
         "persistence": "persisted",
-        "file": "crates/flockmux-server/src/routes/rest.rs:1854-1920",
+        "file": "crates/swarmx-server/src/routes/rest.rs:1854-1920",
         "notes": "端点已实现（cross-ref agents表的workspace_id，逐一interrupt live agents）。Composer或工具栏尚无UI调用此端点。可用于'全部打断'快捷键，但未在设计中明确要求"
       },
       {
         "uiElement": "wake_agent 端点（手动唤醒）",
         "source": "rest.rs:1103-1123 POST /api/agent/:id/wake；deliver_manual_wake()注入blackboard wake事件。Composer:806自动call此端点在sendMessage后",
         "persistence": "live-only",
-        "file": "crates/flockmux-server/src/routes/rest.rs:1103-1123 + MessagesPanel.tsx:806",
+        "file": "crates/swarmx-server/src/routes/rest.rs:1103-1123 + MessagesPanel.tsx:806",
         "notes": "已集成：send后自动唤醒recipient（best-effort，失败不阻塞UI）。符合设计要求的'发消息触发wake'行为"
       },
       {
         "uiElement": "队长 typing 行（入流律最小实现）：思考→派工→合并 status",
         "source": "thought_trace.status（message meta字段）+ 首个AgentActivity。当前PendingBubble仅从thought_trace.summary推断步骤",
         "persistence": "live-only",
-        "file": "web/src/components/MessagesPanel.tsx:1687-1708 + crates/flockmux-protocol/src/ws_swarm.rs:20-42",
+        "file": "web/src/components/MessagesPanel.tsx:1687-1708 + crates/swarmx-protocol/src/ws_swarm.rs:20-42",
         "notes": "message.thought_trace已有status字段可传状态（见rest.rs swarm.rs的storage_trace_to_rest）。PendingBubble.tsx显示reasoning summary but no explicit status binding。设计要求'1-2s内出现 队长正在思考→派工→合并'，需：(1)ensure thought_trace.status及时发送 (2)bind typing行到status值而非heuristics。后端thought_trace已可记录，前端仅需绑定状态显示"
       },
       {
         "uiElement": "成员心跳活态行（非气泡）：正在<动词> + 计时 + 上次输出",
         "source": "AgentActivity.label + last_activity_at。当前无activity行UI，仅有pending bubble",
         "persistence": "missing",
-        "file": "crates/flockmux-storage/src/store.rs:438-444 last_activity_at + crates/flockmux-protocol/src/ws_swarm.rs:81-97 AgentActivity",
+        "file": "crates/swarmx-storage/src/store.rs:438-444 last_activity_at + crates/swarmx-protocol/src/ws_swarm.rs:81-97 AgentActivity",
         "notes": "后端数据完整（last_activity_at via touch_agent_activity，AgentActivity label），但前端无activity行渲染。设计要求的'测试成员 正在 写 refund.test.ts  ⋯  14s·上次输出 2s前'是新增UI，需绑定AgentActivity live stream（WS）+last_activity_at（45s无输出降级为⚠灰）"
       },
       {
         "uiElement": "首卡占位即时落地（◐启动中）vs 等700ms tailer",
         "source": "spawn_bootstrap_inject()无即时占位事件；依赖transcript tailer推迟首卡。设计要求spawn时同步emit◐启动中卡",
         "persistence": "missing",
-        "file": "crates/flockmux-server/src/routes/rest.rs:1161-1250 spawn_bootstrap_inject",
+        "file": "crates/swarmx-server/src/routes/rest.rs:1161-1250 spawn_bootstrap_inject",
         "notes": "当前逻辑延迟至tailer poll（~700ms）才见首卡。设计要求'不等tailer，同步落◐启动中占位'，需在spawn时立即emit SwarmEvent::Message{kind=system,meta={subtype:'bootstrap_started'}}before waiting ShimReady。这是P0高收益改动（堵住'盯绿点'空窗）"
       },
       {
         "uiElement": "AgentState死即移除pending（不再挂60s）",
         "source": "AgentState.Error/Exited（ws_swarm.rs:100-117）vs PendingBubble timeout 60s（PENDING_TIMEOUT_MS常量）。设计要求agent死即去掉pending",
         "persistence": "persisted",
-        "file": "crates/flockmux-protocol/src/ws_swarm.rs:100-117 + web/src/components/MessagesPanel.tsx:698（PENDING_TIMEOUT_MS搜无）",
+        "file": "crates/swarmx-protocol/src/ws_swarm.rs:100-117 + web/src/components/MessagesPanel.tsx:698（PENDING_TIMEOUT_MS搜无）",
         "notes": "PendingBubble inference（MessagesPanel.tsx:672-706）已检查alive agents（shim_exit==null && killed_at==null），但未绑AgentState.Error。需补：pendingResponders过滤时不仅检killed_at还要排除Error state。watchdog已能fire record_agent_error（rest.rs:720-743），但前端未consume state event"
       },
       {
         "uiElement": "活态行/派工卡在WS重连时回填 GET /api/agent/:id/activity",
         "source": "rest.rs:1125-1136 GET /api/agent/:id/activity served from swarm.recent_activity()（in-memory ring）。重连时需先backfill再接流",
         "persistence": "live-only",
-        "file": "crates/flockmux-server/src/routes/rest.rs:1125-1136",
+        "file": "crates/swarmx-server/src/routes/rest.rs:1125-1136",
         "notes": "设计要求'断线兜底：活态行在重连时先打GET回填再接流'。当前endpoint返回in-memory ring（不持久），刷新/重连后activity归零。这是P1硬依赖（诊断3根因），需后端：(1)AgentActivity表持久化（当前仅broadcast，drop frames under flood）(2)GET改走DB而非ring。设计note:1140已明确'前提是该端点不再只读in-memory ring'"
       },
       {
         "uiElement": "系统事件卡持久化（派工/交付/计划/失败/模型切换/回退/隔离）",
         "source": "messages表kind/meta列（store.rs:1070）已支持；系统卡应落kind=system+meta={subtype:'dispatch'|'handoff'|...}。当前无系统卡生成逻辑",
         "persistence": "persisted",
-        "file": "crates/flockmux-storage/src/store.rs:1065-1082",
+        "file": "crates/swarmx-storage/src/store.rs:1065-1082",
         "notes": "后端基础设施ready（kind+meta）。设计要求的'系统事件可直接落kind=system + 结构化meta'已验证可行。需前端生成逻辑（dispatch卡/handoff卡等），后端inject时调store.insert_message with meta。设计P1:'系统事件持久化+入流'是砍伪spike的关键（三个方向都估了'messages vs swarm_events'讨论，实际messages表已支持）"
       },
       {
         "uiElement": "启动清单卡逐步消费bootstrap事件 + 90s看门狗原地翻失败卡",
         "source": "rest.rs:33 FIRST_RESPONSE_WATCHDOG_MS=90_000; watchdog fire调record_agent_error（:720-743）+publish AgentState.Error（:733）。启动清单UI未实现",
         "persistence": "persisted",
-        "file": "crates/flockmux-server/src/routes/rest.rs:33,711-743",
+        "file": "crates/swarmx-server/src/routes/rest.rs:33,711-743",
         "notes": "watchdog已实现且真的fire record_agent_error。需前端：(1)spawn时inject◐启动中占位卡 (2)bind到BootstrapStage event stream（隔离→登录验证→启动引擎→首响应）(3)90s无响应或watchdog event→卡原地翻转failure state。后端已publish AgentState.Error+AgentActivity{phase=error}，前端仅需消费"
       },
       {
@@ -716,7 +716,7 @@
     "reusable": [
       {
         "name": "interrupt/resume/interrupt_all/wake_agent 端点",
-        "file": "crates/flockmux-server/src/routes/rest.rs:1103-1861",
+        "file": "crates/swarmx-server/src/routes/rest.rs:1103-1861",
         "gives": "后端完整实现，Composer可直接调rest.1806(interrupt)/1824(resume)，无需新建"
       },
       {
@@ -736,22 +736,22 @@
       },
       {
         "name": "messages表 kind+meta 结构",
-        "file": "crates/flockmux-storage/src/store.rs:1070",
+        "file": "crates/swarmx-storage/src/store.rs:1070",
         "gives": "系统事件可直接落库，无需新表"
       },
       {
         "name": "thought_trace + AgentActivity 事件流",
-        "file": "crates/flockmux-protocol/src/ws_swarm.rs:20-97",
+        "file": "crates/swarmx-protocol/src/ws_swarm.rs:20-97",
         "gives": "typing行状态来源已有，仅需前端绑定显示"
       },
       {
         "name": "POST /api/prompt/optimize 端点",
-        "file": "crates/flockmux-server/src/routes/rest.rs:2392-2432",
+        "file": "crates/swarmx-server/src/routes/rest.rs:2392-2432",
         "gives": "后端完整实现，Composer可直接调用，仅需UI包装"
       },
       {
         "name": "POST /api/attachment 端点",
-        "file": "crates/flockmux-server/src/routes/rest.rs:2838-2893",
+        "file": "crates/swarmx-server/src/routes/rest.rs:2838-2893",
         "gives": "上传端点完整，需前端client-side retry+error UI"
       }
     ]

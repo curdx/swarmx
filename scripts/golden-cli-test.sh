@@ -8,7 +8,7 @@
 #
 #     spawn → pre-spawn patches (trust / MCP inject / Stop-hook) → bootstrap
 #     prompt reached the model → swarm_* MCP tools are wired into the toolset
-#     → the swarm round-trip back to flockmux-server succeeds.
+#     → the swarm round-trip back to swarmx-server succeeds.
 #
 # This is the "adding a CLI is a testable contract" gate (modeled on
 # superpowers' tests/skill-triggering/run-test.sh). It is deliberately NOT a
@@ -25,12 +25,12 @@
 # A CLI whose binary isn't on PATH is SKIPPED (not failed). Exit code is
 # non-zero iff at least one tested CLI FAILED.
 #
-# NOTE: the harness sets FLOCKMUX_SERVER_URL to match FLOCKMUX_PORT. This is
-# load-bearing — if they diverge, the agent's flockmux-mcp + wake-check call
+# NOTE: the harness sets SWARMX_SERVER_URL to match SWARMX_PORT. This is
+# load-bearing — if they diverge, the agent's swarmx-mcp + wake-check call
 # the default :7777 instead of this test server, and every CLI "fails".
 set -uo pipefail
 
-PORT="${FLOCKMUX_GOLDEN_PORT:-7798}"
+PORT="${SWARMX_GOLDEN_PORT:-7798}"
 BASE="http://127.0.0.1:${PORT}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
@@ -41,7 +41,7 @@ CLIS=("$@")
 echo "▶ building workspace binaries…"
 cargo build --workspace -q || { echo "✗ cargo build failed"; exit 1; }
 
-TMP="$(mktemp -d /tmp/flockmux-golden.XXXX)"
+TMP="$(mktemp -d /tmp/swarmx-golden.XXXX)"
 mkdir -p "$TMP/project"
 printf '# golden cli test\n' > "$TMP/project/README.md"
 SRV=""
@@ -65,11 +65,11 @@ except Exception:
 }
 trap cleanup EXIT
 
-echo "▶ starting flockmux-server on :$PORT (isolated data dir)…"
-FLOCKMUX_PORT="$PORT" FLOCKMUX_SERVER_URL="$BASE" \
-  FLOCKMUX_DB_PATH="$TMP/d.db" FLOCKMUX_WORKSPACES_DIR="$TMP/ws" \
-  FLOCKMUX_BLACKBOARD_DIR="$TMP/bb" FLOCKMUX_RECORDINGS_DIR="$TMP/rec" \
-  RUST_LOG=warn ./target/debug/flockmux-server > "$TMP/server.log" 2>&1 &
+echo "▶ starting swarmx-server on :$PORT (isolated data dir)…"
+SWARMX_PORT="$PORT" SWARMX_SERVER_URL="$BASE" \
+  SWARMX_DB_PATH="$TMP/d.db" SWARMX_WORKSPACES_DIR="$TMP/ws" \
+  SWARMX_BLACKBOARD_DIR="$TMP/bb" SWARMX_RECORDINGS_DIR="$TMP/rec" \
+  RUST_LOG=warn ./target/debug/swarmx-server > "$TMP/server.log" 2>&1 &
 SRV=$!
 
 for _ in $(seq 1 30); do curl -sf "$BASE/api/plugins" >/dev/null 2>&1 && break; sleep 1; done
@@ -116,9 +116,9 @@ for cli in "${CLIS[@]}"; do
   key="golden/${cli}.done"
   prompt="Connectivity self-test. Your ONLY task: immediately call the swarm_write_blackboard tool to write the exact text READY to the key ${key}. Do not create files, do not run commands, do not do anything else. After that single tool call you are finished."
   # Optional model override — some engines have no built-in default model (e.g.
-  # opencode needs an explicit provider/model). FLOCKMUX_GOLDEN_MODEL applies to
+  # opencode needs an explicit provider/model). SWARMX_GOLDEN_MODEL applies to
   # every CLI; GOLDEN_MODEL_<cli> overrides per CLI (e.g. GOLDEN_MODEL_opencode).
-  mvar="GOLDEN_MODEL_${cli}"; model="${!mvar:-${FLOCKMUX_GOLDEN_MODEL:-}}"
+  mvar="GOLDEN_MODEL_${cli}"; model="${!mvar:-${SWARMX_GOLDEN_MODEL:-}}"
   body="$(CLI="$cli" KEY="$key" WS="$WS" CALLER="$CALLER" MODEL="$model" PROMPT="$prompt" python3 -c 'import os,json
 b={"cli":os.environ["CLI"],"role":"researcher","system_prompt":os.environ["PROMPT"],
    "caller_agent_id":os.environ["CALLER"],"workspace_id":os.environ["WS"]}

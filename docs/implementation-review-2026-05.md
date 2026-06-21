@@ -1,4 +1,4 @@
-# flockmux-core 实现审查报告（2026-05）
+# swarmx-core 实现审查报告（2026-05）
 
 > **修复进度（持续更新，全部已合入 main）**
 > - ✅ **P0 全部**：无鉴权/CORS → Origin 白名单；主干 2 个失败测试 + 接 CI 门禁；kill 改进程组回收孙进程。
@@ -7,8 +7,8 @@
 > - ✅ **F3 wake 漏匹配**：handoff 写入但零订阅者时 warn（点名 orphan key + 当前等待列表）。
 > - ✅ **F12 lag 丢 wake**：广播 lag 后对账 depends_on vs 黑板（含 .error/.failed 别名）重唤醒丢失的一次性 wake；广播容量 256→1024 降低 lag 频率。
 > - ✅ **F6 写入非原子（完整修复）**：①**liveness**——黑板 op-log insert 失败时不再吞掉 BlackboardChanged，内容已在盘上，照发 wake（哨兵 id=-1）+ 返回成功，依赖方不再被一次 DB 抖动悄悄搁浅；②**启动对账**——boot 时 `reconcile_oplog_from_disk` 扫黑板目录 vs op-log，给"有文件无 op 行"（崩溃中途写）的 path 补回 `op="reconcile"` 行，恢复 `swarm_list_blackboard` 发现性；幂等、不广播（boot 无订阅者）。新增单测（孤儿文件→只补它、二次为 no-op、可读回 + 进 discovery）。真 swarm 浏览器跑通、零回归。
-> - ✅ **F5 DB 无保留策略**：boot 时按保留窗口（`FLOCKMUX_RETENTION_DAYS`，默认 30、0=永久保留）prune 三张只增表，只删"不再承重"的行——黑板**被取代的旧历史**（永不删每 path 最新行，发现/reconcile 依赖）、**已消费 wake + 已投递已读**消息（未消费 wake 永不删，FK 引用的父消息跳过下轮再删）、**旧的已 finalize 录制**（顺带 best-effort unlink `.cast` 文件）。单事务 + 删后 `wal_checkpoint(TRUNCATE)`+`optimize`；新增 `(path,id)` 索引（迁移 0008，顺带提速 latest-per-path 发现）；不做写时 dedup（会破坏"重写同内容也发 wake"语义）、不强制 VACUUM（空闲页复用已封顶增长）。穷尽单测覆盖全部安全红线 + boot 冒烟验迁移/接线。
-> - ✅ **多 CLI L5/L4（详见 `multi-cli-redesign-plan.md`）**：L5a 分层 registry override（用户 `~/.flockmux/cli-plugins` 不 fork 即可改/加 CLI）、L5c model 与 CLI 解耦（数据驱动 model overlay，同 CLI 任意 model 不分叉 role）、L4 ACP 传输基础（单一可复用 JSON-RPC-over-stdio codec + transport 接缝，声明 acp 安全回退 PTY）。
+> - ✅ **F5 DB 无保留策略**：boot 时按保留窗口（`SWARMX_RETENTION_DAYS`，默认 30、0=永久保留）prune 三张只增表，只删"不再承重"的行——黑板**被取代的旧历史**（永不删每 path 最新行，发现/reconcile 依赖）、**已消费 wake + 已投递已读**消息（未消费 wake 永不删，FK 引用的父消息跳过下轮再删）、**旧的已 finalize 录制**（顺带 best-effort unlink `.cast` 文件）。单事务 + 删后 `wal_checkpoint(TRUNCATE)`+`optimize`；新增 `(path,id)` 索引（迁移 0008，顺带提速 latest-per-path 发现）；不做写时 dedup（会破坏"重写同内容也发 wake"语义）、不强制 VACUUM（空闲页复用已封顶增长）。穷尽单测覆盖全部安全红线 + boot 冒烟验迁移/接线。
+> - ✅ **多 CLI L5/L4（详见 `multi-cli-redesign-plan.md`）**：L5a 分层 registry override（用户 `~/.swarmx/cli-plugins` 不 fork 即可改/加 CLI）、L5c model 与 CLI 解耦（数据驱动 model overlay，同 CLI 任意 model 不分叉 role）、L4 ACP 传输基础（单一可复用 JSON-RPC-over-stdio codec + transport 接缝，声明 acp 安全回退 PTY）。
 > - ✅ **前端 F15 两套 DAG 合并**：删 legacy GraphPanel，edge 推导抽成 `lib/dagEdgeDerivation` 单一来源（消除 satisfied/producer/live-filter 漂移）；SwarmPanel 去 graph tab。
 > - ✅ **前端 Shell.tsx 巨型文件拆分**：1438 → 516 → **303 行**；侧栏树 + ManageRootsDialog → `WorkspaceSidebar`，tab 栏 + 过渡 → `WorkspaceToolbar`，类型 → `types.ts`，**数据编排 → `useWorkspaceShellData` hook**；行为零变化，tsc + vite build + 浏览器走查通过。
 > - ✅ **backlog 清扫（17 agent 逐项核实当前代码后逐一修，全测试绿 + 前端浏览器走查）**：
@@ -48,12 +48,12 @@
 - **修复（小）**：WS 升级 + REST 加 **Origin 白名单**（只放行 tauri 自身 origin / `127.0.0.1`）+ 启动随机 **session token**（前端启动时拿、每请求带）。参考 **openclaw** 的 WS 握手（`declaredCaps` + slow-consumer 断开）。
 
 ### P0-2　主干带着失败的测试发布（人工亲验 ✅）
-- **证据**：`cargo test -p flockmux-mcp` → **41 passed / 1 FAILED**，`handlers.rs:102 tools_list_returns_full_tool_surface` panic `left: 8, right: 9`（删 spell 工具后没同步改断言）。
+- **证据**：`cargo test -p swarmx-mcp` → **41 passed / 1 FAILED**，`handlers.rs:102 tools_list_returns_full_tool_surface` panic `left: 8, right: 9`（删 spell 工具后没同步改断言）。
 - **影响**：本身是 stale 断言（低危），但**说明 CI 没有 gate `cargo test`**——这才是 P0：它意味着上面所有"测试覆盖"的假设都不可信。
 - **修复（小）**：改断言 `9→8`；把 `cargo test --workspace` + `tsc` 接入提交/CI 门禁。
 
 ### P0-3　kill 不回收孙进程 + 误导性文档（人工亲验 ✅）
-- **证据**：进程树是 `server → (PTY) → flockmux-shim → 真实 CLI(claude/codex)`。`pty/lib.rs:164-171 kill()` 只 `child.kill()`(SIGKILL shim) + `child.wait()`，**无 setsid / 无 process group / 无 killpg**（grep 证实）。文档注释（`pty.rs:163-167`、`pty.rs:38`）声称"先关 master 发 SIGHUP→SIGTERM→SIGKILL 升级"，**代码完全没做**。
+- **证据**：进程树是 `server → (PTY) → swarmx-shim → 真实 CLI(claude/codex)`。`pty/lib.rs:164-171 kill()` 只 `child.kill()`(SIGKILL shim) + `child.wait()`，**无 setsid / 无 process group / 无 killpg**（grep 证实）。文档注释（`pty.rs:163-167`、`pty.rs:38`）声称"先关 master 发 SIGHUP→SIGTERM→SIGKILL 升级"，**代码完全没做**。
 - **影响**：SIGKILL 掉 shim 不会连带杀掉它的子进程（真实 CLI）——真实 CLI 被 reparent 到 init **继续运行**，持续烧 API token、占着 workspace、可能写坏文件。server 崩溃时所有孙进程全部泄漏；`main.rs:139` 的 boot orphan-settle **只改 DB 行、不扫不杀 OS 进程**。
 - **修复（中）**：shim `setsid` 建独立进程组；kill 时 `killpg(pgid, SIGTERM)` → 宽限 → `SIGKILL`，兑现文档承诺的升级序列。直接照搬 **openclaw `ProcessSupervisor.signalProcessTree` + force-kill-wait**。同时**修正/删除**那段说谎的文档注释。
 
@@ -132,11 +132,11 @@
 ### 五家怎么做（对照）
 | 项目 | 多 CLI 抽象 | 可直接借鉴 |
 |---|---|---|
-| **openclaw** | 两层：声明式 `CliBackendConfig`(90%) + 类型化 `CliBackendPlugin` 钩子(10%)；`bundleMcpMode` 枚举(`claude-config-file`/`codex-config-overrides`/`gemini-system-settings`)；统一 `ProcessSupervisor`(child\|pty + watchdog + SIGTERM→SIGKILL + run registry) + 并发 lanes | **几乎就是 flockmux 该长成的样子**；且独立落地了和 M6b 一样的 `--strict-mcp-config --mcp-config` 修复 |
+| **openclaw** | 两层：声明式 `CliBackendConfig`(90%) + 类型化 `CliBackendPlugin` 钩子(10%)；`bundleMcpMode` 枚举(`claude-config-file`/`codex-config-overrides`/`gemini-system-settings`)；统一 `ProcessSupervisor`(child\|pty + watchdog + SIGTERM→SIGKILL + run registry) + 并发 lanes | **几乎就是 swarmx 该长成的样子**；且独立落地了和 M6b 一样的 `--strict-mcp-config --mcp-config` 修复 |
 | **gstack** | 单一模板 + 每 CLI 一个声明式 `HostConfig`（toolRewrites/suppressedResolvers/frontmatter 规则/anti-injection 边界串/self-invocation guard）；`validateAllConfigs` 编译期查重 | 加 CLI = 一个声明文件 + 编译期校验；"host ≠ model"axiom |
 | **superpowers** | 一份 `skills/` + N 个薄 per-CLI adapter 指向它；per-CLI **工具词表映射**；host 探测 + 幂等 bootstrap 注入；**每 CLI golden 验收测试** | 内容零分叉；"装了但 bootstrap 没到达模型"这类回归用测试卡住 |
 | **hermes** | 一个 `BaseEnvironment` ABC 驱动 6 后端；**ACP / app-server JSON-RPC** 结构化驱动外部 CLI（而非刮 PTY）；bundled + `$HOME` 分层 override | 未来对支持 ACP 的 CLI 走结构化协议；分层 registry override |
-| **golutra** | 最像 flockmux（Tauri+portable_pty+OSC633 shim）；声明式 `post_ready_plan` DSL(Input/WaitForPattern/ExtractSessionId/Introduction)；自适应 PTY 字节率 idle 检测；合并式 trigger 调度 | **post_ready_plan 把 codex 信任门/会话 id 抓取/MCP-ready 做成数据**；其编译期枚举多 CLI 反而**不如** flockmux 的运行时 TOML——别学这点 |
+| **golutra** | 最像 swarmx（Tauri+portable_pty+OSC633 shim）；声明式 `post_ready_plan` DSL(Input/WaitForPattern/ExtractSessionId/Introduction)；自适应 PTY 字节率 idle 检测；合并式 trigger 调度 | **post_ready_plan 把 codex 信任门/会话 id 抓取/MCP-ready 做成数据**；其编译期枚举多 CLI 反而**不如** swarmx 的运行时 TOML——别学这点 |
 
 ### 目标分层（增量）
 
@@ -174,7 +174,7 @@ trait CliAdapter {
 manifest 加 `transport = "pty" | "acp" | "app-server"`。对暴露 ACP/JSON-RPC 的 CLI（Codex app-server、Copilot `--acp`），走结构化协议拿**真正的 tool-call/permission/streaming 事件**，取代"刮 PTY + 按英文 needle 自动答对话框"（现状 codex `"Hooks need review"`→`2\r` 极脆、绑死 0.132 版本、换语言/换菜单序就答错）。PTY 作为通用兜底保留。**把 JSON-RPC-over-stdio 抽成一个组件**（hermes 的反面教材：它重复实现了 3 份）。
 
 **L5 — 配套加固**
-- **分层 registry override**（hermes）：扫 bundled `cli-plugins/` + 用户 `~/.flockmux/cli-plugins/`，按 id last-writer-wins，用户不 fork 仓库即可改 CLI。
+- **分层 registry override**（hermes）：扫 bundled `cli-plugins/` + 用户 `~/.swarmx/cli-plugins/`，按 id last-writer-wins，用户不 fork 仓库即可改 CLI。
 - **spawn 上限 + 能力交集**（hermes + openclaw lanes）：spawn 深度上限、fan-out 上限、并发 lane——**修 F4 fork-bomb**，加固 auto-trust/skip-permissions 姿态。
 - **model 与 CLI 解耦**（gstack "host ≠ model"）：别把 model 身份焊进 CLI id；留一个 model overlay 轴，让行为微调不分叉 role。
 
@@ -182,7 +182,7 @@ manifest 加 `transport = "pty" | "acp" | "app-server"`。对暴露 ACP/JSON-RPC
 
 ## 可借鉴模式速查表（按主题）
 
-| flockmux 痛点 | 借鉴来源 | 模式 |
+| swarmx 痛点 | 借鉴来源 | 模式 |
 |---|---|---|
 | 多 CLI 抽象只做一半 | openclaw / gstack | 声明式配置(90%) + 类型化钩子(10%) + 编译期 validate_all |
 | 加 CLI 要改代码 | superpowers | 一份内容 + 薄 adapter + 工具词表映射；golden 验收测试 |
@@ -196,7 +196,7 @@ manifest 加 `transport = "pty" | "acp" | "app-server"`。对暴露 ACP/JSON-RPC
 | 跨 agent prompt 注入 | gstack | DATA_START/END 边界 + 临时文件传参 + reviewer 只读 |
 | 自我评审不独立 | gstack | self-invocation guard（CLI 不能当自己的独立 reviewer） |
 
-**别学的反模式**：swarm-ide 提交 live API key、给每个 agent 开无沙箱 bash；openclaw `reconcileOrphans()` 故意 no-op（Tauri 会重启，flockmux 必须真对账）；golutra 编译期枚举多 CLI + 靠 TUI glyph 刮输出；hermes 把 JSON-RPC plumbing 复制 3 份 + god-file（`gateway/run.py` 900KB）。
+**别学的反模式**：swarm-ide 提交 live API key、给每个 agent 开无沙箱 bash；openclaw `reconcileOrphans()` 故意 no-op（Tauri 会重启，swarmx 必须真对账）；golutra 编译期枚举多 CLI + 靠 TUI glyph 刮输出；hermes 把 JSON-RPC plumbing 复制 3 份 + god-file（`gateway/run.py` 900KB）。
 
 ---
 

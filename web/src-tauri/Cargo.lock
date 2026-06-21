@@ -1146,7 +1146,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "flockmux-tauri"
+name = "swarmx-tauri"
 version = "0.1.2"
 dependencies = [
  "log",

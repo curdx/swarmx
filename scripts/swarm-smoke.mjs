@@ -7,14 +7,14 @@
 //   5. PUT  /api/blackboard/tasks.md → 200
 //   6. GET  /api/blackboard/tasks.md → echoes content + sha
 //   7. Subscribe ws/swarm, then fs.writeFile <blackboard>/external.md
-//      from outside flockmux → expect a BlackboardChanged{op:"external"} event
+//      from outside swarmx → expect a BlackboardChanged{op:"external"} event
 //   8. PUT /api/blackboard/..%2Fescape.md → 400 (path traversal)
 //   9. DELETE both agents, exit 0 on PASS / 1 on FAIL
 //
 // Assumptions:
-//   * flockmux-server is running at 127.0.0.1:7777.
-//   * The blackboard root is either FLOCKMUX_BLACKBOARD_DIR (if set when the
-//     server started, also export it here) or ~/.flockmux/blackboard.
+//   * swarmx-server is running at 127.0.0.1:7777.
+//   * The blackboard root is either SWARMX_BLACKBOARD_DIR (if set when the
+//     server started, also export it here) or ~/.swarmx/blackboard.
 
 import { writeFile, mkdir, rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
@@ -26,8 +26,8 @@ const WS_SWARM = "ws://127.0.0.1:7777/ws/swarm";
 const CLI = process.argv[2] || "codex";
 
 const BLACKBOARD_ROOT =
-  process.env.FLOCKMUX_BLACKBOARD_DIR ||
-  path.join(homedir(), ".flockmux", "blackboard");
+  process.env.SWARMX_BLACKBOARD_DIR ||
+  path.join(homedir(), ".swarmx", "blackboard");
 
 const failures = [];
 function check(cond, msg) {

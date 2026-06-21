@@ -204,7 +204,7 @@ export function CommandPalette() {
     [navigate, close],
   );
   const openWizard = useCallback(() => {
-    window.dispatchEvent(new CustomEvent("flockmux:open-wizard"));
+    window.dispatchEvent(new CustomEvent("swarmx:open-wizard"));
     close();
   }, [close]);
 
@@ -456,7 +456,7 @@ export function CommandPalette() {
 
 // 同 Settings 持久化主题的写入路径，避免 palette 和 Settings UI 漂移。
 function persistTheme(mode: ThemeMode) {
-  const KEY = "flockmux:settings:v1";
+  const KEY = "swarmx:settings:v1";
   try {
     const raw = window.localStorage.getItem(KEY);
     const obj = raw ? JSON.parse(raw) : {};

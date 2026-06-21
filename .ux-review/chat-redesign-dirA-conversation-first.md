@@ -4,7 +4,7 @@ The mockup is rendered. Now here is the complete design spec.
 
 # 聊天窗口设计方向：「队长在场 / 机器下沉」
 
-> 押注：用户来 flockmux 的核心心智不是「管理一群 agent」，而是「跟一个能干活的队长把事说清楚」。聊天窗口因此首先是一个安静、可信、单声道的对话；多成员的机器细节默认不在场，只在它**真的发生**时，以一张克制的系统卡入流。
+> 押注：用户来 swarmx 的核心心智不是「管理一群 agent」，而是「跟一个能干活的队长把事说清楚」。聊天窗口因此首先是一个安静、可信、单声道的对话；多成员的机器细节默认不在场，只在它**真的发生**时，以一张克制的系统卡入流。
 
 ---
 
@@ -84,7 +84,7 @@ The mockup is rendered. Now here is the complete design spec.
 | **成员消息** | **默认不进流**。成员只通过队长说话 | 抽屉里按色归属 | 仅「交付」「需要你」两种结果才升格为系统卡入流 |
 | **系统事件卡** | 居中或带左色条的卡，**形状与气泡明显不同**（派工/交付/计划/失败/模型切换/回退/隔离降级） | 锚定相关成员的角色色 | 派工卡 `▾` 折叠；失败卡永不折叠 |
 
-**关键决策：成员不在流里发气泡**（竞品研究三家一致：Anthropic 多 agent 研究系、Claude Code sub-agents——子 agent 在隔离上下文里干活，只有**凝练结果**冒泡给人）。落到 flockmux：
+**关键决策：成员不在流里发气泡**（竞品研究三家一致：Anthropic 多 agent 研究系、Claude Code sub-agents——子 agent 在隔离上下文里干活，只有**凝练结果**冒泡给人）。落到 swarmx：
 
 - 队长是唯一对人说话的「声音」。worker 的 raw token 流、worker→队长 的 handoff，默认是内部协调，**不广播**。
 - 现状的「pending responder 气泡」「多 agent merge 推断 reasoning」全部下沉——它们制造的正是 firehose。
@@ -131,7 +131,7 @@ The mockup is rendered. Now here is the complete design spec.
 
 ## 5. 计划 / 派工 / 交付 / 审批 / diff
 
-| flockmux 事件 | 呈现 | 在哪 | 可操控 |
+| swarmx 事件 | 呈现 | 在哪 | 可操控 |
 |---|---|---|---|
 | **计划** | 计划卡，置顶在轴内（不是单独空间），活的 checklist `✓/◐/○`，每项标拥有它的成员 | 入流（轴顶钉住） | 派工前可批准/改：`[批准计划]`，呼应「先批计划再跑」闸门 |
 | **派工** | 派工卡（左色条 + 成员色 + ●进行中），`▾` 展开成小团队树（队长→成员→依赖） | 入流（折叠态一行） | 点成员名 → 过滤轴/跳抽屉；展开看子步骤。**取代 DAG 标签** |
@@ -144,7 +144,7 @@ The mockup is rendered. Now here is the complete design spec.
 - **进抽屉**（右侧、高频机器输出）：raw 终端、完整 diff、成员逐 token 流、活动时间线明细。
 - **可操控的只在卡上**：批准计划、批准/拒绝、合并闸、行级评论、推进、接管/交还。
 
-**审批与 diff 的「门」位置**（竞品研究：信任需要 agent-决定与文件-改变之间有一道闸）：flockmux worker 在隔离工作区写，门从「写前」移到「合并前」——交付卡先入流，变更 tab 审，合并闸把关，per-file accept 可挑拣。
+**审批与 diff 的「门」位置**（竞品研究：信任需要 agent-决定与文件-改变之间有一道闸）：swarmx worker 在隔离工作区写，门从「写前」移到「合并前」——交付卡先入流，变更 tab 审，合并闸把关，per-file accept 可挑拣。
 
 ---
 
@@ -242,8 +242,8 @@ The mockup is rendered. Now here is the complete design spec.
 ---
 
 关键文件锚点（绝对路径）：
-- 聊天主组件：`/Users/wdx/opc/flockmux-core/web/src/components/MessagesPanel.tsx`、`/Users/wdx/opc/flockmux-core/web/src/components/Chat.tsx`
-- 复用组件：`/Users/wdx/opc/flockmux-core/web/src/components/{ChatMarkdown,ModelPicker,OrchestratorFailureCard,TaskActivity,AgentDrawer}.tsx`
-- 设计令牌：`/Users/wdx/opc/flockmux-core/web/src/styles/global.css`（`--color-agent-*` 角色色、五态 `--color-status-*`）
-- 后端事件源：`/Users/wdx/opc/flockmux-core/crates/flockmux-protocol/src/ws_swarm.rs`、`/Users/wdx/opc/flockmux-core/crates/flockmux-server/src/{wake,transcript}.rs`
-- 已决方案对照：`/Users/wdx/opc/flockmux-core/.ux-review/final-redesign.md`
+- 聊天主组件：`/Users/wdx/opc/swarmx-core/web/src/components/MessagesPanel.tsx`、`/Users/wdx/opc/swarmx-core/web/src/components/Chat.tsx`
+- 复用组件：`/Users/wdx/opc/swarmx-core/web/src/components/{ChatMarkdown,ModelPicker,OrchestratorFailureCard,TaskActivity,AgentDrawer}.tsx`
+- 设计令牌：`/Users/wdx/opc/swarmx-core/web/src/styles/global.css`（`--color-agent-*` 角色色、五态 `--color-status-*`）
+- 后端事件源：`/Users/wdx/opc/swarmx-core/crates/swarmx-protocol/src/ws_swarm.rs`、`/Users/wdx/opc/swarmx-core/crates/swarmx-server/src/{wake,transcript}.rs`
+- 已决方案对照：`/Users/wdx/opc/swarmx-core/.ux-review/final-redesign.md`

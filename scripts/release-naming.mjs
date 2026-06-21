@@ -3,7 +3,7 @@
 // Raw Tauri bundler output is named with bundler-specific noise — Rust target
 // triples on the updater bundles plus inconsistent arch tokens (`aarch64`,
 // `x64`, `amd64`, `x86_64`) and a `_en-US` locale on the MSI. Left alone, the
-// release publishes scary names like `x86_64-unknown-linux-gnu-flockmux_0.1.2_
+// release publishes scary names like `x86_64-unknown-linux-gnu-swarmx_0.1.2_
 // amd64.deb` (the "unknown" is the vendor field of the Rust triple — normal,
 // but it reads like a bug to users).
 //
@@ -16,11 +16,11 @@
 // place and both sides stay honest.
 //
 // Canonical name: <product>_<version>_<label><suffix>
-//   e.g. flockmux_0.1.2_macos-arm64.app.tar.gz
-//        flockmux_0.1.2_linux-x86_64.AppImage
-//        flockmux_0.1.2_windows-x64-setup.exe
+//   e.g. swarmx_0.1.2_macos-arm64.app.tar.gz
+//        swarmx_0.1.2_linux-x86_64.AppImage
+//        swarmx_0.1.2_windows-x64-setup.exe
 
-export const PRODUCT = "flockmux";
+export const PRODUCT = "swarmx";
 
 // Rust target triple → { label used in file names, Tauri updater platform key,
 // the updater-bundle suffix for that platform }.

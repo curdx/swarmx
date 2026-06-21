@@ -1,4 +1,4 @@
-# 前端信息架构分析 — flockmux 工作空间（代码深读）
+# 前端信息架构分析 — swarmx 工作空间（代码深读）
 
 依据：web/src 实码（commit 95c9fa5）+ .ux-review/firsthand-findings.md 实测记录。
 
@@ -109,7 +109,7 @@ AppShell 顶栏 (44px)：品牌 logo(→/chat) · ⌘K 搜索按钮 · 通知铃
 | 工作空间 vs 工作区 | chat.backToCurrent"回到当前工作区"、mcp.pageSubtitle"所有工作区" | 同物两名混用 |
 | 任务（全局看板）vs 任务台账（房间内）vs 目标（全局页 + 台账内"目标·假设·计划"） | nav.tasks / chat.tabs.ledger / nav.goals | **三套任务/目标体系无互链无解释**（见 3.3） |
 | "3 steps" 徽章 | Welcome.tsx:62 硬编码英文 | zh 界面夹生英文 |
-| "后端未加载 \`init\` spell — 请重启 flockmux-server…" | CreateWizard.tsx:316 硬编码 | 开发者口吻错误文案直达用户 |
+| "后端未加载 \`init\` spell — 请重启 swarmx-server…" | CreateWizard.tsx:316 硬编码 | 开发者口吻错误文案直达用户 |
 
 †死键（locales 有、代码零引用，grep 验证）：chat.runSpell、cmdk.runSpell、wizard.aiNamed、chat.attachSource、
 chat.noActiveAgents、chat.emptyStateTitle/Hint、chat.backToChat、chat.globalScopeHint、chat.noConversation、

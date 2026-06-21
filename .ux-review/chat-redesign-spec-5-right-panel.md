@@ -311,17 +311,17 @@ i18n key 建议 `workspace.verb.write/read/test/install/run/search/advance/work`
 | UI 元素 | 数据来源 | 持久化 | 引用 file:line | 缺口/降级 |
 |---|---|---|---|---|
 | 脉搏点颜色/typing/置顶 | `resolveMemberVisual(agent, live, messages, labels)` | derived（实时） | `web/src/lib/agent.ts:265-358` | **已实现**，本区直接调；含 45s/300s 降级与死即移除 |
-| 数字徽章计数 | 精确未读 per-(from,thread) | persisted | `crates/flockmux-storage/src/store.rs:1531-1577`（现 COUNT 无 GROUP BY） | **降级**：未补精确端点前，徽章可先隐藏或显总未读（依赖后端新增 `GROUP BY from_agent,thread_id` 端点，P1） |
-| 乐队 chip 态徽章 | `AgentLiveState.state`（七态） | live-only | `web/src/api/types.ts:429-472`；`crates/flockmux-protocol/src/ws_swarm.rs:102-118` | 冷加载用 `resolveMemberVisual` 兜底（已含 `last_activity_at`/`last_error` 持久化兜底） |
+| 数字徽章计数 | 精确未读 per-(from,thread) | persisted | `crates/swarmx-storage/src/store.rs:1531-1577`（现 COUNT 无 GROUP BY） | **降级**：未补精确端点前，徽章可先隐藏或显总未读（依赖后端新增 `GROUP BY from_agent,thread_id` 端点，P1） |
+| 乐队 chip 态徽章 | `AgentLiveState.state`（七态） | live-only | `web/src/api/types.ts:429-472`；`crates/swarmx-protocol/src/ws_swarm.rs:102-118` | 冷加载用 `resolveMemberVisual` 兜底（已含 `last_activity_at`/`last_error` 持久化兜底） |
 | 乐队 chip "正在<动作>"小字 | `AgentLiveState.activity.label` → `activityVerb()` | live-only | `web/src/api/types.ts:454-462` | 冷加载无 activity → 显态徽章文案，不显动作 |
 | live 行动词（第一信号） | `formatActivityLine(live).label` → `activityVerb()` | live-only | `web/src/lib/agent.ts:363-372` | **已实现** formatActivityLine |
 | live 行计时 | `formatActivityLine(live).elapsedMs` → `formatDelta` | derived | `web/src/lib/agent.ts:363-372`；`AgentDrawer.tsx:96-104`（formatDelta） | running 用 at→now，settled 用 duration_ms |
-| live 行「上次输出 Ns前」 | `AgentInfo.last_activity_at` | **persisted** | `web/src/api/types.ts:118-123`；`crates/flockmux-storage/src/store.rs:438-452`（touch_agent_activity）；migration 0013 | **已持久化**，冷加载可用 |
+| live 行「上次输出 Ns前」 | `AgentInfo.last_activity_at` | **persisted** | `web/src/api/types.ts:118-123`；`crates/swarmx-storage/src/store.rs:438-452`（touch_agent_activity）；migration 0013 | **已持久化**，冷加载可用 |
 | 45s 无活动降级 | `last_activity_at` / `activity.at` vs now（前端阈值） | derived | `web/src/lib/agent.ts:126-128`（STALL/STARTUP/NO_RESPONSE 常量） | **missing 后端信号**：纯前端时间比较，无服务器 heartbeat 事件（P2 增强可选） |
-| 死即移除（agent 死） | `AgentState::Error/Exited` + `killed_at`/`shim_exit` | persisted（硬字段）/ live（state） | `web/src/api/types.ts:429-441`；`crates/flockmux-server/src/routes/rest.rs:731-774` | **已实现**于 resolveMemberVisual（killed/exit 硬态优先） |
-| 焦点 [活动] tab | `AgentActivity[]` via `GET /api/agent/:id/activity` | **live-only（缺口）** | `crates/flockmux-server/src/routes/rest.rs:1125-1136`（in-memory ring） | **missing：依赖后端新增 agent_activity 表 + 端点走 DB**（诊断 3 硬依赖，P1）。未补前：重连后活动 tab 可能空，需显「正在恢复活动…」而非空白 |
+| 死即移除（agent 死） | `AgentState::Error/Exited` + `killed_at`/`shim_exit` | persisted（硬字段）/ live（state） | `web/src/api/types.ts:429-441`；`crates/swarmx-server/src/routes/rest.rs:731-774` | **已实现**于 resolveMemberVisual（killed/exit 硬态优先） |
+| 焦点 [活动] tab | `AgentActivity[]` via `GET /api/agent/:id/activity` | **live-only（缺口）** | `crates/swarmx-server/src/routes/rest.rs:1125-1136`（in-memory ring） | **missing：依赖后端新增 agent_activity 表 + 端点走 DB**（诊断 3 硬依赖，P1）。未补前：重连后活动 tab 可能空，需显「正在恢复活动…」而非空白 |
 | 焦点 [终端] tab | `XtermPane`（PTY 流） | live-only | `AgentDrawer.tsx:62`（XtermPane）；migration sessionStorage lastSeq | **已实现**（gap-replay 重连） |
-| 焦点 [变更] tab | `threadDiff` 端点 | live-only | `web/src/api/http.ts:321-325`；`crates/flockmux-server/src/routes/workspaces.rs:816-821` | 复用现有 diff（仅文件名，无 hunk）；行级评论是别的工单 |
+| 焦点 [变更] tab | `threadDiff` 端点 | live-only | `web/src/api/http.ts:321-325`；`crates/swarmx-server/src/routes/workspaces.rs:816-821` | 复用现有 diff（仅文件名，无 hunk）；行级评论是别的工单 |
 | 焦点 [录像]/[消息]/[上下文] | AgentDrawer 原五 tab 数据 | persisted | `AgentDrawer.tsx:82-93` | **原样复用** |
 | 失败 chip / 焦点失败卡 | `last_error`/`last_error_kind`/`last_error_at` | **persisted** | `web/src/api/types.ts:124-134`；migration 0022；`OrchestratorFailureCard.tsx` | **已持久化**，冷加载可重放失败卡 |
 | 角色色 / 角色名 | `AgentInfo.role` → `roleColorClass` | persisted | `web/src/api/types.ts:84`；`web/src/lib/agent.ts:42-58` | **已实现**，三态全程同色同名 |
@@ -466,10 +466,10 @@ i18n key 建议 `workspace.verb.write/read/test/install/run/search/advance/work`
 ---
 
 **关键文件锚点（绝对路径）**：
-- 复用核心：`/Users/wdx/opc/flockmux-core/web/src/lib/agent.ts`（`resolveMemberVisual` :265-358、`formatActivityLine` :363-372、`roleColorClass` :42-58、阈值常量 :126-128）
-- 右面板支点：`/Users/wdx/opc/flockmux-core/web/src/components/agent/AgentDrawer.tsx`（五 tab :82-93、Header/ActionRow :350-459、`formatDelta` :96-104）
-- 类型/信号：`/Users/wdx/opc/flockmux-core/web/src/api/types.ts`（`AgentInfo` :81-135、`AgentLiveState`/`SwarmAgentState` :429-472）
-- 失败卡：`/Users/wdx/opc/flockmux-core/web/src/components/workspace/OrchestratorFailureCard.tsx`
-- 后端缺口：`/Users/wdx/opc/flockmux-core/crates/flockmux-server/src/routes/rest.rs:1125-1136`（activity 端点服务 in-memory ring，P1 硬依赖）、`/Users/wdx/opc/flockmux-core/crates/flockmux-storage/src/store.rs`（`touch_agent_activity` :438-452、未读 :1531-1577）
-- design token：`/Users/wdx/opc/flockmux-core/web/src/styles/global.css`（agent 色 :103-110、state 色 :69-75、status 色 :82-100、radius :129-133、foreground/surface/border :21-44）
-- i18n：`/Users/wdx/opc/flockmux-core/web/src/i18n/locales/zh.json`（现有 `agent.tabs.*` / `agent.wake/pause/resume` 复用；`agent.injectPlaceholder`/`agent.confirm.wake.desc` 存行话泄漏需清洗）
+- 复用核心：`/Users/wdx/opc/swarmx-core/web/src/lib/agent.ts`（`resolveMemberVisual` :265-358、`formatActivityLine` :363-372、`roleColorClass` :42-58、阈值常量 :126-128）
+- 右面板支点：`/Users/wdx/opc/swarmx-core/web/src/components/agent/AgentDrawer.tsx`（五 tab :82-93、Header/ActionRow :350-459、`formatDelta` :96-104）
+- 类型/信号：`/Users/wdx/opc/swarmx-core/web/src/api/types.ts`（`AgentInfo` :81-135、`AgentLiveState`/`SwarmAgentState` :429-472）
+- 失败卡：`/Users/wdx/opc/swarmx-core/web/src/components/workspace/OrchestratorFailureCard.tsx`
+- 后端缺口：`/Users/wdx/opc/swarmx-core/crates/swarmx-server/src/routes/rest.rs:1125-1136`（activity 端点服务 in-memory ring，P1 硬依赖）、`/Users/wdx/opc/swarmx-core/crates/swarmx-storage/src/store.rs`（`touch_agent_activity` :438-452、未读 :1531-1577）
+- design token：`/Users/wdx/opc/swarmx-core/web/src/styles/global.css`（agent 色 :103-110、state 色 :69-75、status 色 :82-100、radius :129-133、foreground/surface/border :21-44）
+- i18n：`/Users/wdx/opc/swarmx-core/web/src/i18n/locales/zh.json`（现有 `agent.tabs.*` / `agent.wake/pause/resume` 复用；`agent.injectPlaceholder`/`agent.confirm.wake.desc` 存行话泄漏需清洗）

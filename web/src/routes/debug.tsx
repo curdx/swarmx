@@ -32,7 +32,7 @@ import {
 } from "@/lib/tauriWindowChrome";
 
 const MAX_COLS = 6;
-const SWARM_PANEL_KEY = "flockmux:swarmPanelOpen";
+const SWARM_PANEL_KEY = "swarmx:swarmPanelOpen";
 
 // Module-level single-flight: two quick spawns (or a remount mid-create) must
 // not race and create duplicate "debug-scratch" workspaces. The first caller's
@@ -44,7 +44,7 @@ let debugWorkspacePromise: Promise<string> | null = null;
 // "debug-scratch" workspace exists and pin every spawn to it. Production users
 // go through the main UI's CreateWizard.
 //
-// cwd is fixed to "/tmp": the old `window.__FLOCKMUX_HOME` was never injected,
+// cwd is fixed to "/tmp": the old `window.__SWARMX_HOME` was never injected,
 // so this always resolved to "/tmp" anyway, and the backend requires cwd to be
 // an existing directory ("/tmp" reliably is on macOS/Linux).
 async function ensureDebugWorkspace(): Promise<string> {
@@ -276,7 +276,7 @@ export default function DebugRoute() {
           }}
         >
           <strong style={{ fontSize: 14 }} {...TAURI_DRAG_REGION}>
-            flockmux M2 (debug)
+            swarmx M2 (debug)
           </strong>
           <span style={{ color: "#64748b", fontSize: 12 }} {...TAURI_DRAG_REGION}>
             {t("debug.localSingleUser", {

@@ -182,7 +182,7 @@ export function AgentDrawer({ agentId, activities, onClose }: Props) {
       // look like history only started when the drawer opened. At least log it.
       .catch((e) => {
         // eslint-disable-next-line no-console
-        console.warn(`[flockmux] agent activity backfill failed (${agentId})`, e);
+        console.warn(`[swarmx] agent activity backfill failed (${agentId})`, e);
       });
     return () => {
       alive = false;

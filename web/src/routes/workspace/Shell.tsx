@@ -177,9 +177,9 @@ export default function WorkspaceShell() {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   useEffect(() => {
     const onOpen = () => setWizardOpen(true);
-    window.addEventListener("flockmux:open-wizard", onOpen as EventListener);
+    window.addEventListener("swarmx:open-wizard", onOpen as EventListener);
     return () =>
-      window.removeEventListener("flockmux:open-wizard", onOpen as EventListener);
+      window.removeEventListener("swarmx:open-wizard", onOpen as EventListener);
   }, []);
 
   // jumpUnread is a pure UI signal to MessagesPanel (scroll to first unread).

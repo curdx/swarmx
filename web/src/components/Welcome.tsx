@@ -1,7 +1,7 @@
 /**
- * Welcome — 第一次打开 flockmux / 没选工作空间时的主介绍屏。
+ * Welcome — 第一次打开 swarmx / 没选工作空间时的主介绍屏。
  *
- * 用户进 app 给你的注意力大概 10 秒：要么这 10 秒里看懂"flockmux 是啥
+ * 用户进 app 给你的注意力大概 10 秒：要么这 10 秒里看懂"swarmx 是啥
  * 能干啥"、按下"开始"按钮，要么关掉再不打开。所以这屏必须：
  *   1. 一句话讲清楚产品定位 (不用术语)
  *   2. 一个突出主 CTA (新建工作空间)
@@ -83,7 +83,7 @@ export function Welcome({ onCreateWorkspace }: Props) {
           </div>
         </div>
 
-        {/* 三个 highlight chip — 解释 "flockmux 跟单开一个 claude 有什么不一样"，
+        {/* 三个 highlight chip — 解释 "swarmx 跟单开一个 claude 有什么不一样"，
          *  比纯一句话 slogan 更具体，比一整段产品文档轻。 */}
         <div className="grid gap-3 md:grid-cols-3">
         {HIGHLIGHTS.map((h) => {
@@ -118,7 +118,7 @@ export function Welcome({ onCreateWorkspace }: Props) {
             <ArrowRight className="size-4" />
           </button>
           <a
-            href="https://github.com/curdx/flockmux-core#readme"
+            href="https://github.com/curdx/swarmx-core#readme"
             target="_blank"
             rel="noreferrer"
             className="inline-flex items-center gap-1.5 font-caption text-[12px] text-foreground-tertiary transition-colors hover:text-foreground-secondary hover:underline"

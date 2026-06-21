@@ -1,13 +1,13 @@
 # OpenCode CLI plugin (Model A — PTY transport).
 #
-# Spawned under flockmux-shim as an interactive TUI, like claude/codex. flockmux
-# writes a per-agent config file at ~/.flockmux/opencode/<agent_id>.json and
+# Spawned under swarmx-shim as an interactive TUI, like claude/codex. swarmx
+# writes a per-agent config file at ~/.swarmx/opencode/<agent_id>.json and
 # sets `OPENCODE_CONFIG=<that file>` at spawn (spawn.rs).
 #
 # IMPORTANT (verified live against opencode 1.17.7): `OPENCODE_CONFIG` MERGES on
-# top of the user's existing config, it does NOT replace it. flockmux's keys win
+# top of the user's existing config, it does NOT replace it. swarmx's keys win
 # on conflict (deep-merge, last-writer), so the per-agent file authoritatively
-# sets: the flockmux-swarm MCP server (with this agent's identity in
+# sets: the swarmx-swarm MCP server (with this agent's identity in
 # `environment`), `permission = "allow"`, `autoupdate = false`, and the wake
 # plugin. The user's own `provider`/model config is PRESERVED (so the worker can
 # authenticate and run a model) — which is what we want. The tradeoff: the
@@ -16,7 +16,7 @@
 #
 # Per-agent identity is still collision-free even in Shared-workspace spells:
 # each process has its OWN OPENCODE_CONFIG file with its OWN agent_id, and
-# flockmux writes no project-local <ws>/opencode.json that they'd clobber.
+# swarmx writes no project-local <ws>/opencode.json that they'd clobber.
 #
 # Auth is SHARED ($XDG_DATA_HOME/opencode/auth.json), so a login (or a custom
 # provider in the user's global config) applies to every worker; no per-agent auth.
@@ -31,7 +31,7 @@ default_args = []
 home_env = "HOME"
 # opencode authenticates per-provider via its own `opencode auth login`
 # (subscription logins like Anthropic/Copilot, or raw API keys). Treat it as a
-# CLI-account surface like codex; flockmux still can't meter subscription spend.
+# CLI-account surface like codex; swarmx still can't meter subscription spend.
 billing_surface = "cli-account"
 requires_explicit_billing_opt_in = false
 
@@ -42,13 +42,13 @@ mcp_format = "opencode-json"
 
 # Wake: opencode has NO blocking Stop hook (its only turn-end signal is a
 # read-only `session.idle` event). So the wake loop runs as an opencode PLUGIN
-# (cli-plugins/opencode/flockmux-wake.js): on `session.idle` it POSTs flockmux's
+# (cli-plugins/opencode/swarmx-wake.js): on `session.idle` it POSTs swarmx's
 # `consume_wakes` endpoint and, when wakes are pending, re-prompts its own
 # session via the SDK client. This plugin is the opencode equivalent of the
 # claude/codex Stop hook. Merged into the SAME per-agent config file. Format
 # `opencode-plugin` → pre_spawn::install_opencode_wake_plugin.
 #
-# NOTE: the plugin pairs with flockmux's wake-kick exactly like the claude/codex
+# NOTE: the plugin pairs with swarmx's wake-kick exactly like the claude/codex
 # Stop hook does — the kick is a SHORT nudge that wakes an ALREADY-IDLE agent (the
 # plugin only fires on the session.idle *transition*, so it can't nudge an agent
 # that already settled), and the plugin then delivers the full wake reason via
@@ -72,7 +72,7 @@ auto_dismiss_update = false
 # bootstrap via keystroke paste — the bracketed paste parks the TUI at READY and
 # never submits (verified live, opencode 1.17.7). opencode's own remedy is the
 # documented `/tui/*` HTTP control API its embedded server exposes (the surface
-# its browser extension drives). So flockmux spawns the TUI with a known per-agent
+# its browser extension drives). So swarmx spawns the TUI with a known per-agent
 # `--port` and POSTs append-prompt + submit-prompt instead of faking keystrokes.
 # Deterministic and size-independent. See crate::opencode_tui + spawn.rs.
 input_delivery = "opencode-tui-http"
@@ -97,7 +97,7 @@ effort_args = []
 
 # Health needles — "alive but can't work" PTY signatures (see claude.toml). None
 # yet: opencode's not-logged-in / quota banner text hasn't been captured in a
-# verified flockmux recording, and we don't ship guessed substrings (a wrong
+# verified swarmx recording, and we don't ship guessed substrings (a wrong
 # needle stays silent — exactly the failure we're fixing). Until a real
 # recording confirms the exact text, opencode's auth/quota failures are still
 # surfaced by the first-response watchdog. Add verified entries here to upgrade

@@ -11,10 +11,10 @@
 > - ✅ **F22 已修（bootstrap 去重）**：`spawn_worker` 与 `run_spell` 两份近乎逐字重复的 bootstrap 注入抽成单个 `spawn_bootstrap_inject(registry, rx, agent_id, prompt, BootstrapCtx)`（rest.rs，净 −37 行）；`2500ms` / `150ms` 等时序常量现在各只出现一次 = 唯一改动点。差异（worker raw prompt vs spell render_prompt、日志字段、占位符诊断）经 `BootstrapCtx` 参数化。全测试绿。
 > - ✅ **F8 已修 + stop_hook 超时外置**：删除死字段 `mcp_inject`/`ready_detect`（零引用，纯误导）；Stop-hook 超时从两个 Rust 常量（claude 10000ms / codex 10s）搬进 manifest 的 `stop_hook_timeout`（各自原生单位写入），消除"未来 CLI 复用错常量→1000× 超时"的隐患。manifest 守卫断言锁定。
 > - ✅ **前端输入策略数据化（L1 收尾）**：`input_settle_ms` 进 manifest → `CliPluginInfo` → `/api/plugins`；前端启动时 `primeInputPolicies` 填缓存，`inputPolicyFor` 据 cli 查表，删掉 `startsWith('codex-')` 硬分支。**颜色**按调研结论（VS Code "contributes" 主题模型：展示/主题色应在客户端按语义 token 解析、不写死 hex 从后端下发）**留在前端**——`GraphPanel.cliColor` 改成查表+默认兜底（去硬 `===` 分支），全量主题化属 legacy GraphPanel 清理。依据：行为(input timing)→后端 manifest；展示(color)→前端主题。
-> - ✅ **bootstrap 固定 2500ms → MCP-ready 信号（readiness-probe）**：原计划"等 PTY 的 MCP-ready 横幅"被**实测否掉**——抓了 claude 2.1.158 + codex 0.134 启动全文，两边都**没有稳定的 MCP 横幅**可匹配（比 codex needle 更脆）。改用规范级信号：flockmux-mcp 在收到 CLI 的 `tools/list` 时 POST `/api/agent/:id/mcp-ready`（MCP 生命周期里 = 工具已暴露给模型）→ server 翻转 per-agent `watch` 门 → bootstrap 等它（changed 或 6s 兜底，不持锁过 await）。实测 MCP **~283ms 就绪**（旧固定 2500ms，约快 9×），bootstrap 走 mcp-ready 路径、orchestrator 拿到工具正常发言、无报错。依据：[MCP lifecycle spec](https://modelcontextprotocol.io/specification/2025-03-26/basic/lifecycle) + [K8s readiness-probe](https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/)（固定 sleep 是反模式）。
-> - ✅ **L3 golden 验收测试**：`scripts/golden-cli-test.sh` —— 每个 cli-plugin 起一个 worker、唯一任务是调 `swarm_write_blackboard`，轮询黑板断言 key 出现，从而验证"spawn→pre-spawn patch→bootstrap 到达模型→MCP swarm 工具→server 往返"整链路。仿 superpowers `run-test.sh`；非 cargo/CI 测试（真起 CLI、需登录、花少量 token），未装 CLI 自动 skip，内置 `FLOCKMUX_SERVER_URL==PORT`。实测 claude + codex 均 PASS。把"加 CLI"变成可手动跑的合约。
-> - ✅ **L5 spawn 上限（修 fork-bomb F4）**：spawn 公共路径 `spawn_with_bookkeeping` 加**全局存活 agent 上限**（数 in-memory registry = 真并发上限，覆盖 /api/agent + /api/worker + run_spell）；`spawn_worker` 加**委派深度上限**（走 workers 表 parent 链，loop-bounded，终止于非-worker 的 orchestrator）。均 env 可调（默认 `FLOCKMUX_MAX_LIVE_AGENTS=256` / `FLOCKMUX_MAX_SPAWN_DEPTH=6`），超限返回 429 + 可操作提示。实测 cap=2 时第 3 个 spawn 被 429 拒。依据 hermes MAX_DEPTH + openclaw 并发 lanes。
-> - ✅ **L5a 分层 registry override**：`PluginRegistry::load_layered(dirs)` 按序加载 bundled `cli-plugins/` + 用户 `~/.flockmux/cli-plugins/`（env `FLOCKMUX_USER_CLI_PLUGINS_DIR` 可改），同 id 后层覆盖前层（last-writer-wins）+ 覆盖时 info 点名。per-layer warn-skip 韧性保留；缺层/全缺非致命。用户不 fork 仓库即可改/加 CLI。单测（覆盖赢、用户新增、坏 TOML 跳过、缺层 no-op）+ boot 冒烟（REST `/api/plugins` 实测 codex 被用户层覆盖、gemini 新增）。
+> - ✅ **bootstrap 固定 2500ms → MCP-ready 信号（readiness-probe）**：原计划"等 PTY 的 MCP-ready 横幅"被**实测否掉**——抓了 claude 2.1.158 + codex 0.134 启动全文，两边都**没有稳定的 MCP 横幅**可匹配（比 codex needle 更脆）。改用规范级信号：swarmx-mcp 在收到 CLI 的 `tools/list` 时 POST `/api/agent/:id/mcp-ready`（MCP 生命周期里 = 工具已暴露给模型）→ server 翻转 per-agent `watch` 门 → bootstrap 等它（changed 或 6s 兜底，不持锁过 await）。实测 MCP **~283ms 就绪**（旧固定 2500ms，约快 9×），bootstrap 走 mcp-ready 路径、orchestrator 拿到工具正常发言、无报错。依据：[MCP lifecycle spec](https://modelcontextprotocol.io/specification/2025-03-26/basic/lifecycle) + [K8s readiness-probe](https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/)（固定 sleep 是反模式）。
+> - ✅ **L3 golden 验收测试**：`scripts/golden-cli-test.sh` —— 每个 cli-plugin 起一个 worker、唯一任务是调 `swarm_write_blackboard`，轮询黑板断言 key 出现，从而验证"spawn→pre-spawn patch→bootstrap 到达模型→MCP swarm 工具→server 往返"整链路。仿 superpowers `run-test.sh`；非 cargo/CI 测试（真起 CLI、需登录、花少量 token），未装 CLI 自动 skip，内置 `SWARMX_SERVER_URL==PORT`。实测 claude + codex 均 PASS。把"加 CLI"变成可手动跑的合约。
+> - ✅ **L5 spawn 上限（修 fork-bomb F4）**：spawn 公共路径 `spawn_with_bookkeeping` 加**全局存活 agent 上限**（数 in-memory registry = 真并发上限，覆盖 /api/agent + /api/worker + run_spell）；`spawn_worker` 加**委派深度上限**（走 workers 表 parent 链，loop-bounded，终止于非-worker 的 orchestrator）。均 env 可调（默认 `SWARMX_MAX_LIVE_AGENTS=256` / `SWARMX_MAX_SPAWN_DEPTH=6`），超限返回 429 + 可操作提示。实测 cap=2 时第 3 个 spawn 被 429 拒。依据 hermes MAX_DEPTH + openclaw 并发 lanes。
+> - ✅ **L5a 分层 registry override**：`PluginRegistry::load_layered(dirs)` 按序加载 bundled `cli-plugins/` + 用户 `~/.swarmx/cli-plugins/`（env `SWARMX_USER_CLI_PLUGINS_DIR` 可改），同 id 后层覆盖前层（last-writer-wins）+ 覆盖时 info 点名。per-layer warn-skip 韧性保留；缺层/全缺非致命。用户不 fork 仓库即可改/加 CLI。单测（覆盖赢、用户新增、坏 TOML 跳过、缺层 no-op）+ boot 冒烟（REST `/api/plugins` 实测 codex 被用户层覆盖、gemini 新增）。
 > - ✅ **L5c model 与 CLI 解耦（gstack "host ≠ model"）**：manifest 加 `model_args` 模板（`{model}` 占位符，claude/codex 均 `["--model","{model}"]`）+ 可选 `default_model`；spawn 时按 `req.model || plugin.default_model` 解析并替换进 argv（纯函数 `model_overlay_args`，单测）。`SpawnAgentRequest`/`SpawnWorkerRequest` + MCP `swarm_spawn_worker` schema 加 `model` 参数，orchestrator 可给不同 worker 指定不同模型而不 fork CLI id/role；`CliPluginInfo`/前端 types 下发 `default_model`。同 CLI 任意模型、零 Rust/role 分叉。端到端冒烟（echo 假 CLI 经 REST 带 model spawn，录制实测 argv 出现 `--model opus-smoke`）。未做 DB 持久化 model（归前端那轮一起做 UI badge）。
 > - ✅ **L4 ACP 传输基础**：①manifest 加 `transport = "pty" | "acp"` 枚举（默认 pty，claude/codex 零变化）；②新增 `crate::acp` —— 把 JSON-RPC-over-stdio **抽成单一可复用 codec**（hermes 反面教材是重复 3 份）：Request/Notification/Response/Error 类型 + 行分帧 `LineDecoder`（缓冲半包、跳空行、容忍 CRLF、坏帧不毒化流）+ 单调 `IdGen`，7 个纯函数单测；③spawn.rs 接缝——声明 `acp` 时 warn 并回退 PTY（codec 就绪、session 驱动是下一步增量）。端到端冒烟：echocli 声明 acp → 日志正确 warn、echo 仍经 PTY 回退正常 spawn（声明 acp 安全不破坏）。**待续（远期）**：ACP session 驱动（initialize 握手 + permission/tool-call 事件映射 + streaming），建在此 codec 上。
 > - ✅ **ready_plan 顺序 onboarding**：ReadyPlanRunner 从"并行 answer_dialog 监视器"重构为**顺序游标状态机**，支持 4 种步骤——`answer_dialog`（等 needle→注入 response→前进）、`wait_for`（等 needle 出现再前进，取代固定 sleep）、`input`（步骤激活即注入）、`extract_session_id`（抓 needle 后 token 进 `into` 槽，备 resume）。每步单发、needle 步超时（window_ms 默认 30s 到点跳过）、buffer 8KiB 滑窗。codex 单 answer_dialog 行为不变。9 个 runner 单测。暂无 shipped CLI 用新步骤（备未来 onboarding）。
@@ -92,7 +92,7 @@ timeout_ms = 8000
 对应 `plugins.rs` 结构骨架（新增类型用 `#[serde(default)]`，保证现有 claude.toml/codex.toml 不改也能解析）：
 
 ```rust
-// crates/flockmux-server/src/plugins.rs
+// crates/swarmx-server/src/plugins.rs
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct CliPlugin {
     pub id: String,
@@ -149,7 +149,7 @@ pub enum ReadyStep {
 把 `pre_spawn.rs:544 match plugin.id` 换成"按能力枚举选 writer"。每个 writer 是"某种配置格式"，与具体 CLI 解耦——**新 CLI 复用已知格式就零新代码**。
 
 ```rust
-// crates/flockmux-server/src/pre_spawn.rs
+// crates/swarmx-server/src/pre_spawn.rs
 pub struct PreSpawnCtx<'a> {
     pub agent_id: &'a str,
     pub mcp_bin: &'a Path,
@@ -180,7 +180,7 @@ pub fn run_patches(plugin: &CliPlugin, ws: &Path, ctx: &PreSpawnCtx) -> Result<(
 `spawn.rs` 的 inline `if id==` argv 注入 → 由 manifest 数据驱动：
 
 ```rust
-// crates/flockmux-server/src/spawn.rs —— 取代 spawn.rs:106/122 的两个 if id==
+// crates/swarmx-server/src/spawn.rs —— 取代 spawn.rs:106/122 的两个 if id==
 let mut argv = vec![shim, plugin.binary.clone()];
 argv.extend(plugin.default_args.iter().cloned());
 argv.extend(plugin.skip_approvals_args.iter().cloned());
@@ -204,7 +204,7 @@ for step in &plugin.ready_plan {
 `validate_all` + warn-skip 加载（修 F9 + gstack 校验）：
 
 ```rust
-// crates/flockmux-server/src/plugins.rs
+// crates/swarmx-server/src/plugins.rs
 impl PluginRegistry {
     pub fn load_dir(dir: &Path) -> Result<Self> {
         if !dir.is_dir() { return Ok(Self::default()); }       // 缺目录不致命（对齐 roles.rs）
@@ -246,7 +246,7 @@ impl PluginRegistry {
 把"加 CLI"变成**可测合约**，专杀"装了但 bootstrap 没接上模型"这类最常见回归：
 
 ```rust
-// crates/flockmux-server/tests/cli_golden.rs（每个 plugin 一条，CLI 不在 PATH 则 skip）
+// crates/swarmx-server/tests/cli_golden.rs（每个 plugin 一条，CLI 不在 PATH 则 skip）
 #[tokio::test]
 async fn gemini_bootstrap_reaches_model_and_fires_a_swarm_tool() {
     if which::which("gemini").is_err() { eprintln!("skip: gemini not installed"); return; }
@@ -290,7 +290,7 @@ async fn gemini_bootstrap_reaches_model_and_fires_a_swarm_tool() {
 ## 6. L4 / L5（远期，本方案先不做，留接口）
 
 - **L4 结构化协议传输**（hermes ACP/app-server）：manifest 加 `transport = "pty" | "acp" | "app-server"`。对 Codex `app-server` / Copilot `--acp`，走 JSON-RPC 拿真 tool-call/permission/streaming 事件，取代刮 PTY + 答英文对话框。PTY 留作通用兜底。**把 JSON-RPC-over-stdio 抽成一个组件**（hermes 反面教材：它重复实现了 3 份）。`ready_plan`/`DialogAutoAnswer` 在 ACP 模式下不需要。
-- **L5a 分层 registry override**（hermes）：扫 bundled `cli-plugins/` + 用户 `~/.flockmux/cli-plugins/`，按 id last-writer-wins，用户不 fork 仓库即可改/加 CLI。
+- **L5a 分层 registry override**（hermes）：扫 bundled `cli-plugins/` + 用户 `~/.swarmx/cli-plugins/`，按 id last-writer-wins，用户不 fork 仓库即可改/加 CLI。
 - **L5b spawn 上限 + 能力交集**（hermes/openclaw lanes）：spawn 深度上限、fan-out 上限、并发 lane——修 fork-bomb（审查报告 F4），加固 skip-permissions 姿态。
 - **L5c model 与 CLI 解耦**（gstack "host ≠ model"）：加可选 model overlay 轴，behavior 微调不分叉 role。
 

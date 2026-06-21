@@ -1,4 +1,4 @@
-# flockmux 全量批判性审查报告
+# swarmx 全量批判性审查报告
 
 生成时间：2026-06-13　方式：28 个独立审查员逐页/逐后端域元素级审查 + 每条对抗式复核（驳回 40 条误报）
 
@@ -52,7 +52,7 @@
 - **页面/域**：任务页 Tasks　**维度**：状态诚实性 / 错误处理与失败恢复　**置信度**：high
 - **现象**：在卡片上点「阻塞/完成/归档/复位」，确认后卡片立刻乐观地移动到目标列；如果后端写库失败（500、断网、agent_id 不存在），用户看不到任何错误提示，卡片要么停在错误的列、要么在 4 秒轮询后悄悄弹回原位，用户以为自己操作成功了。
 - **复现**：1) 起后端，打开 /tasks，有至少一个 worker。2) 用 devtools 把 POST /api/tasks/:id/status 拦截成返回 500（或直接拔网）。3) 点某卡片「完成」并确认。4) 观察：卡片乐观跳到 Done 列，无任何报错；4 秒后轮询把它弹回原列，全程零提示。
-- **根因**：web/src/routes/tasks.tsx:64-83（setStatus 无 catch，乐观更新后失败静默）；触发点 web/src/api/http.ts:80-98（非 2xx 抛 ApiError）；后端失败源 crates/flockmux-server/src/routes/tasks.rs:96-109（400/500）；可用而未用的诚实反馈设施 web/src/lib/toast.ts + web/src/App.tsx:130
+- **根因**：web/src/routes/tasks.tsx:64-83（setStatus 无 catch，乐观更新后失败静默）；触发点 web/src/api/http.ts:80-98（非 2xx 抛 ApiError）；后端失败源 crates/swarmx-server/src/routes/tasks.rs:96-109（400/500）；可用而未用的诚实反馈设施 web/src/lib/toast.ts + web/src/App.tsx:130
 - **影响**：操作者以为已把某个 worker 标记为 blocked/done（可能据此做了运维决策，比如不再去管它），实际后端没记下来，4 秒后状态又跳回去，造成误判和反复操作。是这个项目明令禁止的「状态撒谎」。
 - **建议修法**：给 setStatus 加 catch：捕获后回滚乐观更新（保留改动前的快照）或至少弹一个错误 toast/内联错误条，并提示可重试。最简单：catch 里 setErr(true) 复用现有错误条，且不依赖 finally 的 load() 来「纠正」——因为纠正本身也是无声的。
 
@@ -60,7 +60,7 @@
 - **页面/域**：依赖图 DAG 视图　**维度**：功能正确性 / 状态诚实性 / 越权范围　**置信度**：high
 - **现象**：在某个 direction(thread)的依赖图里点「暂停所有 agent」，会把同一 workspace 下其它 direction 里正在跑的 agent 也一起 Ctrl-C 暂停；按钮旁的计数和确认弹窗里写的数字却只是当前 direction 的 live 数，用户以为只停了眼前这几个。
 - **复现**：建一个有 ≥2 个 direction 的 workspace，每个 direction 各 spawn 1 个 worker 跑起来；进入 direction A 的 DAG 视图，点右上「暂停所有 agent」确认；切到 direction B，发现 B 的 worker 也变成已暂停。
-- **根因**：web/src/routes/workspace/views/Dag.tsx:422-433 (onInterruptAll 调 workspace 级 interruptAllInWorkspace) + crates/flockmux-server/src/routes/rest.rs:1987-1992 (后端只按 workspace_id 过滤、不看 thread_id)；范围不自洽点：确认弹窗 count Dag.tsx:478-481 与文案 Dag.tsx:482-485，及 onResumeAll thread 级 Dag.tsx:438-457
+- **根因**：web/src/routes/workspace/views/Dag.tsx:422-433 (onInterruptAll 调 workspace 级 interruptAllInWorkspace) + crates/swarmx-server/src/routes/rest.rs:1987-1992 (后端只按 workspace_id 过滤、不看 thread_id)；范围不自洽点：确认弹窗 count Dag.tsx:478-481 与文案 Dag.tsx:482-485，及 onResumeAll thread 级 Dag.tsx:438-457
 - **影响**：多 direction 协作时，操作者在 A 方向点暂停，B 方向正在干活的 worker 被静默中断、自动唤醒被关掉，直到有人手动恢复——用户根本不知道是这一下点出来的。属于「界面撒谎 + 越权影响别的会话」，是项目红线。
 - **建议修法**：两选一并保持自洽：(a) 真按 workspace 停——就把按钮文案/计数改成 workspace 级(用 activeMembers 而非 thread 过滤后的 liveAgents 计数)，并明确告诉用户会影响所有 direction；或 (b) 按 direction 停——给后端 interrupt-all 加 thread_id 查询参数(对齐 rest.rs:1990 的过滤)，前端传 activeThread.id，让 interrupt 与 resume 范围都收敛到当前 direction。当前 interrupt(workspace)与 resume(本地 thread 列表)范围不一致，务必统一。
 
@@ -76,14 +76,14 @@
 - **页面/域**：文件接口　**维度**：8. 安全/隐私（越权/任意文件读取）　**置信度**：high
 - **现象**：任何在用户机上跑起来的本地进程（恶意 npm 依赖、被 prompt-injection 操纵的 agent 子进程、落地的命令执行）只要往 http://127.0.0.1:7777/api/files/read?path=/任意绝对路径 发一个不带 Origin 头的 GET，就能把该文件内容读回来；同样可用 /api/files/list 遍历整个磁盘。完全不需要知道任何 workspace_id、token 或密钥。
 - **复现**：起服务后在另一终端跑：curl 'http://127.0.0.1:7777/api/files/read?path=/etc/hosts'（无 Origin 头）→ 返回文件内容；curl 'http://127.0.0.1:7777/api/files/read?path='$HOME'/.npmrc' → 返回 npm token（.npmrc 不在 is_sensitive 名单里）。
-- **根因**：crates/flockmux-server/src/routes/files.rs:251 (read_file 裸调用跳过 jail) / files.rs:185 (list_dir 同) / files.rs:111 (is_sensitive 窄黑名单) / main.rs:872-895 (require_local_origin 放行无 Origin 请求)
+- **根因**：crates/swarmx-server/src/routes/files.rs:251 (read_file 裸调用跳过 jail) / files.rs:185 (list_dir 同) / files.rs:111 (is_sensitive 窄黑名单) / main.rs:872-895 (require_local_origin 放行无 Origin 请求)
 - **影响**：这是该项目红线级越权：一个被注入的 agent 或一条恶意依赖即可把用户主目录里的源码、~/.config/* 下绝大多数配置、~/.docker/config.json、~/.npmrc、浏览器 cookie 库、~/.bash_history、私有仓库代码等悉数读走并外传。is_sensitive 只挡了 .ssh/.aws/.gnupg/.kube/.azure/.config/gcloud/.claude.json/.netrc/.pgpass/.git-credentials + *.pem/*.key/.env/含 credential 等极少数；其余高价值文件全裸奔。
 - **建议修法**：裸调用（无 workspace_id）不应等于『全盘可读』。最小修复：去掉裸调用的无限制特例——要求所有 read/list 都必须落在某个 workspace 的 roots 内，all=1 仅作为显式 UI 开关且不可由无 Origin 的进程触发；或者对『无 Origin』的请求（即非浏览器、非用户本人点击）禁用 all=1 与裸全盘读，只允许 workspace-jail 内访问。根因上，loopback+无 token 的模型决定了『同机任意进程=可信』，但文件读接口把这个假设放大成了任意文件读取 oracle，需要把文件接口收敛到 workspace 白名单而不是黑名单。
 
 #### P0-5 Tauri 丢弃 sidecar 的事件接收端(_rx)：后端启动失败时，安装版用户看到一个连不上后端、毫无报错的死界面
 - **页面/域**：服务启动与资源解析(main + 资源目录)　**维度**：状态诚实性 / 错误处理与失败恢复 / 真实用户路径　**置信度**：high
-- **现象**：release 安装版里 flockmux-server 作为 sidecar 启动。如果它在启动早期失败（例如端口 7777 被上次崩溃残留的孤儿进程占着→main 里 acquire_singleton_lock 走 std::process::exit(2)；或 Store::open/create_dir_all 因 HOME 只读而 ? 返回 Err 退出），Tauri 端只会 log::error! 到日志文件，UI 窗口照常打开。用户面对的是一个永远连不上 127.0.0.1:7777 的界面，没有任何「后端没起来」的提示，也无从自助恢复（只能重装/手动清进程）。
-- **复现**：1) 在 release 安装版运行后强杀 Tauri 但留下 flockmux-server 孤儿占着 7777（或先手动起一个占 7777 的进程）；2) 再次打开 app；3) 新 sidecar 因 singleton-lock 冲突 exit(2)；4) 观察：窗口正常打开，但所有 /api 请求失败，界面无任何「后端未启动」提示。
+- **现象**：release 安装版里 swarmx-server 作为 sidecar 启动。如果它在启动早期失败（例如端口 7777 被上次崩溃残留的孤儿进程占着→main 里 acquire_singleton_lock 走 std::process::exit(2)；或 Store::open/create_dir_all 因 HOME 只读而 ? 返回 Err 退出），Tauri 端只会 log::error! 到日志文件，UI 窗口照常打开。用户面对的是一个永远连不上 127.0.0.1:7777 的界面，没有任何「后端没起来」的提示，也无从自助恢复（只能重装/手动清进程）。
+- **复现**：1) 在 release 安装版运行后强杀 Tauri 但留下 swarmx-server 孤儿占着 7777（或先手动起一个占 7777 的进程）；2) 再次打开 app；3) 新 sidecar 因 singleton-lock 冲突 exit(2)；4) 观察：窗口正常打开，但所有 /api 请求失败，界面无任何「后端未启动」提示。
 - **根因**：web/src-tauri/src/lib.rs:84 (primary: `_rx` discarded) + web/src/routes/chat/Home.tsx:67-75 (co-cause: backend-down fetch failure swallowed → renders the clean "create your first workspace" Welcome splash, affirmatively misleading)
 - **影响**：首次/重启打开应用，若端口被占或数据目录不可写，用户得到一个完全不工作且不解释为什么的应用——违反「下载→安装→打开→立刻能用」与状态诚实性红线。这正是项目最高准则反复强调的那类「开发机好好的、安装版坏掉」事故的运行期版本。
 - **建议修法**：在 lib.rs 的 release 分支里 take 住 rx 并 tokio/async 监听：收到 CommandEvent::Terminated 或 Error 时，emit 一个 Tauri 事件（或 set 一个 app state 标志）让前端弹出「后端启动失败：<stderr 尾部>」并提供重试/查看日志按钮；同时把 stderr 落到日志。最低限度也要在收到 Terminated 时把 stderr 末几行写日志，而不是整段静默。
@@ -91,7 +91,7 @@
 #### P0-6 后端挂了/拉取工作区失败时,终端页吞掉 error 并撒谎说「连接成功/为全部工作空间打开」
 - **页面/域**：终端页 Terminal　**维度**：状态诚实性 / 错误处理与失败恢复　**置信度**：high
 - **现象**：后端没起或网络断时,useToolWorkspaces 的 listWorkspaces() 失败,ready 仍翻 true。终端页看到的是:工作区下拉被隐藏(workspaces.length===0),确认卡片标题正常显示、描述写「将为『全部』打开一个真实 shell」,「连接终端」按钮从 loading 变为可点击且 enabled。用户点击后 WebSocket 静默连接失败,xterm 只是一片漆黑,没有任何报错。
-- **复现**：1) 关掉 flockmux-server(后端 7777 不起);2) 打开 /terminal;3) 观察:下拉消失,卡片说『将为全部打开 shell』,『连接终端』按钮可点;4) 点击连接 → 黑屏,无任何错误提示。
+- **复现**：1) 关掉 swarmx-server(后端 7777 不起);2) 打开 /terminal;3) 观察:下拉消失,卡片说『将为全部打开 shell』,『连接终端』按钮可点;4) 点击连接 → 黑屏,无任何错误提示。
 - **根因**：web/src/routes/terminal.tsx:48
 - **影响**：这是项目红线『状态诚实性』的正面违反:界面在后端不可用时显示『可连接/为全部工作空间打开』,用户点了连接却得到一个黑屏终端,完全不知道是后端没起还是自己操作错了,只能凭经验去重启。对小白用户尤其致命——既不告知失败,也无自助恢复路径。
 - **建议修法**：在 terminal.tsx:48 解构出 error,并在渲染时优先分支:若 error 非空,展示『加载工作区失败/后端未连接』的错误态卡片 + 重试按钮,而不是展示可点击的连接卡片;同时 disabled 条件应为 disabled={!ready || !!error}。确认卡片的 workspace 文案在 error 态下不应回退成『全部』。
@@ -99,7 +99,7 @@
 #### P0-7 「压缩」按钮在默认安装版上 100% 失败，却谎报「已是最简，无需压缩」
 - **页面/域**：账本 Ledger 视图　**维度**：状态诚实性 / 错误处理与失败恢复　**置信度**：high
 - **现象**：用户点顶栏「压缩」，转一下圈，然后看到提示「已是最简，无需压缩」。实际上后端根本没压缩——它返回了 402 错误，前端把错误吞掉伪装成「无需压缩」。
-- **复现**：默认安装版（未设 FLOCKMUX_ALLOW_CLAUDE_PRINT）打开任意空间 → Ledger 标签 → 点「压缩」。无论台账多大都显示「已是最简，无需压缩」。Network 面板可见 POST /api/blackboard/compact 实际返回 402。
+- **复现**：默认安装版（未设 SWARMX_ALLOW_CLAUDE_PRINT）打开任意空间 → Ledger 标签 → 点「压缩」。无论台账多大都显示「已是最简，无需压缩」。Network 面板可见 POST /api/blackboard/compact 实际返回 402。
 - **根因**：web/src/routes/workspace/views/Ledger.tsx:191-203
 - **影响**：这是项目红线「界面不许撒谎」的直接违反：一个功能 100% 不可用，UI 却显示成功态（且是'无需操作'这种最具误导性的成功）。用户永远不知道真实原因，也拿不到后端给的自助开启指引。同理 503（无 claude 插件）、502/504（claude 失败/超时）、500 也全被吞成「无需压缩」。
 - **建议修法**：不要 `.catch(() => null)`。捕获 ApiError 后区分：成功(changed)→显示省了多少；402/503→把后端 detail（含开启引导）显示为说明而非'成功'；其它错误→红色错误态。即把 compactNote 拆成 ok/info/error 三态，错误用 state-danger 文案展示 `(e as ApiError).detail`。
@@ -108,7 +108,7 @@
 - **页面/域**：黑板/Swarm 面板 + 通用组件　**维度**：数据完整性 / 状态诚实性　**置信度**：high
 - **现象**：在左上角输入框敲一个已存在的文件名（例如 design.md、task.ledger.md）再点 +，该黑板文件被直接清空成空白，UI 没有任何警告，左侧列表里看起来还在、点开却是空的。
 - **复现**：1) 让 swarm 写出 design.md（有内容）。2) 在共享区左上输入框敲 `design.md`，点 + 或按回车。3) design.md 内容被清空，无任何提示，且历史里只剩一条新的空 write。
-- **根因**：BlackboardPanel.tsx:134-146 createNew() 无条件 `api.writeBlackboard(path, { content: "" })`，没有先检查 path 是否已存在（entries 里能查到却不查）。后端 write_blackboard（crates/flockmux-swarm/src/swarm.rs:514）是纯 upsert/覆盖语义，也不区分『新建』和『改写』，所以前端这一下就把已有内容覆盖为空。
+- **根因**：BlackboardPanel.tsx:134-146 createNew() 无条件 `api.writeBlackboard(path, { content: "" })`，没有先检查 path 是否已存在（entries 里能查到却不查）。后端 write_blackboard（crates/swarmx-swarm/src/swarm.rs:514）是纯 upsert/覆盖语义，也不区分『新建』和『改写』，所以前端这一下就把已有内容覆盖为空。
 - **影响**：黑板是整个 swarm 的协作记忆（design.md、各 role 的 handoff 信号都在这里）。操作者想『新建』一个文件却撞名，等于一键抹掉 agent 正在依赖的关键文件，触发的是空内容写入而非删除——还会广播 blackboard_changed(op=write)，下游 depends_on 订阅者被错误唤醒去读一份空文件。属于跨 agent 的隐性数据损坏。
 - **建议修法**：createNew 里先判重：若 entries 已含该 path（或先 readBlackboard 成功），不要覆盖——改为直接 openPath(path) 选中它，或弹 ConfirmActionDialog（variant=destructive）确认『该文件已存在，确定要清空重建吗』。理想是后端补一个 create-only（已存在则 409）语义，前端据此提示。
 
@@ -121,7 +121,7 @@
 - **页面/域**：Cron 接口　**维度**：状态诚实性 / 错误处理与失败恢复　**置信度**：high
 - **现象**：用户点「Run now」，遇到数据库 busy、send_message 失败、init spell 没生成编排器、甚至 workspace 已删除等任何错误时，接口都返回 200 OK + {ok:false, skipped:"<原始错误串>"}。前端 cron.tsx:352 只判断 `!r.ok && r.skipped` 就当成一条普通红字提示，用户看到一段看不懂的 Rust 错误串（如 `database is locked` / `workspace not found`），既不知道是临时问题还是永久坏掉，也不知道该重试还是该删任务。
 - **复现**：1) 让任意 cron job 指向一个已软删除的 workspace（删空间后该 job 变 orphaned）；2) 在 /cron 点该任务的「Run now」；3) 后端 revive_orchestrator 走 get_workspace_by_id... 注意 get_workspace_by_id 不过滤 deleted_at，若 workspace 行还在则继续，否则返回 None→Err("workspace not found")；4) 观察响应是 200 而非 4xx/5xx，且 UI 直接显示原始错误串。
-- **根因**：crates/flockmux-server/src/routes/cron.rs:240-248 (run_cron collapses every run_job Err into 200 + {ok:false, skipped}); error sources undifferentiated in crates/flockmux-server/src/cron.rs:217-245 (run_job) and 251-276 (revive_orchestrator)
+- **根因**：crates/swarmx-server/src/routes/cron.rs:240-248 (run_cron collapses every run_job Err into 200 + {ok:false, skipped}); error sources undifferentiated in crates/swarmx-server/src/cron.rs:217-245 (run_job) and 251-276 (revive_orchestrator)
 - **影响**：状态撒谎红线：失败被静默降级成 200，监控/前端都以为请求成功了。用户遇到瞬时 DB busy 本可重试，却被一段技术错误串劝退；遇到 orphaned 任务也只看到 `workspace not found` 而非「该空间已删除，请删除此任务」。无法自助恢复。
 - **建议修法**：在 run_job 区分两类结果：返回 `Result<RunOutcome,String>`，其中 RunOutcome::Skipped(reason) 才走 200+{ok:false,skipped}，真正的 Err（DB/spawn 故障）走 500 + {error}。run_cron 据此分流；前端对 500 给「服务出错，可重试」、对 skipped 给业务文案。至少把 revive 失败、DB 错误与「无编排器且无法复活」用不同 message 前缀区分。
 
@@ -152,8 +152,8 @@
 #### P1-5 claude -p 退出码 0 但 stdout 实为错误/拒绝文本时，会被当成「优化结果」塞进 composer
 - **页面/域**：Prompt 优化 / Recording 接口　**维度**：状态诚实性 / 错误处理　**置信度**：medium
 - **现象**：用户点「优化」，草稿被替换成一段并非优化结果的文本——可能是 claude 的拒答（"I cannot help with that..."）、登录/额度提示，或某些版本下 exit 0 仍打印的提示语。界面表现为「优化成功」，实际把垃圾内容写进了草稿。
-- **复现**：在未登录或额度耗尽（但 claude 仍 exit 0 打印提示）的环境，设 FLOCKMUX_ALLOW_CLAUDE_PRINT=1，对一段 >=8 字符的草稿点「优化」，观察 composer 被替换为提示文本而非真正的改写。
-- **根因**：crates/flockmux-server/src/routes/rest.rs:2589（仅 out.status.success() 判成败）+ 2604-2618（exit 0 即无条件信任 stdout，无 is_error/内容校验）
+- **复现**：在未登录或额度耗尽（但 claude 仍 exit 0 打印提示）的环境，设 SWARMX_ALLOW_CLAUDE_PRINT=1，对一段 >=8 字符的草稿点「优化」，观察 composer 被替换为提示文本而非真正的改写。
+- **根因**：crates/swarmx-server/src/routes/rest.rs:2589（仅 out.status.success() 判成败）+ 2604-2618（exit 0 即无条件信任 stdout，无 is_error/内容校验）
 - **影响**：触碰状态诚实性红线：把「未验证的模型输出」当成「已确认的优化结果」展示。最坏情况用户没注意直接发送了被污染的草稿。前端有 undo（MessagesPanel.tsx:738）能兜底，但前提是用户察觉到不对。
 - **建议修法**：不要无条件信任 stdout：(1) 改用 `--output-format json` 并解析 `is_error`/`subtype` 字段，仅在确为正常 result 时采纳；或 (2) 至少加启发式护栏——若 cleaned 与原文长度比异常（如远短于原文、或包含明显的拒答/登录关键词），降级为「未改动 + 提示」而非替换。当前 text 模式 + 仅看退出码无法区分「真改写」与「错误文本」。
 
@@ -161,7 +161,7 @@
 - **页面/域**：Tasks / Goals 接口　**维度**：状态诚实性/错误处理　**置信度**：high
 - **现象**：当 store.list_tasks 因 DB 锁/损坏/IO 失败时，handler 把错误吞掉返回 200 {"tasks":[]}。前端 tasks.tsx 的 err 标志永远不会被触发，Kanban 显示空状态文案 No tasks yet，用户以为没有任务，实际是后端读库挂了。
 - **复现**：在 list_tasks SQL 涉及的表上制造一个临时错误（如让 blackboard_ops 不可读触发 query 失败），观察接口仍回 200 空数组。
-- **根因**：crates/flockmux-server/src/routes/tasks.rs:71 let rows = state.store.list_tasks(ws).await.unwrap_or_default(); — Err 被静默降级为空 Vec。对比同域 goals.rs:90-100 list_goals 正确地把 Err 映射成 500 {"error":...}。
+- **根因**：crates/swarmx-server/src/routes/tasks.rs:71 let rows = state.store.list_tasks(ws).await.unwrap_or_default(); — Err 被静默降级为空 Vec。对比同域 goals.rs:90-100 list_goals 正确地把 Err 映射成 500 {"error":...}。
 - **影响**：数据库异常被伪装成正常但没数据，违反状态诚实性红线，且让运维/用户无法区分真没任务和后端坏了，排障困难。
 - **建议修法**：改成 match：Ok(rows)=>Json(...)；Err(e)=>(500, Json({"error":e.to_string()}))，与 list_goals 一致。前端区分 5xx 显示 loadError。
 
@@ -169,7 +169,7 @@
 - **页面/域**：Usage 接口与计价　**维度**：状态诚实性 / 错误处理与失败恢复　**置信度**：high
 - **现象**：当 agent_usage 查询真的报错（SQLITE_BUSY 重试耗尽、库损坏、JOIN 时 schema 异常等），用户看到的不是错误提示，而是一片祥和的「暂无用量数据」空状态，误以为自己没花钱/没跑过任务。
 - **复现**：在 store 层让 usage_by_model 返回 Err（例如手动制造 SQLITE_BUSY 或临时改表名），打开 Usage 页 → 看到「暂无用量」而非错误。
-- **根因**：crates/flockmux-server/src/routes/usage.rs:333-335
+- **根因**：crates/swarmx-server/src/routes/usage.rs:333-335
 - **影响**：命中项目红线「不许把失败默默吞掉显示成功」。用户排查成本/排查为何用量不涨时会被彻底误导，且无任何自助恢复线索（连日志都只是 unwrap_or_default 后无声丢弃，error 没进 tracing）。
 - **建议修法**：handler 改为把三处 Result 的 Err 向上传播成 5xx（或返回一个带 `error` 字段的 JSON 让前端区分），至少在 unwrap 前 `tracing::error!` 记录。前端在拿到 5xx 时已有 err 横幅，只需后端不再把错误压平成 200+空。
 
@@ -177,17 +177,17 @@
 - **页面/域**：Usage 接口与计价　**维度**：功能正确性　**置信度**：high
 - **现象**：用量趋势折线图（UsageTrendChart）在累计使用超过 90 个不同日期后，显示的是最早 90 天的数据，最近的日期被悄悄丢弃——图表看起来「定格」在很久以前，且总量卡片与图表对不上。
 - **复现**：构造 >90 个不同日期的 agent_usage 行（at 跨 100+ 天），调 /api/usage → by_day 返回的是最早 90 天，最近的日期缺失。
-- **根因**：crates/flockmux-storage/src/store.rs:773-795 `usage_by_day` 的 SQL：`... GROUP BY day ORDER BY day ASC LIMIT ?2`（ws 分支 LIMIT ?2，无 ws 分支 LIMIT ?1）。函数文档/注释（store.rs:751、usage.rs 调用处传 90）声称是「last `days` days / 最近 days 天」，但 `ORDER BY day ASC` + `LIMIT` 取的是升序排在前面的、也就是最旧的 N 天，且 WHERE 里没有任何 `at >= now-Nd` 的时间下界。
+- **根因**：crates/swarmx-storage/src/store.rs:773-795 `usage_by_day` 的 SQL：`... GROUP BY day ORDER BY day ASC LIMIT ?2`（ws 分支 LIMIT ?2，无 ws 分支 LIMIT ?1）。函数文档/注释（store.rs:751、usage.rs 调用处传 90）声称是「last `days` days / 最近 days 天」，但 `ORDER BY day ASC` + `LIMIT` 取的是升序排在前面的、也就是最旧的 N 天，且 WHERE 里没有任何 `at >= now-Nd` 的时间下界。
 - **影响**：趋势图对老用户不诚实地展示陈旧数据并隐藏近期活动（命中诚实性红线的「把还没验证/错误的状态当确认状态展示」）。totals 是全量聚合、by_day 是错的子集，二者口径不一致会让用户困惑。
 - **建议修法**：改成先取最近 N 天：`... GROUP BY day ORDER BY day DESC LIMIT ?N`（或加 `WHERE at >= (strftime('%s','now')-? )*1000` 时间下界），并在返回前/前端再按 day ASC 排序绘图。同时修正 ws 分支与无 ws 分支保持一致。
 
 #### P1-9 pricing 配置路径只认 HOME 环境变量，Windows 安装版会落到 CWD 相对路径，读写/重置全失效
 - **页面/域**：Usage 接口与计价　**维度**：安装版现实（项目最高准则）/ 数据完整性　**置信度**：medium
 - **现象**：Windows 用户在 Usage 页编辑并保存价格表（PUT /api/usage/pricing）后，要么写入失败（往安装目录/盘根写被拒），要么写到一个用户找不到的幽灵位置；重启后自定义价格不生效，「重置」也作用在错误路径上——表现为「保存后看着成功，下次打开又变回默认」。
-- **复现**：在 Windows（不设 HOME）跑安装版 sidecar，CWD=安装目录或 /，PUT /api/usage/pricing → 写入相对 .flockmux/pricing.json，重启后 load_pricing_rules 读不到、回落默认。
-- **根因**：crates/flockmux-server/src/routes/usage.rs:168-173
+- **复现**：在 Windows（不设 HOME）跑安装版 sidecar，CWD=安装目录或 /，PUT /api/usage/pricing → 写入相对 .swarmx/pricing.json，重启后 load_pricing_rules 读不到、回落默认。
+- **根因**：crates/swarmx-server/src/routes/usage.rs:168-173
 - **影响**：Windows 安装版的价格自定义/重置功能整体不可用且不诚实（PUT 返回里 path 字段会显示一个相对路径，用户照着去找文件根本不存在）。属于「装完包就坏」的典型。
-- **建议修法**：统一改用跨平台 home 解析（dirs::home_dir() / 或 HOME 失败时回退 USERPROFILE），或由 Tauri 启动 sidecar 时把 `FLOCKMUX_*` 绝对路径环境变量传进来并优先读取；usage.rs 至少先 USERPROFILE 兜底。这是仓库级修复，建议抽一个共用 home_dir() 帮手替换全部 var("HOME")。
+- **建议修法**：统一改用跨平台 home 解析（dirs::home_dir() / 或 HOME 失败时回退 USERPROFILE），或由 Tauri 启动 sidecar 时把 `SWARMX_*` 绝对路径环境变量传进来并优先读取；usage.rs 至少先 USERPROFILE 兜底。这是仓库级修复，建议抽一个共用 home_dir() 帮手替换全部 var("HOME")。
 
 #### P1-10 选中节点的「唤醒/暂停/恢复」按钮：选中已死 agent 时是死按钮，唤醒失败被静默吞掉
 - **页面/域**：依赖图 DAG 视图　**维度**：状态诚实性 / 死按钮 / 错误处理　**置信度**：high
@@ -207,8 +207,8 @@
 
 #### P1-12 网络层失败（后端 sidecar 未起/挂掉）抛出的是裸 TypeError，最终把 "Failed to fetch"/"Load failed" 这种英文直接甩给小白用户
 - **页面/域**：前端 API 层 + 基址解析　**维度**：错误处理与失败恢复 / 真实用户路径 / 一致性　**置信度**：high
-- **现象**：当 flockmux-server sidecar 还没启动、崩了、或端口被占时，任何 api.* 调用的 fetch 会 reject 一个 TypeError（Chrome 文案 "Failed to fetch"，WKWebView/Safari 文案 "Load failed"）。这个不是 ApiError，所以所有 `e instanceof ApiError ? e.detail : (e as Error).message` 的调用方（files.tsx:83/120、WorkspaceSidebar.tsx:1114/1140、CreateWizard.tsx:242/398 等）都落到 else 分支，把这串英文原文当错误提示展示。
-- **复现**：不启动 flockmux-server（或 kill 掉 7777 端口），打开前端，进入 /files 选一个工作区或点任意拉取按钮 → 错误区显示 "Failed to fetch" / "Load failed"。
+- **现象**：当 swarmx-server sidecar 还没启动、崩了、或端口被占时，任何 api.* 调用的 fetch 会 reject 一个 TypeError（Chrome 文案 "Failed to fetch"，WKWebView/Safari 文案 "Load failed"）。这个不是 ApiError，所以所有 `e instanceof ApiError ? e.detail : (e as Error).message` 的调用方（files.tsx:83/120、WorkspaceSidebar.tsx:1114/1140、CreateWizard.tsx:242/398 等）都落到 else 分支，把这串英文原文当错误提示展示。
+- **复现**：不启动 swarmx-server（或 kill 掉 7777 端口），打开前端，进入 /files 选一个工作区或点任意拉取按钮 → 错误区显示 "Failed to fetch" / "Load failed"。
 - **根因**：web/src/api/http.ts:74（根因定位正确；关键是此行裸 `await fetch` 无 try/catch，连接层 reject 的 TypeError 绕过了 line 80 的 `!res.ok` → ApiError 归一化，最终以 (e as Error).message 形式在 files.tsx:83/120、WorkspaceSidebar.tsx:1114/1140、CreateWizard.tsx:242/250 等调用方暴露给用户。冷启动窗口由 web/src-tauri/src/lib.rs:82-97 即发即忘式 spawn 且无就绪门控所致）
 - **影响**：安装版用户第一次打开、或服务崩溃重启的几秒内点任何按钮，看到的是一串看不懂的英文报错，无法自助判断「是不是该等一下/重启」。违反项目「下载→打开→立刻能用」与状态诚实性红线（把底层连接失败暴露成技术黑话）。
 - **建议修法**：在 request() 里用 try/catch 包住 fetch；catch 到非 AbortError 的异常时，抛出一个归一化的 ApiError（建议 status=0, detail=可 i18n 的「无法连接到本地服务」key）。这样所有 `instanceof ApiError` 的调用方就能统一识别「服务没起」这一类，给出「正在启动/请重启」的引导，而不是甩英文。
@@ -225,7 +225,7 @@
 - **页面/域**：回放视图 + 播放器 + 录制面板　**维度**：功能正确性 / 一致性　**置信度**：high
 - **现象**：Replays 卡片缩略区永远只显示一个静态 ▶ 图标 + cols×rows + 时长，从不显示录像首帧/首几行实际终端内容。用户无法在不点进去的情况下区分哪条录像是哪条。
 - **复现**：grep -rn 'loadCastPreview|getCachedCastPreview|castPreview' web/src 只命中定义文件自身，无消费者；打开 Replays 看任意卡片缩略图均为静态图标。
-- **根因**：web/src/routes/workspace/views/Replays.tsx:311-346（CastThumb 自渲染静态占位、未接线）；孤儿模块 web/src/lib/castPreview.ts:95,99；接线在 "workspace-as-first-class" 重构中从已删除的 web/src/routes/replays/index.tsx（原提交 1f80c20 中 line 24/282-289 有 wiring）丢失。后端省流假设失效点 crates/flockmux-server/src/routes/recording.rs:79
+- **根因**：web/src/routes/workspace/views/Replays.tsx:311-346（CastThumb 自渲染静态占位、未接线）；孤儿模块 web/src/lib/castPreview.ts:95,99；接线在 "workspace-as-first-class" 重构中从已删除的 web/src/routes/replays/index.tsx（原提交 1f80c20 中 line 24/282-289 有 wiring）丢失。后端省流假设失效点 crates/swarmx-server/src/routes/recording.rs:79
 - **影响**：功能缺失（缩略图名不副实），同时携带一段有维护成本、有潜在副作用(fetch+abort)的死代码。castPreview 的实现还依赖『服务端不支持 Range 所以 abort 中断连接省流』的假设，而 recording.rs:79 用 tokio::fs::read 一次性把整个文件读进内存再整体返回，前端 abort 省不下后端的内存/IO —— 即使接上也达不到注释承诺的省流效果。
 - **建议修法**：二选一：(a) 把 CastThumb 接上 loadCastPreview/getCachedCastPreview，真正渲染首帧文本（注意 useEffect 清理、卸载 guard、错误兜底）；(b) 既然不用就删掉 castPreview.ts，避免误导后人。若选 (a)，建议后端配合支持 HTTP Range 或单独提供 /preview 端点，否则每张卡片仍会触发整文件读取。
 
@@ -249,7 +249,7 @@
 - **页面/域**：对话主面板 MessagesPanel(核心)　**维度**：数据完整性/功能正确性　**置信度**：high
 - **现象**：用户从工作空间 A 切到工作空间 B：B 房间里只显示「最近全局 200 条」里恰好属于 B 的消息。如果 B 的对话比全局最近 200 条都旧，B 房间会显示空（或只剩零星几条），用户以为历史丢了；反之刚在 A 发的消息切回 B 再切回 A 时只靠 live 事件补，断连/丢事件就缺。
 - **复现**：建一个有较多历史消息的工作空间 A，再建工作空间 B（让 A 的消息把全局最近 200 条占满）。打开 A→切到 B→切回 A：观察 A 是否还能看到首屏之外/更早的历史；在 A 发消息后切到 B 再切回 A，断开 /ws/swarm 观察是否缺消息。
-- **根因**：crates/flockmux-storage/src/store.rs:1703-1717 (+ web/src/components/MessagesPanel.tsx:266-275)
+- **根因**：crates/swarmx-storage/src/store.rs:1703-1717 (+ web/src/components/MessagesPanel.tsx:266-275)
 - **影响**：小白用户切到一个稍有历史的空间会看到「空房间」或残缺历史，怀疑数据丢失/产品坏了；这正是项目红线说的「界面撒谎」——把不完整当完整展示。
 - **建议修法**：两种任选其一：① 给 MessagesPanel 加 key（在 Chat.tsx:992 <MessagesPanel key={`${workspace.id}:${activeThread?.id ?? 'main'}`} …/>）强制按房间 remount 重新 refresh；② 在 MessagesPanel 内把 refresh 的依赖与触发改为 [workspaceSlug, activeThreadId]（useEffect(()=>{refresh()},[refresh,workspaceSlug,activeThreadId]) 且 listMessages 带 to/from 或后续做房间级分页）。推荐 ①，最小且彻底。
 
@@ -281,7 +281,7 @@
 - **页面/域**：工作空间外壳 + 侧边栏 + 工具条　**维度**：状态诚实性 / 功能正确性(竞态)　**置信度**：medium
 - **现象**：命名方向创建后到 git worktree 隔离完成（最长约 30s）这段时间，聊天区显示『闲置/无 AI』并给出『唤起 orchestrator』按钮。用户若在此窗口点击，会出现两个 orchestrator（一个在旧 shared cwd，一个被后端 reroot 到 worktree），即代码注释自己警告的 split-brain。
 - **复现**：1. 创建命名方向。2. 在 worktree 隔离完成前（人为放慢 git 或大仓库）观察聊天区。3. 看到『唤起 orchestrator』按钮并点击 → 检查 listAgents 出现两个 orchestrator。
-- **根因**：web/src/routes/workspace/views/Chat.tsx:278 (WorkspaceStatusStrip 的 hasMembers 判定缺少 activeThread.state==='preparing' 检查；revive 按钮渲染于 Chat.tsx:368-383，reviveOrchestrator 于 Chat.tsx:464-484；后端无守卫的 split-brain 竞态在 crates/flockmux-server/src/routes/workspaces.rs:1426 reroot_thread_orchestrator 与 rest.rs:2248-2261 的 cwd 解析)
+- **根因**：web/src/routes/workspace/views/Chat.tsx:278 (WorkspaceStatusStrip 的 hasMembers 判定缺少 activeThread.state==='preparing' 检查；revive 按钮渲染于 Chat.tsx:368-383，reviveOrchestrator 于 Chat.tsx:464-484；后端无守卫的 split-brain 竞态在 crates/swarmx-server/src/routes/workspaces.rs:1426 reroot_thread_orchestrator 与 rest.rs:2248-2261 的 cwd 解析)
 - **影响**：诚实性：把『准备中』谎报为『闲置可手动启动』；功能性：用户点击触发重复 orchestrator，与后端 reroot 抢 cwd，文件写入 split-brain。
 - **建议修法**：空状态渲染前先判断 activeThread.state==='preparing'：此时显示带 spinner 的『方向准备中…』占位，禁用/隐藏 revive 按钮（侧栏已经用 Loader2 表达 preparing，聊天区应保持一致）。activeThread 已在 Outlet context（ShellOutletContext 可下发），Chat 拿得到。
 
@@ -289,7 +289,7 @@
 - **页面/域**：文件接口　**维度**：8. 安全/隐私（凭据泄露）　**置信度**：high
 - **现象**：即便在 jail 内或开了 all=1，许多明显的凭据/隐私文件依然能被 /api/files/read 读出：~/.npmrc、~/.docker/config.json、~/.config/*（除 gcloud 外整目录都没挡，如 ~/.config/gh/hosts.yml GitHub token、~/.config/op、~/.config/Code 等）、~/.git-credentials 之外的 .git/config（内含带 token 的 remote url）、~/.bash_history / ~/.zsh_history、浏览器 Cookies SQLite、kubeconfig 若不在 ~/.kube、~/.terraform.d/credentials.tfrc.json、各类 *.token / *.secret 文件等。
 - **复现**：curl 'http://127.0.0.1:7777/api/files/read?path='$HOME'/.config/gh/hosts.yml' 或 .../.npmrc → 直接返回明文 token；is_sensitive 对这两个路径返回 false（不含任何被枚举的目录/文件/名字模式）。
-- **根因**：crates/flockmux-server/src/routes/files.rs:111-149
+- **根因**：crates/swarmx-server/src/routes/files.rs:111-149
 - **影响**：与发现1叠加，把『可读全盘』进一步坐实为『可读几乎所有凭据』。即使将来修了裸调用问题、把访问收进 workspace，开发者把项目放在 ~ 或把 ~/.config 加成 root 时，这些凭据仍会被任意 agent/依赖读走。
 - **建议修法**：改为白名单/扩展名白名单思路而非黑名单：读接口默认只允许文本/代码类扩展名（.rs/.ts/.md/.json/.toml/...），或至少把 is_sensitive 扩成覆盖 ~/.config 整树、history 文件、*.token/*.secret/*.crt/*.cer/*.ovpn/.npmrc/.pypirc/.docker、浏览器 profile 目录等，并对『目录名以 . 开头的 dotfile 目录』默认更保守。长期看，文件浏览器不该承担读凭据的能力面。
 
@@ -312,7 +312,7 @@
 #### P1-25 切换目标状态失败时：界面已乐观改成新状态，但没有错误提示，且 reload 失败时假状态会悄悄留下（状态撒谎）
 - **页面/域**：目标页 Goals　**维度**：状态诚实性 / 错误处理与失败恢复　**置信度**：high
 - **现象**：用户点某个状态按钮（如 active→complete），卡片立刻显示成「完成」并打绿勾。若后端 PATCH /api/goals/:id/status 返回 500 或网络断开，用户看不到任何错误，界面停留在「完成」。
-- **复现**：1) 打开 /goals 选有目标的工作区；2) 停掉后端(crates/flockmux-server)或断网；3) 点任一状态按钮。现象：卡片立刻变新状态、无任何错误提示，且新状态一直留着。
+- **复现**：1) 打开 /goals 选有目标的工作区；2) 停掉后端(crates/swarmx-server)或断网；3) 点任一状态按钮。现象：卡片立刻变新状态、无任何错误提示，且新状态一直留着。
 - **根因**：web/src/routes/goals.tsx:124-142
 - **影响**：用户以为已把目标标记为完成/阻塞/归档，实际后端根本没改。后续决策（停掉某方向、认为目标达成）建立在假状态上。这正是 CLAUDE.md 明令禁止的『显示成功但底层没成』。
 - **建议修法**：给 setStatus 加 catch：失败时 setErr(友好文案) 并把 goals 回滚到调用前的快照（在乐观更新前先存 prev，catch 里 setGoals(prev)）；不要只靠 finally 的 load() 兜底，因为 load 自身也可能失败。
@@ -320,7 +320,7 @@
 #### P1-26 工作区列表加载失败时，目标页伪装成「暂无目标」空态（吞掉了 useToolWorkspaces 暴露的 error）
 - **页面/域**：目标页 Goals　**维度**：状态诚实性 / 空-加载-错误态　**置信度**：high
 - **现象**：若 listWorkspaces 接口失败（后端没起/网络断），目标页不报错，而是渲染空态卡片『暂无目标。先创建一个…』，工作区下拉显示「—」。用户以为自己没有目标，实际是根本没连上后端。
-- **复现**：1) 不启动 flockmux-server；2) 打开 /goals。现象：显示『暂无目标』而非『加载失败』。
+- **复现**：1) 不启动 swarmx-server；2) 打开 /goals。现象：显示『暂无目标』而非『加载失败』。
 - **根因**：web/src/routes/goals.tsx:54（解构遗漏 error）；触发态来自 web/src/lib/useToolWorkspaces.ts:34-37（catch 中 setError + setReady(true)）；空态误显落点 web/src/routes/goals.tsx:76-79 → 246-249。注意原报告把根因文件写成 web/src/hooks/useToolWorkspaces.ts，正确路径是 web/src/lib/useToolWorkspaces.ts。补充：tasks.tsx:42、terminal.tsx:48、usage.tsx:78 同样未消费 error，仅 files.tsx:56,167-174 做了正确处理——故此缺陷不止 goals 一页，但 goals 确实中招。
 - **影响**：后端故障被伪装成『正常但无数据』，用户不会去排查连接问题，反而可能重复尝试新建目标（也会失败）。与项目红线『不许把失败默默吞掉显示成功/正常』直接冲突；其他工具页（按注释）本是要消费这个 error 的，目标页漏接。
 - **建议修法**：在 goals.tsx 解构出 error 并在工作区下拉旁/列表区渲染明确的『工作区加载失败：xxx，请检查后端是否运行』错误态，与『暂无目标』空态区分开。
@@ -353,7 +353,7 @@
 - **页面/域**：设置页 Settings　**维度**：状态诚实性 / 功能正确性　**置信度**：high
 - **现象**：用户在 设置→通用 里打开/关闭「启动时展开聊天窗口」「新消息桌面通知」「失败时停掉其它 agent」，开关动画正常、值也持久化了，看起来生效了。实际上三个开关对应用行为零影响。
 - **复现**：1) grep -rn 'openMainOnLaunch|desktopNotify|killOthersOnFail' web/src crates web/src-tauri → 除 settings.tsx 自身与 i18n 文案外，零消费者。2) grep -rn 'new Notification|sendNotification|plugin-notification|isPermissionGranted' web/src → 无任何 OS 通知代码（通知系统只有应用内 NotificationPopover 铃铛）。
-- **根因**：web/src/routes/settings.tsx:79-89 (字段声明+DEFAULTS) 与 settings.tsx:279-303 (GeneralPanel 渲染三个 ToggleRow)；缺失的消费侧：OS 通知无实现 (web/src-tauri 无 tauri-plugin-notification)、窗口启动无偏好读取 (web/src-tauri/src/lib.rs setup/CloseRequested)、失败级联无接线 (crates/flockmux-server/src/routes/rest.rs:1956 interrupt_all 仅手动端点)
+- **根因**：web/src/routes/settings.tsx:79-89 (字段声明+DEFAULTS) 与 settings.tsx:279-303 (GeneralPanel 渲染三个 ToggleRow)；缺失的消费侧：OS 通知无实现 (web/src-tauri 无 tauri-plugin-notification)、窗口启动无偏好读取 (web/src-tauri/src/lib.rs setup/CloseRequested)、失败级联无接线 (crates/swarmx-server/src/routes/rest.rs:1956 interrupt_all 仅手动端点)
 - **影响**：这正是项目红线「界面撒谎」：用户以为配置了桌面通知/启动行为/失败联动，实际什么都没发生。尤其『新消息桌面通知』——用户关掉打扰指望静默，或打开指望后台弹通知，结果都落空，是会真实误导人的功能性谎言。
 - **建议修法**：二选一：(a) 真正接线——desktopNotify 接 Tauri notification 插件在 agent 回复时发系统通知；openMainOnLaunch 在 src-tauri/lib.rs setup 里读该偏好决定 window 初始 show/hide 并改掉「关窗即退出」逻辑；killOthersOnFail 由后端 wake/registry 在 agent 异常退出时读取并级联 interrupt。(b) 在没接线前，把这三行从 GeneralPanel 删除或标注「即将推出」并 disabled，绝不能让一个看起来生效的开关其实是空操作。建议先做 (b) 止血。
 
@@ -368,8 +368,8 @@
 #### P1-32 隐私页「清空全部」是半截谎言：抹了 localStorage，但运行中的设置仍在内存里、下一次任意改动会把旧值写回
 - **页面/域**：设置页 Settings　**维度**：数据完整性 / 状态诚实性　**置信度**：high
 - **现象**：用户点「清空全部」→ 确认 → 弹 toast『已清除 N 项』。但页面上的主题卡高亮、语言选择、三个开关仍显示清空前的旧状态；并且只要随后再动任何一个开关，旧的主题/语言/开关值就被原样写回 localStorage，等于没清干净。
-- **复现**：1) 切到 dark + English，开几个开关。2) 隐私→清空全部→确认。3) 观察：主题/语言/开关 UI 没变（仍 dark/En）。4) 再点任一开关→ 打开 devtools localStorage，flockmux:settings:v1 又出现且含旧 theme/lang。
-- **根因**：PrivacyPanel.clearAllNow (settings.tsx:977-982) 直接 localStorage.removeItem 掉所有 flockmux:* 包括 flockmux:settings:v1，但 SettingsRoute 顶层的 settings state（126 行）和它的 useEffect([settings]) 持久化（132-140）完全不知情：clear 不修改 settings，所以既不会刷新 UI 显示，也不触发重写——直到用户下次 update() 任一字段，effect 用内存里的旧 settings 调 saveSettings 把整份旧配置复活。
+- **复现**：1) 切到 dark + English，开几个开关。2) 隐私→清空全部→确认。3) 观察：主题/语言/开关 UI 没变（仍 dark/En）。4) 再点任一开关→ 打开 devtools localStorage，swarmx:settings:v1 又出现且含旧 theme/lang。
+- **根因**：PrivacyPanel.clearAllNow (settings.tsx:977-982) 直接 localStorage.removeItem 掉所有 swarmx:* 包括 swarmx:settings:v1，但 SettingsRoute 顶层的 settings state（126 行）和它的 useEffect([settings]) 持久化（132-140）完全不知情：clear 不修改 settings，所以既不会刷新 UI 显示，也不触发重写——直到用户下次 update() 任一字段，effect 用内存里的旧 settings 调 saveSettings 把整份旧配置复活。
 - **影响**：『清除』这个不可逆危险操作的结果与界面展示不一致：toast 报成功，可主题/语言/开关并没回到默认，且会被静默复活。用户以为重置了实际没有，属于危险操作后的状态撒谎 + 数据不一致。
 - **建议修法**：clearAllNow 清除后应同步把内存状态复位：setSettings(DEFAULTS)（并相应 setTheme(DEFAULTS.theme)/i18n.changeLanguage(DEFAULTS.lang)），让 UI 与 localStorage 一致；或把清除做成「清除后强制 reload」。至少不能让顶层 effect 用陈旧 settings 把刚清掉的 key 写回。
 
@@ -392,7 +392,7 @@
 #### P1-35 后端 500 / 断网时 seed() 静默吞错,与「真正没有通知」渲染成完全一样的空态
 - **页面/域**：通知中心 + 通知弹窗　**维度**：状态诚实性 / 错误处理与失败恢复 / 空加载错误边界态　**置信度**：high
 - **现象**：后端没起、网络断、或 /api/message、/api/blackboard 返回 500 时,通知中心列表区显示和「确实一条通知都没有」一模一样的空态(铃铛图标 +「该分类暂无通知」)。用户被告知「没有通知」,但其实是没拉到数据。
-- **复现**：停掉 flockmux-server(或断网),打开 /notifications。预期:应提示「加载失败/后端未连接,点击重试」。实际:显示空态「该分类暂无通知」,与真·空无法区分。
+- **复现**：停掉 swarmx-server(或断网),打开 /notifications。预期:应提示「加载失败/后端未连接,点击重试」。实际:显示空态「该分类暂无通知」,与真·空无法区分。
 - **根因**：notifications.tsx 的 `seed()` (266-307) 整个 try 包住 `Promise.all([...])`,catch 块只有 `/* best-effort */` 完全吞掉。`requestEndpoint` 在任何非 2xx 都会 throw `ApiError`(http.ts:80-99 确认),所以 500 会进 catch → items 保持空 → 走 filtered.length===0 的空态分支(notifications.tsx:495-499)。NotificationPopover.tsx 的 `refresh()` (121-166) 同样静默 catch,后端挂时弹窗也只显示「Nothing here yet」。这违反项目状态诚实性红线:把「失败」显示成「成功(空)」。
 - **影响**：用户在后端故障时被误导以为一切正常只是没消息,不会去重启/排查;也无从自助恢复(没有重试/错误提示)。通知是用户判断 agent 在干什么的主要窗口,这里撒谎影响很大。
 - **建议修法**：seed()/refresh() 区分三态:加载中 / 加载失败 / 真空。catch 里 setState 一个 error 标志,空态分支先判断 error→渲染「加载失败 + 重试按钮」(重试调用 seed)。可复用项目里已有的 useSwarmFeedStatus()=='closed' 作为「后端连不上」的佐证一起提示。
@@ -446,7 +446,7 @@
 - **页面/域**：Blackboard 与消息接口　**维度**：错误处理与失败恢复 / 边界态　**置信度**：high
 - **现象**：调用 GET /api/message?q=" 或 q=foo AND 或 q=* 这类含 FTS5 语法字符/不闭合引号/裸操作符的查询时，接口返回 500 INTERNAL_SERVER_ERROR，body 里是原始的 SQLite FTS 解析错误文本（如 fts5: syntax error near "..."）。正常的搜索框输入（带引号、括号、AND/OR/星号）会随机触发这个 500。
 - **复现**：对本地 7777 执行 curl 'http://127.0.0.1:7777/api/message?q=%22'（q 为单个双引号），观察返回 500 与 fts5 语法错误文本。
-- **根因**：crates/flockmux-storage/src/store.rs:1744 search_messages 里 `WHERE messages_fts MATCH ?1` 直接绑定用户传入的 query；FTS5 的 MATCH 右值本身是一套查询 DSL，畸形语法会让 SQLite 返回错误。crates/flockmux-server/src/routes/swarm.rs:33-38 list_messages 走 search_messages 分支，错误经 internal_err（swarm.rs:339）原样 to_string() 回前端，既给了 500 又泄露内部实现细节。注意这是 query 解析错误而非注入——参数化是对的，但 FTS DSL 校验缺失。
+- **根因**：crates/swarmx-storage/src/store.rs:1744 search_messages 里 `WHERE messages_fts MATCH ?1` 直接绑定用户传入的 query；FTS5 的 MATCH 右值本身是一套查询 DSL，畸形语法会让 SQLite 返回错误。crates/swarmx-server/src/routes/swarm.rs:33-38 list_messages 走 search_messages 分支，错误经 internal_err（swarm.rs:339）原样 to_string() 回前端，既给了 500 又泄露内部实现细节。注意这是 query 解析错误而非注入——参数化是对的，但 FTS DSL 校验缺失。
 - **影响**：一旦前端把这个 q 接到搜索框（协议字段已就绪，只是当前 web/ 未接），用户每输入一个引号/括号就报错；即便现在，任何走 loopback 的调用方用合法字符也能稳定打出 500，且错误信息暴露后端用的是 SQLite FTS5。属于状态诚实性边缘：搜索失败应是「没结果/请换词」而不是「服务器内部错误」。
 - **建议修法**：在 search_messages 前对 query 做 FTS5 安全化：要么把用户输入用双引号包成一个 phrase 并转义内部双引号（query.replace('\"', "\"\"") 再两端加引号，退化为纯短语匹配），要么显式 sanitize 掉 FTS 操作符；并把这一类错误在 handler 层映射成 400 + 友好提示（「搜索语法无效」）而非 500 原文回吐。
 
@@ -454,15 +454,15 @@
 - **页面/域**：Blackboard 与消息接口　**维度**：边界态 / 性能 / 错误处理　**置信度**：medium
 - **现象**：一次性提交超大 ids 数组（>32766 个，或在老 SQLite 上 >999 个）调用 /api/message/read，返回 500，错误为 SQLite 'too many SQL variables'。被标记已读的操作整批失败，且没有任何「部分成功/请分批」的提示。
 - **复现**：构造一个含 40000 个整数的 JSON 数组 POST 到 /api/message/read（body<2MB），观察 500 与 'too many SQL variables'。
-- **根因**：crates/flockmux-protocol/src/rest.rs:350-353 MarkReadRequest.ids 无长度约束；crates/flockmux-storage/src/store.rs:1785-1813 mark_read 把每个 id 拼成一个 `IN (?,?,...)` 占位符（store.rs:1794），加上 at_ms、to_agent 共 ids.len()+2 个绑定变量，一旦超过 SQLITE_MAX_VARIABLE_NUMBER 直接报错，没有按 batch 切分。这些 route 没有单独抬高 body limit，受 axum 默认 ~2MB body 约束，但 2MB JSON 足以塞进远超 32k 个 i64，所以该上限可达。
+- **根因**：crates/swarmx-protocol/src/rest.rs:350-353 MarkReadRequest.ids 无长度约束；crates/swarmx-storage/src/store.rs:1785-1813 mark_read 把每个 id 拼成一个 `IN (?,?,...)` 占位符（store.rs:1794），加上 at_ms、to_agent 共 ids.len()+2 个绑定变量，一旦超过 SQLITE_MAX_VARIABLE_NUMBER 直接报错，没有按 batch 切分。这些 route 没有单独抬高 body limit，受 axum 默认 ~2MB body 约束，但 2MB JSON 足以塞进远超 32k 个 i64，所以该上限可达。
 - **影响**：loopback 单用户场景概率低、影响有限，但属于「输入未校验 + 无分块」的真实健壮性缺口：调用方（含未来批量已读 UI 或脚本）一旦传入大批 ids，整批已读失败且只能看到一个不可自助恢复的 500。
 - **建议修法**：在 store.mark_read 内对 ids 按固定 chunk（如 500）切分多条 UPDATE…IN 在同一事务里执行并汇总 RETURNING；或在 handler 层对 ids.len() 设上限并返回 400 友好提示。consume_wakes 用的是无变量列表的整表 UPDATE，不受影响，可作对照。
 
 #### P2-3 MCP write/read_blackboard 把 agent 提供的 path 未编码直接拼进 URL，含 ?/#/空格 的 path 会被 URL 解析截断/错位
 - **页面/域**：Blackboard 与消息接口　**维度**：功能正确性 / 一致性　**置信度**：medium
-- **现象**：agent 通过 MCP 工具写/读一个 path 含特殊字符（如 'notes?v2'、'a b.md'、'x#frag'）时，crates/flockmux-mcp/src/tools.rs 直接 format! 拼 URL，? 之后被 server 当 query 丢弃、# 被截断、空格使 URL 非法，导致写到的 key 与 agent 以为的 key 不一致，或请求失败。
+- **现象**：agent 通过 MCP 工具写/读一个 path 含特殊字符（如 'notes?v2'、'a b.md'、'x#frag'）时，crates/swarmx-mcp/src/tools.rs 直接 format! 拼 URL，? 之后被 server 当 query 丢弃、# 被截断、空格使 URL 非法，导致写到的 key 与 agent 以为的 key 不一致，或请求失败。
 - **复现**：MCP swarm_write_blackboard path='a?b.md' content='x'，再 swarm_read_blackboard path='a?b.md'，观察 read 报 not found（实际写到了 'a'，'?b.md' 被当 query）。
-- **根因**：crates/flockmux-mcp/src/tools.rs:527 与 crates/flockmux-mcp/src/tools.rs:560
+- **根因**：crates/swarmx-mcp/src/tools.rs:527 与 crates/swarmx-mcp/src/tools.rs:560
 - **影响**：blackboard 的 key 命名一旦带这些字符，写入路径与读取路径不一致，造成「写了读不到」或写到非预期 key；属功能正确性 bug，对依赖 blackboard 协作的 orchestrator/worker 链路有实际影响。
 - **建议修法**：在 tools.rs 拼 URL 前对 path 的每个 segment 做 percent-encode（如用 url::Url 或 percent-encoding crate，保留 / 作分隔符其余编码），server 侧解码后 path_safe 校验不变。
 
@@ -470,7 +470,7 @@
 - **页面/域**：Blackboard 与消息接口　**维度**：状态诚实性 / 数据完整性　**置信度**：low
 - **现象**：当 insert_blackboard_op 失败（SQLITE_BUSY 超预算、磁盘满等）时，write_blackboard 仍返回成功 JSON（routes/swarm.rs:331-336），id 为 -1。调用方/UI 看到的是「写入成功」，但这条写入不在 op-log 里：/api/blackboard 列表和 /api/blackboard-history 都查不到它，直到下次重启 reconcile_oplog_from_disk 才补回。
 - **复现**：代码审查：write_blackboard 的 Err(e) 分支构造 id=-1 的 BlackboardOpRecord 并返回 Ok，routes/swarm.rs 将其 record.id 原样放入响应 JSON。
-- **根因**：crates/flockmux-swarm/src/swarm.rs:606-631（哨兵 id=-1 来源）+ crates/flockmux-server/src/routes/swarm.rs:331-336（原样透传，无标记）。根因定位正确，但影响链需修正：真正的 agent 写入面是 crates/flockmux-mcp/src/tools.rs:553-581，它只读 sha256 不读 id；前端 web/src/components/BlackboardPanel.tsx:118-145 丢弃返回值——故"误导调用方"未成立。
+- **根因**：crates/swarmx-swarm/src/swarm.rs:606-631（哨兵 id=-1 来源）+ crates/swarmx-server/src/routes/swarm.rs:331-336（原样透传，无标记）。根因定位正确，但影响链需修正：真正的 agent 写入面是 crates/swarmx-mcp/src/tools.rs:553-581，它只读 sha256 不读 id；前端 web/src/components/BlackboardPanel.tsx:118-145 丢弃返回值——故"误导调用方"未成立。
 - **影响**：内容不会丢（落盘是真的），但发现性/历史在重启前缺失，且接口返回的 id=-1 是个对调用方无意义甚至误导的值。这是一个有意识的权衡（注释写得很清楚），但 HTTP 层把 id=-1 当正常 id 回吐、不附带任何「op-log 未记录」标记，属于轻度状态不诚实。
 - **建议修法**：保留落盘+广播策略，但在 HTTP 响应里对 id<0 的情况附加一个布尔标记（如 oplog_persisted:false）或把 id 置 null，让调用方知道这条写入暂未进入历史；或对 insert 失败做一次带退避的重试再降级。
 
@@ -478,7 +478,7 @@
 - **页面/域**：Cron 接口　**维度**：功能正确性 / 数据完整性 / 资源泄漏　**置信度**：high
 - **现象**：创建或编辑定时任务时，只校验 cron 表达式合法 + workspace_id/prompt 非空字符串（cron.rs:100-113 / 156-169），从不查 workspace 表。于是可以存下一个 workspace_id = 任意 UUID（甚至随手敲的字符串）的 enabled 任务。到点后调度器 run_job→revive_orchestrator→get_workspace_by_id 返回 None→Err，run_job 返回 Err，scheduler 只在 debug 级别打一行日志，且因为只在 Ok 分支 touch_cron_run（cron.rs:243、304-307），last_run_at 永不更新——于是**每个匹配的分钟都会重试一次、永远失败、永远不停**。
 - **复现**：POST /api/cron body={workspace_id:"does-not-exist",name:"x",cron_expr:"* * * * *",prompt:"hi"} → 返回 200 ok:true 并入库；等到下一分钟，后端日志每分钟出现一行 `cron: skipped ... workspace not found`，last_run_at 始终为 null，任务永不停止重试。
-- **根因**：crates/flockmux-server/src/routes/cron.rs:107 (create_cron 缺 get_workspace_by_id 校验) 与 crates/flockmux-server/src/routes/cron.rs:163 (update_cron 同) 为根因；放大因素在 crates/flockmux-server/src/cron.rs:243 (touch_cron_run 仅成功路径调用) 与 crates/flockmux-server/src/cron.rs:301 (去重依赖 last_run_at，失败路径不写故永不触发)。
+- **根因**：crates/swarmx-server/src/routes/cron.rs:107 (create_cron 缺 get_workspace_by_id 校验) 与 crates/swarmx-server/src/routes/cron.rs:163 (update_cron 同) 为根因；放大因素在 crates/swarmx-server/src/cron.rs:243 (touch_cron_run 仅成功路径调用) 与 crates/swarmx-server/src/cron.rs:301 (去重依赖 last_run_at，失败路径不写故永不触发)。
 - **影响**：数据完整性：库里能留下永远跑不通的「幽灵任务」。资源/性能：调度器对坏任务每分钟反复 list_agents + get_workspace 查询并尝试 spawn，长期空转；若表达式是 `* * * * *` 则每 30s tick 都打一次失败日志。用户体验：在前端只显示 orphaned 标记，但根因（一开始就写错 workspace_id）无任何即时反馈。
 - **建议修法**：create_cron/update_cron 在校验后增加 `state.store.get_workspace_by_id(workspace_id)`（且过滤 deleted_at IS NULL），不存在则返回 400「workspace 不存在」。同时给 scheduler 的失败路径也写一次 last_run_at（或单独的 last_attempt_at）做退避，避免坏任务每分钟无限重试。
 
@@ -486,7 +486,7 @@
 - **页面/域**：Cron 接口　**维度**：数据完整性 / 越权（跨空间资源生命周期）　**置信度**：medium
 - **现象**：删除一个 workspace 时调用 disable_cron_jobs_for_workspace 把其下任务批量置 enabled=0（store.rs:1247+），但：(a) 手动「Run now」不检查 enabled，照样能对已禁用/已删空间的任务触发 run_job；(b) run_job→revive_orchestrator→get_workspace_by_id（store.rs:2384，SELECT 未带 `WHERE deleted_at IS NULL`）会把软删除行也查出来，于是用一个已经标记删除的 workspace 的 cwd 去 run_spell 拉起一个全新编排器。
 - **复现**：1) 建一个 workspace + 一条指向它的 cron job；2) 删除该 workspace（软删，行仍在但 deleted_at 非空，且 disable 把 job 置 disabled）；3) 在 /cron 对该（orphaned）任务点 Run now；4) run_cron 不校验 enabled → run_job → get_workspace_by_id 仍返回该软删行 → revive_orchestrator 用其 cwd 拉起编排器。需确认 list_workspaces 是否已排除软删行造成 orphaned 标记。
-- **根因**：crates/flockmux-storage/src/store.rs:2384-2410 (get_workspace_by_id 缺 `AND deleted_at IS NULL`); crates/flockmux-server/src/routes/cron.rs:231-249 (run_cron 触发前不校验 enabled / workspace 删除态); crates/flockmux-server/src/cron.rs:251-276 (revive_orchestrator 直接信任软删行的 ws.cwd); crates/flockmux-server/src/routes/rest.rs:2176-2191 (run_spell 仅对 None 报 not found，软删 workspace 照常放行)
+- **根因**：crates/swarmx-storage/src/store.rs:2384-2410 (get_workspace_by_id 缺 `AND deleted_at IS NULL`); crates/swarmx-server/src/routes/cron.rs:231-249 (run_cron 触发前不校验 enabled / workspace 删除态); crates/swarmx-server/src/cron.rs:251-276 (revive_orchestrator 直接信任软删行的 ws.cwd); crates/swarmx-server/src/routes/rest.rs:2176-2191 (run_spell 仅对 None 报 not found，软删 workspace 照常放行)
 - **影响**：已删除空间被意外复活：用户以为删掉空间就干净了，结果一个残留 cron job 被手动 Run（或若 disable 漏网仍 enabled）就把编排器重新拉起来，在那个 cwd 里跑 prompt。数据完整性/生命周期不一致。
 - **建议修法**：get_workspace_by_id 增加 `AND deleted_at IS NULL`（或新增专用方法供 cron 用）；run_cron 在触发前若 job 所属 workspace 已删除/不存在，直接返回明确错误而非 revive；revive_orchestrator 对已删空间显式拒绝。
 
@@ -494,7 +494,7 @@
 - **页面/域**：Cron 接口　**维度**：输入校验 / 功能正确性 / 一致性　**置信度**：high
 - **现象**：create_cron/update_cron 的 tz_offset_minutes、preview 的 offset 都是裸 i32，没有 [-720,840]（即 UTC-12..UTC+14）之类的合法时区范围校验。可以传 offset=999999999 之类，被原样入库并参与 `now_secs + job.tz_offset_minutes as i64 * 60`（cron.rs:297）与 next_after 的 `offset_min as i64 * 60`（cron.rs:173）计算，得到一个荒谬的「本地时刻」，调度会在用户完全意料不到的 UTC 时刻触发；前端 wallClock/formatRun 也会据此渲染出错误时间。
 - **复现**：PUT /api/cron/:id body 里 tz_offset_minutes=500000 → 200 入库；列表 next_run 与实际调度时刻都按这个荒谬偏移计算，前端时间显示错乱。
-- **根因**：crates/flockmux-server/src/routes/cron.rs:92-93 (CreateCronRequest.tz_offset_minutes)、139-147 (UpdateCronRequest.tz_offset_minutes)、60-67 (PreviewQuery.offset) 均无范围校验；唯一校验入口 crate::cron::is_valid (cron.rs:147-157) 只校验 5 个 cron 字段、不碰 offset。根因定位准确，无需修正。
+- **根因**：crates/swarmx-server/src/routes/cron.rs:92-93 (CreateCronRequest.tz_offset_minutes)、139-147 (UpdateCronRequest.tz_offset_minutes)、60-67 (PreviewQuery.offset) 均无范围校验；唯一校验入口 crate::cron::is_valid (cron.rs:147-157) 只校验 5 个 cron 字段、不碰 offset。根因定位准确，无需修正。
 - **影响**：功能正确性：任务在错误的 UTC 时刻触发，且 next_run 预览也算错，与用户「本地时间」的心智完全不符。前端展示与实际触发不一致（一致性/诚实性的边角）。虽然单机本地、攻击面有限，但正常前端永远只发浏览器真实 offset，出现异常值多半意味着客户端 bug 或脏数据，缺校验会让 bug 难以发现。
 - **建议修法**：在 create/update/preview 校验 `-720 <= offset <= 840`（分钟），越界返回 400。
 
@@ -502,7 +502,7 @@
 - **页面/域**：Cron 接口　**维度**：性能 / 一致性　**置信度**：high
 - **现象**：list_cron 在 cron.rs:40 明确用 tokio::task::spawn_blocking 包住 next_after，注释（cron.rs:36-39）专门解释「这是 minute-by-minute 扫描、纯 CPU、不能堵 async 执行器」。但 preview_cron（cron.rs:74-82）调用同一个 next_after 却直接在 async handler 里同步跑，没有 spawn_blocking。preview 由创建表单每次输入防抖 300ms 后触发（cron.tsx:105-129），是高频调用点。
 - **复现**：代码对照：cron.rs:40 用 spawn_blocking、cron.rs:77 不用，二者调用同一 next_after。
-- **根因**：crates/flockmux-server/src/routes/cron.rs:77 直接 `crate::cron::next_after(...)`，未复用 list_cron 已采用的 spawn_blocking 隔离模式。两处对同一热点的处理不一致。
+- **根因**：crates/swarmx-server/src/routes/cron.rs:77 直接 `crate::cron::next_after(...)`，未复用 list_cron 已采用的 spawn_blocking 隔离模式。两处对同一热点的处理不一致。
 - **影响**：性能/一致性：next_after 因 date_matches 的「整天跳过」优化（cron.rs:181-184），最坏情况已被压到约 366 次天跳 + ≤1440 次分钟探测（如 `59 23 31 12 *`），单次约一两千次迭代，量级很小，所以不构成真正 DoS——这也是为何降为 P2 而非更高。但作者既然在 list 里认定它该进 blocking 池，preview 这个更高频的入口却漏了，属明确的不一致与潜在执行器阻塞隐患，应统一。
 - **建议修法**：preview_cron 同样用 spawn_blocking 包住 is_valid+next_after，与 list_cron 保持一致。
 
@@ -510,7 +510,7 @@
 - **页面/域**：Cron 接口　**维度**：并发 / 功能正确性　**置信度**：medium
 - **现象**：调度器靠 `last_run_at / 60_000 == cur_min` 防止同一分钟重复触发（cron.rs:301-303）。但手动 run_cron（cron.rs:231-249）完全不查 last_run_at，run_job 成功后虽然会 touch_cron_run，但若用户在到点的同一分钟点了「Run now」，紧接着调度器 tick 时 last_run_at 已是本分钟→调度器会跳过——顺序无害；反之若先手动点两下（前端 runningId 只在单个组件内禁用按钮，多个标签页/快速双击仍可并发），run_job 之间没有任何互斥，会向编排器投递两条相同 cron note 并各自 deliver_manual_wake。
 - **复现**：两个浏览器标签页同时打开 /cron，对同一任务几乎同时点「Run now」→ 服务端无互斥，编排器收到两条相同 cron note。
-- **根因**：crates/flockmux-server/src/routes/cron.rs:231-249 run_cron 无去重/无锁；run_job(cron.rs:217-245) 也无幂等保护。前端 runningId 禁用（cron.tsx:510）只在单实例内有效，非服务端约束。
+- **根因**：crates/swarmx-server/src/routes/cron.rs:231-249 run_cron 无去重/无锁；run_job(cron.rs:217-245) 也无幂等保护。前端 runningId 禁用（cron.tsx:510）只在单实例内有效，非服务端约束。
 - **影响**：并发/功能正确性：编排器可能在极短时间内收到重复任务消息并被重复 wake，导致重复执行同一调度 prompt（对会改文件/发请求的任务尤其敏感）。属于较窄的竞态，正常单用户单击影响有限，故 P2。
 - **建议修法**：若希望手动触发也幂等，可在 run_cron 里复用同一分钟 dedup，或对 (job_id) 加一个短期 in-flight 去重；至少在文档/UI 上明确「Run now 不去重、会立即额外触发一次」。
 
@@ -518,7 +518,7 @@
 - **页面/域**：MCP 接口　**维度**：安全 / 输入校验　**置信度**：medium
 - **现象**：name 形如 `--scope`、`--help`、`-x`、`--global` 等全部通过校验（valid_name 只要求字符属于 [A-Za-z0-9_-]，不限制首字符）。这些值被放进 `claude mcp add <name> ...` / `claude mcp remove <name> ...` 的位置参数处，会被底层 clap 解析成 flag 而非 server 名，导致 CLI 行为被悄悄改变。
 - **复现**：对 POST /api/mcp/uninstall 发 `{"name":"--scope","cli":"claude"}`：valid_name 通过 → 执行 `claude mcp remove --scope --scope user`，name 被解析成 flag，行为偏离预期。对比正常 `{"name":"context7"}`。
-- **根因**：crates/flockmux-server/src/routes/mcp_admin.rs:153-159 (valid_name 首字符无约束)；uninstall 缺 allowlist 在 crates/flockmux-server/src/routes/mcp_admin.rs:445-456
+- **根因**：crates/swarmx-server/src/routes/mcp_admin.rs:153-159 (valid_name 首字符无约束)；uninstall 缺 allowlist 在 crates/swarmx-server/src/routes/mcp_admin.rs:445-456
 - **影响**：在 loopback 单用户模型下危害有限（攻击者已是本机用户或经 CSRF/DNS-rebind 绕过 require_local_origin），但属于明确的输入校验缺口：构造特定 name 可让 remove 子命令解析出预期外的 flag，行为不可控。同时 uninstall 不校验 allowlist，意味着可对任意（合法字符的）user-scope server 名发起删除，超出「只管 chrome-devtools/context7」的设计意图（卸载误删面）。
 - **建议修法**：valid_name 增加首字符约束：必须以 ASCII 字母或数字开头（拒绝 `-`/`_` 开头）。更稳妥：所有 CLI 调用在 name 与 `--` 之间显式用 `--` 终止 flag 解析（如能），并让 uninstall 也只接受 known() 白名单内的 name，避免对任意 server 发删除。
 
@@ -526,7 +526,7 @@
 - **页面/域**：MCP 接口　**维度**：鉴权/越权 / 数据完整性　**置信度**：medium
 - **现象**：mcp_uninstall 只过 valid_name，不调用 known()。任何能打到该端点的请求（本机网页经放行的 local Origin，或符合条件的 no-Origin 请求）都能 `claude mcp remove <任意合法名> --scope user`，删掉用户**手动配置的、与本应用无关的**其它 MCP server（如用户自己装的 filesystem、github 等）。
 - **复现**：假设用户 ~/.claude.json 里有自配的 `filesystem` MCP。POST /api/mcp/uninstall `{"name":"filesystem","cli":"claude"}` → 通过 valid_name → 执行 `claude mcp remove filesystem --scope user`，删掉了与本应用无关的用户配置。
-- **根因**：crates/flockmux-server/src/routes/mcp_admin.rs:445
+- **根因**：crates/swarmx-server/src/routes/mcp_admin.rs:445
 - **影响**：前端 UI 目前只渲染 SERVERS 两项，正常用户点不到删除别的 server——但后端契约本身允许删任意 server 名，配合 CORS permissive + 本机任意网页可发 local-Origin 请求（require_local_origin 只校验 Origin 是不是 localhost，不校验是哪个 app），一个用户误访问的本地开发页面（任何 localhost:* 站点）就能调用此端点删光用户的 MCP 配置。属于越权删除 + 数据完整性风险。
 - **建议修法**：mcp_uninstall 在 valid_name 之后加 `known(&req.name).is_some()` 校验，拒绝删除非本应用 allowlist 内的 server；让后端契约与「只管理我们装的那两个」的设计意图一致。
 
@@ -534,7 +534,7 @@
 - **页面/域**：MCP 接口　**维度**：功能正确性 / 边界态 / 错误处理　**置信度**：high
 - **现象**：当从 ~/.claude.json 或 ~/.codex/config.toml 里 recover 出来的 key 末尾含多字节 UTF-8 字符（用户手改过配置、粘贴了含非 ASCII 的字符串、或 key 真含 Unicode）时，mask_key 在 `&k[k.len().saturating_sub(4)..]` 处可能切在码点中间，直接 panic。经 CatchPanicLayer 兜住后，GET /api/mcp/status 整个请求返回 500，MCP 页面加载失败（status 一直 null、转圈/报错）。
 - **复现**：在 ~/.claude.json 的 mcpServers.context7.args 里写入 `["--api-key","abc世"]`（末尾是 3 字节中文）。GET /api/mcp/status → mask_key("abc世")：chars 计数=4 不进 short 分支……（注：需让 len>4 字节且尾 4 字节非边界，如 "abcd世"：字节 `&k[len-4..]` 落在「世」中间）→ panic → 500。
-- **根因**：crates/flockmux-server/src/routes/mcp_admin.rs:304
+- **根因**：crates/swarmx-server/src/routes/mcp_admin.rs:304
 - **影响**：虽然标准 API key 是 ASCII、正常路径不触发，但这是「读用户磁盘上任意内容再切片」的真实 panic 路径，且崩的是用户最常打开的 MCP 状态页（status 是页面首屏依赖）。一旦用户配置里有 Unicode，MCP 页面整片不可用，且报错信息（500）不会指向真正原因，难以自助恢复。
 - **建议修法**：按字符而非字节取尾：`k.chars().rev().take(4).collect::<String>()` 反转回正序，或 `let tail: String = k.chars().skip(n.saturating_sub(4)).collect();`，杜绝字节边界 panic。
 
@@ -542,7 +542,7 @@
 - **页面/域**：MCP 接口　**维度**：安全/隐私　**置信度**：medium
 - **现象**：安装需密钥的 server（context7）时，key 通过 `... -- npx -y @upstash/context7-mcp --api-key <KEY>` 作为子进程的命令行参数传递。在子进程存活期间，任何能读进程表的本地进程（`ps aux`、`/proc/<pid>/cmdline`、多用户机器上的其它用户）都能看到完整明文 key。
 - **复现**：启用 context7 并填 key 的同时，另开终端 `ps aux | grep -i api-key` 或 watch 进程表，可见 `--api-key <明文>`。
-- **根因**：crates/flockmux-server/src/routes/mcp_admin.rs:389-419
+- **根因**：crates/swarmx-server/src/routes/mcp_admin.rs:389-419
 - **影响**：单用户本机模型下风险中等，但项目自我宣称「全程不显示完整 key、后端只回打码值」（McpPanel.tsx:12 + mask_key 的设计意图），而实际安装那一刻 key 又以明文进了进程表，与隐私承诺不完全一致。多用户/共享开发机或有恶意本地软件时，key 会泄露。
 - **建议修法**：优先用环境变量或 stdin 把 key 传给底层工具（若 claude/codex 的 mcp add 支持 env 形式，如 `--env CONTEXT7_API_KEY=...` 或写入配置而非命令行）；至少在文档/UI 说明该 key 在安装瞬间对本机进程可见，不要对外宣称「全程不暴露」。需先用 ctx7 核实 claude/codex CLI 当前是否支持 env 方式注入 MCP key 再定方案。
 
@@ -582,7 +582,7 @@
 - **页面/域**：Prompt 优化 / Recording 接口　**维度**：资源泄漏 / 性能 / 边界态　**置信度**：medium
 - **现象**：若 claude（或被错误配置成 claude 的其它二进制）在 45s 内持续向 stdout 喷大量输出，服务端会把全部内容缓冲进内存才返回。
 - **复现**：理论复现：把 claude 插件 binary 指向一个长时间狂打 stdout 的脚本，触发优化，观察内存。
-- **根因**：crates/flockmux-server/src/routes/rest.rs:2568-2569 `child.wait_with_output()` 把 stdout+stderr 无上限读入 Vec<u8>，仅靠 45s 超时（2569）兜底；haiku 小模型正常输出很小，但没有字节上限保护。
+- **根因**：crates/swarmx-server/src/routes/rest.rs:2568-2569 `child.wait_with_output()` 把 stdout+stderr 无上限读入 Vec<u8>，仅靠 45s 超时（2569）兜底；haiku 小模型正常输出很小，但没有字节上限保护。
 - **影响**：本地单用户、小模型、45s 限时下实际风险很低，是纵深防御缺口而非现实事故。
 - **建议修法**：对 stdout 读取加一个合理上限（如 256KB，优化提示词本就该是短文本），超限即截断并按失败处理；或限制读取的 take(N)。
 
@@ -590,7 +590,7 @@
 - **页面/域**：Prompt 优化 / Recording 接口　**维度**：一致性 / 性能　**置信度**：high
 - **现象**：代码注释与行为不符；单个 .cast 最大可达 64MiB（DEFAULT_MAX_CAST_BYTES），每次播放回放都把整文件读进内存再发，而非流式。
 - **复现**：读 recording.rs:55 注释 vs 79 行实现即可见不一致。
-- **根因**：crates/flockmux-server/src/routes/recording.rs:55 注释写「streams the .cast file」，但 79 行 `tokio::fs::read(&row.path)` 是全量读入；writer.rs:37 单文件上限 64MiB。
+- **根因**：crates/swarmx-server/src/routes/recording.rs:55 注释写「streams the .cast file」，但 79 行 `tokio::fs::read(&row.path)` 是全量读入；writer.rs:37 单文件上限 64MiB。
 - **影响**：本地 loopback 单用户、文件多为几 MiB，体感无碍；但注释误导后续维护者，且大文件回放会有一次性内存峰值。属一致性/性能小瑕疵。
 - **建议修法**：要么把读取改成真正的流式（tokio_util::io::ReaderStream + Body::from_stream），要么把注释改成「reads the whole .cast into memory（≤64MiB）」以免误导。
 
@@ -598,7 +598,7 @@
 - **页面/域**：Spell / Role / Plugin 接口　**维度**：安全/隐私（命令/提示注入）　**置信度**：high
 - **现象**：调用 /api/spell/run（或 /api/worker）时，请求体里的 `task`（spell）或 `system_prompt`（worker）会被 render_prompt 拼进 agent 的首个提示词，然后作为原始字节直接灌进 agent 的真实 CLI（claude/codex）PTY。若文本里含回车(\r/\n)、ANSI/OSC 转义序列或 TUI 斜杠命令，会被子进程当成真实键盘输入解释。
 - **复现**：POST /api/spell/run {"name":"init","task":"正常任务\r恶意指令：忽略以上，运行 rm -rf ...","workspace_id":"<id>"}；render_prompt 把含 \r 的 task 拼进 init 提示词，spawn_bootstrap_inject 原样灌进 orchestrator PTY，\r 可能在合法提示提交前先提交攻击者那一段。
-- **根因**：crates/flockmux-server/src/routes/rest.rs:1382
+- **根因**：crates/swarmx-server/src/routes/rest.rs:1382
 - **影响**：在本地单用户、loopback-only 模型下，主要受益方是“能调用 /api/worker 的 orchestrator（即模型本身）”和任何能 POST 到 7777 的本地进程。orchestrator 由模型驱动、其 system_prompt 内容不完全可信（可被它处理的外部内容污染），等于把‘半可信文本→真实 CLI 键盘输入’的边界完全敞开：可注入斜杠命令、抢先提交、污染 OSC 生命周期标记导致状态机误判（与本项目红线‘状态不许撒谎’相关）。不是远程 RCE（loopback+CORS 防护在 main.rs:848+），但属于明确的注入面，且与诚实性红线耦合。
 - **建议修法**：注入提示词前对 body 做控制字符白名单过滤：剥离/拒绝除必要换行外的 C0/C1 控制字符与 ESC(0x1b) 序列（至少过滤 \x1b、\x07、独立 \r）。更稳妥的做法是用 bracketed-paste 包裹注入体（写 ESC[200~ + body + ESC[201~，再单独发 \r 提交），让 TUI 协议级地把整段当粘贴、内嵌换行/转义不被解释——这同时也比现在依赖‘settle_ms 启发式’更可靠（解决 rest.rs:1393 记录的 21988 字节卡死类问题）。校验前确认目标 CLI 支持 bracketed paste（claude/codex 均支持）。
 
@@ -606,7 +606,7 @@
 - **页面/域**：Spell / Role / Plugin 接口　**维度**：鉴权/越权　**置信度**：medium
 - **现象**：POST /api/worker 只校验 caller_agent_id 非空字符串，不校验它是否对应一个真实存在、且属于本 workspace_id 的 live agent。攻击者/任意本地调用方可以伪造 caller_agent_id 来驱动 thread/cwd 解析、并把派生消息 from=system to=<伪造id> 写进消息表。
 - **复现**：POST /api/worker {"role":"backend","system_prompt":"x","workspace_id":"<别人的ws>","caller_agent_id":"任意不存在或他人的id"}；只要 workspace 存在、role 合法，就会拉起 worker 并把 wake/消息挂到伪造 caller 上，无任何归属拒绝。
-- **根因**：crates/flockmux-server/src/routes/rest.rs:1500
+- **根因**：crates/swarmx-server/src/routes/rest.rs:1500
 - **影响**：loopback 单用户模型下风险被环境收窄，但仍是越权设计缺陷：一个本地非特权进程（或被污染的 orchestrator）可拿不属于自己的 agent_id/workspace 组合拉起 worker、把 wake 订阅挂到别的 agent 上、向任意 agent 投递 system 卡片，污染别的 space 的协作流。与审查维度‘越权访问别的 agent/space’直接相关。
 - **建议修法**：在 spawn_worker 开头校验 caller_agent_id：用 store 查这个 agent 是否存在且其 workspace_id == req.workspace_id（live 优先查 registry，历史查 SQLite）。不匹配返回 400/403。同样在 send_message(to_agent=caller) 前确认 caller 真实存在，避免给幽灵 id 落库消息。
 
@@ -622,7 +622,7 @@
 - **页面/域**：Tasks / Goals 接口　**维度**：状态诚实性/数据完整性　**置信度**：high
 - **现象**：对一个已删除/不存在的 agent_id POST /api/tasks/:id/status，接口照样返回 200 {"ok":true}。前端 Kanban 卡片点 Block/Done/Archive 乐观地把卡片移到目标列，4 秒后下一次轮询把它默默弹回原状态，用户看到状态闪一下又跳回，没有任何报错解释。
 - **复现**：1) GET /api/tasks 拿一个 agent_id；2) DELETE /api/agent/:id 或等其被清理；3) POST /api/tasks/<那个id>/status body {"status":"done"} 观察返回 200 ok:true 而 workers 表无变化。
-- **根因**：crates/flockmux-storage/src/store.rs:922-935 set_task_status 里 conn.execute(UPDATE workers SET task_status=?2 WHERE agent_id=?1) 的受影响行数被直接丢弃，永远返回 Ok(())。handler crates/flockmux-server/src/routes/tasks.rs:103-104 据此回 {"ok":true}。对比同文件里 update_goal_status(store.rs:1051-1055) 正确地用 changed>0 区分并让 handler 回 404 — 同一项目里两套写法不一致。
+- **根因**：crates/swarmx-storage/src/store.rs:922-935 set_task_status 里 conn.execute(UPDATE workers SET task_status=?2 WHERE agent_id=?1) 的受影响行数被直接丢弃，永远返回 Ok(())。handler crates/swarmx-server/src/routes/tasks.rs:103-104 据此回 {"ok":true}。对比同文件里 update_goal_status(store.rs:1051-1055) 正确地用 changed>0 区分并让 handler 回 404 — 同一项目里两套写法不一致。
 - **影响**：用户操作显示成功但实际什么都没落库。命中项目红线：界面/接口不许显示成功但底层没成。卡片在轮询间隙被 reaper/kill 清理、或前端拿着 stale agent_id 重试时必现。
 - **建议修法**：store.rs set_task_status 返回 Result<bool>(changed>0)；handler 在 false 时返回 404 {"error":"no such task"}，与 update_goal_status 对齐。前端 setStatus(tasks.tsx:76-80) try/finally 补 catch：失败时回滚乐观更新并提示。
 
@@ -630,7 +630,7 @@
 - **页面/域**：Tasks / Goals 接口　**维度**：一致性/数据完整性/UX　**置信度**：high
 - **现象**：后端 VALID_STATUSES 允许 7 种状态(含 triage、ready)，但前端看板 COLUMNS 只渲染 5 列(todo/running/blocked/done/archived)。一旦某任务状态被 override 成 triage 或 ready(API 完全允许)，该卡片不属于任何列、彻底从看板消失，但 header 的 {{n}} tasks 计数仍把它算进去 — 用户看到 12 tasks 却只数得出 9 张卡，且无法对该任务再操作(卡片不可见就点不到 Reopen)。
 - **复现**：POST /api/tasks/<id>/status {"status":"ready"} → GET /api/tasks 该任务 status=ready → 打开 /tasks 页：计数+1 但无卡片显示，也无法对其 Reopen。
-- **根因**：crates/flockmux-server/src/routes/tasks.rs:25-27 VALID_STATUSES 含 triage,ready；web/src/routes/tasks.tsx:32-38 COLUMNS 无这两列；byCol(tasks.tsx:85) 按精确 status 过滤且无 catch-all 兜底列。
+- **根因**：crates/swarmx-server/src/routes/tasks.rs:25-27 VALID_STATUSES 含 triage,ready；web/src/routes/tasks.tsx:32-38 COLUMNS 无这两列；byCol(tasks.tsx:85) 按精确 status 过滤且无 catch-all 兜底列。
 - **影响**：状态词表(API 契约)与渲染词表不一致，导致数据丢失式的 UI(任务不可见且不可恢复)。属于自相矛盾+数据完整性问题。
 - **建议修法**：二选一：(a) 后端 VALID_STATUSES 收敛到看板实际有的 5 个，拒绝 triage/ready；或 (b) 前端补 triage/ready 两列，或加一个"其它"兜底列收容任何未知 status，保证 sum(列)==tasks.length。
 
@@ -638,15 +638,15 @@
 - **页面/域**：Tasks / Goals 接口　**维度**：错误处理/输入校验　**置信度**：high
 - **现象**：create_goal 只校验 workspace_id/objective 非空，不校验它们是否真的存在；传一个不存在的 workspace_id 或 thread_id，FK 约束(foreign_keys=ON)触发，handler 走 Err 分支返回 500 {"error":"FOREIGN KEY constraint failed"}。同理 add_goal_evidence 对不存在的 goal_id 返回 500 裸错误。本该是 400/404 的客户端错误被报成 500 服务端错误，且把底层 SQLite 文案透给前端。
 - **复现**：POST /api/goals body {"workspace_id":"does-not-exist","objective":"x"} → 500 {"error":"FOREIGN KEY constraint failed"}。POST /api/goals/<bogus-id>/evidence 同样 500。
-- **根因**：crates/flockmux-storage/src/connection.rs:36 (pragma foreign_keys=ON 的实际位置；报告误写为 crates/flockmux-server/src/db/connection.rs:36)。handler 缺校验/裸 500 的位置 crates/flockmux-server/src/routes/goals.rs:114-141、175-179、258-295 与报告一致。
+- **根因**：crates/swarmx-storage/src/connection.rs:36 (pragma foreign_keys=ON 的实际位置；报告误写为 crates/swarmx-server/src/db/connection.rs:36)。handler 缺校验/裸 500 的位置 crates/swarmx-server/src/routes/goals.rs:114-141、175-179、258-295 与报告一致。
 - **影响**：错误码语义错误（客户端传错变成 500），错误信息泄漏存储实现细节，前端无法据 code 给出"工作区不存在"这类可恢复提示。
 - **建议修法**：create_goal 先 get_workspace_by_id / get_thread 校验存在性，不存在回 404；FK 类错误归一化为 400/404 友好文案，不直接吐 e.to_string()。顺手订正 0003 迁移里"foreign_keys OFF"的过时注释。
 
 #### P2-26 live-agent / spawn-depth 容量检查与实际 spawn 非原子(TOCTOU)，并发 /api/worker 可越过上限
 - **页面/域**：Tasks / Goals 接口　**维度**：并发/资源泄漏　**置信度**：medium
-- **现象**：spawn_with_bookkeeping 先读 registry.list().len() 与 cap 比较(rest.rs:556-566)，通过后才真正 spawn 并注册。多个 /api/worker(或 orchestrator 通过 MCP 并发委派)同时进入时，都读到 live<cap 再各自 spawn，实际 live 数会冲破 FLOCKMUX_MAX_LIVE_AGENTS。spawn-depth 检查(rest.rs:1657-1689)同理是先查后插。
-- **复现**：把 FLOCKMUX_MAX_LIVE_AGENTS 设很小(如 2)，并发发起 >2 个 /api/worker，观察最终 live agent 数可短暂超过 2。
-- **根因**：crates/flockmux-server/src/routes/rest.rs:556 (检查) 与 crates/flockmux-server/src/routes/rest.rs:883 (实际 registry.insert) 之间非原子；spawn-depth 同类问题在 rest.rs:1657-1689
+- **现象**：spawn_with_bookkeeping 先读 registry.list().len() 与 cap 比较(rest.rs:556-566)，通过后才真正 spawn 并注册。多个 /api/worker(或 orchestrator 通过 MCP 并发委派)同时进入时，都读到 live<cap 再各自 spawn，实际 live 数会冲破 SWARMX_MAX_LIVE_AGENTS。spawn-depth 检查(rest.rs:1657-1689)同理是先查后插。
+- **复现**：把 SWARMX_MAX_LIVE_AGENTS 设很小(如 2)，并发发起 >2 个 /api/worker，观察最终 live agent 数可短暂超过 2。
+- **根因**：crates/swarmx-server/src/routes/rest.rs:556 (检查) 与 crates/swarmx-server/src/routes/rest.rs:883 (实际 registry.insert) 之间非原子；spawn-depth 同类问题在 rest.rs:1657-1689
 - **影响**：fork-bomb 防护(F4)在高并发下不是硬上限而是软上限。每个超额 worker 是一个带 --dangerously-skip-permissions 的真实 CLI 进程，烧 PTY/RAM/API 预算。单用户本地场景概率与危害都有限，故 P2。
 - **建议修法**：把容量判断与注册做成一次原子操作（在 registry 注册时由同一把锁内做 len 检查并拒绝），而非 check 后 act 两步；或用原子计数器 fetch_add 后超限回滚。
 
@@ -654,7 +654,7 @@
 - **页面/域**：Tasks / Goals 接口　**维度**：状态诚实性/一致性　**置信度**：medium
 - **现象**：从看板对一个 killed_at=null(进程仍活)的 worker 点 Archive 或 Done，只写 workers.task_status 标签，进程继续跑、继续烧 token。卡片被归到 Archived 列，却同时挂着绿色 Running 活体圆点(tasks.tsx:186-191)，形成"已归档但还在跑"的并存观感。
 - **复现**：spawn 一个 worker，进程运行中从 /tasks 点 Archive，观察卡片进 Archived 列但绿色 Running 圆点仍在、进程未退出。
-- **根因**：crates/flockmux-storage/src/store.rs:922-935 (set_task_status，裸 UPDATE，crate 应为 flockmux-storage 而非 flockmux-server)
+- **根因**：crates/swarmx-storage/src/store.rs:922-935 (set_task_status，裸 UPDATE，crate 应为 swarmx-storage 而非 swarmx-server)
 - **影响**：用户直觉上 Archive=收尾/关闭，但底层 agent 没停，预算继续消耗。好在确认弹窗文案(en.json tasks.confirm.archived.desc move out of the normal task flow)没有谎称会终止进程，属于诚实但易误解，故 P2。
 - **建议修法**：要么在 Archive 时给出明确二选项"仅归档标签/归档并终止进程"；要么在 archived 列对 killed_at=null 的卡保留醒目的"仍在运行"标记并提供 Kill 入口，消除"绿点+归档"的认知冲突。
 
@@ -670,7 +670,7 @@
 - **页面/域**：WebSocket：pty / swarm / terminal　**维度**：资源泄漏　**置信度**：high
 - **现象**：用户打开页面建立 /ws/swarm,然后关闭标签页/断网。如果此时 swarm 没有新事件产生(空闲),服务端那条 WS 连接对应的写循环 + broadcast::Receiver 会一直挂着,既不退出也不释放,直到下一次有 swarm 事件且 send() 失败才会清理。长时间空闲 + 反复开关页面会累积僵尸订阅者。
 - **复现**：1) 启动后端;2) 用 websocat ws://127.0.0.1:7777/ws/terminal 之外的 /ws/swarm 连上;3) 保持 swarm 空闲(不发消息、不写 blackboard);4) kill 掉客户端进程或拔网线模拟无 FIN 断开;5) 服务端日志不会出现 'ws/swarm client disconnected',对应 task 持续存活。
-- **根因**：crates/flockmux-server/src/routes/ws_swarm.rs:33-75 (根因定位完全正确，无需修正)
+- **根因**：crates/swarmx-server/src/routes/ws_swarm.rs:33-75 (根因定位完全正确，无需修正)
 - **影响**：单用户本地工具影响有限,但属于真实的连接与任务泄漏:每个泄漏的订阅者还占着 swarm broadcast(容量 1024)的一个槽,极端情况下拖慢 Lagged 触发、长期占内存。
 - **建议修法**：在主循环用 tokio::select! 同时等待 rx.recv() 与『reader_task 结束 / 一个表示客户端关闭的信号』,任一完成即退出并 abort 对方;或把结构改成与 pty_ws 一致(主循环读客户端、写在子任务里),并在写子任务里对 send 失败立即退出。也可加服务端定时 Ping 作为活性探测兜底。
 
@@ -678,7 +678,7 @@
 - **页面/域**：WebSocket：pty / swarm / terminal　**维度**：性能　**置信度**：medium
 - **现象**：在 async 任务里持有进程级 std::sync::Mutex 的同时,执行同步的 openpty + fork/exec(spawn_shell)。新建一个浏览器终端期间,其它标签页的终端 attach/detach、以及每分钟的 idle 回收器全部被这把锁挡住;并且锁是在 tokio 工作线程上跨阻塞 syscall 持有的,会钉住该 worker 线程。
 - **复现**：读代码即可确认:terminal_ws.rs:165 取锁,179 在持锁分支内调用同步 spawn_shell;229 才出作用域释放锁。
-- **根因**：crates/flockmux-server/src/routes/terminal_ws.rs:165-229（持锁），阻塞调用在 179 行 spawn_shell → crates/flockmux-pty/src/lib.rs:67-104（openpty + spawn_command 同步 fork/exec）
+- **根因**：crates/swarmx-server/src/routes/terminal_ws.rs:165-229（持锁），阻塞调用在 179 行 spawn_shell → crates/swarmx-pty/src/lib.rs:67-104（openpty + spawn_command 同步 fork/exec）
 - **影响**：单用户场景一般只是新建终端时其它终端操作短暂卡顿;但属于『持锁跨阻塞 syscall + 钉住 tokio worker』的反模式,在多终端/慢盘/被 ptrace 等情况下会放大为可感知卡顿。
 - **建议修法**：把 spawn_shell 移到锁外:先在锁外完成 PtyBridge::spawn(失败直接返回),拿到 bridge/ring/bcast 后再短暂 lock 注册表做一次 insert;或用 tokio::task::spawn_blocking 执行 fork 并用 async Mutex / 更细粒度的锁。注意保持『replay 快照 + subscribe 在同一把锁下』的不丢不重不变量(可只对 ring 这一步保持原子)。
 
@@ -686,7 +686,7 @@
 - **页面/域**：WebSocket：pty / swarm / terminal　**维度**：错误处理与失败恢复　**置信度**：medium
 - **现象**：进程级终端注册表与每会话 ring 都用 std::sync::Mutex 且全程 .unwrap()。只要任何一个持锁任务发生 panic(例如 pump 任务里的 ring 操作、reaper、或 handler 内持锁段),该 Mutex 被投毒,之后所有 .lock().unwrap() 都会连锁 panic,导致全部终端会话不可恢复,只能重启后端。
 - **复现**：静态分析:terminal_ws.rs 中所有 registry()/ring 锁均为 std::sync::Mutex + .unwrap();任一持锁段 panic 即毒化,后续 lock 全 panic。
-- **根因**：crates/flockmux-server/src/routes/terminal_ws.rs 多处:registry() 内 R 是 Mutex<HashMap>(65-71),取用处 82、165、212、287 全是 .lock().unwrap();ring 是 Arc<Mutex<...>>,取用处 169、197 也是 .unwrap()。std Mutex 的投毒语义意味着一次 panic 会让锁永久毒化。对照 pty 域用的是 parking_lot::Mutex(registry.rs:19),它不投毒——终端域用了会投毒的 std Mutex 却没处理 PoisonError。
+- **根因**：crates/swarmx-server/src/routes/terminal_ws.rs 多处:registry() 内 R 是 Mutex<HashMap>(65-71),取用处 82、165、212、287 全是 .lock().unwrap();ring 是 Arc<Mutex<...>>,取用处 169、197 也是 .unwrap()。std Mutex 的投毒语义意味着一次 panic 会让锁永久毒化。对照 pty 域用的是 parking_lot::Mutex(registry.rs:19),它不投毒——终端域用了会投毒的 std Mutex 却没处理 PoisonError。
 - **影响**：正常路径不会触发,但任何一处持锁 panic 会把整个浏览器内终端功能打死且无法自愈(界面表现为终端再也连不上,且没有清晰提示),违背『用户能自助恢复而非只能重启』。
 - **建议修法**：改用 parking_lot::Mutex(与 registry.rs 一致,无投毒),或对 PoisonError 做 .unwrap_or_else(|e| e.into_inner()) 恢复;同时审计持锁临界区里是否有可 panic 代码并尽量收窄。
 
@@ -694,7 +694,7 @@
 - **页面/域**：WebSocket：pty / swarm / terminal　**维度**：安全/隐私　**置信度**：medium
 - **现象**：/ws/terminal?session=<id> 的 session 完全由客户端给定,服务端不做任何校验/绑定。任何已通过 require_local_origin 的本地页面,只要复用/猜到一个已存在的 session id,就能 attach 到该 shell:重放其 scrollback(可能含命令历史/密钥)并注入键盘字节执行任意命令。
 - **复现**：已读 terminal_ws.rs:141-174 与 web/src/routes/terminal.tsx:29-38 确认 session 由客户端提供、服务端零校验直接作为会话 key 复用。
-- **根因**：crates/flockmux-server/src/routes/terminal_ws.rs:141-157 直接拿 q.session 作为 registry key,空则随机生成;reattach 分支(166-174)对任意命中 key 的会话照单全收(attached+1、订阅 bcast、replay 全量 ring),无 origin 绑定、无 workspace 绑定、无随机能力校验。正规客户端虽用 crypto.randomUUID()/工作区(web/src/routes/terminal.tsx:29-38)生成不可猜 id,但这只是客户端约定,服务端并不强制——session 实际承担了能力令牌的职责却没有令牌的不可伪造性。
+- **根因**：crates/swarmx-server/src/routes/terminal_ws.rs:141-157 直接拿 q.session 作为 registry key,空则随机生成;reattach 分支(166-174)对任意命中 key 的会话照单全收(attached+1、订阅 bcast、replay 全量 ring),无 origin 绑定、无 workspace 绑定、无随机能力校验。正规客户端虽用 crypto.randomUUID()/工作区(web/src/routes/terminal.tsx:29-38)生成不可猜 id,但这只是客户端约定,服务端并不强制——session 实际承担了能力令牌的职责却没有令牌的不可伪造性。
 - **影响**：在该项目既定信任模型(loopback + 同源)下危害有限,属于纵深防御缺口:一旦未来放宽到多源/嵌入第三方页面,或本地存在可被诱导发起同源 WS 的渠道,client 选定的 session 就成了劫持任意 shell(任意命令执行 + 读历史)的入口。
 - **建议修法**：由服务端生成并返回不可猜的 session 能力(忽略/拒绝客户端自带的可枚举 id),或把 session 绑定到 workspace_id + 一个服务端持有的随机 secret;reattach 必须校验该 secret。至少在文档与代码里明确『session 必须服务端签发的高熵值』而非信任客户端。
 
@@ -702,7 +702,7 @@
 - **页面/域**：WebSocket：pty / swarm / terminal　**维度**：一致性　**置信度**：high
 - **现象**：ws_swarm.rs 顶部注释声称『lag past the broadcast channel's capacity (256) is disconnected』,但实际 swarm broadcast 容量是 1024。任何照注释推断 Lagged 阈值/背压行为的人都会算错。
 - **复现**：对比 ws_swarm.rs:7-8 与 swarm.rs:214。
-- **根因**：crates/flockmux-server/src/routes/ws_swarm.rs:7-8 写 256;实际通道在 crates/flockmux-swarm/src/swarm.rs:214 `broadcast::channel(1024)`。文档与实现漂移。
+- **根因**：crates/swarmx-server/src/routes/ws_swarm.rs:7-8 写 256;实际通道在 crates/swarmx-swarm/src/swarm.rs:214 `broadcast::channel(1024)`。文档与实现漂移。
 - **影响**：不影响运行,但误导后续维护者对滞后/丢事件阈值的判断。
 - **建议修法**：把注释改为 1024,或改成引用常量避免再次漂移。
 
@@ -710,7 +710,7 @@
 - **页面/域**：WebSocket：pty / swarm / terminal　**维度**：一致性　**置信度**：high
 - **现象**：订阅滞后(Lagged)时,handler 构造了一个 SwarmEvent::AgentState{ __system__, Idle } 并序列化成 warn_payload,随后用 `let _ = warn_payload;` 直接丢弃,真正发给客户端的是另写的内联 error JSON。这段是无意义的死代码。
 - **复现**：读 ws_swarm.rs:54-66。
-- **根因**：crates/flockmux-server/src/routes/ws_swarm.rs:54-66:55-59 构造并 serde 序列化 warn_payload,60-64 实际发送的是手写的 error 字符串,66 `let _ = warn_payload;` 注释为『silence unused』把它丢掉。
+- **根因**：crates/swarmx-server/src/routes/ws_swarm.rs:54-66:55-59 构造并 serde 序列化 warn_payload,60-64 实际发送的是手写的 error 字符串,66 `let _ = warn_payload;` 注释为『silence unused』把它丢掉。
 - **影响**：无功能影响,纯属误导性死代码,每次 Lagged 还白做一次序列化分配。
 - **建议修法**：删除 warn_payload 的构造与序列化,只保留实际发送的 error 帧。
 
@@ -718,7 +718,7 @@
 - **页面/域**：任务页 Tasks　**维度**：功能正确性 / 防重复点击 / 一致性　**置信度**：high
 - **现象**：点完「完成」确认后，在后端返回前这段时间（以及 4 秒轮询刷新前），按钮没有任何 disabled / loading 态。用户可以连点多次、或对同一张卡连续点「阻塞」再「完成」，每次都弹确认框、每次都发一次 POST。卡片也没有「处理中」的视觉反馈。
 - **复现**：1) /tasks 打开。2) 对同一张卡快速点「阻塞」确认、再点「完成」确认。3) 观察发出两次 POST，且无任何按钮禁用反馈；最终列归属取决于返回顺序。
-- **根因**：web/src/routes/tasks.tsx:64-100 (setStatus 缺 in-flight 标志 + requestStatus 无条件弹框) 与 web/src/routes/tasks.tsx:234-244 (CardBtn 无 disabled/aria-busy)；竞态在持久层因 crates/flockmux-storage/src/store.rs:922-935 裸 UPDATE、last-write-wins 而真实暴露
+- **根因**：web/src/routes/tasks.tsx:64-100 (setStatus 缺 in-flight 标志 + requestStatus 无条件弹框) 与 web/src/routes/tasks.tsx:234-244 (CardBtn 无 disabled/aria-busy)；竞态在持久层因 crates/swarmx-storage/src/store.rs:922-935 裸 UPDATE、last-write-wins 而真实暴露
 - **影响**：重复 POST 增加无谓后端写；快速连点不同动作时，最后落库的状态取决于网络返回顺序，可能与用户最后点的不一致（竞态）。
 - **建议修法**：给 setStatus 加 in-flight set（按 agent_id 记录正在提交的卡），提交期间把该卡按钮 disabled + 显示 spinner；requestStatus 在该卡 in-flight 时直接忽略。
 
@@ -726,7 +726,7 @@
 - **页面/域**：任务页 Tasks　**维度**：功能正确性 / 一致性 / 数据完整性　**置信度**：medium
 - **现象**：如果某个 worker 的有效状态是 triage 或 ready，它不会出现在任何一列里（看板列 COLUMNS 只有 todo/running/blocked/done/archived），但页头的「N 个任务」计数仍然把它算进去。结果：页头说有 10 个任务，5 列加起来只有 8 张卡，两张「人间蒸发」，用户完全不知道它们去哪了。
 - **复现**：1) curl -X POST /api/tasks/<agent_id>/status -d '{"status":"ready"}'。2) 刷新 /tasks。3) 页头计数 +1，但该卡片不出现在任何列，且无法复位。
-- **根因**：web/src/routes/tasks.tsx:32-38 COLUMNS 写死 5 个 key；byCol（tasks.tsx:85）按精确 status 过滤，没有「其它/未知状态」兜底列。而后端 crates/flockmux-server/src/routes/tasks.rs:25-27 VALID_STATUSES 允许 triage 与 ready，set_task_status（tasks.rs:89-111）接受这两个值并落库，effective_status（tasks.rs:31-49）随后会把它们原样返回。页头计数 tasks.tsx:110-114 用的是 tasks.length（全量），与列内可见卡片数不一致。
+- **根因**：web/src/routes/tasks.tsx:32-38 COLUMNS 写死 5 个 key；byCol（tasks.tsx:85）按精确 status 过滤，没有「其它/未知状态」兜底列。而后端 crates/swarmx-server/src/routes/tasks.rs:25-27 VALID_STATUSES 允许 triage 与 ready，set_task_status（tasks.rs:89-111）接受这两个值并落库，effective_status（tasks.rs:31-49）随后会把它们原样返回。页头计数 tasks.tsx:110-114 用的是 tasks.length（全量），与列内可见卡片数不一致。
 - **影响**：通过文档化的 POST /api/tasks/:id/status 接口（或未来新增 triage/ready 按钮、或多端写入）把状态设为 triage/ready 后，这些任务在看板里彻底不可见且无法再操作（卡片没渲染就没有复位按钮），只能去数据库或换接口救。属于数据「看不见即丢失」的完整性问题。当前 UI 自身的按钮不会产生这两个状态，所以现网触发面有限，但接口契约与 UI 不自洽。
 - **建议修法**：二选一：a) COLUMNS 补上 triage/ready 两列（i18n 键 tasks.status.triage/ready 已存在，翻译齐全），与后端 VALID_STATUSES 对齐；b) 加一个「其它」兜底列收纳所有不在已知列里的 status，保证任何有效状态都可见可操作；同时让页头计数与列内卡片总数口径一致。
 
@@ -806,7 +806,7 @@
 - **页面/域**：全局外壳/命令面板/模型选择/Spell启动/Agent抽屉　**维度**：功能正确性 / 前后端契约　**置信度**：high
 - **现象**：SpellsLauncher 里输入任务后点「✨ Auto」或「运行」,后端一律返回 400,界面红字「运行失败:POST /api/spell/run → 400: spell requires workspace context: pass workspace_id or caller_agent_id」。无论选哪个法术、填不填高级 workspace 路径都一样。
 - **复现**：1) 用 VITE_ENABLE_DEBUG=1 跑前端;2) 打开 /debug;3) 顶部 SpellsLauncher 输入任意任务点运行;4) 红字 400 spell requires workspace context。
-- **根因**：web/src/components/SpellsLauncher.tsx:86-91 (launch() body omits workspace_id/caller_agent_id) vs crates/flockmux-server/src/routes/rest.rs:2144-2173 (unconditional 400 when both absent)
+- **根因**：web/src/components/SpellsLauncher.tsx:86-91 (launch() body omits workspace_id/caller_agent_id) vs crates/swarmx-server/src/routes/rest.rs:2144-2173 (unconditional 400 when both absent)
 - **影响**：组件作为元素级功能是死的——所有按钮都不可用。降级为 P2 仅因为它只挂在 routes/debug.tsx:268,而 debug 路由被 VITE_ENABLE_DEBUG==='1' 门控(web/src/lib/debug.ts:1),正式安装包里编译不进、用户碰不到。但它仍是真实损坏的代码,且 README 注释(types.ts:273)还宣称『top-bar SpellsLauncher』会传 workspace_id,与实现矛盾。
 - **建议修法**：要么给 SpellsLauncher 接入当前 workspace 上下文、launch() 里带上 workspace_id(+ thread_id)再调 api.runSpell;要么既然已被聊天页的发消息自举/CreateWizard 取代,直接删掉这个废弃组件和 debug 里的引用,免得留个坏样板。
 
@@ -894,7 +894,7 @@
 - **页面/域**：回放视图 + 播放器 + 录制面板　**维度**：状态诚实性　**置信度**：medium
 - **现象**：对一条还在录制中(finalized_at==null)的录像点播放/进全屏播放器，asciinema-player 只加载点击那一刻已写入磁盘的字节，播到一半就停在快照末尾，用户以为录像就这么短/卡住了。
 - **复现**：spawn 一个 orchestrator 让其持续输出，趁未退出时在 Replays 点该录像播放 —— 播到快照末尾即停，无任何不完整说明。
-- **根因**：crates/flockmux-server/src/routes/recording.rs:79-98 (get_recording 非流式一次性整读，对 live 录像返回截断快照) 叠加 web/src/components/AsciicastPlayer.tsx:42-66 (create(src) 一次性加载、无 live 增长感知)；主用户面缺说明在 web/src/routes/workspace/views/Replays.tsx:245-255 与 web/src/routes/replays/player.tsx:198-202,232-237
+- **根因**：crates/swarmx-server/src/routes/recording.rs:79-98 (get_recording 非流式一次性整读，对 live 录像返回截断快照) 叠加 web/src/components/AsciicastPlayer.tsx:42-66 (create(src) 一次性加载、无 live 增长感知)；主用户面缺说明在 web/src/routes/workspace/views/Replays.tsx:245-255 与 web/src/routes/replays/player.tsx:198-202,232-237
 - **影响**：用户可能误判录像内容缺失或播放器坏了。属于轻度状态不诚实（没主动说明这是不完整快照）。
 - **建议修法**：live 录像的播放器附近显示一行说明（如『录制进行中，当前只能回放到此刻已写入的部分』），或对 live 录像禁用自动播放并提示『录制完成后回放更完整』。把 RecordingsPanel 里那句解释搬到 Replays/player。
 
@@ -918,7 +918,7 @@
 - **页面/域**：回放视图 + 播放器 + 录制面板　**维度**：性能 / 资源 / 一致性　**置信度**：medium
 - **现象**：快速连点刷新图标会并发打多次 listRecordings+listAgents；一批 agent 集中退出时，每个 agent_state=exited 事件都立刻触发一次 refresh（即两次 REST），短时间内重复请求成片。刷新时按钮无任何 loading/disabled 反馈。
 - **复现**：连点刷新图标数次看 network 多次并发；或同时退出多个 agent 看 /api/recording 与 /api/agents 成串重复请求。
-- **根因**：web/src/routes/workspace/views/Replays.tsx:107-126 (refresh 无 inFlight 去重+并行双请求), :184-192 (按钮无 disabled/spinner), :132-137 (exited 逐个无防抖触发 refresh); 服务端逐个广播证据 crates/flockmux-server/src/reaper.rs:57-85; dedupe 缺失证据 web/src/api/http.ts:163 与 :282 (二者均无 dedupe，与原文括注「listAgents 在别处有 dedupe」不符)
+- **根因**：web/src/routes/workspace/views/Replays.tsx:107-126 (refresh 无 inFlight 去重+并行双请求), :184-192 (按钮无 disabled/spinner), :132-137 (exited 逐个无防抖触发 refresh); 服务端逐个广播证据 crates/swarmx-server/src/reaper.rs:57-85; dedupe 缺失证据 web/src/api/http.ts:163 与 :282 (二者均无 dedupe，与原文括注「listAgents 在别处有 dedupe」不符)
 - **影响**：批量退出场景下接口被无谓打多次；刷新无反馈影响体感（不知道点没点到）。非致命但属轮询/重复请求类性能问题。
 - **建议修法**：refresh 加 inFlight ref + 给按钮 disabled+spinner；useSwarmFeed 的 exited→refresh 做 200-500ms 防抖合并；可给 listRecordings 也接 dedupe。
 
@@ -1006,7 +1006,7 @@
 - **页面/域**：工作空间外壳 + 侧边栏 + 工具条　**维度**：状态诚实性 / 错误处理与失败恢复　**置信度**：high
 - **现象**：用户在侧栏点「+ 新方向」并填了名字 → 确认。前端导航进新方向，但聊天区是空的、没有任何 AI，也没有任何错误提示说明为什么。
 - **复现**：1. 在一个 git 项目工作空间点「+ 新方向」填名字确认。2. 构造隔离失败（worktree 目标已被占用 / 制造 git 命令失败 / 断盘）。3. 观察：方向创建成功、导航进入、members 为 0、无 orchestrator、无错误 toast。
-- **根因**：crates/flockmux-server/src/routes/workspaces.rs:1382-1391 (degrade 分支只 degrade_thread_to_shared、从不 spawn) 对"失败后无 orchestrator"这一机制定位正确；但经得起推敲的诚实性缺口实为"静默 degrade"——隔离失败只有 tracing::warn!(workspaces.rs:1383/1388) 加一个侧栏图标(见 workspaces.rs:1396-1402 注释)，主视图无任何"隔离失败/不再隔离"的可见提示。原报告"显示 ready 的空房间且无法对话"不成立：空房间已诚实显示"AI 未在线"并提供唤醒按钮+首条消息自愈。
+- **根因**：crates/swarmx-server/src/routes/workspaces.rs:1382-1391 (degrade 分支只 degrade_thread_to_shared、从不 spawn) 对"失败后无 orchestrator"这一机制定位正确；但经得起推敲的诚实性缺口实为"静默 degrade"——隔离失败只有 tracing::warn!(workspaces.rs:1383/1388) 加一个侧栏图标(见 workspaces.rs:1396-1402 注释)，主视图无任何"隔离失败/不再隔离"的可见提示。原报告"显示 ready 的空房间且无法对话"不成立：空房间已诚实显示"AI 未在线"并提供唤醒按钮+首条消息自愈。
 - **影响**：命名方向在隔离失败时变成无 AI 的房间；界面把它显示成 ready（只是 degraded 图标），违反状态诚实性红线——显示『就绪』但实际没人能对话。
 - **建议修法**：二选一：(a) 后端 degrade 分支也走一遍 spawn（在原 shared cwd run_spell init），与成功分支对称；(b) 前端不要无条件信任 preparing 就跳过 spawn——监听 thread_changed，若方向最终 degraded 且无 members 则补 spawn。缓解面：Chat 视图(Chat.tsx:368-383)的『唤起 orchestrator』按钮可让用户自救，但用户不知道为何要点，仍属诚实性问题；至少在 degrade 时给前端一个可见提示。
 
@@ -1078,7 +1078,7 @@
 - **页面/域**：文件页 Files　**维度**：安全/隐私/越权　**置信度**：medium
 - **现象**：文件页对图片用 <img src=/api/file?path=...> 渲染（files.tsx:237-241, imagePaths.ts:56-58）。但 serve_file（rest.rs:2872-2925）只做 loopback 校验 + 25MB + 图片类型 sniff，完全没有 is_sensitive() denylist、也没有 workspace jail。而同一页的 /api/files/read（files.rs:247-255）两道闸都加了。
 - **复现**：在浏览器/本地进程直接请求 http://127.0.0.1:7777/api/file?path=<jail外某真实png绝对路径>，返回 200 图片字节，无视 workspace_id 与 jail。
-- **根因**：crates/flockmux-server/src/routes/rest.rs:2872 serve_file 既不调用 files.rs 的 is_sensitive()，也不接收/校验 workspace_id。结果：任何能构造 http 请求到 loopback 的本地进程（恶意 MCP 子进程、被注入的依赖、落地的 XSS），可用 /api/file?path=/Users/x/.ssh/id_rsa.png 之类路径绕过 read 端点的防护——虽然要求是图片扩展名+图片字节 sniff，但 .ssh 目录、jail 外目录里真实存在的图片（如某私有仓库截图、别的工作区的设计稿）都能被任意读取，突破了 files 页“工作区隔离”的安全模型。
+- **根因**：crates/swarmx-server/src/routes/rest.rs:2872 serve_file 既不调用 files.rs 的 is_sensitive()，也不接收/校验 workspace_id。结果：任何能构造 http 请求到 loopback 的本地进程（恶意 MCP 子进程、被注入的依赖、落地的 XSS），可用 /api/file?path=/Users/x/.ssh/id_rsa.png 之类路径绕过 read 端点的防护——虽然要求是图片扩展名+图片字节 sniff，但 .ssh 目录、jail 外目录里真实存在的图片（如某私有仓库截图、别的工作区的设计稿）都能被任意读取，突破了 files 页“工作区隔离”的安全模型。
 - **影响**：文件页宣称“默认 jail 到当前工作区”，但图片这一类型的隔离形同虚设——可跨工作区/越过 jail 读取任意图片文件，违反 CLAUDE.md 列为红线的“越权访问别的 agent/space”。
 - **建议修法**：让 serve_file 复用 files.rs::is_sensitive() 做硬 denylist；并接收可选 workspace_id+all，对非 all 请求套用 is_within_any(allowed_roots) jail。若产品上图片有意全盘可读，至少 is_sensitive() 必须补上，与 read 端点保持一致。
 
@@ -1133,18 +1133,18 @@
 #### P2-87 默认资源目录最终回退到裸相对路径 'spells'/'roles'/'cli-plugins'，在安装版(CWD=/)会解析成 /spells 等不存在路径
 - **页面/域**：服务启动与资源解析(main + 资源目录)　**维度**：安装版现实(最高准则) / 一致性　**置信度**：medium
 - **现象**：default_spells_dir()（spells.rs:362）、default_roles_dir()（roles.rs:276）、default_plugins_dir()（plugins.rs:509）在 env 变量缺失且 CARGO_MANIFEST_DIR 候选目录不存在时，最后一行返回裸相对路径 PathBuf::from("spells") / "roles" / "cli-plugins"。安装版 sidecar 的 CWD 是 /，于是这些会被当作 /spells、/roles、/cli-plugins 去 load_dir。
-- **复现**：在 CWD=/ 且未设任何 FLOCKMUX_*_DIR、CARGO_MANIFEST_DIR 指向的构建机路径不存在时调用 default_spells_dir()，返回值为相对 "spells"，被解析为 /spells。
+- **复现**：在 CWD=/ 且未设任何 SWARMX_*_DIR、CARGO_MANIFEST_DIR 指向的构建机路径不存在时调用 default_spells_dir()，返回值为相对 "spells"，被解析为 /spells。
 - **根因**：三个 default_*_dir() 的兜底分支用相对路径。当前之所以不致命，纯粹是因为 main.rs:153/168 和 plugins load_layered 都先 builtin()（include_str! 编译进二进制）再 overlay 磁盘目录，且 load_dir/merge_dir 对不存在目录 warn+skip 非致命。也就是说裸相对路径这条「死路」被 builtin 层兜住了，但它本身是误导性的、且依赖 CWD——一旦哪天某处直接用 default_*_dir() 的返回值而不走 builtin overlay（例如 plugins.rs:548 测试里就直接 load_dir(&default_plugins_dir())），在 CWD=/ 的环境就会拿到 / 下的错误路径或意外读到根目录同名目录。
 - **影响**：目前无用户可见故障（builtin 兜底）。但这是一个潜伏的「相对路径依赖 CWD」反模式，正是项目头号准则点名的危险来源；后续任何绕过 builtin 的新调用点都会在安装版踩坑。
 - **建议修法**：兜底分支不要返回裸相对路径。要么返回 None/明确报错，要么至少在日志里 warn 一次「resource dir 未通过 env 或 manifest 解析，回退到 CWD 相对路径（安装版下不可靠）」，让发版自检能发现。更彻底的做法：既然 spells/roles/plugins 已全部 include_str! 进二进制，磁盘 overlay 应当只在 env 变量显式给出时才尝试，manifest/裸相对路径两条 dev-only 分支可以收敛掉以消除歧义。
 
-#### P2-88 apiBase.ts 硬编码 7777，而服务端 FLOCKMUX_PORT 可配置：两者一旦不一致，Tauri 前端连不上自己的 sidecar
+#### P2-88 apiBase.ts 硬编码 7777，而服务端 SWARMX_PORT 可配置：两者一旦不一致，Tauri 前端连不上自己的 sidecar
 - **页面/域**：服务启动与资源解析(main + 资源目录)　**维度**：一致性 / 功能正确性　**置信度**：medium
-- **现象**：main.rs:279 服务端口由 FLOCKMUX_PORT 决定（默认 7777），server_url 随之派生。但 web/src/lib/apiBase.ts:25-26 在 Tauri prod 下把 HTTP_BASE/WS_HOST 硬编码为 127.0.0.1:7777。
-- **复现**：给 release sidecar 设 FLOCKMUX_PORT=7800 启动；前端仍向 127.0.0.1:7777 发请求 → 全部失败。
+- **现象**：main.rs:279 服务端口由 SWARMX_PORT 决定（默认 7777），server_url 随之派生。但 web/src/lib/apiBase.ts:25-26 在 Tauri prod 下把 HTTP_BASE/WS_HOST 硬编码为 127.0.0.1:7777。
+- **复现**：给 release sidecar 设 SWARMX_PORT=7800 启动；前端仍向 127.0.0.1:7777 发请求 → 全部失败。
 - **根因**：web/src/lib/apiBase.ts:23-24（硬编码 127.0.0.1:7777 的字面量实际在第 23 行 HTTP_BASE 与第 24 行 WS_HOST，报告所写 25-26 行略有偏差）
 - **影响**：当前不触发。但它把「修端口冲突」这条最该走的路堵死了：任何给 sidecar 设非 7777 端口的改动都会让前端瞎掉，且因为是硬编码、不会有编译/类型报错来提醒。
-- **建议修法**：让端口成为单一事实源：Tauri 启动 sidecar 时若需要自定义端口，应通过 Tauri 命令/注入的全局变量把端口告诉前端（或干脆让前端读一个由 Rust 侧注入的 window.__FLOCKMUX_PORT__），apiBase.ts 据此构造 URL，而不是写死 7777。
+- **建议修法**：让端口成为单一事实源：Tauri 启动 sidecar 时若需要自定义端口，应通过 Tauri 命令/注入的全局变量把端口告诉前端（或干脆让前端读一个由 Rust 侧注入的 window.__SWARMX_PORT__），apiBase.ts 据此构造 URL，而不是写死 7777。
 
 #### P2-89 「保存中…」按钮文案对英文用户硬编码显示中文
 - **页面/域**：用量与成本页 Usage　**维度**：一致性 / i18n / 状态诚实性　**置信度**：high
@@ -1172,7 +1172,7 @@
 
 #### P2-92 价目表配置文件绝对路径（含用户名/家目录）被原样渲染进 UI
 - **页面/域**：用量与成本页 Usage　**维度**：安全/隐私　**置信度**：medium
-- **现象**：价目表区块的 meta 行与「恢复默认」确认弹窗里，直接展示完整绝对路径，如 /Users/<用户名>/.flockmux/pricing.json，暴露了操作系统用户名与家目录结构。
+- **现象**：价目表区块的 meta 行与「恢复默认」确认弹窗里，直接展示完整绝对路径，如 /Users/<用户名>/.swarmx/pricing.json，暴露了操作系统用户名与家目录结构。
 - **复现**：打开 /usage，看价目表标题下 meta 行；点恢复默认看确认弹窗描述，均显示完整绝对路径。
 - **根因**：后端 usage.rs:399 `"path": pricing_config_path()` 返回的是绝对 PathBuf（usage.rs:168-172 用 HOME 拼接），前端 usage.tsx:452-459 pricingMeta 与 usage.tsx:190-192 confirmResetDesc 直接插值显示。
 - **影响**：桌面应用本机自看自，泄露面有限，但属于不必要地把家目录绝对路径呈现给 UI（截图/录屏分享时会带出用户名）。低危。
@@ -1206,7 +1206,7 @@
 - **页面/域**：目标页 Goals　**维度**：功能正确性 / 边界态　**置信度**：medium
 - **现象**：在预算框粘贴/输入超长数字（如 99999999999999999999），点创建，请求 500 失败，目标没建成，且错误条显示原始解析错误。
 - **复现**：预算框输入 20 位以上的数字 → 创建 → 500。
-- **根因**：web/src/routes/goals.tsx:111 (Number(rawBudget) 无 isSafeInteger/上界校验) + goals.tsx:219 (输入框不限长度)；后端实际拒绝点为 crates/flockmux-server/src/routes/goals.rs:116 的 Json<CreateGoalRequest> 提取器（返回 422 而非 500，非报告所指的 goals.rs:135）
+- **根因**：web/src/routes/goals.tsx:111 (Number(rawBudget) 无 isSafeInteger/上界校验) + goals.tsx:219 (输入框不限长度)；后端实际拒绝点为 crates/swarmx-server/src/routes/goals.rs:116 的 Json<CreateGoalRequest> 提取器（返回 422 而非 500，非报告所指的 goals.rs:135）
 - **影响**：属罕见输入，但会以最难懂的方式（500+原始报错）失败，且没有前端提示告诉用户『预算数值过大』。
 - **建议修法**：前端对 budget 做范围/长度校验（Number.isSafeInteger 检查、限制到合理上限），超出时禁用创建或给提示，而不是把超界值发给后端。
 
@@ -1279,14 +1279,14 @@
 - **现象**：模型页即便一字未改点保存，也会请求 PUT 并弹『已保存』2.5s。算不上谎言（确实 PUT 成功了），但对用户而言「我没改也说保存了」略微稀释了反馈的信息量。
 - **复现**：模型页不改任何东西直接点保存 → 弹「已保存」。逻辑见 497-512。
 - **根因**：ModelsPanel.save (settings.tsx:497-512) 无 dirty 判断，无条件 putModels；服务器 echo 回 config 即视为 saved=true。
-- **影响**：影响很小，仅反馈语义略弱 + 一次无谓的写盘（后端会原子写 ~/.flockmux/models.json）。
+- **影响**：影响很小，仅反馈语义略弱 + 一次无谓的写盘（后端会原子写 ~/.swarmx/models.json）。
 - **建议修法**：可选：cfg 与已知 data.config 相等时禁用「保存」按钮或跳过请求；非阻塞性优化。
 
 #### P2-106 × 终止按钮在后端失败时仍乐观移除 agent，可能「假终止」+ 被 WS 刷新复活
 - **页面/域**：调试页 Debug　**维度**：状态诚实性 / 数据完整性 / 竞态　**置信度**：high
 - **现象**：点 × 终止：即使后端 killAgent 抛错（agent 没真被杀），前端也立刻把这个 pane 从列表里抹掉，用户以为已终止；但底层进程可能还活着，且随后一次 WS 触发的 refreshAgents 会把它重新加回来，pane 闪一下又出现。
 - **复现**：在 kill 接口返回非 2xx 的情况下点 × —— pane 立即消失（无任何错误提示），随后任意 agent_state 事件触发刷新后该 pane 重新出现。
-- **根因**：web/src/routes/debug.tsx:139-154 (kill 的 catch 仅 console.warn 后无条件乐观移除、对传输层失败也不提示)；后端实际路径为 crates/flockmux-server/src/routes/rest.rs:1063-1113 (teardown_agent 一旦命中 registry 即返回 204，record_agent_kill DB 写失败被 tracing::warn! 吞)，而非报告所称的「teardown 失败返回非 2xx」
+- **根因**：web/src/routes/debug.tsx:139-154 (kill 的 catch 仅 console.warn 后无条件乐观移除、对传输层失败也不提示)；后端实际路径为 crates/swarmx-server/src/routes/rest.rs:1063-1113 (teardown_agent 一旦命中 registry 即返回 204，record_agent_kill DB 写失败被 tracing::warn! 吞)，而非报告所称的「teardown 失败返回非 2xx」
 - **影响**：用户看到「已终止」是假象（界面撒谎），真实进程仍在跑、仍在烧 token；或者抹掉后又复活造成视觉错乱。属于状态诚实性 + 数据完整性双重问题。
 - **建议修法**：把乐观移除挪到 try 成功之后；catch 里不移除、改为弹错误提示让用户知道终止失败可重试。或保留乐观 UI 但失败时回滚（把 agent 加回 + 提示）。
 
@@ -1310,17 +1310,17 @@
 - **页面/域**：调试页 Debug　**维度**：真实用户路径 / 一致性 / 错误处理　**置信度**：high
 - **现象**：顶栏为每个 CLI 渲染一个 + 按钮，包括服务端探测到未安装的 CLI。点未安装的（如 + Codex）会等 spawn 失败后弹一个浏览器原生 alert，文案是后端原始英文报错。
 - **复现**：在没装 codex 的机器上进 /debug，点 + Codex，观察阻塞式原生 alert 弹出。
-- **根因**：crates/flockmux-server/src/routes/rest.rs:213-218（后端 installed 标志，审查员写的 rest.rs 行号正确，补全完整路径）；前端缺陷在 web/src/routes/debug.tsx:243-252（按钮无视 installed）与 web/src/routes/debug.tsx:131-133（阻塞式 alert）
+- **根因**：crates/swarmx-server/src/routes/rest.rs:213-218（后端 installed 标志，审查员写的 rest.rs 行号正确，补全完整路径）；前端缺陷在 web/src/routes/debug.tsx:243-252（按钮无视 installed）与 web/src/routes/debug.tsx:131-133（阻塞式 alert）
 - **影响**：用户被引导去点一个注定失败的按钮，再被一个阻塞式英文 alert 打断，自助恢复成本高、与产品其余部分交互范式割裂。
 - **建议修法**：对 installed===false 的插件按钮加 disabled + title 提示「未检测到该 CLI」（或直接不渲染）；把 alert 换成 AppToaster 错误 toast。
 
-#### P2-110 ensureDebugWorkspace 依赖永不存在的 __FLOCKMUX_HOME，cwd 恒为 /tmp，且 listWorkspaces dedupe TTL=0 留竞态窗口建出重复 debug-scratch
+#### P2-110 ensureDebugWorkspace 依赖永不存在的 __SWARMX_HOME，cwd 恒为 /tmp，且 listWorkspaces dedupe TTL=0 留竞态窗口建出重复 debug-scratch
 - **页面/域**：调试页 Debug　**维度**：功能正确性 / 数据完整性　**置信度**：medium
 - **现象**：Debug 页首次 spawn 时自动建的 debug-scratch 工作区，cwd 永远是 /tmp（即便用户机有合理项目目录）；并发首点多个 + 按钮时可能建出多个同名 debug-scratch 工作区。
-- **复现**：代码审计：grep __FLOCKMUX_HOME 仅 debug.tsx 命中、无写入处 → cwd 必为 /tmp。并发 spawn 时序下两次 listWorkspaces 都早于第一次 createWorkspace 完成即重复建。
+- **复现**：代码审计：grep __SWARMX_HOME 仅 debug.tsx 命中、无写入处 → cwd 必为 /tmp。并发 spawn 时序下两次 listWorkspaces 都早于第一次 createWorkspace 完成即重复建。
 - **根因**：web/src/routes/debug.tsx:111-123
 - **影响**：agent 永远在 /tmp 下跑（与用户预期项目目录无关，文件落 /tmp 易被系统清理 → 数据完整性风险）；并发点击产生孤儿重复工作区。仅影响 debug 页，但属真实逻辑缺陷。
-- **建议修法**：去掉对 __FLOCKMUX_HOME 的依赖（要么真的注入它，要么改用后端已知的默认 cwd）；ensureDebugWorkspace 加单飞（用一个 module 级 Promise 缓存）避免并发重复建。
+- **建议修法**：去掉对 __SWARMX_HOME 的依赖（要么真的注入它，要么改用后端已知的默认 cwd）；ensureDebugWorkspace 加单飞（用一个 module 级 Promise 缓存）避免并发重复建。
 
 #### P2-111 整个 Ledger 页面英文用户看到的全是中文（ledger.* i18n key 在两个语言包里都不存在）
 - **页面/域**：账本 Ledger 视图　**维度**：一致性 / 真实用户路径（i18n 漏翻）　**置信度**：high
@@ -1382,7 +1382,7 @@
 - **页面/域**：通知中心 + 通知弹窗　**维度**：数据完整性 / 一致性　**置信度**：medium
 - **现象**：用户在通知中心把一条共享区(blackboard)通知标为已读,刷新页面后它很可能又变回未读。
 - **复现**：—
-- **根因**：web/src/routes/notifications.tsx:294 (已读集合用易变 id);配合 notifications.tsx:243-247 与 381-382 (仅 msg- 同步服务端、bb- 全靠 localStorage);crates/flockmux-storage/src/store.rs:1916 (list_blackboard_ops(None) 取 MAX(id) 使 at 随每次写入而变)。popover NotificationPopover.tsx:152 仅用于 live 去重，非症状落点。
+- **根因**：web/src/routes/notifications.tsx:294 (已读集合用易变 id);配合 notifications.tsx:243-247 与 381-382 (仅 msg- 同步服务端、bb- 全靠 localStorage);crates/swarmx-storage/src/store.rs:1916 (list_blackboard_ops(None) 取 MAX(id) 使 at 随每次写入而变)。popover NotificationPopover.tsx:152 仅用于 live 去重，非症状落点。
 - **影响**：共享区类通知的已读状态在最常见场景(台账被反复更新)下不稳定,用户反复清同一条,体验上像「标不掉」。是数据完整性/一致性问题。
 - **建议修法**：blackboard 通知 id 改用稳定标识(如 `bb-${path}` 或服务端 op `id`,BlackboardEntry 暂无 id 字段——可让 list_blackboard_paths 带上 op id,types.ts:230 的 BlackboardEntry 加 id),把已读绑到稳定键而非易变的 at。
 
@@ -1446,7 +1446,7 @@
 - **页面/域**：黑板/Swarm 面板 + 通用组件　**维度**：功能完整性 / 真实用户路径　**置信度**：high
 - **现象**：用户一旦建了文件（哪怕是手滑建的 typo 文件名，或一次性的临时笔记），就再也删不掉。左侧『暂无文件』很快变成一长串再也清不掉的列表。
 - **复现**：—
-- **根因**：crates/flockmux-server/src/routes/api.rs:73 (路由 `/api/blackboard/*path` 仅 .get().put()，无 .delete()) + web/src/components/BlackboardPanel.tsx:134 (createNew 有创建、无删除按钮)；唯一删行路径 store.rs:1947 delete_blackboard_prefix 仅由 workspaces.rs:1591 按 direction/thread 前缀调用，用户够不到单文件
+- **根因**：crates/swarmx-server/src/routes/api.rs:73 (路由 `/api/blackboard/*path` 仅 .get().put()，无 .delete()) + web/src/components/BlackboardPanel.tsx:134 (createNew 有创建、无删除按钮)；唯一删行路径 store.rs:1947 delete_blackboard_prefix 仅由 workspaces.rs:1591 按 direction/thread 前缀调用，用户够不到单文件
 - **影响**：配合上一条『撞名清空』，用户清理误建文件的唯一办法是把它 save 成空白后继续无视——既脏又容易二次误伤。小白第一次用很容易留下一堆删不掉的垃圾文件，破坏对工具的信任。
 - **建议修法**：加单文件删除：后端补 DELETE /api/blackboard/*path（走 path_safe 校验 + 记一条 op=delete），前端在 pathRow 或编辑区头部加删除按钮并用 ConfirmActionDialog 二次确认。
 
@@ -1491,7 +1491,7 @@
 
 1. [首页/工作空间列表 + 新建空间向导] 向导扫描完成靠‘看到任意 project.summary.* 写入’判定，并发/残留 scout 会让向导提前误关并跳错房间
 2. [首页/工作空间列表 + 新建空间向导] 向导原生选目录按钮(Tauri)选中后未做存在性/目录校验即可能直接放行
-3. [首页/工作空间列表 + 新建空间向导] Welcome 文档外链硬编码到 github.com/curdx/flockmux-core，与实际仓库可能不符
+3. [首页/工作空间列表 + 新建空间向导] Welcome 文档外链硬编码到 github.com/curdx/swarmx-core，与实际仓库可能不符
 4. [对话主面板 MessagesPanel(核心)] composer 在无活成员且无 onSend 时禁用，但占位文案/提示未明确告诉小白「先唤醒」
 5. [工作空间外壳 + 侧边栏 + 工具条] 未读计数依赖最近 200 条消息的 id→sender 映射，超过 200 条历史时 message_read 可能无法递减、未读 badge 卡住
 6. [依赖图 DAG 视图] interrupt-all 返回 failed 列表被前端丢弃，部分 agent 暂停失败仍显示成功

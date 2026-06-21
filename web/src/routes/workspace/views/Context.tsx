@@ -276,7 +276,7 @@ export default function ContextView() {
       // prefixes instead of role names, with no hint why — at least log it.
       .catch((e) => {
         // eslint-disable-next-line no-console
-        console.warn("[flockmux] role lookup (listAgents) failed", e);
+        console.warn("[swarmx] role lookup (listAgents) failed", e);
       });
     return () => {
       cancelled = true;
@@ -315,14 +315,14 @@ export default function ContextView() {
           .then(setSnap)
           .catch((e) => {
             // eslint-disable-next-line no-console
-            console.warn(`[flockmux] blackboard re-read failed (${ev.path})`, e);
+            console.warn(`[swarmx] blackboard re-read failed (${ev.path})`, e);
           });
         api
           .listBlackboardHistory(ev.path, 50, false)
           .then(setHistory)
           .catch((e) => {
             // eslint-disable-next-line no-console
-            console.warn(`[flockmux] blackboard history reload failed (${ev.path})`, e);
+            console.warn(`[swarmx] blackboard history reload failed (${ev.path})`, e);
           });
       }
     },

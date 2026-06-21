@@ -18,15 +18,15 @@
 // (reroot_thread_orchestrator → run_spell "init"), so it is deliberately out of
 // scope for a zero-token smoke; the path itself is proven by the three above.
 //
-// Assumptions: flockmux-server is running at 127.0.0.1:${FLOCKMUX_PORT:-7777}.
-// Run it against a THROWAWAY data dir (separate $HOME + FLOCKMUX_PORT) so it
-// never touches the user's real ~/.flockmux.
+// Assumptions: swarmx-server is running at 127.0.0.1:${SWARMX_PORT:-7777}.
+// Run it against a THROWAWAY data dir (separate $HOME + SWARMX_PORT) so it
+// never touches the user's real ~/.swarmx.
 
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-const PORT = process.env.FLOCKMUX_PORT || "7777";
+const PORT = process.env.SWARMX_PORT || "7777";
 const BASE = `http://127.0.0.1:${PORT}`;
 const WS_SWARM = `ws://127.0.0.1:${PORT}/ws/swarm`;
 
@@ -100,7 +100,7 @@ const threadChanged = (wsId, threadId, op) => (e) =>
   e.op === op;
 
 async function main() {
-  const cwd = await mkdtemp(path.join(tmpdir(), "flockmux-dir-smoke-"));
+  const cwd = await mkdtemp(path.join(tmpdir(), "swarmx-dir-smoke-"));
   console.log(`workspace cwd: ${cwd}  (server ${BASE})`);
 
   const collector = new SwarmEventCollector();

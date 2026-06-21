@@ -99,7 +99,7 @@
                   "type": "text",
                   "id": "OEKPX",
                   "fill": "$foreground-primary",
-                  "content": "flockmux",
+                  "content": "swarmx",
                   "fontFamily": "$font-heading",
                   "fontSize": 13,
                   "fontWeight": "600"
@@ -11531,7 +11531,7 @@
                   "type": "text",
                   "id": "Flkn2",
                   "fill": "$foreground-tertiary",
-                  "content": "Flockmux 偏好 · 集成 · 快捷键",
+                  "content": "Swarmx 偏好 · 集成 · 快捷键",
                   "fontFamily": "$font-caption",
                   "fontSize": 12,
                   "fontWeight": "normal"
@@ -11849,7 +11849,7 @@
                       "type": "text",
                       "id": "bawEU",
                       "fill": "$foreground-primary",
-                      "content": "flockmux",
+                      "content": "swarmx",
                       "fontFamily": "$font-heading",
                       "fontSize": 11,
                       "fontWeight": "700"
@@ -20926,7 +20926,7 @@
                   "fill": "$foreground-inverse",
                   "textGrowth": "fixed-width",
                   "width": "fill_container",
-                  "content": "cat ~/.flockmux/blackboard/api.spec",
+                  "content": "cat ~/.swarmx/blackboard/api.spec",
                   "lineHeight": 1.5,
                   "fontFamily": "$font-mono",
                   "fontSize": 13,
@@ -21976,7 +21976,7 @@
                           "fill": "$foreground-secondary",
                           "textGrowth": "fixed-width",
                           "width": "fill_container",
-                          "content": "~/.flockmux/recordings/",
+                          "content": "~/.swarmx/recordings/",
                           "fontFamily": "$font-mono",
                           "fontSize": 11,
                           "fontWeight": "normal"

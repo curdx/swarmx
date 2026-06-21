@@ -6,7 +6,7 @@
  * we send keystrokes as binary + a `{type:"resize"}` JSON on fit.
  *
  * Per-workspace + persistent: the session id is keyed by the selected workspace
- * (`flockmux.terminal.session:<wsId>`, kept in sessionStorage), so each
+ * (`swarmx.terminal.session:<wsId>`, kept in sessionStorage), so each
  * workspace has its own shell that survives navigation/F5 (the server replays
  * scrollback on reattach). Switching the workspace picker tears down the view
  * and attaches that workspace's shell; a first spawn starts in its cwd.
@@ -25,13 +25,13 @@ import { Button } from "@/components/ui/button";
 /** Stable per-tab, per-workspace terminal session id, so navigating away and
  *  back reattaches to the same server-side shell instead of spawning a fresh
  *  one — and each workspace keeps its own shell. */
-const SID_PREFIX = "flockmux.terminal.session:";
+const SID_PREFIX = "swarmx.terminal.session:";
 
 /** Once the user confirms the "open a real shell" prompt, we remember it for the
  *  whole tab session so switching workspaces just rebuilds the connection instead
  *  of re-prompting every time. Honesty is preserved: the connect effect still
  *  surfaces a real backend/PTY failure even when this flag is set. */
-const CONFIRMED_KEY = "flockmux.terminal.confirmed";
+const CONFIRMED_KEY = "swarmx.terminal.confirmed";
 function readConfirmed(): boolean {
   try {
     return sessionStorage.getItem(CONFIRMED_KEY) === "1";
@@ -216,7 +216,7 @@ export default function TerminalRoute() {
                 {error
                   ? t("terminal.backendDown", {
                       defaultValue:
-                        "连接不上后端 (127.0.0.1:7777)，无法打开终端。请确认 flockmux 服务在运行。",
+                        "连接不上后端 (127.0.0.1:7777)，无法打开终端。请确认 swarmx 服务在运行。",
                     })
                   : t("terminal.disconnected", { defaultValue: "连接已断开" })}
               </span>
@@ -262,7 +262,7 @@ export default function TerminalRoute() {
                   {error
                     ? t("terminal.backendDown", {
                         defaultValue:
-                          "连接不上后端 (127.0.0.1:7777)，无法打开终端。请确认 flockmux 服务在运行。",
+                          "连接不上后端 (127.0.0.1:7777)，无法打开终端。请确认 swarmx 服务在运行。",
                       })
                     : t("terminal.confirmDesc", {
                         workspace: activeWs?.name ?? t("common.all"),

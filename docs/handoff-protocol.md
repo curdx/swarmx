@@ -3,7 +3,7 @@
 How multi-agent fullstack spells (M6a) coordinate via the blackboard
 and swarm messages. **This is a convention, not a runtime contract** —
 agents that don't follow it deadlock or produce inconsistent artifacts,
-but flockmux-core does not enforce it.
+but swarmx-core does not enforce it.
 
 ## Standard blackboard keys
 
@@ -30,12 +30,12 @@ but flockmux-core does not enforce it.
 All `*_at` timestamps are ISO 8601 UTC.
 
 The blackboard keeps **version history** on every write (see
-`flockmux-storage`), so amendments to e.g. `api.spec` mid-build are
+`swarmx-storage`), so amendments to e.g. `api.spec` mid-build are
 recoverable — read the latest version via `swarm_read_blackboard`.
 
 **Listing vs reading (M6d-1).** `swarm_list_blackboard` returns the
 SQLite write history, which persists across server restarts and
-across `rm` of the FS files under `~/.flockmux/blackboard/`. A row
+across `rm` of the FS files under `~/.swarmx/blackboard/`. A row
 in the listing is therefore NOT proof that the key's value is
 currently available — the file may have been deleted between runs.
 Agents that branch on the presence of `.error` (or any other
