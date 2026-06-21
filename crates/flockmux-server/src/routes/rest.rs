@@ -30,7 +30,26 @@ use uuid::Uuid;
 /// The design's honesty bar — the orchestrator's `init` greet normally lands
 /// well inside this, so the window is generous enough to avoid false alarms on
 /// a slow first turn while still surfacing a never-started agent fast.
-const FIRST_RESPONSE_WATCHDOG_MS: u64 = 90_000;
+///
+/// Per-engine, NOT flat — because the window is only meaningful for engines that
+/// can be legitimately silent during a slow first turn:
+///   - claude/codex stream JSONL transcript activity within seconds (the
+///     `transcript` tailer touches activity per tool step), so they're never
+///     silent for long — a tight 90s window catches a real wedge fast.
+///   - opencode (TUI cold-start + first model call) and reasonix (serve + first
+///     SSE turn) have NO transcript tailer and can sit genuinely quiet for
+///     60-90s while working. The codebase's own budget for that first turn is
+///     ~100s (see `engine_probe::probe_timeout` opencode=100s / OPENCODE_TURN_
+///     TIMEOUT=75s), so 150s ≈ 1.5× that — comfortably above a slow-but-fine
+///     first turn, still bounded for a true wedge.
+/// Keep the opencode value in sync with `opencode_tui::deliver_bootstrap`'s
+/// overall window (they're the coupled "did opencode start its first turn" pair).
+fn first_response_watchdog_ms(engine: &str) -> u64 {
+    match engine {
+        "opencode" | "reasonix" => 150_000,
+        _ => 90_000,
+    }
+}
 
 fn now_ms() -> i64 {
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -787,11 +806,10 @@ pub(crate) async fn spawn_with_bookkeeping(
                         let store_wd = store.clone();
                         let swarm_wd = swarm.clone();
                         let agent_wd = agent_for_task.clone();
+                        let watchdog_ms = first_response_watchdog_ms(&engine_for_task);
                         tokio::spawn(async move {
-                            tokio::time::sleep(std::time::Duration::from_millis(
-                                FIRST_RESPONSE_WATCHDOG_MS,
-                            ))
-                            .await;
+                            tokio::time::sleep(std::time::Duration::from_millis(watchdog_ms))
+                                .await;
                             match store_wd.agent_silent_since_ready(agent_wd.clone()).await {
                                 Ok(true) => {
                                     let reason =
