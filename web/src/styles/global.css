@@ -100,7 +100,7 @@
   --color-status-exit: #52525B;          /* zinc-600 */
 
   /* Role colors stay distinctive so DAG / avatar legends read clearly. */
-  --color-agent-planner: #2563EB;     /* blue-600 — matches primary */
+  --color-agent-planner: #2563EB;     /* blue-600 */
   --color-agent-backend: #7C3AED;     /* violet-600 */
   --color-agent-frontend: #0891B2;    /* cyan-600 */
   --color-agent-architect: #DC2626;   /* red-600 */
@@ -457,8 +457,8 @@ a {
  * Reuses the existing token system so it tracks light / [data-theme=dark]. */
 .prose-chat {
   font-family: var(--font-body);
-  font-size: 13px;
-  line-height: 1.6;
+  font-size: 13.5px;
+  line-height: 1.68;
   color: inherit;
   word-break: break-word;
   overflow-wrap: anywhere;
@@ -627,6 +627,25 @@ a {
   40% {
     opacity: 1;
     transform: translateY(-2px);
+  }
+}
+
+/* ── Reduced motion (a11y) ───────────────────────────────────────────────
+ * Honour the OS "reduce motion" switch (vestibular disorders / motion
+ * sensitivity). We have several always-on motions — the PendingBubble typing
+ * dots, Loader2 spinners, hover/colour transitions, asciinema playback and
+ * the React Flow canvas — that have no opt-out otherwise. Near-zero the
+ * durations rather than `animation: none` so JS animationend/transitionend
+ * handlers still fire (some components wait on them). Andy Bell's canonical
+ * snippet. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }
 

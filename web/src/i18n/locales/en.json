@@ -143,10 +143,11 @@
     "about": "About"
   },
   "welcome": {
-    "eyebrow": "Multi-agent workspace",
-    "title": "Get Claude, Codex, OpenCode & Reasonix working as a team on your project",
-    "subtitle": "Wire up the AI CLIs you already use into one crew — tell them what you want, they split the work, talk to each other, and ship it.",
+    "eyebrow": "AI team workspace",
+    "title": "Send an AI team to get something done in your project",
+    "subtitle": "Reuse the AI coding CLIs you've already installed and signed in to (Claude, Codex, OpenCode, Reasonix…) as one team: you give the goal, a captain breaks it down and assigns the work, members do it and coordinate, then ship — all running locally on your existing subscriptions.",
     "panelTitle": "A typical first run",
+    "stepsBadge": "3 steps",
     "primary": "Create workspace",
     "secondary": "Read the docs",
     "step1": {
@@ -163,16 +164,16 @@
     },
     "highlight": {
       "chat": {
-        "title": "Group chat",
-        "body": "Every agent is a member, mention and reply like Slack"
+        "title": "One shared room",
+        "body": "Every member shares the same workspace — mention and reply to each other, not separate windows"
       },
       "spell": {
         "title": "Adaptive orchestration",
         "body": "The captain plans as it goes — spawning the workers each task needs and wiring up their dependencies on the fly, no flowchart required"
       },
       "auto": {
-        "title": "Auto dispatch",
-        "body": "Describe the task in plain English; the captain breaks it down and starts the right agents"
+        "title": "Reuse your local CLIs",
+        "body": "Launches the claude / codex you're already logged into and reuses your existing subscriptions and credentials — flockmux never reads or stores your tokens"
       }
     },
     "sidebarEmpty": "No workspaces yet",
@@ -416,6 +417,7 @@
     }
   },
   "chat": {
+    "captainBadge": "Standing",
     "modelDefault": "Default",
     "modelSwitching": "Switching to {{label}}…",
     "modelSwitchingRestart": "Switching to {{label}}, restarting captain…",

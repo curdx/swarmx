@@ -371,7 +371,7 @@ export default function ContextView() {
           {t("context.subtitle", { count: entries.length })}
         </span>
         <span className="flex-1" />
-        <div className="flex h-8 w-60 items-center gap-2 rounded-md bg-surface-primary px-3">
+        <div className="flex h-8 w-60 items-center gap-2 rounded-md bg-surface-primary px-3 transition-shadow focus-within:ring-2 focus-within:ring-ring/50">
           <Search className="size-3.5 text-foreground-tertiary" />
           <input
             name="context-search"
