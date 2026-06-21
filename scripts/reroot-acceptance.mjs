@@ -2,15 +2,15 @@
 // REAL-TOKEN acceptance test for the isolation → re-root flow (fd45c14 territory).
 //
 // Spawns real orchestrator CLIs, so it is NOT a CI test — run by hand against a
-// server started with a THROWAWAY flockmux data dir but the REAL $HOME (so the
+// server started with a THROWAWAY swarmx data dir but the REAL $HOME (so the
 // spawned claude/codex find their login), e.g.:
 //
 //   D=$(mktemp -d)
-//   FLOCKMUX_PORT=7799 FLOCKMUX_SERVER_URL=http://127.0.0.1:7799 \
-//     FLOCKMUX_DB_PATH=$D/d.db FLOCKMUX_WORKSPACES_DIR=$D/ws \
-//     FLOCKMUX_BLACKBOARD_DIR=$D/bb FLOCKMUX_RECORDINGS_DIR=$D/rec \
-//     RUST_LOG=warn ./target/debug/flockmux-server &
-//   FLOCKMUX_PORT=7799 node scripts/reroot-acceptance.mjs [reassign|orphan|both]
+//   SWARMX_PORT=7799 SWARMX_SERVER_URL=http://127.0.0.1:7799 \
+//     SWARMX_DB_PATH=$D/d.db SWARMX_WORKSPACES_DIR=$D/ws \
+//     SWARMX_BLACKBOARD_DIR=$D/bb SWARMX_RECORDINGS_DIR=$D/rec \
+//     RUST_LOG=warn ./target/debug/swarmx-server &
+//   SWARMX_PORT=7799 node scripts/reroot-acceptance.mjs [reassign|orphan|both]
 //
 // Two scenarios for how the user's opening request survives the orchestrator
 // swap when a direction is named (== isolation + re-root):
@@ -29,7 +29,7 @@ import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-const PORT = process.env.FLOCKMUX_PORT || "7799";
+const PORT = process.env.SWARMX_PORT || "7799";
 const BASE = `http://127.0.0.1:${PORT}`;
 const WS_SWARM = `ws://127.0.0.1:${PORT}/ws/swarm`;
 const REQUEST = "Please add a dark mode toggle to the settings page.";
@@ -80,7 +80,7 @@ const inbox = async (agent) => {
 
 async function runScenario(col, mode) {
   console.log(`\n========== scenario: ${mode} ==========`);
-  const cwd = await mkdtemp(path.join(tmpdir(), `flockmux-reroot-${mode}-`));
+  const cwd = await mkdtemp(path.join(tmpdir(), `swarmx-reroot-${mode}-`));
   await writeFile(path.join(cwd, "README.md"), "# reroot acceptance\n");
   execSync('git init -q && git add -A && git -c user.email=t@t -c user.name=t commit -qm init', { cwd });
 

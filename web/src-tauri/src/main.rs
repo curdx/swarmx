@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    flockmux_tauri_lib::run();
+    swarmx_tauri_lib::run();
 }

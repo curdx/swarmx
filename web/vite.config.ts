@@ -16,10 +16,10 @@ const pkg = JSON.parse(
 ) as { version: string };
 
 // Backend host:port the dev/preview proxy points at. Defaults to the standard
-// dev server on :7777; override with FLOCKMUX_BACKEND (e.g. "127.0.0.1:7788")
+// dev server on :7777; override with SWARMX_BACKEND (e.g. "127.0.0.1:7788")
 // to run an isolated test stack against a separate backend without disturbing
 // a long-lived :7777 dev session.
-const BACKEND = process.env.FLOCKMUX_BACKEND || "127.0.0.1:7777";
+const BACKEND = process.env.SWARMX_BACKEND || "127.0.0.1:7777";
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],

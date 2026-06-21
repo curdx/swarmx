@@ -19,61 +19,61 @@ const RENAME = path.join(HERE, "rename-release-assets.mjs");
 const MANIFEST = path.join(HERE, "gen-updater-manifest.mjs");
 const VERSION = "0.1.2";
 const TAG = "v0.1.2";
-const REPO = "curdx/flockmux-core";
+const REPO = "curdx/swarmx-core";
 
 // Exactly what the bundler emits per target (the v0.1.2 assets, with the old
 // Rust-triple prefix stripped — i.e. the raw bundler basenames).
 const RAW = {
   "aarch64-apple-darwin": [
-    "flockmux.app.tar.gz",
-    "flockmux.app.tar.gz.sig",
-    "flockmux_0.1.2_aarch64.dmg",
+    "swarmx.app.tar.gz",
+    "swarmx.app.tar.gz.sig",
+    "swarmx_0.1.2_aarch64.dmg",
   ],
   "x86_64-apple-darwin": [
-    "flockmux.app.tar.gz",
-    "flockmux.app.tar.gz.sig",
-    "flockmux_0.1.2_x64.dmg",
+    "swarmx.app.tar.gz",
+    "swarmx.app.tar.gz.sig",
+    "swarmx_0.1.2_x64.dmg",
   ],
   "x86_64-unknown-linux-gnu": [
-    "flockmux-0.1.2-1.x86_64.rpm",
-    "flockmux-0.1.2-1.x86_64.rpm.sig",
-    "flockmux_0.1.2_amd64.AppImage",
-    "flockmux_0.1.2_amd64.AppImage.sig",
-    "flockmux_0.1.2_amd64.deb",
-    "flockmux_0.1.2_amd64.deb.sig",
+    "swarmx-0.1.2-1.x86_64.rpm",
+    "swarmx-0.1.2-1.x86_64.rpm.sig",
+    "swarmx_0.1.2_amd64.AppImage",
+    "swarmx_0.1.2_amd64.AppImage.sig",
+    "swarmx_0.1.2_amd64.deb",
+    "swarmx_0.1.2_amd64.deb.sig",
   ],
   "x86_64-pc-windows-msvc": [
-    "flockmux_0.1.2_x64-setup.exe",
-    "flockmux_0.1.2_x64-setup.exe.sig",
-    "flockmux_0.1.2_x64_en-US.msi",
-    "flockmux_0.1.2_x64_en-US.msi.sig",
+    "swarmx_0.1.2_x64-setup.exe",
+    "swarmx_0.1.2_x64-setup.exe.sig",
+    "swarmx_0.1.2_x64_en-US.msi",
+    "swarmx_0.1.2_x64_en-US.msi.sig",
   ],
 };
 
 const EXPECTED = {
   "aarch64-apple-darwin": [
-    "flockmux_0.1.2_macos-arm64.app.tar.gz",
-    "flockmux_0.1.2_macos-arm64.app.tar.gz.sig",
-    "flockmux_0.1.2_macos-arm64.dmg",
+    "swarmx_0.1.2_macos-arm64.app.tar.gz",
+    "swarmx_0.1.2_macos-arm64.app.tar.gz.sig",
+    "swarmx_0.1.2_macos-arm64.dmg",
   ],
   "x86_64-apple-darwin": [
-    "flockmux_0.1.2_macos-x64.app.tar.gz",
-    "flockmux_0.1.2_macos-x64.app.tar.gz.sig",
-    "flockmux_0.1.2_macos-x64.dmg",
+    "swarmx_0.1.2_macos-x64.app.tar.gz",
+    "swarmx_0.1.2_macos-x64.app.tar.gz.sig",
+    "swarmx_0.1.2_macos-x64.dmg",
   ],
   "x86_64-unknown-linux-gnu": [
-    "flockmux_0.1.2_linux-x86_64.rpm",
-    "flockmux_0.1.2_linux-x86_64.rpm.sig",
-    "flockmux_0.1.2_linux-x86_64.AppImage",
-    "flockmux_0.1.2_linux-x86_64.AppImage.sig",
-    "flockmux_0.1.2_linux-x86_64.deb",
-    "flockmux_0.1.2_linux-x86_64.deb.sig",
+    "swarmx_0.1.2_linux-x86_64.rpm",
+    "swarmx_0.1.2_linux-x86_64.rpm.sig",
+    "swarmx_0.1.2_linux-x86_64.AppImage",
+    "swarmx_0.1.2_linux-x86_64.AppImage.sig",
+    "swarmx_0.1.2_linux-x86_64.deb",
+    "swarmx_0.1.2_linux-x86_64.deb.sig",
   ],
   "x86_64-pc-windows-msvc": [
-    "flockmux_0.1.2_windows-x64-setup.exe",
-    "flockmux_0.1.2_windows-x64-setup.exe.sig",
-    "flockmux_0.1.2_windows-x64.msi",
-    "flockmux_0.1.2_windows-x64.msi.sig",
+    "swarmx_0.1.2_windows-x64-setup.exe",
+    "swarmx_0.1.2_windows-x64-setup.exe.sig",
+    "swarmx_0.1.2_windows-x64.msi",
+    "swarmx_0.1.2_windows-x64.msi.sig",
   ],
 };
 
@@ -101,8 +101,8 @@ test("no 'unknown' or Rust triple leaks into any canonical name", () => {
 });
 
 test("suffixOf prefers the longest match (.sig pairs disambiguated)", () => {
-  assert.equal(suffixOf("flockmux.app.tar.gz.sig"), ".app.tar.gz.sig");
-  assert.equal(suffixOf("flockmux.app.tar.gz"), ".app.tar.gz");
+  assert.equal(suffixOf("swarmx.app.tar.gz.sig"), ".app.tar.gz.sig");
+  assert.equal(suffixOf("swarmx.app.tar.gz"), ".app.tar.gz");
   assert.equal(suffixOf("x_en-US.msi.sig"), ".msi.sig");
   assert.equal(suffixOf("x_en-US.msi"), ".msi");
   assert.equal(suffixOf("x-setup.exe.sig"), "-setup.exe.sig");
@@ -124,7 +124,7 @@ test("rename-release-assets.mjs produces the friendly set for every target", asy
 test("rename fails loudly on an unrecognized artifact", async () => {
   const raw = await tmp("fm-raw-bad-");
   const out = await tmp("fm-out-bad-");
-  await writeFile(path.join(raw, "flockmux_0.1.2_amd64.snap"), "x");
+  await writeFile(path.join(raw, "swarmx_0.1.2_amd64.snap"), "x");
   assert.throws(() =>
     execFileSync("node", [RENAME, raw, out, "x86_64-unknown-linux-gnu", VERSION], {
       stdio: "pipe",
@@ -134,11 +134,11 @@ test("rename fails loudly on an unrecognized artifact", async () => {
 
 test("gen-updater-manifest builds latest.json matching the uploaded files", async () => {
   // Lay out the renamed assets like actions/download-artifact does:
-  // release-artifacts/flockmux-<triple>/<canonical files>
+  // release-artifacts/swarmx-<triple>/<canonical files>
   const root = await tmp("fm-rel-");
   const sigBody = {}; // canonical .sig name → its signature content
   for (const triple of Object.keys(EXPECTED)) {
-    const dir = path.join(root, `flockmux-${triple}`);
+    const dir = path.join(root, `swarmx-${triple}`);
     await mkdir(dir, { recursive: true });
     for (const n of EXPECTED[triple]) {
       const body = n.endsWith(".sig") ? `SIGNATURE(${n})` : `bin(${n})`;
@@ -160,10 +160,10 @@ test("gen-updater-manifest builds latest.json matching the uploaded files", asyn
   // Every Tauri platform key present, each pointing at the real uploaded file.
   const base = `https://github.com/${REPO}/releases/download/${TAG}/`;
   const want = {
-    "darwin-aarch64": "flockmux_0.1.2_macos-arm64.app.tar.gz",
-    "darwin-x86_64": "flockmux_0.1.2_macos-x64.app.tar.gz",
-    "linux-x86_64": "flockmux_0.1.2_linux-x86_64.AppImage",
-    "windows-x86_64": "flockmux_0.1.2_windows-x64.msi",
+    "darwin-aarch64": "swarmx_0.1.2_macos-arm64.app.tar.gz",
+    "darwin-x86_64": "swarmx_0.1.2_macos-x64.app.tar.gz",
+    "linux-x86_64": "swarmx_0.1.2_linux-x86_64.AppImage",
+    "windows-x86_64": "swarmx_0.1.2_windows-x64.msi",
   };
   assert.deepEqual(Object.keys(manifest.platforms).sort(), Object.keys(want).sort());
   for (const [key, file] of Object.entries(want)) {
@@ -188,15 +188,15 @@ test("gen-updater-manifest FAILS LOUDLY if a built bundle is missing its .sig", 
   // naive generator would silently drop darwin-aarch64. We must refuse instead.
   const root = await tmp("fm-broken-");
   // linux is fully signed (so the run isn't entirely empty)
-  const lin = path.join(root, "flockmux-x86_64-unknown-linux-gnu");
+  const lin = path.join(root, "swarmx-x86_64-unknown-linux-gnu");
   await mkdir(lin, { recursive: true });
-  await writeFile(path.join(lin, "flockmux_0.1.2_linux-x86_64.AppImage"), "bin");
-  await writeFile(path.join(lin, "flockmux_0.1.2_linux-x86_64.AppImage.sig"), "SIG");
+  await writeFile(path.join(lin, "swarmx_0.1.2_linux-x86_64.AppImage"), "bin");
+  await writeFile(path.join(lin, "swarmx_0.1.2_linux-x86_64.AppImage.sig"), "SIG");
   // macOS arm64: bundle present, signature MISSING
-  const mac = path.join(root, "flockmux-aarch64-apple-darwin");
+  const mac = path.join(root, "swarmx-aarch64-apple-darwin");
   await mkdir(mac, { recursive: true });
-  await writeFile(path.join(mac, "flockmux_0.1.2_macos-arm64.app.tar.gz"), "bin");
-  await writeFile(path.join(mac, "flockmux_0.1.2_macos-arm64.dmg"), "bin");
+  await writeFile(path.join(mac, "swarmx_0.1.2_macos-arm64.app.tar.gz"), "bin");
+  await writeFile(path.join(mac, "swarmx_0.1.2_macos-arm64.dmg"), "bin");
 
   assert.throws(
     () =>
@@ -213,10 +213,10 @@ test("gen-updater-manifest is fine when a platform is genuinely not built", asyn
   // platform is legitimately absent (not 'broken'), so the manifest succeeds
   // with just the platforms that ran.
   const root = await tmp("fm-partial-");
-  const lin = path.join(root, "flockmux-x86_64-unknown-linux-gnu");
+  const lin = path.join(root, "swarmx-x86_64-unknown-linux-gnu");
   await mkdir(lin, { recursive: true });
-  await writeFile(path.join(lin, "flockmux_0.1.2_linux-x86_64.AppImage"), "bin");
-  await writeFile(path.join(lin, "flockmux_0.1.2_linux-x86_64.AppImage.sig"), "SIG");
+  await writeFile(path.join(lin, "swarmx_0.1.2_linux-x86_64.AppImage"), "bin");
+  await writeFile(path.join(lin, "swarmx_0.1.2_linux-x86_64.AppImage.sig"), "SIG");
 
   const out = JSON.parse(
     execFileSync("node", [MANIFEST, root, TAG, REPO, "2026-06-13T00:00:00Z"], {

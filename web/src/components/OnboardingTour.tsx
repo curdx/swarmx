@@ -7,7 +7,7 @@
  * 不盖住聊天输入，用户可以一边看一边继续工作。
  *
  * 触发条件：用户在 /chat/:wsId/* 下 (=已经有 workspace 了) + localStorage
- * 里 flockmux:tour:onboarding-v1 没标 seen。跳过 / 走完都会 mark seen，
+ * 里 swarmx:tour:onboarding-v1 没标 seen。跳过 / 走完都会 mark seen，
  * 不会再弹。版本号 v1 — 如果以后改 tour 内容可 bump v2 让老用户也再看一次。
  */
 
@@ -26,7 +26,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/cn";
 
-const STORAGE_KEY = "flockmux:tour:onboarding-v1";
+const STORAGE_KEY = "swarmx:tour:onboarding-v1";
 
 interface Step {
   icon: LucideIcon;
@@ -57,12 +57,12 @@ function markSeen() {
   }
 }
 
-/** Reset hook for debug: window.flockmux.resetTour() — handy when QA-ing. */
+/** Reset hook for debug: window.swarmx.resetTour() — handy when QA-ing. */
 if (typeof window !== "undefined") {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (window as any).flockmux = (window as any).flockmux || {};
+  (window as any).swarmx = (window as any).swarmx || {};
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (window as any).flockmux.resetTour = () => {
+  (window as any).swarmx.resetTour = () => {
     try {
       window.localStorage.removeItem(STORAGE_KEY);
       // eslint-disable-next-line no-console

@@ -148,7 +148,7 @@ test("terminal page requires an explicit connect action", async ({ page }) => {
 
 test("create workspace dialog keeps form controls named and labelled", async ({ page }) => {
   await page.addInitScript(() => {
-    window.localStorage.setItem("flockmux:tour:onboarding-v1", "1");
+    window.localStorage.setItem("swarmx:tour:onboarding-v1", "1");
   });
   await page.goto("/chat");
   await page.waitForLoadState("domcontentloaded");
@@ -211,8 +211,8 @@ test("notification mark-all-read uses app confirmation before changing read stat
 }) => {
   let markReadCalls = 0;
   await page.addInitScript(() => {
-    window.localStorage.setItem("flockmux:tour:onboarding-v1", "1");
-    window.localStorage.removeItem("flockmux:notif:read:v1");
+    window.localStorage.setItem("swarmx:tour:onboarding-v1", "1");
+    window.localStorage.removeItem("swarmx:notif:read:v1");
   });
   await page.route(/\/api\/message(\?.*)?$/, async (route) => {
     if (route.request().method() !== "GET") return route.fallback();
@@ -260,12 +260,12 @@ test("notification mark-all-read uses app confirmation before changing read stat
 
 test("privacy clear local data requires app confirmation", async ({ page }) => {
   await page.addInitScript(() => {
-    window.localStorage.setItem("flockmux:tour:onboarding-v1", "1");
-    window.localStorage.setItem("flockmux:test-preserve", "1");
+    window.localStorage.setItem("swarmx:tour:onboarding-v1", "1");
+    window.localStorage.setItem("swarmx:test-preserve", "1");
   });
 
   await page.goto("/settings/privacy");
-  await page.getByRole("button", { name: /清空 flockmux:\*|Clear flockmux:\*/ }).click();
+  await page.getByRole("button", { name: /清空 swarmx:\*|Clear swarmx:\*/ }).click();
   const dialog = page.getByRole("dialog", {
     name: /清空本地数据|Clear local data/,
   });
@@ -274,13 +274,13 @@ test("privacy clear local data requires app confirmation", async ({ page }) => {
   await dialog.getByRole("button", { name: /取消|Cancel/ }).click();
   await expect(dialog).toBeHidden();
   await expect
-    .poll(() => page.evaluate(() => window.localStorage.getItem("flockmux:test-preserve")))
+    .poll(() => page.evaluate(() => window.localStorage.getItem("swarmx:test-preserve")))
     .toBe("1");
 });
 
 test("mcp api-key dialog keeps the secret input named and labelled", async ({ page }) => {
   await page.addInitScript(() => {
-    window.localStorage.setItem("flockmux:tour:onboarding-v1", "1");
+    window.localStorage.setItem("swarmx:tour:onboarding-v1", "1");
   });
   await page.route("**/api/mcp/env", async (route) => {
     await route.fulfill({

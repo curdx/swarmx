@@ -398,7 +398,7 @@ export function CreateWizard({ open, onClose, onCreated }: Props) {
         throw new Error(
           t(
             "wizard.errBackendNotReady",
-            "本地服务尚未就绪,请稍候重试;若一直这样,重启 flockmux 即可。",
+            "本地服务尚未就绪,请稍候重试;若一直这样,重启 swarmx 即可。",
           ),
         );
       }

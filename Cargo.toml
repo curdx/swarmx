@@ -1,15 +1,15 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/flockmux-protocol",
-    "crates/flockmux-shim",
-    "crates/flockmux-pty",
-    "crates/flockmux-server",
-    "crates/flockmux-swarm",
-    "crates/flockmux-mcp",
-    "crates/flockmux-storage",
-    "crates/flockmux-recorder",
-    "crates/flockmux-cli",
+    "crates/swarmx-protocol",
+    "crates/swarmx-shim",
+    "crates/swarmx-pty",
+    "crates/swarmx-server",
+    "crates/swarmx-swarm",
+    "crates/swarmx-mcp",
+    "crates/swarmx-storage",
+    "crates/swarmx-recorder",
+    "crates/swarmx-cli",
 ]
 exclude = ["web/src-tauri"]
 
@@ -18,7 +18,7 @@ version = "0.1.2"
 edition = "2021"
 rust-version = "1.83"
 license = "MIT"
-authors = ["flockmux contributors"]
+authors = ["swarmx contributors"]
 
 [workspace.dependencies]
 # async runtime

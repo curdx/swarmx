@@ -1,7 +1,7 @@
 /**
  * Usage / Cost page (`/usage`).
  *
- * flockmux has no spend data from claude/codex (PTY transport, not an API), so
+ * swarmx has no spend data from claude/codex (PTY transport, not an API), so
  * the server scrapes per-turn token counts from each worker's session JSONL
  * into `agent_usage` and prices them at query time (GET /api/usage). This page
  * renders that: headline stat cards, a per-day token trend (pure-CSS bars, no
@@ -66,7 +66,7 @@ function fmtCacheHit(input: number, cacheRead: number): string {
   return `${Math.round((cacheRead / denom) * 100)}%`;
 }
 /** Collapse a `$HOME` prefix to `~` so the displayed pricing path doesn't leak
- *  the user's home dir (e.g. `/Users/jane/.flockmux/...` → `~/.flockmux/...`).
+ *  the user's home dir (e.g. `/Users/jane/.swarmx/...` → `~/.swarmx/...`).
  *  The browser can't read $HOME, so we pattern-match the platform home roots. */
 function foldHome(path: string): string {
   const m = path.match(/^(\/Users\/[^/]+|\/home\/[^/]+|[A-Za-z]:[\\/]Users[\\/][^\\/]+)/);
@@ -240,7 +240,7 @@ export default function UsageRoute() {
     setConfirm({
       title: t("usage.confirmResetTitle"),
       description: t("usage.confirmResetDesc", {
-        path: pricing ? foldHome(pricing.path) : "~/.flockmux/pricing.json",
+        path: pricing ? foldHome(pricing.path) : "~/.swarmx/pricing.json",
       }),
       confirmLabel: t("usage.pricingReset"),
       variant: "destructive",

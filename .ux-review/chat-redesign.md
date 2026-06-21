@@ -2,7 +2,7 @@ Confirmed: AgentDrawer is 872 lines with five tabs (terminal/activity/recordings
 
 ---
 
-# flockmux 聊天窗口重设计 · 最终推荐方案
+# swarmx 聊天窗口重设计 · 最终推荐方案
 
 > 合成方法：以评分最高的方向为骨架，嫁接其它方向被评委点名的最佳点子。两位评委分属不同视角——新手视角（conversation-first 88 / thread 80 / cockpit 64）和工程视角（cockpit 78 / conversation 71 / thread 64），结论相反。本方案不二选一，而是**用 conversation-first 的"单声道主轴"心智作为默认体验骨架**（这是新手视角与已批准的 final-redesign.md 都站的一边），**嫁接 cockpit-split 那套被工程评委称为"复用度最高、风险最低工程支点"的右面板/钻取机制作为可选的进阶层**，再从 thread-as-workspace 取"diff 进流的行级评审 + 合并闸门"这一个被两位评委都点名为直觉的收口动作。所有结论已对照真实代码验证（锚点见下）。
 
@@ -14,7 +14,7 @@ Confirmed: AgentDrawer is 872 lines with five tabs (terminal/activity/recordings
 
 1. **队长气泡近乎隐形，AI 输出不是视觉主角。** 当前用户蓝气泡是全屏最强元素，队长（真正的 payload）反而弱。这违反"AI 输出是 payload，必须最显眼"的基本盘。证据：`web/src/components/MessagesPanel.tsx:1178` 起的气泡渲染，用户态 accent 实底而队长态低对比。
 
-2. **等待期撒谎：PendingBubble 在成员静默死亡后仍挂 60s。** 后端的真相是 `AgentState` 有 `Error`/`Exited` 七态（`crates/flockmux-protocol/src/ws_swarm.rs:102-118`），且 90s 看门狗真的会 `record_agent_error("watchdog")`（`crates/flockmux-server/src/routes/rest.rs:33,711-730`）——但前端 typing 气泡没绑这些事实，绿点/spinner 在 agent 已死后继续转。证据：watchdog 常量与 `record_agent_error` 调用确证后端已知道"它死了"，是前端没读。
+2. **等待期撒谎：PendingBubble 在成员静默死亡后仍挂 60s。** 后端的真相是 `AgentState` 有 `Error`/`Exited` 七态（`crates/swarmx-protocol/src/ws_swarm.rs:102-118`），且 90s 看门狗真的会 `record_agent_error("watchdog")`（`crates/swarmx-server/src/routes/rest.rs:33,711-730`）——但前端 typing 气泡没绑这些事实，绿点/spinner 在 agent 已死后继续转。证据：watchdog 常量与 `record_agent_error` 调用确证后端已知道"它死了"，是前端没读。
 
 3. **"现在发生什么"在重连/冷加载后变空白。** `GET /api/agent/:id/activity` 的注释明确写它"served from the transcript tailer's in-memory ring"（`rest.rs:1125-1135`），广播通道"drops frames under flood"（`ws_swarm.rs:78-80`）。结果：刷新页面或断线重连后，活动信息归零，比不显示更显眼地撒谎。
 
@@ -147,7 +147,7 @@ Confirmed: AgentDrawer is 872 lines with five tabs (terminal/activity/recordings
 | **派工** | 派工卡（左色条 + ●进行中），`▾` 展开成小团队树（队长→成员→依赖） | 入流（折叠一行） | 点成员名→过滤/跳焦点；展开看子步骤。**取代独立 DAG 视图** | DAG 字段 `depends_on/produces/consumes` 已存在（`web/src/api/types.ts:92` + `dagEdgeDerivation.ts`）。**注意**：内联小团队树是从 843 行 `Dag.tsx` 的**重写**，不是白捡——需在排期承认 |
 | **交付** | 交付卡：`N 文件 +x/−y` + 测试输出折叠 + `[查看变更]` | 入流 | `[查看变更]`跳变更 tab | **新建**卡，数据来自 worktree diff + thread `dirty/ahead/behind` |
 | **审批/需要你** | 三要素卡：①做什么 ②为什么 ③预期结果 + `[批准][拒绝][看终端]` | 入流（红/琥珀，永不消失）+ 收件箱 + 桌面通知 | 禁裸 APPROVE/DENY | **新建**卡 |
-| **diff/变更** | **破例进流的收口动作**（thread 取此点）：1280px 点`[查看变更]`→流内就地展开为大卡（file list + 逐文件折叠，虚拟化）；1536+→右面板变更 tab，对话不被推走 | 流内/面板 | 行级评论（点行→"让队长改这里"→带 file:line 发成员）；**合并闸**：所有文件已看勾选 + rebase✓ + 测试○ + 评论已解决○ 才点亮 `[合并回 main]`，per-file accept 可挑拣 | **新建** review 面（flockmux 首个）；门从"写前"移到"合并前"（rCoding 共识） |
+| **diff/变更** | **破例进流的收口动作**（thread 取此点）：1280px 点`[查看变更]`→流内就地展开为大卡（file list + 逐文件折叠，虚拟化）；1536+→右面板变更 tab，对话不被推走 | 流内/面板 | 行级评论（点行→"让队长改这里"→带 file:line 发成员）；**合并闸**：所有文件已看勾选 + rebase✓ + 测试○ + 评论已解决○ 才点亮 `[合并回 main]`，per-file accept 可挑拣 | **新建** review 面（swarmx 首个）；门从"写前"移到"合并前"（rCoding 共识） |
 
 ### 4.4 Composer（含打断/排队/@/模型/优化/附件/键盘）
 
@@ -266,9 +266,9 @@ P0 把"不撒谎 + 不 firehose"立住，**不依赖新表**。
 ---
 
 **关键文件锚点（绝对路径）**：
-- 聊天主体：`/Users/wdx/opc/flockmux-core/web/src/components/MessagesPanel.tsx`（1799 行；Composer/草稿 263、@autocomplete 728-766、气泡 1178、思考块 1606）、`/Users/wdx/opc/flockmux-core/web/src/components/ChatMarkdown.tsx`
-- 右面板支点：`/Users/wdx/opc/flockmux-core/web/src/components/agent/AgentDrawer.tsx`（872 行，五 tab 在 :82-92）
-- 失败卡：`/Users/wdx/opc/flockmux-core/web/src/components/workspace/OrchestratorFailureCard.tsx`；模型：`/Users/wdx/opc/flockmux-core/web/src/components/ModelPicker.tsx`（:12 注释确证"restarts the live orchestrator"）；DAG：`/Users/wdx/opc/flockmux-core/web/src/routes/workspace/views/Dag.tsx`（843 行）、`/Users/wdx/opc/flockmux-core/web/src/lib/dagEdgeDerivation.ts`、`/Users/wdx/opc/flockmux-core/web/src/api/types.ts:92`
-- 后端事件源：`/Users/wdx/opc/flockmux-core/crates/flockmux-protocol/src/ws_swarm.rs`（AgentActivity 仅 tool/system kind :74-97；广播 drops frames :78-80；AgentState 七态 :102-118）
-- 后端事实：`/Users/wdx/opc/flockmux-core/crates/flockmux-server/src/routes/rest.rs`（看门狗 :33,711-730；interrupt/resume/interrupt_all/wake :1103,1806,1824,1861；activity 端点服务 in-memory ring :1125-1135）、`/Users/wdx/opc/flockmux-core/crates/flockmux-storage/src/store.rs`（messages kind+meta :1070；last_activity_at/touch :438-444）
+- 聊天主体：`/Users/wdx/opc/swarmx-core/web/src/components/MessagesPanel.tsx`（1799 行；Composer/草稿 263、@autocomplete 728-766、气泡 1178、思考块 1606）、`/Users/wdx/opc/swarmx-core/web/src/components/ChatMarkdown.tsx`
+- 右面板支点：`/Users/wdx/opc/swarmx-core/web/src/components/agent/AgentDrawer.tsx`（872 行，五 tab 在 :82-92）
+- 失败卡：`/Users/wdx/opc/swarmx-core/web/src/components/workspace/OrchestratorFailureCard.tsx`；模型：`/Users/wdx/opc/swarmx-core/web/src/components/ModelPicker.tsx`（:12 注释确证"restarts the live orchestrator"）；DAG：`/Users/wdx/opc/swarmx-core/web/src/routes/workspace/views/Dag.tsx`（843 行）、`/Users/wdx/opc/swarmx-core/web/src/lib/dagEdgeDerivation.ts`、`/Users/wdx/opc/swarmx-core/web/src/api/types.ts:92`
+- 后端事件源：`/Users/wdx/opc/swarmx-core/crates/swarmx-protocol/src/ws_swarm.rs`（AgentActivity 仅 tool/system kind :74-97；广播 drops frames :78-80；AgentState 七态 :102-118）
+- 后端事实：`/Users/wdx/opc/swarmx-core/crates/swarmx-server/src/routes/rest.rs`（看门狗 :33,711-730；interrupt/resume/interrupt_all/wake :1103,1806,1824,1861；activity 端点服务 in-memory ring :1125-1135）、`/Users/wdx/opc/swarmx-core/crates/swarmx-storage/src/store.rs`（messages kind+meta :1070；last_activity_at/touch :438-444）
 - 上位方案对照：`.ux-review/final-redesign.md`（在 main 工作树，非本分支）

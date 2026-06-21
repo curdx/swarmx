@@ -13,14 +13,14 @@ P0 两件事，互为底座：
 
 | 事实 | 出处 |
 |---|---|
-| `swarm_spawn_worker` 入参：`cli`(enum claude/codex)、`role_label`(自由串)、`system_prompt`、`handoff_signal`(自由串)、`depends_on`(自由串数组)、`model`(自由串) | `flockmux-mcp/src/tools.rs:140-176,569-630` |
-| worker 存储 `NewWorker`：`agent_id/parent_agent_id/role_label/system_prompt/handoff_signal/depends_on_json/spawned_at` | `flockmux-storage/src/models.rs:152-166` |
-| **BlackboardChanged 的 `path` = 生产者原样传入的 `rel_path`，服务端不重写** | `flockmux-swarm/src/swarm.rs:219-275` |
-| wake 匹配 = `keys.iter().any(\|k\| k == key)` **精确字符串相等**，writer 排除自身 | `flockmux-server/src/wake.rs:192-208` |
+| `swarm_spawn_worker` 入参：`cli`(enum claude/codex)、`role_label`(自由串)、`system_prompt`、`handoff_signal`(自由串)、`depends_on`(自由串数组)、`model`(自由串) | `swarmx-mcp/src/tools.rs:140-176,569-630` |
+| worker 存储 `NewWorker`：`agent_id/parent_agent_id/role_label/system_prompt/handoff_signal/depends_on_json/spawned_at` | `swarmx-storage/src/models.rs:152-166` |
+| **BlackboardChanged 的 `path` = 生产者原样传入的 `rel_path`，服务端不重写** | `swarmx-swarm/src/swarm.rs:219-275` |
+| wake 匹配 = `keys.iter().any(\|k\| k == key)` **精确字符串相等**，writer 排除自身 | `swarmx-server/src/wake.rs:192-208` |
 | 磁盘命名空间 `<workspace_id>/<thread.slug>/` 写在 rel_path 里（删方向按此前缀） | `routes/rest.rs:2104,2112` |
 | `.error`/`.failed` 后缀 fan-out 到 base key 的订阅者（已有） | `wake.rs:105-119` |
 | 孤儿 handoff 诊断（写了某 handoff 但 0 个 depends_on 命中）**目前只 `warn!`，不阻断** | `wake.rs:231-260,518-527` |
-| **已有** `RoleManifest`/`RoleRegistry`：`id/name/description/default_cli/artifact_paths/handoff_signal/depends_on/system_prompt_template`，`roles/*.md` 加载，`role_ref` 合并已实现+测试**但休眠**（只 `orchestrator` 在用） | `flockmux-server/src/roles.rs:45-152` |
+| **已有** `RoleManifest`/`RoleRegistry`：`id/name/description/default_cli/artifact_paths/handoff_signal/depends_on/system_prompt_template`，`roles/*.md` 加载，`role_ref` 合并已实现+测试**但休眠**（只 `orchestrator` 在用） | `swarmx-server/src/roles.rs:45-152` |
 | cycle 检测已存在（acyclic 校验） | `wake.rs:~888`；spells 也有 |
 
 **核心病灶**：生产者写的 key 与消费者 `depends_on` 列的 key，是两处独立的 LLM 自选字符串，靠**字节相等**对齐，中间还要 LLM 手搓 `<workspace_id>/<thread.slug>/` 前缀。少前缀 / 尾斜杠 / typo / 大小写 → 永远不唤醒，且生产者已成功退出（`.error` fallback 也不触发）。这是 docs F3 已记录的 bug 类。
@@ -33,7 +33,7 @@ P0 两件事，互为底座：
 - **扩展不新建**：复用现有 `RoleManifest`/`RoleRegistry`/`load_dir`/`role_ref` 合并，加字段、加内建角色、加项目级 override、接到 `swarm_spawn_worker`。
 - **角色作者声明，绝不让 LLM 运行时发明**（调研模式 #1）。
 - **`when_to_use`(面向 router) 与 `system_prompt`(面向 worker) 分开**——匹配只读薄描述符。
-- **可扩展但闭集**：内建默认 + 项目 `.flockmux/roles/*.toml` 按 slug 覆盖；坏条目 soft-fail（log + skip），未知 slug 在 spawn 时**硬报错**。
+- **可扩展但闭集**：内建默认 + 项目 `.swarmx/roles/*.toml` 按 slug 覆盖；坏条目 soft-fail（log + skip），未知 slug 在 spawn 时**硬报错**。
 
 ### 1.2 扩展后的 `RoleManifest`（TOML front-matter）
 
@@ -64,7 +64,7 @@ risk           = "normal"                # normal|high(P1-D 强制加 verifier)
 
 ### 1.3 内建角色 + 项目 override
 - **内建默认**：编译进二进制（`include_str!` 或 `RoleRegistry::builtin()`），保证 fresh checkout 可用。先发一小撮 vetted 角色（调研模式 #1/反模式 #6：小而精，防 ruflo 式 98 角色漂移）：`orchestrator`(已有)、`frontend`、`backend`、`reviewer`、`test-runner`、`docs-writer`、`researcher`、`fixer`。
-- **项目 override**：`<workspace_cwd>/.flockmux/roles/*.toml`，按 `id` 覆盖内建（同 RooCode `.roomodes` / claude-code-router 3 层 override）。`load_dir` 已 soft-fail（`roles.rs:98-128`），扩成「内建 → 项目」两层 merge。
+- **项目 override**：`<workspace_cwd>/.swarmx/roles/*.toml`，按 `id` 覆盖内建（同 RooCode `.roomodes` / claude-code-router 3 层 override）。`load_dir` 已 soft-fail（`roles.rs:98-128`），扩成「内建 → 项目」两层 merge。
 - **drift 测试**：生成 JSON-schema + 单测校验内建角色与 schema 一致（仿 RooCode）。
 
 ### 1.4 `swarm_spawn_worker` 工具变更
@@ -162,12 +162,12 @@ fn mint_handoff_key(thread_scope: &str, role_slug: &str, kind: &str) -> String
 
 | crate / 文件 | 改动 |
 |---|---|
-| `flockmux-server/src/roles.rs` | `RoleManifest` 加 `when_to_use/default_model_tier/produces/consumes/tool_allowlist/modality/risk`(均 default)；`RoleRegistry` 加 `builtin()` + 内建→项目两层 merge；加 `mint_handoff_key()` |
+| `swarmx-server/src/roles.rs` | `RoleManifest` 加 `when_to_use/default_model_tier/produces/consumes/tool_allowlist/modality/risk`(均 default)；`RoleRegistry` 加 `builtin()` + 内建→项目两层 merge；加 `mint_handoff_key()` |
 | `roles/*.toml`（新内建集） | frontend/backend/reviewer/test-runner/docs-writer/researcher/fixer + 现有 orchestrator |
-| `flockmux-mcp/src/tools.rs` | `swarm_spawn_worker` schema：`role_label→role`(slug)、删裸 `handoff_signal/depends_on`、加 `produces/consumes`；新增 `swarm_list_roles` |
-| `flockmux-server/src/routes/rest.rs`（`/api/worker`） | 解析 `role`→注册表校验；铸造 key；解析 `consumes`→depends_on；**spawn 前图校验**(未知/无生产者/环/did-you-mean)；prompt 注入铸造 key |
-| `flockmux-server/src/wake.rs` | `orphaned_*` 从 warn → fail-CLOSED(`blocked` 状态 + 唤醒 orchestrator)；铸造 key 与 `register_exit_key`/`register_wake_subs` 对齐 |
-| `flockmux-storage/src/models.rs` + migration | `NewWorker` 加 `role_slug/produces_json/consumes_json`；新 migration ADD COLUMN |
+| `swarmx-mcp/src/tools.rs` | `swarm_spawn_worker` schema：`role_label→role`(slug)、删裸 `handoff_signal/depends_on`、加 `produces/consumes`；新增 `swarm_list_roles` |
+| `swarmx-server/src/routes/rest.rs`（`/api/worker`） | 解析 `role`→注册表校验；铸造 key；解析 `consumes`→depends_on；**spawn 前图校验**(未知/无生产者/环/did-you-mean)；prompt 注入铸造 key |
+| `swarmx-server/src/wake.rs` | `orphaned_*` 从 warn → fail-CLOSED(`blocked` 状态 + 唤醒 orchestrator)；铸造 key 与 `register_exit_key`/`register_wake_subs` 对齐 |
+| `swarmx-storage/src/models.rs` + migration | `NewWorker` 加 `role_slug/produces_json/consumes_json`；新 migration ADD COLUMN |
 | 前端 DAG | 边由 `consumes`(typed) 画，不再解析裸串；`blocked` 状态新样式 |
 
 ---
@@ -183,8 +183,8 @@ fn mint_handoff_key(thread_scope: &str, role_slug: &str, kind: &str) -> String
 
 ## 5. 为什么这是 P0（调研依据）
 
-- typed handoff key 是**全仓库最强共识**（调研模式 #3）：openai-agents-python `handoff()` 返对象+`input_type` 校验、langgraph build 时集合差断言、conductor 注册即失败、MetaGPT `cause_by` 从类算出、agno 服务端铸造 ID。flockmux 当前的裸串正是反模式 #1，且已中招(F3)。
-- 角色注册表是解决 #1/#3 的**底座**，且 flockmux **已有 80% 实现**（休眠的 `roles.rs`），P0 主要是激活+接线，effort 真实为 M。
+- typed handoff key 是**全仓库最强共识**（调研模式 #3）：openai-agents-python `handoff()` 返对象+`input_type` 校验、langgraph build 时集合差断言、conductor 注册即失败、MetaGPT `cause_by` 从类算出、agno 服务端铸造 ID。swarmx 当前的裸串正是反模式 #1，且已中招(F3)。
+- 角色注册表是解决 #1/#3 的**底座**，且 swarmx **已有 80% 实现**（休眠的 `roles.rs`），P0 主要是激活+接线，effort 真实为 M。
 - 二者互锁：注册表的 `produces/consumes` 喂给 key 铸造与图校验；没有注册表，typed key 没有「角色」可锚。
 
 ---
@@ -207,7 +207,7 @@ fn mint_handoff_key(thread_scope: &str, role_slug: &str, kind: &str) -> String
 | 内建角色文件 | ✅ | `roles/` 新增 frontend/backend/reviewer/test-runner/docs-writer/researcher/fixer(+现有 orchestrator)。 |
 | 存储层 + migration 0011 | ✅ | `NewWorker` 加 role_slug/produces_json/consumes_json；migration 0011 三列 ADD COLUMN；record_worker/list_workers_by_ids 同步;2 往返单测绿。 |
 | MCP 工具 | ✅ | `swarm_spawn_worker`：role(slug)+produces+consumes，删裸 handoff_signal/depends_on，cli/model 转可选；新增 `swarm_list_roles`；工具计数测试 9→10。 |
-| `/api/worker` 校验+铸造 | ✅ | 角色注册表校验(未知→400+valid options+Levenshtein did-you-mean) + 项目 `.flockmux/roles/` overlay；cli/model 从 role 默认解析；produces→minted keys；consumes 图校验(未知/不产该 kind/自依赖→400)→minted depends_on；铸造 key 注入 worker prompt；新增 GET /api/roles。 |
+| `/api/worker` 校验+铸造 | ✅ | 角色注册表校验(未知→400+valid options+Levenshtein did-you-mean) + 项目 `.swarmx/roles/` overlay；cli/model 从 role 默认解析；produces→minted keys；consumes 图校验(未知/不产该 kind/自依赖→400)→minted depends_on；铸造 key 注入 worker prompt；新增 GET /api/roles。 |
 | WakeCoordinator fail-CLOSED | ✅(部分) | 死亡 fallback 的 `.error` key 对齐为 `<minted_signal>.error`(与 worker 自愿失败一致；base_key_aliases 精确 fan 到 `.done` 消费者)；orchestrator+依赖方在生产者死亡时经 `select_targets(signal)` 已被唤醒。2 wake 单测绿。 |
 | 前端 DAG | ✅(无需改) | `web/src/lib/dagEdgeDerivation.ts` 按 handoff_signal↔depends_on 匹配画边;二者现皆 server-minted 且一致 → **零改动照常工作**,minted key 可读显示。 |
 | 回归测试 | ✅(自动化部分) | roles/wake/storage 确定性单测已落并绿(契合 E2E 策略 memory)。 |

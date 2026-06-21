@@ -1,14 +1,14 @@
 # Claude Code CLI plugin.
 #
-# Spawned under flockmux-shim. HOME is passed through so the agent reads
+# Spawned under swarmx-shim. HOME is passed through so the agent reads
 # OAuth credentials from ~/.claude/.credentials.json on first launch (and
 # subsequent launches skip the OAuth flow).
 
 id = "claude"
 display_name = "Claude Code"
 binary = "claude"
-# Skip per-tool approval prompts. flockmux workspaces are ephemeral,
-# isolated, flockmux-owned; without this every MCP swarm_* tool call
+# Skip per-tool approval prompts. swarmx workspaces are ephemeral,
+# isolated, swarmx-owned; without this every MCP swarm_* tool call
 # would gate on a manual "1. Yes" in the PTY and block M5-style
 # autonomous coordination.
 default_args = ["--dangerously-skip-permissions"]
@@ -22,15 +22,15 @@ requires_explicit_billing_opt_in = false
 # reaches Claude Code, it can prefer API billing over the user's interactive
 # Claude subscription login.
 blocked_env_prefixes = ["ANTHROPIC_"]
-# Workspaces we create under ~/.flockmux/workspaces/ are trusted by
+# Workspaces we create under ~/.swarmx/workspaces/ are trusted by
 # construction; pre-patch the per-project flag so claude doesn't prompt.
 auto_trust_workspace = true
-# Pre-spawn writes ~/.claude.json projects.<ws>.mcpServers.flockmux-swarm
+# Pre-spawn writes ~/.claude.json projects.<ws>.mcpServers.swarmx-swarm
 # (local scope ⇒ no "trust this MCP server?" prompt). Per-spawn entry
 # carries the agent_id.
 auto_inject_mcp = true
 # Pre-spawn writes a `Stop` hook into <workspace>/.claude/settings.local.json
-# that calls `flockmux-mcp wake-check`. At every turn boundary the hook
+# that calls `swarmx-mcp wake-check`. At every turn boundary the hook
 # probes /api/message/unread_count; if the agent has unread mail, the hook
 # returns `{decision:"block", reason:"..."}` and claude continues into a
 # new turn that picks the messages up via swarm_list_messages.
@@ -72,7 +72,7 @@ max = "max"        # claude's true ceiling, supported on the effort-aware models
 # match, raises AgentState::Error so the UI shows an honest, actionable failure
 # card instead of a fake "online" dot + "暂无消息".
 #
-# "Not logged in" is verified against a real flockmux recording: claude prints
+# "Not logged in" is verified against a real swarmx recording: claude prints
 # "Not logged in · Run /login" (and "… · Please run /login") verbatim when no
 # OAuth credential is present. The common substring is the stable needle.
 [[health_needles]]

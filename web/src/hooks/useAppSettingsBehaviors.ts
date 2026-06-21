@@ -1,6 +1,6 @@
 /**
  * useAppSettingsBehaviors — wires the three behavioural Settings toggles
- * (routes/settings.tsx → flockmux:settings:v1) to real runtime effects. Mounted
+ * (routes/settings.tsx → swarmx:settings:v1) to real runtime effects. Mounted
  * once, in AppShell, so it lives across every route.
  *
  * 1. openMainOnLaunch — on first mount under Tauri, if the user opted out, hide
@@ -65,7 +65,7 @@ async function notifyAgentReply(from: string): Promise<void> {
     if (!granted) granted = (await requestPermission()) === "granted";
     if (granted)
       sendNotification({
-        title: "flockmux",
+        title: "swarmx",
         body: i18n.t("agent.notifyReply", { from, defaultValue: "{{from}} 回复了你" }),
       });
   } catch {

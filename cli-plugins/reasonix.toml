@@ -2,8 +2,8 @@
 #
 # Unlike claude/codex (PTY keystroke) and opencode (PTY TUI + /tui HTTP),
 # reasonix is driven via its OWN `reasonix serve` mode: a headless HTTP+SSE
-# session server (browser client at /). flockmux spawns
-#   flockmux-shim reasonix serve --model <m> --addr 127.0.0.1:<port>
+# session server (browser client at /). swarmx spawns
+#   swarmx-shim reasonix serve --model <m> --addr 127.0.0.1:<port>
 # under the PTY (so lifecycle/kill/is_alive reuse the existing machinery — the
 # PTY just carries serve's one-line startup banner), then drives EVERYTHING over
 # HTTP:
@@ -20,8 +20,8 @@
 # events via POST /api/agent/:id/activity).
 #
 # MCP: reasonix reads the Claude Code `mcpServers` schema from a project-root
-# `.mcp.json` as-is (verified live: it exposed mcp__flockmux-swarm__swarm_* to
-# the model). So the adapter drops the SAME per-agent .mcp.json body flockmux
+# `.mcp.json` as-is (verified live: it exposed mcp__swarmx-swarm__swarm_* to
+# the model). So the adapter drops the SAME per-agent .mcp.json body swarmx
 # writes for claude into the workspace. Format `reasonix-mcp-json`.
 #
 # Auth/billing: DeepSeek API key via the DEEPSEEK_API_KEY env var (spawn.rs

@@ -1,9 +1,9 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "flockmux",
-  "mainBinaryName": "flockmux-tauri",
+  "productName": "swarmx",
+  "mainBinaryName": "swarmx-tauri",
   "version": "0.1.2",
-  "identifier": "com.flockmux.desktop",
+  "identifier": "com.swarmx.desktop",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:5173",
@@ -14,7 +14,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "flockmux",
+        "title": "swarmx",
         "width": 1440,
         "height": 900,
         "minWidth": 1024,
@@ -36,12 +36,12 @@
     "targets": "all",
     "createUpdaterArtifacts": true,
     "externalBin": [
-      "binaries/flockmux-server",
-      "binaries/flockmux-shim",
-      "binaries/flockmux-mcp"
+      "binaries/swarmx-server",
+      "binaries/swarmx-shim",
+      "binaries/swarmx-mcp"
     ],
     "resources": {
-      "../../cli-plugins/opencode/flockmux-wake.js": "cli-plugins/opencode/flockmux-wake.js"
+      "../../cli-plugins/opencode/swarmx-wake.js": "cli-plugins/opencode/swarmx-wake.js"
     },
     "icon": [
       "icons/32x32.png",
@@ -55,7 +55,7 @@
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDFDOEIwMDI1OEI5OTFBRjkKUldUNUdwbUxKUUNMSEVPcmM1d3I1TE1iQW9TMGFHQjFEaHFFamNrUkhtVVg1aGZqTDVQYnI5ZEYK",
       "endpoints": [
-        "https://github.com/curdx/flockmux-core/releases/latest/download/latest.json"
+        "https://github.com/curdx/swarmx-core/releases/latest/download/latest.json"
       ]
     }
   }

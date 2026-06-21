@@ -11,7 +11,7 @@ role_ref = "orchestrator"
 # init
 
 One-agent spell run at workspace creation. The agent is the
-**orchestrator** (see `roles/orchestrator.md`) — flockmux's single
+**orchestrator** (see `roles/orchestrator.md`) — swarmx's single
 point of contact per workspace. It runs Phase A (scan + greet) on
 first wake, then sits in Phase B (dual-ledger loop) for the lifetime
 of the workspace.

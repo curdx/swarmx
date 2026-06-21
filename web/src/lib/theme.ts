@@ -11,7 +11,7 @@
  *   - useTheme() is the hook Settings (and anywhere else) wires to.
  */
 
-const STORAGE_KEY = "flockmux:settings:v1";
+const STORAGE_KEY = "swarmx:settings:v1";
 
 export type ThemeMode = "light" | "dark" | "system";
 

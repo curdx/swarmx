@@ -66,9 +66,9 @@ function structFields(text, structName) {
 // mapping → compiles fine, field is SILENTLY dropped from the API response.
 // ─────────────────────────────────────────────────────────────────────────
 {
-  const restPath = "crates/flockmux-protocol/src/rest.rs";
-  const modelsPath = "crates/flockmux-storage/src/models.rs";
-  const swarmRoutePath = "crates/flockmux-server/src/routes/swarm.rs";
+  const restPath = "crates/swarmx-protocol/src/rest.rs";
+  const modelsPath = "crates/swarmx-storage/src/models.rs";
+  const swarmRoutePath = "crates/swarmx-server/src/routes/swarm.rs";
   const restText = await readText(restPath);
   const modelsText = await readText(modelsPath);
   const swarmRoute = await readText(swarmRoutePath);
@@ -112,18 +112,18 @@ function structFields(text, structName) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// Rule 2 — every public type in flockmux-storage::models must be re-exported
+// Rule 2 — every public type in swarmx-storage::models must be re-exported
 // from its lib.rs.
 //
-// Root cause it guards: `flockmux-storage/src/lib.rs` re-exports models via an
+// Root cause it guards: `swarmx-storage/src/lib.rs` re-exports models via an
 // EXPLICIT list (`pub use models::{...}`), not `pub use models::*`. Add a
 // `pub struct/enum` to models.rs but forget the list → storage compiles, but
 // external crates (server/swarm) can't reference the new type, and it's easy
 // to miss until something downstream won't build.
 // ─────────────────────────────────────────────────────────────────────────
 {
-  const modelsPath = "crates/flockmux-storage/src/models.rs";
-  const libPath = "crates/flockmux-storage/src/lib.rs";
+  const modelsPath = "crates/swarmx-storage/src/models.rs";
+  const libPath = "crates/swarmx-storage/src/lib.rs";
   const modelsText = await readText(modelsPath);
   const libText = await readText(libPath);
 
@@ -162,9 +162,9 @@ function structFields(text, structName) {
   const conf = JSON.parse(await readText(confPath));
   const externalBin = conf?.bundle?.externalBin;
   const required = [
-    "binaries/flockmux-server",
-    "binaries/flockmux-shim",
-    "binaries/flockmux-mcp",
+    "binaries/swarmx-server",
+    "binaries/swarmx-shim",
+    "binaries/swarmx-mcp",
   ];
   if (!Array.isArray(externalBin)) {
     fail(`规则3: ${confPath} 的 bundle.externalBin 不是数组（或缺失）`);
@@ -183,7 +183,7 @@ function structFields(text, structName) {
 // Rule 4 — codex worker spawn must keep injecting a per-agent CODEX_HOME.
 //
 // Root cause it guards: codex workers MUST run with an isolated CODEX_HOME so
-// they load ONLY the flockmux-swarm MCP, not the user's personal ~/.codex MCP
+// they load ONLY the swarmx-swarm MCP, not the user's personal ~/.codex MCP
 // servers (chrome-devtools, pencil, …) which stall a headless worker at
 // startup (503 / hangs). If a refactor of the spawn env drops this line, codex
 // workers silently fall back to the global ~/.codex and break.
@@ -195,8 +195,8 @@ function structFields(text, structName) {
 // Both must stay put.
 // ─────────────────────────────────────────────────────────────────────────
 {
-  const codexAdapterPath = "crates/flockmux-server/src/cli/codex.rs";
-  const dispatchPath = "crates/flockmux-server/src/cli/mod.rs";
+  const codexAdapterPath = "crates/swarmx-server/src/cli/codex.rs";
+  const dispatchPath = "crates/swarmx-server/src/cli/mod.rs";
   const codexAdapterText = await readText(codexAdapterPath);
   const dispatchText = await readText(dispatchPath);
   // Match the quoted literal `"CODEX_HOME"` — it only appears in the actual
@@ -230,8 +230,8 @@ function structFields(text, structName) {
 // ─────────────────────────────────────────────────────────────────────────
 {
   const { readdir } = await import("node:fs/promises");
-  const migDir = "crates/flockmux-storage/migrations";
-  const schemaPath = "crates/flockmux-storage/src/schema.rs";
+  const migDir = "crates/swarmx-storage/migrations";
+  const schemaPath = "crates/swarmx-storage/src/schema.rs";
   const schema = await readText(schemaPath);
   let files = [];
   try {
@@ -301,10 +301,10 @@ function structFields(text, structName) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// 规则7: 每个被代码读取的 FLOCKMUX_* 变量必须在 docs/configuration.md 有条目。
-// Root cause it guards: a new `std::env::var("FLOCKMUX_NEW_THING")` ships but
+// 规则7: 每个被代码读取的 SWARMX_* 变量必须在 docs/configuration.md 有条目。
+// Root cause it guards: a new `std::env::var("SWARMX_NEW_THING")` ships but
 // nobody documents it, so users can't discover the knob. Scan every .rs under
-// crates/ for `FLOCKMUX_*` and assert the config doc mentions each.
+// crates/ for `SWARMX_*` and assert the config doc mentions each.
 // ─────────────────────────────────────────────────────────────────────────
 {
   const { readdir, readFile: rf } = await import("node:fs/promises");
@@ -326,7 +326,7 @@ function structFields(text, structName) {
   await collectRs(path.join(root, "crates"), sources);
   const used = new Set();
   for (const text of sources) {
-    for (const m of text.matchAll(/FLOCKMUX_[A-Z_]+/g)) used.add(m[0]);
+    for (const m of text.matchAll(/SWARMX_[A-Z_]+/g)) used.add(m[0]);
   }
   let doc = "";
   try {

@@ -1,4 +1,4 @@
-# flockmux 逐元素审查报告 — 蜂群 / 聊天 / 黑板 / 上下文
+# swarmx 逐元素审查报告 — 蜂群 / 聊天 / 黑板 / 上下文
 
 > 日期：2026-06-06　方法：挑剔 reviewer 视角，**对着真实运行的产品**（release server :7777，真机触发真实 orchestrator + codex worker 端到端）逐元素走查，并以业界最佳实践为标尺（Cursor 2.0/3、Devin、Manus、Magentic-UI、Claude Code Agent view、Linear、Figma、Temporal/Airflow、MUI X）。代码层证据由三个并行研究 agent 提供并经现实交叉验证。
 >
@@ -8,13 +8,13 @@
 
 ## 0. 一句话结论
 
-flockmux 的**任务台账 + 黑板 + 协作图 + typed handoff key** 这套"结构化协作底座"，正是 2025-2026 业界（Cursor 100-agents、OpenAI Symphony）用真实数据验证过的最大杠杆（issue-tracker 当 agent 控制平面 → OpenAI 内部 +500% landed PR）。**底座已是产品护城河，但 UI 把它当只读进度条用了**。最高价值的方向不是加功能，而是把这套已有的底座在 UI 上"做成一等公民、可人机共写"。
+swarmx 的**任务台账 + 黑板 + 协作图 + typed handoff key** 这套"结构化协作底座"，正是 2025-2026 业界（Cursor 100-agents、OpenAI Symphony）用真实数据验证过的最大杠杆（issue-tracker 当 agent 控制平面 → OpenAI 内部 +500% landed PR）。**底座已是产品护城河，但 UI 把它当只读进度条用了**。最高价值的方向不是加功能，而是把这套已有的底座在 UI 上"做成一等公民、可人机共写"。
 
 同时，**逐元素审出一批真实可用性问题**，其中一条（通知里 manual wake 显示成空白行）是上一次 commit `f5d4dd4` 我自己引入的回归 —— 一并诚实列出。
 
 ---
 
-## 1. 站在巨人肩膀上：flockmux 已经做对的（先肯定）
+## 1. 站在巨人肩膀上：swarmx 已经做对的（先肯定）
 
 现实走查中验证为**符合或领先最佳实践**的点，不要在重构中弄丢：
 
@@ -141,7 +141,7 @@ flockmux 的**任务台账 + 黑板 + 协作图 + typed handoff key** 这套"结
 4. **【高】DAG 两图分离 + 统一状态色 + key humanize + 事件组折叠**：计划态/执行态分离；灰/黄/绿/红；handoff key 复用 humanize；高频活动折成 span。（Temporal/Airflow）
 5. **【中】整体走 Linear 视觉路线**（信息密集但平静：调暗次要元素、减分隔线、少强色）+ Figma ephemeral 在场感（黑板读写高亮、跟随某 worker、空闲淡出、隐藏开关）。同时解决"去 AI-slop"。
 6. **【中】全屏 agent 控制台**：一屏看每个 worker 在干什么/是否等输入/是否完成 + token 用量，"窥视不打断"。（Claude Code Agent view）
-7. **【中】可回放工具级时间轴**：flockmux 已读会话 JSONL，升级成可 step-through 回放。（Manus/Devin）
+7. **【中】可回放工具级时间轴**：swarmx 已读会话 JSONL，升级成可 step-through 回放。（Manus/Devin）
 
 ---
 
@@ -155,7 +155,7 @@ flockmux 的**任务台账 + 黑板 + 协作图 + typed handoff key** 这套"结
 5. ✅ 台账实时更新（Plan: backend 进行中 / Status: dispatched / Assignments owner）；
 6. ❌ worker done → 汇报闭环 **未达成**：codex worker spawn 后 10+ 分钟 `last_activity_at:null`（进程 shim_ready，但从未产生任何工具活动），UI 正确标 🟡「无响应」；orchestrator 已 idle，永久等待 `backend.done`，无超时兜底。
 
-**闭环结论**：happy-path 的**可观测性全链路打通**（自动上线 / 实时活动 / spawn / DAG / 台账实时更新均现实验证通过）；但撞上真实的 **codex worker 卡死（从未活动）** 边界 —— 同时暴露 flockmux 可靠性短板（S5）与 codex 集成脆弱（呼应历史 m5b codex trust gate）。**"对着现实从头跑一遍"恰好逼出 happy-path 测不到的故障路径。**
+**闭环结论**：happy-path 的**可观测性全链路打通**（自动上线 / 实时活动 / spawn / DAG / 台账实时更新均现实验证通过）；但撞上真实的 **codex worker 卡死（从未活动）** 边界 —— 同时暴露 swarmx 可靠性短板（S5）与 codex 集成脆弱（呼应历史 m5b codex trust gate）。**"对着现实从头跑一遍"恰好逼出 happy-path 测不到的故障路径。**
 
 ---
 

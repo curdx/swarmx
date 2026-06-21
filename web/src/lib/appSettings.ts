@@ -1,7 +1,7 @@
 /**
  * appSettings — runtime read of the user's behavioural preferences.
  *
- * These three toggles live in the SAME `flockmux:settings:v1` localStorage blob
+ * These three toggles live in the SAME `swarmx:settings:v1` localStorage blob
  * the Settings page (routes/settings.tsx) owns and writes; theme.ts / i18n read
  * their own slices of it the same way. We only READ here — Settings is the sole
  * writer — and we read fresh on every call (no subscription, no cache), so a
@@ -12,7 +12,7 @@
  * JSON / no-localStorage environment all fall back to them.
  */
 
-const STORAGE_KEY = "flockmux:settings:v1";
+const STORAGE_KEY = "swarmx:settings:v1";
 
 export interface AppSettings {
   /** Show the main window on launch. false ⇒ start hidden to the tray (Tauri). */

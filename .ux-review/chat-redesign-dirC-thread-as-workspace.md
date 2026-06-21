@@ -2,13 +2,13 @@
 
 ---
 
-# flockmux 聊天窗口重设计：「会话即编排台」
+# swarmx 聊天窗口重设计：「会话即编排台」
 
 ## 1. 一句话主张
 
 **押注「边看边操控」——对话流本身就是编排界面,队长的计划、派工、交付、审批、变更全部以可操作的结构化卡内联进同一条流里,用户在不离开对话的前提下随时插话/打断/批准/合并,而不是看完再切到别的 tab 去操作。**
 
-赌注的反面很明确:我们**不做**右侧 50% 的常驻 work surface 分屏(Devin/Manus 那套),因为 flockmux 是「1 人 + 1 队长 + N 临时成员」的编排场景,而非「1 人盯 1 个 agent 干活」的陪看场景。常驻分屏会把用户钉在「旁观者」位置;我们要的是用户作为「编排者」始终握着方向盘。终端/录像这类高频噪音 surface 退到按需抽屉,**唯独 diff review 破例进流**——因为合并是收口动作,必须在用户视线主轴上完成。
+赌注的反面很明确:我们**不做**右侧 50% 的常驻 work surface 分屏(Devin/Manus 那套),因为 swarmx 是「1 人 + 1 队长 + N 临时成员」的编排场景,而非「1 人盯 1 个 agent 干活」的陪看场景。常驻分屏会把用户钉在「旁观者」位置;我们要的是用户作为「编排者」始终握着方向盘。终端/录像这类高频噪音 surface 退到按需抽屉,**唯独 diff review 破例进流**——因为合并是收口动作,必须在用户视线主轴上完成。
 
 ---
 
@@ -216,7 +216,7 @@
 - **1280px**:点交付卡的 `[查看变更]` → diff 在流里**就地展开为一张大卡**(file list + 逐文件折叠 diff),顶到当前滚动位置。用户在卡内做行级评审,卡底是合并闸门。看完收起,流继续。
 - **1536px+**:同一动作 → diff 在右 dock 展开,对话不被推走,可一边看 diff 一边在 composer 指挥。
 
-**行级评审评论**(现状 `final-redesign.md:249` + rCoding:merge-time gate):点 diff 某行 → 内联输入「让成员改这里」→ 作为带 `file:line` 上下文的消息发给该成员(回到流里成为一条定向消息)。这是 flockmux 第一个 review surface。评论「解决」用启发式(后续 diff 覆盖该行)+ 允许手动 toggle(现状 P2:启发式脆弱,留人工兜底)。
+**行级评审评论**(现状 `final-redesign.md:249` + rCoding:merge-time gate):点 diff 某行 → 内联输入「让成员改这里」→ 作为带 `file:line` 上下文的消息发给该成员(回到流里成为一条定向消息)。这是 swarmx 第一个 review surface。评论「解决」用启发式(后续 diff 覆盖该行)+ 允许手动 toggle(现状 P2:启发式脆弱,留人工兜底)。
 
 **合并闸门**(rCoding:gate 从 before-write 移到 before-merge):
 ```
@@ -307,7 +307,7 @@
 
 2. **牺牲流的纯净度**。把派工/交付/审批/diff 全塞进一条流,流会变「重」——结构卡比聊天气泡占更多垂直空间。短会话还好,长会话(20+ 派工)流会很长。缓解:派工卡折叠成一行 + 时间分隔 + 计划卡作为粘性导航锚,但这是真实代价。
 
-3. **牺牲并行的空间分离**。Vibe Kanban/Conductor 用 kanban 看板给每个 agent 独立 lane,空间上天然不冲突。我们坚持单流 + 派工卡,在**极高并行(8+ 成员)**时,即使折叠成一行,流里也会有 8 张卡上下堆叠,不如看板一目了然。我们赌 flockmux 典型并行度是 2–5(现状 Crystal 模型 N=3–5 甜点),单流够用;真到 8+,成员条 + 收件箱兜底,但承认这是上限。
+3. **牺牲并行的空间分离**。Vibe Kanban/Conductor 用 kanban 看板给每个 agent 独立 lane,空间上天然不冲突。我们坚持单流 + 派工卡,在**极高并行(8+ 成员)**时,即使折叠成一行,流里也会有 8 张卡上下堆叠,不如看板一目了然。我们赌 swarmx 典型并行度是 2–5(现状 Crystal 模型 N=3–5 甜点),单流够用;真到 8+,成员条 + 收件箱兜底,但承认这是上限。
 
 4. **对键盘重度用户的学习成本**:QUEUE/INTERRUPT 双发送(Enter vs ⌘Enter)是已知的混淆源(rCoding:Claude Code 自己都有这个文档化困惑)。我们用「待发 chip + 插话前确认」缓解,但仍需用户建立心智模型。
 
@@ -358,8 +358,8 @@
 ---
 
 **关键文件锚点**(均为绝对路径):
-- 聊天主体:`/Users/wdx/opc/flockmux-core/web/src/components/.../MessagesPanel.tsx`、`Chat.tsx`
+- 聊天主体:`/Users/wdx/opc/swarmx-core/web/src/components/.../MessagesPanel.tsx`、`Chat.tsx`
 - 复用为右抽屉:`AgentDrawer.tsx`;失败卡:`OrchestratorFailureCard.tsx`;模型:`ModelPicker.tsx`
-- 事件协议(需扩展持久化):`/Users/wdx/opc/flockmux-core/crates/flockmux-protocol/src/ws_swarm.rs`
-- 活动来源(tailer):`/Users/wdx/opc/flockmux-core/crates/flockmux-server/src/transcript.rs`
-- 完整重设计上位方案:`/Users/wdx/opc/flockmux-core/.ux-review/final-redesign.md`
+- 事件协议(需扩展持久化):`/Users/wdx/opc/swarmx-core/crates/swarmx-protocol/src/ws_swarm.rs`
+- 活动来源(tailer):`/Users/wdx/opc/swarmx-core/crates/swarmx-server/src/transcript.rs`
+- 完整重设计上位方案:`/Users/wdx/opc/swarmx-core/.ux-review/final-redesign.md`

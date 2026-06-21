@@ -1,9 +1,0 @@
-[package]
-name = "flockmux-shim"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
-
-[[bin]]
-name = "flockmux-shim"
-path = "src/main.rs"

@@ -181,7 +181,7 @@ export default function LedgerView() {
 
   // Context compaction: summarize the (unbounded-growth) ledgers in place via a
   // headless small-model pass. Non-destructive — the blackboard op-log keeps the
-  // pre-compaction version. A flockmux-shaped "context compression": the PTY
+  // pre-compaction version. A swarmx-shaped "context compression": the PTY
   // CLIs self-manage their own window; what grows here is the ledger state.
   const [compacting, setCompacting] = useState(false);
   const [compactNote, setCompactNote] = useState<string | null>(null);
@@ -330,7 +330,7 @@ export default function LedgerView() {
 }
 
 /** Worker 近况通栏 —— 把每个 worker 写到 `<role>.progress.md` 的最新一行
- *  当成一条心跳显示。Magentic-One 论文里没有这玩意,是 flockmux 的补丁:
+ *  当成一条心跳显示。Magentic-One 论文里没有这玩意,是 swarmx 的补丁:
  *  Bash / npm install 这种秒不出动静的任务期间,只有"派活了…然后呢?"对用户
  *  来说是个黑盒。orchestrator 在 worker prompt 里要求每个里程碑都覆写这个
  *  文件,这里就把所有 workers 的最新心跳铺出来,newest first。 */

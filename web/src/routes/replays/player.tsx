@@ -96,7 +96,7 @@ export default function ReplayPlayer() {
       try {
         // No GET /api/recording/:id today; list + find is fine on a
         // single-user box. If the library outgrows that, add a dedicated
-        // endpoint to flockmux-recorder.
+        // endpoint to swarmx-recorder.
         const [rows, agents] = await Promise.all([
           api.listRecordings(),
           api.listAgents().catch(() => [] as AgentInfo[]),

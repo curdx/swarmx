@@ -23,7 +23,7 @@ I now have all the verified anchors I need: design tokens, i18n namespace conven
 - **不做 approve-before-run 自治级字段**：计划卡的 `[批准计划]` 闸门是**可选 UI**，依赖后端新增"会话级自治级 + spawn 挂起"（§6 P2 唯一 L 级后端）。本规格定义闸门**关闭时**（默认）的全部行为，闸门开启路径标注为「依赖后端」。
 - **不做测试 runner**：合并闸的「测试通过」条件依赖后端新增 `test_runs` 表与 runner（数据地图标 missing）。本规格定义该条件为 **`unknown` 三态之一**，未接入时显示「未运行测试」灰态而非假绿，**不阻塞合并**（见 §4 合并闸阈值）。
 - **不做 user→user 回复线程**：交付卡/变更卡的 `[查看变更]` 不创建子会话。
-- **不重写 worktree diff 计算**：复用 `GET /api/workspaces/:id/threads/:tid/diff`（`crates/flockmux-server/src/routes/workspaces.rs:816-821`），仅在它返回的 `files: string[]` 之上叠加前端逐文件展开与新增的行级 hunk 端点。
+- **不重写 worktree diff 计算**：复用 `GET /api/workspaces/:id/threads/:tid/diff`（`crates/swarmx-server/src/routes/workspaces.rs:816-821`），仅在它返回的 `files: string[]` 之上叠加前端逐文件展开与新增的行级 hunk 端点。
 
 ---
 
@@ -329,26 +329,26 @@ i18n 约定：嵌套对象，沿用现有 `chat.*` / `merge.*` / `agent.tabs.*` 
 | 计划 checklist 项文本 | 台账 markdown `${keyPrefix}task.ledger.md` | persisted（纯 markdown，**无结构化字段**） | `web/src/routes/workspace/views/Ledger.tsx:67-68`；`web/src/routes/workspace/views/Chat.tsx:681-683` |
 | 计划项 `✓/◐/○` 状态 | **缺失** — 需前端 markdown parser 或 orchestrator 改结构化格式 | **missing** | 无；**依赖后端新增**：约定 orchestrator 写结构化计划（建议 `task.plan.json` blackboard key，含 `[{text, owner_role, status}]`），或 P1 前端 parser（regex 提 `- [x]/[~]/[ ]`） |
 | 计划项「拥有成员」徽章 | **缺失** — 无成员→任务映射字段 | **missing** | 无；**依赖后端新增**：上述 `task.plan.json` 的 `owner_role` 字段；徽章渲染复用 `roleColorClass`/`resolveMemberVisual`（`web/src/lib/agent.ts:42,265`） |
-| 卡头队长健康度点 | `AgentInfo` 队长的 `AgentState` + `last_error*` | persisted | `crates/flockmux-protocol/src/ws_swarm.rs:102-118`；`crates/flockmux-storage/src/models.rs:52-65`（迁移 0022 `last_error*`） |
+| 卡头队长健康度点 | `AgentInfo` 队长的 `AgentState` + `last_error*` | persisted | `crates/swarmx-protocol/src/ws_swarm.rs:102-118`；`crates/swarmx-storage/src/models.rs:52-65`（迁移 0022 `last_error*`） |
 | P-0 降级判定（首条不符计划结构） | 队长首条 `message.body` parser 失败 → P-0 | persisted（消息已落表） | `web/src/components/MessagesPanel.tsx:1278-1380`（队长气泡渲染） |
-| 计划卡入流持久化 | **缺失** — 应落 `kind=system, meta.subtype='plan'` | **missing** | **依赖后端新增** plan 系统卡；复用 `messages` kind+meta（`crates/flockmux-storage/src/store.rs:1070-1081`） |
+| 计划卡入流持久化 | **缺失** — 应落 `kind=system, meta.subtype='plan'` | **missing** | **依赖后端新增** plan 系统卡；复用 `messages` kind+meta（`crates/swarmx-storage/src/store.rs:1070-1081`） |
 | approve-before-run 闸门（P-3） | **缺失** — 会话级自治级 + spawn 挂起 | **missing** | 无；**依赖后端新增**（§6 P2 唯一 L 级后端）；闸门关闭时本组件不依赖它 |
 | 交付卡 `N 文件 +x/−y` | `meta.subtype='delivery'` 的 `files/insertions/deletions` | **missing**（delivery 事件无落库） | **依赖后端新增** delivery 系统卡；diff 数据现状来自 worktree（非 DB）：`web/src/api/http.ts:321-323`（`threadDiff`） |
 | 交付卡测试输出折叠 | `meta.test_output` / `test_status` | **missing** | **依赖后端新增** delivery meta 字段（同上）；UI 复用 `MessagesPanel.tsx:1606` 折叠块 |
-| 变更文件列表 | `GET …/threads/:tid/diff` → `ThreadDiff.files: string[]` | persisted（live 计算，每次拉取） | `crates/flockmux-server/src/routes/workspaces.rs:816-821`；`web/src/api/types.ts:366-375` |
+| 变更文件列表 | `GET …/threads/:tid/diff` → `ThreadDiff.files: string[]` | persisted（live 计算，每次拉取） | `crates/swarmx-server/src/routes/workspaces.rs:816-821`；`web/src/api/types.ts:366-375` |
 | 文件级 `+x/−y` | **缺失** — `diff_summary` 只回文件名，无逐文件增删数 | **missing** | **依赖后端新增**：扩展 `/diff` 或新端点返回 per-file `{path, insertions, deletions, hunks}` |
 | 逐文件 hunk（行展开 R-3） | **缺失** — 无 hunk 端点 | **missing** | **依赖后端新增** `GET …/threads/:tid/diff/file?path=`（返回 hunks）；缺失时降级 R-10 |
 | 行级评论（R-4/R-5） | **缺失** — 无 `review_comments` 表/端点 | **missing** | **依赖后端新增** `review_comments` 表 + `POST …/threads/:tid/comments` + 转成 user→成员消息（复用 `messages` kind+meta） |
 | 评论解决态（R-6） | **缺失** — 无 `resolved_at` | **missing** | **依赖后端新增** `review_comments.resolved_at` + 标记端点 |
 | per-file accept 复选（R-2） | **缺失** — 无 `file_accept` 表 | **missing** | **依赖后端新增** `file_accept(thread_id, file_path, accepted_by, accepted_at)` |
 | per-file「已看」勾（合并闸条件1） | **缺失** — 无 `reviewed_at` | **missing** | **依赖后端新增** `file_accept.reviewed_at` 或 `review_files_read` 表 |
-| 合并闸·rebase 条件 | `diff.base_dirty`（preflight 调 `/diff`） | live-only（仅 POST 时算，需 UI 预检调 /diff） | `crates/flockmux-server/src/routes/workspaces.rs:860-865`；`ThreadDiff.base_dirty` (`types.ts:374`) |
+| 合并闸·rebase 条件 | `diff.base_dirty`（preflight 调 `/diff`） | live-only（仅 POST 时算，需 UI 预检调 /diff） | `crates/swarmx-server/src/routes/workspaces.rs:860-865`；`ThreadDiff.base_dirty` (`types.ts:374`) |
 | 合并闸·测试条件 | **缺失** — 无 `test_runs` 表/runner | **missing**（G-6 诚实降级，不阻塞） | **依赖后端新增** `test_runs(thread_id, status, output, run_at)` + runner |
 | 合并闸·评论解决条件 | 派生自上面 `review_comments` 未解决计数 | **missing**（同评论） | 同评论端点 |
-| 合并执行结果 | `POST …/threads/:tid/merge` → `MergeResult` | persisted | `crates/flockmux-server/src/routes/workspaces.rs:882-896`；`web/src/api/types.ts:377-382` |
+| 合并执行结果 | `POST …/threads/:tid/merge` → `MergeResult` | persisted | `crates/swarmx-server/src/routes/workspaces.rs:882-896`；`web/src/api/types.ts:377-382` |
 | 冲突态（G-4）成员/文件 | `MergeResult.status='resolving'` 的 `agent_id`/`files` | persisted | 同上 `types.ts:380-382` |
 | 合并成功系统卡（G-3 入流） | **缺失** — 应落 `kind=system, meta.subtype='merged'` | **missing** | **依赖后端新增**；复用 `messages` kind+meta（`store.rs:1070`） |
-| 侧栏 dirty/ahead/behind（链接显示） | `ThreadInfo.dirty/ahead/behind` | live-only（列表时算） | `crates/flockmux-server/src/routes/workspaces.rs:51-53`；`types.ts:354-360` |
+| 侧栏 dirty/ahead/behind（链接显示） | `ThreadInfo.dirty/ahead/behind` | live-only（列表时算） | `crates/swarmx-server/src/routes/workspaces.rs:51-53`；`types.ts:354-360` |
 
 **缺口汇总（实现前必须确认后端排期）**：计划结构化状态、delivery 系统卡、per-file `+x/−y`、逐文件 hunk 端点、`review_comments`、`file_accept`(+`reviewed_at`)、`test_runs`、合并/计划系统卡。其中**计划卡（P1）、交付卡（P2）、变更评审 + 合并闸（P2）** 的后端依赖均为 missing，前端需以「空/降级态优先」策略实现：先落 R-10/G-6/D-2 这类诚实降级，端点上线后再点亮完整路径。
 
@@ -455,8 +455,8 @@ i18n 约定：嵌套对象，沿用现有 `chat.*` / `merge.*` / `agent.tabs.*` 
 **关键依赖前置（实现排期必读）**：本组件区三块的后端数据**几乎全为 missing**（数据地图确证）。建议实现顺序——(1) P1 计划卡：先做前端 `parsePlan` + P-0/P-6 降级，端点是台账 markdown（已有）；(2) P2 交付卡 + 变更评审 + 合并闸：必须等后端 `delivery 系统卡`/`per-file diff`/`hunk 端点`/`review_comments`/`file_accept`/`test_runs` 至少落库到可读，否则只能交付 R-10/G-6/D-2 诚实降级骨架。落地前请与后端确认这些表/端点的排期，**不要为了 demo 用假数据点亮绿态**——那正是本规格要根除的诊断 1/2/6。
 
 相关文件锚点（绝对路径）：
-- 复用模板：`/Users/wdx/opc/flockmux-core/web/src/components/workspace/OrchestratorFailureCard.tsx`、`/Users/wdx/opc/flockmux-core/web/src/components/agent/AgentDrawer.tsx:82-92`、`/Users/wdx/opc/flockmux-core/web/src/components/MessagesPanel.tsx:1606`、`/Users/wdx/opc/flockmux-core/web/src/lib/agent.ts:42`
-- diff/merge：`/Users/wdx/opc/flockmux-core/web/src/api/http.ts:321-329`、`/Users/wdx/opc/flockmux-core/web/src/api/types.ts:366-382`、`/Users/wdx/opc/flockmux-core/crates/flockmux-server/src/routes/workspaces.rs:816-896`
-- 计划数据源：`/Users/wdx/opc/flockmux-core/web/src/routes/workspace/views/Ledger.tsx:67-68`、`/Users/wdx/opc/flockmux-core/web/src/routes/workspace/views/Chat.tsx:681-683`
-- 系统卡持久化复用：`/Users/wdx/opc/flockmux-core/crates/flockmux-storage/src/store.rs:1070-1081`
-- token 定义：`/Users/wdx/opc/flockmux-core/web/src/styles/global.css`；i18n：`/Users/wdx/opc/flockmux-core/web/src/i18n/locales/zh.json`
+- 复用模板：`/Users/wdx/opc/swarmx-core/web/src/components/workspace/OrchestratorFailureCard.tsx`、`/Users/wdx/opc/swarmx-core/web/src/components/agent/AgentDrawer.tsx:82-92`、`/Users/wdx/opc/swarmx-core/web/src/components/MessagesPanel.tsx:1606`、`/Users/wdx/opc/swarmx-core/web/src/lib/agent.ts:42`
+- diff/merge：`/Users/wdx/opc/swarmx-core/web/src/api/http.ts:321-329`、`/Users/wdx/opc/swarmx-core/web/src/api/types.ts:366-382`、`/Users/wdx/opc/swarmx-core/crates/swarmx-server/src/routes/workspaces.rs:816-896`
+- 计划数据源：`/Users/wdx/opc/swarmx-core/web/src/routes/workspace/views/Ledger.tsx:67-68`、`/Users/wdx/opc/swarmx-core/web/src/routes/workspace/views/Chat.tsx:681-683`
+- 系统卡持久化复用：`/Users/wdx/opc/swarmx-core/crates/swarmx-storage/src/store.rs:1070-1081`
+- token 定义：`/Users/wdx/opc/swarmx-core/web/src/styles/global.css`；i18n：`/Users/wdx/opc/swarmx-core/web/src/i18n/locales/zh.json`

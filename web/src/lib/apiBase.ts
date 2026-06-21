@@ -2,7 +2,7 @@
 //
 //   dev (vite):     '/api' and '/ws' are proxied to :7777, so relative
 //                   paths work and ws derives host from window.location.
-//   prod web:       the built bundle is served by flockmux-server on
+//   prod web:       the built bundle is served by swarmx-server on
 //                   :7777 itself → window.location.host *is* the backend,
 //                   still relative.
 //   prod tauri:     the webview's asset protocol (tauri://localhost or

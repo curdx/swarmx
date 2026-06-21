@@ -1,5 +1,5 @@
 /**
- * RecordingsPanel — lists asciicast v2 files captured by flockmux-recorder.
+ * RecordingsPanel — lists asciicast v2 files captured by swarmx-recorder.
  *
  * Each row exposes a "▶ play" toggle that expands an inline asciinema-player
  * (WASM-backed terminal session player from the official npm package). The

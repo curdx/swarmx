@@ -16,7 +16,7 @@ import { initReactI18next } from "react-i18next";
 import zh from "./locales/zh.json";
 import en from "./locales/en.json";
 
-const STORAGE_KEY = "flockmux:settings:v1";
+const STORAGE_KEY = "swarmx:settings:v1";
 
 function readLang(): "zh" | "en" {
   try {

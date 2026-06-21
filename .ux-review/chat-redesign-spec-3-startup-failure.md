@@ -13,7 +13,7 @@ I have all the load-bearing facts verified. Here is the implementable component 
 
 # 组件区规格：空 / 启动 / 失败状态机（诚实三态）
 
-> 对齐文档：`/Users/wdx/opc/flockmux-core/.claude/worktrees/funny-raman-47113f/.ux-review/chat-redesign.md` §4.6（空/启动/失败状态）+ §2 原则1（事实律）、原则2（入流律）。
+> 对齐文档：`/Users/wdx/opc/swarmx-core/.claude/worktrees/funny-raman-47113f/.ux-review/chat-redesign.md` §4.6（空/启动/失败状态）+ §2 原则1（事实律）、原则2（入流律）。
 > 行话防火墙：本规格所有用户可见字符串禁用 mailbox/blackboard/wake/worktree/shim/spell/PTY/handoff，统一用 **队长/成员/会话/计划/变更/推进/引擎/分支**。
 
 ---
@@ -452,12 +452,12 @@ F-* ──freshSignalAt > last_error_at(用户终端 /login 成功)──▶ X0(
 ---
 
 **关键文件锚点（绝对路径）**：
-- 改：`/Users/wdx/opc/flockmux-core/web/src/components/workspace/OrchestratorFailureCard.tsx`（泛化为 FailureCard，:58-59 isAuth、:61-70 复制、:73 容器、:109-132 按钮条）
-- 复用计时：`/Users/wdx/opc/flockmux-core/web/src/components/TaskActivity.tsx`（:20 TaskStatus、:62-67 tick、:37-41 图标映射）
-- 接线点 + 已有 memo：`/Users/wdx/opc/flockmux-core/web/src/routes/workspace/views/Chat.tsx`（:200-203 CliReadiness、:446-483 orchestratorFailure、:486-495 retryOrchestrator、:862-873 emptyStateOverride 插槽）
-- 类型：`/Users/wdx/opc/flockmux-core/web/src/api/types.ts`（:54 login_command、:129-134 last_error*、:431 SwarmAgentState）
-- token：`/Users/wdx/opc/flockmux-core/web/src/styles/global.css`（:71-99 状态色、:35-37 前景、:103-110 agent 色、:129-132 radius）
-- 后端事实：`/Users/wdx/opc/flockmux-core/crates/flockmux-server/src/routes/rest.rs`（:33 看门狗常量、:670-695 Spawning/Ready 同步事件、:711-743 watchdog record_agent_error、:766-803 ShimExit/HealthFail、:568-577 fallback_from）
-- 错误 kind 来源：`/Users/wdx/opc/flockmux-core/crates/flockmux-server/src/plugins.rs`（:173-185 HealthNeedle kind=auth|rate_limit|fatal）
-- 持久化框架（P1 入流落库）：`/Users/wdx/opc/flockmux-core/crates/flockmux-storage/src/store.rs`（:1070 messages kind+meta、:438-444 last_activity_at）；`/Users/wdx/opc/flockmux-core/crates/flockmux-server/src/wake.rs`（:389,849 kind+meta+broadcast+store 可复制模式）
-- i18n：`/Users/wdx/opc/flockmux-core/web/src/i18n/locales/zh.json`（新增 `chat.emptyState.*` `chat.bootstrap.*`，扩展 `chat.orchestratorFailure.*`）
+- 改：`/Users/wdx/opc/swarmx-core/web/src/components/workspace/OrchestratorFailureCard.tsx`（泛化为 FailureCard，:58-59 isAuth、:61-70 复制、:73 容器、:109-132 按钮条）
+- 复用计时：`/Users/wdx/opc/swarmx-core/web/src/components/TaskActivity.tsx`（:20 TaskStatus、:62-67 tick、:37-41 图标映射）
+- 接线点 + 已有 memo：`/Users/wdx/opc/swarmx-core/web/src/routes/workspace/views/Chat.tsx`（:200-203 CliReadiness、:446-483 orchestratorFailure、:486-495 retryOrchestrator、:862-873 emptyStateOverride 插槽）
+- 类型：`/Users/wdx/opc/swarmx-core/web/src/api/types.ts`（:54 login_command、:129-134 last_error*、:431 SwarmAgentState）
+- token：`/Users/wdx/opc/swarmx-core/web/src/styles/global.css`（:71-99 状态色、:35-37 前景、:103-110 agent 色、:129-132 radius）
+- 后端事实：`/Users/wdx/opc/swarmx-core/crates/swarmx-server/src/routes/rest.rs`（:33 看门狗常量、:670-695 Spawning/Ready 同步事件、:711-743 watchdog record_agent_error、:766-803 ShimExit/HealthFail、:568-577 fallback_from）
+- 错误 kind 来源：`/Users/wdx/opc/swarmx-core/crates/swarmx-server/src/plugins.rs`（:173-185 HealthNeedle kind=auth|rate_limit|fatal）
+- 持久化框架（P1 入流落库）：`/Users/wdx/opc/swarmx-core/crates/swarmx-storage/src/store.rs`（:1070 messages kind+meta、:438-444 last_activity_at）；`/Users/wdx/opc/swarmx-core/crates/swarmx-server/src/wake.rs`（:389,849 kind+meta+broadcast+store 可复制模式）
+- i18n：`/Users/wdx/opc/swarmx-core/web/src/i18n/locales/zh.json`（新增 `chat.emptyState.*` `chat.bootstrap.*`，扩展 `chat.orchestratorFailure.*`）

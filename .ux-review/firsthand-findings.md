@@ -1,6 +1,6 @@
-# flockmux 工作空间 — 实测第一手记录（2026-06-09，浏览器实操）
+# swarmx 工作空间 — 实测第一手记录（2026-06-09，浏览器实操）
 
-测试方式：chrome-devtools 驱动真实浏览器，后端 + vite dev 真实运行，创建了真实工作空间（/tmp/flockmux-ux-test 迷你项目）。截图在本目录 01-07。
+测试方式：chrome-devtools 驱动真实浏览器，后端 + vite dev 真实运行，创建了真实工作空间（/tmp/swarmx-ux-test 迷你项目）。截图在本目录 01-07。
 
 ## 实测走过的完整流程
 
@@ -52,4 +52,4 @@
 - 成员抽屉：web/src/components/agent/AgentDrawer.tsx
 - 新手引导：web/src/components/OnboardingTour.tsx
 - 工作空间状态：web/src/lib/workspace.ts, lib/activeWorkspace.ts
-- 后端：crates/flockmux-server/src/（routes, spawn）
+- 后端：crates/swarmx-server/src/（routes, spawn）

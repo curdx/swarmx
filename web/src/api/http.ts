@@ -95,7 +95,7 @@ async function request<T>(
     if (e instanceof DOMException && e.name === "AbortError") throw e;
     const original = (e as Error)?.message || String(e);
     const friendly = i18n.t("common.networkError", {
-      defaultValue: "连接不上本地服务（127.0.0.1:7777），请确认 flockmux 正在运行",
+      defaultValue: "连接不上本地服务（127.0.0.1:7777），请确认 swarmx 正在运行",
     });
     throw new ApiError(
       0,

@@ -1,5 +1,5 @@
-// Mirror of flockmux-protocol's wire types. Hand-maintained for now;
-// ts-rs auto-generation lands in M3 once flockmux-protocol grows.
+// Mirror of swarmx-protocol's wire types. Hand-maintained for now;
+// ts-rs auto-generation lands in M3 once swarmx-protocol grows.
 
 export type ServerControl =
   | {
@@ -192,7 +192,7 @@ export interface AgentInfo {
 // ── M3 swarm DTOs ────────────────────────────────────────────────────────
 
 /** Structured metadata the server stamps on system-generated messages
- *  (typed-payload pattern; see flockmux-storage migration 0012). The UI
+ *  (typed-payload pattern; see swarmx-storage migration 0012). The UI
  *  renders / filters from `subtype` instead of regex-parsing the prose body.
  *  Absent (undefined/null) for agent free-text messages. */
 export interface MessageMeta {

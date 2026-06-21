@@ -8,9 +8,9 @@
 - **工业经典**:Temporal——服务端**不靠超时判死**,靠 activity **heartbeat + heartbeat-timeout**,并把"判死延迟"与"最长合法执行时间"(start-to-close)解耦;还在心跳=慢(不杀),心跳停=死。(docs.temporal.io/encyclopedia/detecting-activity-failures)
 - **自适应前沿**:phi-accrual(Cassandra/Akka,默认阈值 8)输出连续怀疑值 φ 而非二元;SWIM/Lifeguard 加"软怀疑态 Suspect + 可申辩 + 监控方自身健康"。(akka failure-detector;hashicorp Lifeguard,误报降 50x)
 
-**关键反面印证:LLM agent 框架普遍没有真正的在线"卡住vs干活"判据。** Claude Code 官方称执行期是 *"complete observability blackout… 没法区分工具正常在跑 vs 卡住"*(issue #43584,closed not planned);LangGraph/OpenAI 只有 `recursion_limit`/`max_turns` 计数兜底。→ **flockmux 用分布式成熟范式填这个公认空白,方向对且超前。**
+**关键反面印证:LLM agent 框架普遍没有真正的在线"卡住vs干活"判据。** Claude Code 官方称执行期是 *"complete observability blackout… 没法区分工具正常在跑 vs 卡住"*(issue #43584,closed not planned);LangGraph/OpenAI 只有 `recursion_limit`/`max_turns` 计数兜底。→ **swarmx 用分布式成熟范式填这个公认空白,方向对且超前。**
 
-## flockmux 设计对照(现有 first-response watchdog 已是多信号:消息 AND 活动 AND 用量 全空才报,精神正确)
+## swarmx 设计对照(现有 first-response watchdog 已是多信号:消息 AND 活动 AND 用量 全空才报,精神正确)
 判据 = **进程活着 AND 四通道全静止(token用量/工具调用/PTY字节/消息)AND 有结构性待办(已到的 wake/依赖key/指向它的消息却没起 turn)**;区分「被晾住(idle在提示符,修=重投wake)」vs「turn中挂死(in-turn字节/token冻死,如卡网络/TTY授权弹窗)」;判出只标软态「疑似卡住」(可恢复≠Error≠kill)+「戳一下」。
 
 - ✓✓ 拒绝纯计时 / 软态可恢复不杀 —— 与 Temporal/SWIM 同构,最站得住。
@@ -36,4 +36,4 @@
 **"判得准"差不多了且有领先,别再纠结。真正还差的是两个判定逻辑本身的盲区——服务端自抽风会连累判定、不前进但没静止的退化循环——补上才算真差不多;其余是打磨。**
 
 ## 出处 / 事实分界
-事实(出处):Chandra-Toueg 1996;Temporal heartbeat/timeout 解耦 + 节流公式;phi-accrual(Akka/Cassandra 默认阈值8);SWIM/Lifeguard(误报降50x);Claude Code #43584「observability blackout」;LangGraph recursion_limit / OpenAI max_turns。推断(标注):50x/0.8/30s 等具体数字迁移到 flockmux 需自测;调研未读 flockmux 实际看门狗代码,落地前需对照实现取舍。
+事实(出处):Chandra-Toueg 1996;Temporal heartbeat/timeout 解耦 + 节流公式;phi-accrual(Akka/Cassandra 默认阈值8);SWIM/Lifeguard(误报降50x);Claude Code #43584「observability blackout」;LangGraph recursion_limit / OpenAI max_turns。推断(标注):50x/0.8/30s 等具体数字迁移到 swarmx 需自测;调研未读 swarmx 实际看门狗代码,落地前需对照实现取舍。

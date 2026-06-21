@@ -1,6 +1,6 @@
 # 后端数据模型 / 生命周期 / API 能力分析（工作空间重设计弹药库）
 
-来源：深读 `crates/flockmux-server/src`（routes/、spawn.rs、wake.rs、pre_spawn.rs、transcript.rs、registry.rs）与 `crates/flockmux-storage`（migrations 0001–0021、models.rs、store.rs）。对照 `.ux-review/firsthand-findings.md` 的 P0「状态撒谎」问题逐条核实。
+来源：深读 `crates/swarmx-server/src`（routes/、spawn.rs、wake.rs、pre_spawn.rs、transcript.rs、registry.rs）与 `crates/swarmx-storage`（migrations 0001–0021、models.rs、store.rs）。对照 `.ux-review/firsthand-findings.md` 的 P0「状态撒谎」问题逐条核实。
 
 ---
 
@@ -14,7 +14,7 @@
 
 ### 2. 源码上下文（`workspace_roots` 表，0006/0007）
 - 字段：`path, role(project|tool|dependency), label, parent_id`。是**逻辑树**（parent_id 指向另一 root），非物理嵌套。
-- 服务端把整棵树渲染成 flockmux 托管块写进主项目的 **CLAUDE.md + AGENTS.md**（HTML 注释定界，幂等替换；最后一个 root 删除时整块剥离，若整文件是 flockmux 写的则删文件并 git 本地 exclude）。**即"源码上下文"的真实作用 = 给 orchestrator 的上下文文件注入**，UI 从未解释这一点。
+- 服务端把整棵树渲染成 swarmx 托管块写进主项目的 **CLAUDE.md + AGENTS.md**（HTML 注释定界，幂等替换；最后一个 root 删除时整块剥离，若整文件是 swarmx 写的则删文件并 git 本地 exclude）。**即"源码上下文"的真实作用 = 给 orchestrator 的上下文文件注入**，UI 从未解释这一点。
 - 有 `GET /api/workspaces/:id/root-suggestions`：扫 package.json file:/link:、Cargo.toml path、go.mod replace、pyproject uv sources、pom.xml 模块/兄弟工程，自动推荐可挂载依赖 —— 现有 UI 基本没用上的能力。
 
 ### 3. 方向 = thread（`threads` 表，0009/0014/0015）
@@ -40,13 +40,13 @@
 
 ### 5. agent 启动管线（bootstrap，"撒谎"的完整事实链）
 spawn_with_bookkeeping → spawn_agent 流程：
-1. **fork-bomb 双闸**：活 agent ≤256（FLOCKMUX_MAX_LIVE_AGENTS）、委派深度 ≤6。
+1. **fork-bomb 双闸**：活 agent ≤256（SWARMX_MAX_LIVE_AGENTS）、委派深度 ≤6。
 2. **CLI 选择 + 自动回退**：请求的 CLI 未安装→自动换装好的（codex 优先），仅 `tracing::warn`，**响应里不告诉前端发生了回退**。
 3. pre_spawn 补丁：trust 项目、消 update 弹窗、写 per-agent MCP 配置（claude `--mcp-config --strict-mcp-config`；codex 隔离 CODEX_HOME + auth.json 软链）、注入 Stop hook、claude 强制 `--session-id`（给转录 tailer 定位）。
 4. PTY 起进程（空环境+白名单 env），录像（asciicast）开写。
 5. **ShimReady**（OSC）→ 持久化 + 广播 Ready ← 绿点至此点亮，*但 CLI 可能正打印 "Not logged in"*。
 6. `ready_plan`：插件清单声明的 needle/response 自动应答状态机（codex "Hooks need review"→"2\r"）。**通用的"扫 PTY 输出找特征串"基础设施已存在**——完全可以加 "Not logged in / Please run /login / rate limit" needle 做登录态检测，但今天没做。
-7. **mcp_ready**：agent 自己的 flockmux-mcp 回 ping `POST /api/agent/:id/mcp-ready`；6s 兜底。仅内存 watch + debug 日志。
+7. **mcp_ready**：agent 自己的 swarmx-mcp 回 ping `POST /api/agent/:id/mcp-ready`；6s 兜底。仅内存 watch + debug 日志。
 8. **P1-D readiness gate**：worker 的 deps 没齐时第一条 prompt 不注入，750ms 轮询黑板（带 spawned_at 新鲜度校验防陈旧 key），300s 兜底强注。日志有 "holding first turn until deps land"。
 9. **注入**：paste + 按字节缩放的 settle（150ms+1ms/100B）+ `\r` + 400ms 后补一个 `\r`。成功只打 `tracing::info!("bootstrap prompt injected")`，超时/中止只打 warn。**全程无任何 DB 行或 SwarmEvent**。
 10. orchestrator 的"打招呼"= 它自己调 swarm_send_message(to="user")。**服务端没有"注入后 N 秒无任何消息/活动"的看门狗**。

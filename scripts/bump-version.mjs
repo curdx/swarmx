@@ -76,7 +76,7 @@ for (const [file, re] of MANIFESTS) {
 // Cargo.lock records each workspace crate's version too. A bumped Cargo.toml
 // without a synced lock makes the release gate (`cargo test --locked`) fail
 // with "cannot update the lock file because --locked was passed". Sync it now —
-// `--workspace` only rewrites the flockmux-* member versions, not any deps.
+// `--workspace` only rewrites the swarmx-* member versions, not any deps.
 try {
   execFileSync("cargo", ["update", "--workspace"], { stdio: "inherit" });
   console.log("✓ Cargo.lock synced (cargo update --workspace)");

@@ -42,23 +42,23 @@
           "evidence": "safe-file-store.ts:34-49,120-141; config-helpers.ts:118-146"
         }
       ],
-      "flockmux_status": "absent",
-      "flockmux_evidence": "flockmux 完全没有 IM 接入或任何外发渠道。证据：(1) grep telegram/discord/whatsapp/feishu/wecom/dingtalk/weixin/wechat 全仓库（含 *.rs/*.tsx/*.ts）只命中注释——MessagesPanel.tsx:2「Telegram-style chat bubbles」是 UI 风格、AppShell.tsx:160「GitHub/Discord/Notion 同款做法」是抄通知弹窗交互、messageRows.ts:11「same heuristic as Telegram」是时间分组算法；slack/matrix 在 rust 里只命中 ws_swarm.rs:31 / models.rs:237 的「Slack-style 系统消息元数据」注释，与 IM 平台无关。(2) flockmux 的「通知」是纯 in-app：notif.ts 文件头注释明说是 bell popover + /notifications 页渲染内部 blackboard/wake/agent 协调事件，没有任何外发。(3) rust 侧 reqwest 只用于内部 HTTP(MCP/files)，无 webhook/push 到外部。(4) 凭据管理只有 mcp_admin.rs:137 给 MCP server 配 api_key_env——但这恰好证明 flockmux 已具备「凭据走 env 不进 argv」的同款安全意识(mcp_admin.rs:133-136 注释明确)，只是没扩展到「外发渠道」这个域。",
+      "swarmx_status": "absent",
+      "swarmx_evidence": "swarmx 完全没有 IM 接入或任何外发渠道。证据：(1) grep telegram/discord/whatsapp/feishu/wecom/dingtalk/weixin/wechat 全仓库（含 *.rs/*.tsx/*.ts）只命中注释——MessagesPanel.tsx:2「Telegram-style chat bubbles」是 UI 风格、AppShell.tsx:160「GitHub/Discord/Notion 同款做法」是抄通知弹窗交互、messageRows.ts:11「same heuristic as Telegram」是时间分组算法；slack/matrix 在 rust 里只命中 ws_swarm.rs:31 / models.rs:237 的「Slack-style 系统消息元数据」注释，与 IM 平台无关。(2) swarmx 的「通知」是纯 in-app：notif.ts 文件头注释明说是 bell popover + /notifications 页渲染内部 blackboard/wake/agent 协调事件，没有任何外发。(3) rust 侧 reqwest 只用于内部 HTTP(MCP/files)，无 webhook/push 到外部。(4) 凭据管理只有 mcp_admin.rs:137 给 MCP server 配 api_key_env——但这恰好证明 swarmx 已具备「凭据走 env 不进 argv」的同款安全意识(mcp_admin.rs:133-136 注释明确)，只是没扩展到「外发渠道」这个域。",
       "candidates": [
         {
           "title": "外发通知到 1-2 个 IM 渠道（Telegram/Slack incoming-webhook）",
-          "what": "给 flockmux 的现有通知系统加一个「外发」出口：把已经在 in-app 产生的关键事件（任务完成、agent 需要审批/输入、swarm 卡住、cron 失败）推到用户的 Telegram bot 或 Slack/Discord incoming webhook。不抄 hermes 的「8 平台双向聊天」，只做「单向外发关键事件」——这是桌面 agent 工具真正缺的：人离开电脑后还能收到「agent 在等你」。借鉴 hermes 的：凭据/行为分离存储、per-platform configured 检测、统一配置抽象这套控制平面设计。",
-          "why_valuable": "flockmux 是长跑型多 agent 编排，任务动辄几十分钟。目前用户必须盯着 app 才知道「orchestrator 在等审批」或「swarm 死锁」。一个外发渠道把「盯屏」变成「收推送」，是桌面 agent 产品的高频刚需，且 flockmux 已有成型的事件源（notif.ts 里的 blackboard/wake/审批事件）和 reqwest，缺的只是出口。",
+          "what": "给 swarmx 的现有通知系统加一个「外发」出口：把已经在 in-app 产生的关键事件（任务完成、agent 需要审批/输入、swarm 卡住、cron 失败）推到用户的 Telegram bot 或 Slack/Discord incoming webhook。不抄 hermes 的「8 平台双向聊天」，只做「单向外发关键事件」——这是桌面 agent 工具真正缺的：人离开电脑后还能收到「agent 在等你」。借鉴 hermes 的：凭据/行为分离存储、per-platform configured 检测、统一配置抽象这套控制平面设计。",
+          "why_valuable": "swarmx 是长跑型多 agent 编排，任务动辄几十分钟。目前用户必须盯着 app 才知道「orchestrator 在等审批」或「swarm 死锁」。一个外发渠道把「盯屏」变成「收推送」，是桌面 agent 产品的高频刚需，且 swarmx 已有成型的事件源（notif.ts 里的 blackboard/wake/审批事件）和 reqwest，缺的只是出口。",
           "feasibility": "high",
-          "feasibility_notes": "Rust 侧 incoming-webhook 是最省力路径：Telegram sendMessage / Slack/Discord webhook 都是单个 reqwest::Client POST JSON，无需任何平台 SDK（hermes 那些重型 adapter 在 Python gateway 里、本就不在借鉴范围）。难点不在协议而在：(a) 凭据存储——flockmux 现在没有「用户级 secret 存储」抽象，要新建一个（建议直接抄 hermes 的 .env + 0600 思路，或用 OS keyring）；(b) 事件→渠道的路由与去重/限流（别把 in-app 每条 wake 都轰出去，hermes 的 require_mention/allow-list 行为配置就是干这个的，可借鉴其『行为』那一半）。前端是一个新 settings 卡片，纯 React，低风险。",
+          "feasibility_notes": "Rust 侧 incoming-webhook 是最省力路径：Telegram sendMessage / Slack/Discord webhook 都是单个 reqwest::Client POST JSON，无需任何平台 SDK（hermes 那些重型 adapter 在 Python gateway 里、本就不在借鉴范围）。难点不在协议而在：(a) 凭据存储——swarmx 现在没有「用户级 secret 存储」抽象，要新建一个（建议直接抄 hermes 的 .env + 0600 思路，或用 OS keyring）；(b) 事件→渠道的路由与去重/限流（别把 in-app 每条 wake 都轰出去，hermes 的 require_mention/allow-list 行为配置就是干这个的，可借鉴其『行为』那一半）。前端是一个新 settings 卡片，纯 React，低风险。",
           "effort": "M",
           "borrow_type": "concept",
           "priority_guess": "P1"
         },
         {
           "title": "凭据(secret)/行为(config)分离 + per-item「已配置」检测的统一抽象",
-          "what": "把 hermes 的两层设计移植成 flockmux 的通用「集成配置」框架：secret 走一处加密/受限存储、行为走普通 config，前端用一张声明式映射表驱动 N 个集成的表单 + 绿色『已配置/未配置』tag（PlatformCard 那套）。即使先只接 1 个渠道，也按这个抽象搭，后续加渠道/加 MCP key 都复用。",
-          "why_valuable": "flockmux 当前凭据管理是临时的(只有 mcp_admin 给 MCP 配 api_key_env)，没有统一的『集成中心』。随产品长大（IM 渠道、未来的 GitHub/Notion 集成、模型 provider key）一定会需要这层。hermes 这套『一张映射表驱动全部平台』+『凭据与行为分两处存』的抽象是经过 10 个平台验证的、可直接照搬的架构骨架，省掉自己踩『把 8 个平台写成 8 段 if』的弯路。",
+          "what": "把 hermes 的两层设计移植成 swarmx 的通用「集成配置」框架：secret 走一处加密/受限存储、行为走普通 config，前端用一张声明式映射表驱动 N 个集成的表单 + 绿色『已配置/未配置』tag（PlatformCard 那套）。即使先只接 1 个渠道，也按这个抽象搭，后续加渠道/加 MCP key 都复用。",
+          "why_valuable": "swarmx 当前凭据管理是临时的(只有 mcp_admin 给 MCP 配 api_key_env)，没有统一的『集成中心』。随产品长大（IM 渠道、未来的 GitHub/Notion 集成、模型 provider key）一定会需要这层。hermes 这套『一张映射表驱动全部平台』+『凭据与行为分两处存』的抽象是经过 10 个平台验证的、可直接照搬的架构骨架，省掉自己踩『把 8 个平台写成 8 段 if』的弯路。",
           "feasibility": "medium",
           "feasibility_notes": "概念可直接搬，但 Rust 落地比 TS 重：hermes 靠 JS 动态对象 + 字符串 path(setNested/deepMerge)实现，Rust 要么用 serde_json::Value 动态操作(可行但丢类型安全)，要么给每个集成定义 struct(类型安全但加集成要改代码、失去『改一张表』的轻量)。建议折中：secret 用受限文件/keyring 统一存，行为用 serde Value 存，映射表用 Rust 的 const 数组(类似 mcp_admin.rs 已有的 Known 表)。前端那张声明式平台表 + PlatformCard 检测逻辑是纯 React，几乎照抄。",
           "effort": "M",
@@ -67,26 +67,26 @@
         },
         {
           "title": "原子配置写：per-path 锁 + temp-rename + .bak 备份",
-          "what": "借鉴 safe-file-store.ts 的写盘纪律：同一配置文件路径串行化写、先写临时文件再 rename 防半写、改前留 .bak。用在 flockmux 任何『编辑用户配置文件』的地方（新加的集成凭据、未来的 settings 落盘）。",
-          "why_valuable": "flockmux 是 Tauri 桌面应用、CLAUDE.md 反复强调『安装版用户角度』，配置文件半写/并发踩踏在桌面端很现实(多窗口/sidecar 并发)。这是个便宜的健壮性保险。",
+          "what": "借鉴 safe-file-store.ts 的写盘纪律：同一配置文件路径串行化写、先写临时文件再 rename 防半写、改前留 .bak。用在 swarmx 任何『编辑用户配置文件』的地方（新加的集成凭据、未来的 settings 落盘）。",
+          "why_valuable": "swarmx 是 Tauri 桌面应用、CLAUDE.md 反复强调『安装版用户角度』，配置文件半写/并发踩踏在桌面端很现实(多窗口/sidecar 并发)。这是个便宜的健壮性保险。",
           "feasibility": "high",
-          "feasibility_notes": "Rust 侧反而比 TS 更顺手且生态成熟：原子写直接用 `tempfile::NamedTempFile::persist`（同分区 rename 原子），per-path 锁用 `tokio::sync::Mutex` 按路径建 map 或直接 `fs2`/`fd-lock` 文件锁。无新依赖障碍。唯一注意：flockmux 主要状态在 SQLite(storage crate)，纯文件配置面可能不大——只在确实有『编辑用户可见配置文件』的新场景才值得引入，否则是过度工程。",
+          "feasibility_notes": "Rust 侧反而比 TS 更顺手且生态成熟：原子写直接用 `tempfile::NamedTempFile::persist`（同分区 rename 原子），per-path 锁用 `tokio::sync::Mutex` 按路径建 map 或直接 `fs2`/`fd-lock` 文件锁。无新依赖障碍。唯一注意：swarmx 主要状态在 SQLite(storage crate)，纯文件配置面可能不大——只在确实有『编辑用户可见配置文件』的新场景才值得引入，否则是过度工程。",
           "effort": "S",
           "borrow_type": "algorithm",
           "priority_guess": "P3"
         },
         {
           "title": "改配置后自动重启/重载受影响子进程的就绪状态机",
-          "what": "借鉴 restartGatewayForProfile 的『stop → start → 轮询直到 ready / 超时报错』模式：配置变更后，不是『写完就报成功』，而是真的把依赖该配置的运行时（在 hermes 是 gateway，在 flockmux 可能是某个 sidecar/agent 连接）重启并验证它真的起来了，起不来就把错误如实返回 UI。",
-          "why_valuable": "正中 flockmux 的『诚实性红线』(MEMORY 里反复出现的『状态撒谎』『静默吞错=界面撒谎』)。hermes 这段是『改了配置 → 确认运行时真吃到了 → 否则报错』的诚实闭环，和 flockmux 的核心价值观完全一致，是个好范式参考。",
+          "what": "借鉴 restartGatewayForProfile 的『stop → start → 轮询直到 ready / 超时报错』模式：配置变更后，不是『写完就报成功』，而是真的把依赖该配置的运行时（在 hermes 是 gateway，在 swarmx 可能是某个 sidecar/agent 连接）重启并验证它真的起来了，起不来就把错误如实返回 UI。",
+          "why_valuable": "正中 swarmx 的『诚实性红线』(MEMORY 里反复出现的『状态撒谎』『静默吞错=界面撒谎』)。hermes 这段是『改了配置 → 确认运行时真吃到了 → 否则报错』的诚实闭环，和 swarmx 的核心价值观完全一致，是个好范式参考。",
           "feasibility": "medium",
-          "feasibility_notes": "这是模式借鉴非代码移植。flockmux 没有 hermes 那种『per-profile 长驻 gateway』架构，所以不能直接套。真正可借鉴的是『写配置后做有超时的就绪轮询、失败如实暴露』这个诚实闭环写法，可用在任何『改设置需要重连/重启某进程』的新场景。当前 flockmux 不一定有现成对应物，价值取决于是否落地上面的外发渠道(渠道凭据改了要验证 token 真能发出去)。",
+          "feasibility_notes": "这是模式借鉴非代码移植。swarmx 没有 hermes 那种『per-profile 长驻 gateway』架构，所以不能直接套。真正可借鉴的是『写配置后做有超时的就绪轮询、失败如实暴露』这个诚实闭环写法，可用在任何『改设置需要重连/重启某进程』的新场景。当前 swarmx 不一定有现成对应物，价值取决于是否落地上面的外发渠道(渠道凭据改了要验证 token 真能发出去)。",
           "effort": "S",
           "borrow_type": "concept",
           "priority_guess": "P3"
         }
       ],
-      "verdict": "这个域整体『部分值得借鉴』但不是抄功能、是抄设计：hermes 的 8 平台双向 IM 聊天对 flockmux（本地多 agent 编排器）不是刚需、且重型适配器本就在外部 Python gateway 里无从抄起；但其中『把关键事件外发到 1-2 个 IM 渠道让人离屏也能收到 agent 求助』是桌面 agent 产品真正缺的高价值能力(P1)，且实现极轻(单个 reqwest webhook，不需任何平台 SDK)。真正值钱的是 hermes 沉淀的那套控制平面设计——凭据/行为分离、一张映射表驱动 N 个集成、configured 检测、原子写、改配置即验证重启——这些是经多平台验证、与 flockmux 诚实性红线高度契合的架构骨架，可在接第一个渠道时就按此抽象搭好。",
+      "verdict": "这个域整体『部分值得借鉴』但不是抄功能、是抄设计：hermes 的 8 平台双向 IM 聊天对 swarmx（本地多 agent 编排器）不是刚需、且重型适配器本就在外部 Python gateway 里无从抄起；但其中『把关键事件外发到 1-2 个 IM 渠道让人离屏也能收到 agent 求助』是桌面 agent 产品真正缺的高价值能力(P1)，且实现极轻(单个 reqwest webhook，不需任何平台 SDK)。真正值钱的是 hermes 沉淀的那套控制平面设计——凭据/行为分离、一张映射表驱动 N 个集成、configured 检测、原子写、改配置即验证重启——这些是经多平台验证、与 swarmx 诚实性红线高度契合的架构骨架，可在接第一个渠道时就按此抽象搭好。",
       "_key": "channels",
       "_title": "8 平台 IM 接入"
     },
@@ -137,13 +137,13 @@
           "evidence": "packages/server/src/services/hermes/tts-providers/text.ts:12-31"
         }
       ],
-      "flockmux_status": "absent",
-      "flockmux_evidence": "flockmux 完全没有语音能力。grep web/src 全树 'getUserMedia|MediaRecorder|speechSynthesis|SpeechRecognition|<audio|new Audio' 零命中；crates 全树 'tts|stt|speech|whisper|transcrib' 仅命中无关词(ws_swarm/litellm_pricing/tasks 里的 'task'/'cast' 等子串)，无任何 TTS/STT 实现。web/src/routes/ 页面清单(chat/cron/debug/files/goals/mcp/notifications/replays/settings/tasks/terminal/usage/workspace)无 voice 页。附带核实:flockmux 当前几乎不向「用户填写的 baseUrl」发外联请求(server 仅 main.rs/files.rs 用 reqwest，mcp_admin.rs 无 base_url fetch)，也没有任何 SSRF/私网校验(swarm.rs 等的 'private' 命中均为注释/schema 假阳性)，secret 处理散落在 spawn/registry 各处、无统一掩码层。",
+      "swarmx_status": "absent",
+      "swarmx_evidence": "swarmx 完全没有语音能力。grep web/src 全树 'getUserMedia|MediaRecorder|speechSynthesis|SpeechRecognition|<audio|new Audio' 零命中；crates 全树 'tts|stt|speech|whisper|transcrib' 仅命中无关词(ws_swarm/litellm_pricing/tasks 里的 'task'/'cast' 等子串)，无任何 TTS/STT 实现。web/src/routes/ 页面清单(chat/cron/debug/files/goals/mcp/notifications/replays/settings/tasks/terminal/usage/workspace)无 voice 页。附带核实:swarmx 当前几乎不向「用户填写的 baseUrl」发外联请求(server 仅 main.rs/files.rs 用 reqwest，mcp_admin.rs 无 base_url fetch)，也没有任何 SSRF/私网校验(swarm.rs 等的 'private' 命中均为注释/schema 假阳性)，secret 处理散落在 spawn/registry 各处、无统一掩码层。",
       "candidates": [
         {
           "title": "TTS 朗读助手回复(server Edge TTS + 前端播放器)",
           "what": "借鉴 hermes 的 TTS 播放栈核心:前端一个 useSpeech 等价的 React hook(playbackToken 防竞态 + 队列 + pause/resume + 按 messageId toggle)，配后端一个 /api/tts/synthesize 端点。MVP 用免 key 的 edge-tts 等价路径(Rust 侧可调 msedge-tts crate 或直接复刻 node-edge-tts 的 WSS 协议)，文本送前先做 text.ts 那套清洗(剥 think/代码块/HTML)。在 MessagesPanel 每条 assistant 消息加一个朗读按钮。",
-          "why_valuable": "flockmux 是 orchestrator 长跑场景,用户经常离开屏幕等 agent 跑完。把最终回复/关键节点朗读出来是真实价值(无障碍 + 解放眼睛),且与已有 notifications/wake 体系天然互补(跑完既弹通知又能念出来)。这是 flockmux 完全空白、且差异化的能力。",
+          "why_valuable": "swarmx 是 orchestrator 长跑场景,用户经常离开屏幕等 agent 跑完。把最终回复/关键节点朗读出来是真实价值(无障碍 + 解放眼睛),且与已有 notifications/wake 体系天然互补(跑完既弹通知又能念出来)。这是 swarmx 完全空白、且差异化的能力。",
           "feasibility": "medium",
           "feasibility_notes": "前端 React 移植直接:useSpeech 是纯 TS+Web API(HTMLAudioElement/speechSynthesis)，playbackToken/队列/降级逻辑照搬即可,无 Vue 依赖。后端是难点:node-edge-tts 是 Node 库,Rust 无现成等价的成熟 crate——选项 A 用 msedge-tts(Rust crate,复刻 Edge WSS 协议,可行但维护活跃度需核实);选项 B 仅做 OpenAI 兼容 /audio/speech 代理(reqwest 转发,最简单但要用户有 key);选项 C 纯前端 Web Speech API 兜底(零后端,但音质差、Tauri WebView 的 speechSynthesis 在 Linux 上可能缺嗓音)。建议 C 兜底 + B 主路径起步,A 作为增强。注意 CLAUDE.md 头号原则:任何嗓音数据/二进制都要随包发,不能依赖仓库布局。",
           "effort": "L",
@@ -153,7 +153,7 @@
         {
           "title": "可复用的 SSRF 防护工具(Rust 移植 url-safety.ts)",
           "what": "把 url-safety.ts 的双层 SSRF 防护(静态私网/保留段黑名单 + DNS 解析后二次校验防 rebinding,覆盖完整 IPv4/IPv6 保留段)移植成一个 Rust 工具函数,凡是后端要去 fetch 用户提供的 URL(未来的 TTS/STT provider、自定义模型 baseUrl、MCP http server、webhook)都先过这道闸。",
-          "why_valuable": "flockmux 目前几乎不外联用户 URL,所以现在洞不大;但一旦引入语音/自定义 provider/MCP remote,SSRF 是桌面应用里能读云元数据(169.254.169.254)、打内网的真实安全洞,而 flockmux 当前零防护。hermes 这份清单(含 CGNAT 100.64、IPv4-mapped IPv6、DNS rebinding 二次校验)是经过实战打磨的、比自己从零写更全。",
+          "why_valuable": "swarmx 目前几乎不外联用户 URL,所以现在洞不大;但一旦引入语音/自定义 provider/MCP remote,SSRF 是桌面应用里能读云元数据(169.254.169.254)、打内网的真实安全洞,而 swarmx 当前零防护。hermes 这份清单(含 CGNAT 100.64、IPv4-mapped IPv6、DNS rebinding 二次校验)是经过实战打磨的、比自己从零写更全。",
           "feasibility": "high",
           "feasibility_notes": "纯算法逻辑,无框架耦合,Rust 移植直接:IP 段判断用 std::net::IpAddr + 现成 crate(如 ip_network 或 ipnet 判私网)能省一半代码;DNS 二次解析用 tokio + trust-dns/hickory-resolver,对 reqwest 可结合自定义 resolver 或在请求前手动解析校验。难点仅在确保「校验用的 IP == 实际连接的 IP」(否则 TOCTOU)——hickory + reqwest 的 resolve override 可解决。是否现在做取决于是否上语音/自定义 provider;若不上,价值悬置。",
           "effort": "M",
@@ -163,7 +163,7 @@
         {
           "title": "STT 语音输入转写(回合制半双工,转写进输入框待编辑)",
           "what": "借鉴 useVoiceDialogue 的回合制设计:聊天输入框旁加麦克风按钮,push-to-talk 录一段→上传后端转写(OpenAI 兼容 /audio/transcriptions 代理)或浏览器 Web Speech→把转写文本塞进输入框让用户编辑后再手动发送。关键是 hermes 的诚实边界:开始新录音只停 TTS 播放(barge-in)、绝不静默取消在跑的 agent run。",
-          "why_valuable": "对长 prompt/口述需求的用户是真实提速,且半双工「转写进输入框待编辑」比全双工实现简单得多、误识别可控。与 flockmux 的 CLAUDE.md 诚实性红线高度契合(不静默取消 run 正是 hermes 明确写进文档的边界)。",
+          "why_valuable": "对长 prompt/口述需求的用户是真实提速,且半双工「转写进输入框待编辑」比全双工实现简单得多、误识别可控。与 swarmx 的 CLAUDE.md 诚实性红线高度契合(不静默取消 run 正是 hermes 明确写进文档的边界)。",
           "feasibility": "medium",
           "feasibility_notes": "前端:MediaRecorder 录音 + useBrowserSpeechRecognition(纯 Web API,React 移植直接,含续录重连/1s 兜底超时这些已踩过的坑值得照抄)。后端转写:Rust 侧用 reqwest 转发 multipart 到 OpenAI 兼容端点最简单(要用户有 key);本地转写(whisper.cpp via whisper-rs crate)可离线但要打包模型权重——又撞 CLAUDE.md 运行时资源打包痛点(几十 MB 模型要进 bundle.resources)。建议起步只做云端代理 + 浏览器 STT,本地 whisper 作为后续。Tauri WebView 的 getUserMedia 麦克风权限在 macOS 需 Info.plist NSMicrophoneUsageDescription,别忘。",
           "effort": "L",
@@ -173,25 +173,25 @@
         {
           "title": "Provider secret 掩码存储层([stored] 哨兵模式)",
           "what": "借鉴 tts-settings-store 的 secret 处理:任何带 API key 的 provider 配置(未来的 TTS/STT/自定义模型 provider),后端把 key 与普通设置分列存,对前端一律返回 '[stored]' 掩码,保存时收到 '[stored]' 即「保持原 key 不变」,实现前端永不接触明文又能局部改配置。",
-          "why_valuable": "flockmux 的 secret 处理目前散落在 spawn/registry,无统一掩码约定。一旦做语音或自定义 provider,这套模式能避免明文 key 回流到前端/localStorage(hermes voice-dialogue.md 专门强调了这条隐私约定)。是个小而稳的工程基座。",
+          "why_valuable": "swarmx 的 secret 处理目前散落在 spawn/registry,无统一掩码约定。一旦做语音或自定义 provider,这套模式能避免明文 key 回流到前端/localStorage(hermes voice-dialogue.md 专门强调了这条隐私约定)。是个小而稳的工程基座。",
           "feasibility": "high",
-          "feasibility_notes": "纯逻辑,Rust 移植直接:序列化时对 secret 字段返回常量哨兵、反序列化时识别哨兵跳过更新。flockmux 已有 storage crate + SQLite migrations(见 0012_message_meta 等),加一张 provider_settings 表即可。难点几乎没有,但价值依赖「flockmux 真的要存第三方 provider key」这个前提——目前 key 走 CLI 自己的 auth(~/.claude),flockmux 不存,所以这条只有在引入语音/自定义 provider 后才需要。",
+          "feasibility_notes": "纯逻辑,Rust 移植直接:序列化时对 secret 字段返回常量哨兵、反序列化时识别哨兵跳过更新。swarmx 已有 storage crate + SQLite migrations(见 0012_message_meta 等),加一张 provider_settings 表即可。难点几乎没有,但价值依赖「swarmx 真的要存第三方 provider key」这个前提——目前 key 走 CLI 自己的 auth(~/.claude),swarmx 不存,所以这条只有在引入语音/自定义 provider 后才需要。",
           "effort": "S",
           "borrow_type": "architecture",
           "priority_guess": "P3"
         },
         {
           "title": "Provider 模型自动发现 probe(对全站自定义 provider 通用)",
-          "what": "借鉴 tts.ts 的 probeProvider:用户填 baseUrl+key 后,后端去 /models 拉真实模型列表、按用途关键词排序推荐,并把 401/403/404/超时/网络/SSRF 错误分类翻译成可操作提示。这不限于语音——flockmux 的 models_config(自定义 CLI provider)同样能用。",
-          "why_valuable": "flockmux 的 models_config 现在要用户手填 concrete model id(README 提到曾因填错 model 触发 503 类问题)。一个「填 baseUrl→自动列出可用模型→点选」的 probe 能直接消灭这类配置错误,UX 提升明显,且复用面比语音宽。",
+          "what": "借鉴 tts.ts 的 probeProvider:用户填 baseUrl+key 后,后端去 /models 拉真实模型列表、按用途关键词排序推荐,并把 401/403/404/超时/网络/SSRF 错误分类翻译成可操作提示。这不限于语音——swarmx 的 models_config(自定义 CLI provider)同样能用。",
+          "why_valuable": "swarmx 的 models_config 现在要用户手填 concrete model id(README 提到曾因填错 model 触发 503 类问题)。一个「填 baseUrl→自动列出可用模型→点选」的 probe 能直接消灭这类配置错误,UX 提升明显,且复用面比语音宽。",
           "feasibility": "medium",
-          "feasibility_notes": "后端 Rust:reqwest GET /models + 关键词排序是直接的;错误人话化(summarizeProbeError 的正则分类)照搬逻辑即可。前提是 flockmux 的 provider 是 OpenAI 兼容(暴露 /models)——需先核实 flockmux 自定义 provider 走的是不是 OpenAI 兼容端点(models_config 是 CLI 层的 tier→model 映射,未必有 baseUrl 概念,可能不直接适用)。若 flockmux provider 不暴露 /models 则价值打折。建议与 SSRF 防护捆绑做。",
+          "feasibility_notes": "后端 Rust:reqwest GET /models + 关键词排序是直接的;错误人话化(summarizeProbeError 的正则分类)照搬逻辑即可。前提是 swarmx 的 provider 是 OpenAI 兼容(暴露 /models)——需先核实 swarmx 自定义 provider 走的是不是 OpenAI 兼容端点(models_config 是 CLI 层的 tier→model 映射,未必有 baseUrl 概念,可能不直接适用)。若 swarmx provider 不暴露 /models 则价值打折。建议与 SSRF 防护捆绑做。",
           "effort": "M",
           "borrow_type": "ux",
           "priority_guess": "P3"
         }
       ],
-      "verdict": "值得借鉴但非高优先级:语音是 flockmux 完全空白、且对「长跑 orchestrator、用户离屏等待」场景有真实差异化价值的能力,hermes 的实现工程化极强(SSRF 双层防护/secret 掩码/playbackToken 防竞态/回合制诚实边界/TTS 文本清洗都是打磨过的好料,且数条可脱离语音单独复用)。但 Rust 后端 TTS/STT 集成有现实成本(无成熟 edge-tts crate、本地 whisper 模型撞打包痛点、Tauri WebView 麦克风权限),且语音对 flockmux 核心(多 agent 编排)非刚需。建议定位为 P2 增强:起步走「前端播放器 + 云端/浏览器 兜底」最小路径验证价值,顺手把 SSRF 防护这条可复用安全基座先落地(为未来自定义 provider/MCP remote 铺路),其余(本地 whisper、模型 probe)按需再上。",
+      "verdict": "值得借鉴但非高优先级:语音是 swarmx 完全空白、且对「长跑 orchestrator、用户离屏等待」场景有真实差异化价值的能力,hermes 的实现工程化极强(SSRF 双层防护/secret 掩码/playbackToken 防竞态/回合制诚实边界/TTS 文本清洗都是打磨过的好料,且数条可脱离语音单独复用)。但 Rust 后端 TTS/STT 集成有现实成本(无成熟 edge-tts crate、本地 whisper 模型撞打包痛点、Tauri WebView 麦克风权限),且语音对 swarmx 核心(多 agent 编排)非刚需。建议定位为 P2 增强:起步走「前端播放器 + 云端/浏览器 兜底」最小路径验证价值,顺手把 SSRF 防护这条可复用安全基座先落地(为未来自定义 provider/MCP remote 铺路),其余(本地 whisper、模型 probe)按需再上。",
       "_key": "voice",
       "_title": "语音 TTS/STT/语音对话"
     },
@@ -240,15 +240,15 @@
           "evidence": "/Users/wdx/opc/hermes-studio/packages/server/src/services/agent-runner/endpoint-resolver.ts:21-65"
         }
       ],
-      "flockmux_status": "partial",
-      "flockmux_evidence": "flockmux 已经能跑 claude/codex，但**走的是完全不同的路线**，且很多 hermes 的代理机制被 flockmux 的计费红线主动拒绝：\n\n1) 进程模型相反：flockmux 用 **交互式 PTY 订阅会话**（cli-plugins/claude.toml:14-19 `--dangerously-skip-permissions` + `billing_surface=\"interactive-subscription\"`；注释明确禁止切到 `claude -p`/SDK/ACP），不是 hermes 的 headless print。spawn.rs:4 用 PtyStream，全程 PTY。\n\n2) 凭据方向相反：flockmux **主动屏蔽** `ANTHROPIC_*` env（claude.toml:24 blocked_env_prefixes，spawn.rs:1221-1222 测试 env_blocked），就是不让 API key 进子进程，以免 claude 优先用 API 计费而非订阅。hermes 则是注入本地 token+baseUrl 走 API。\n\n3) 结构化数据来源不同：flockmux 不用代理 tee，而是**直接 tail CLI 自己写到磁盘的 JSONL transcript**（transcript.rs:418-421 parse_claude/parse_codex），从中抽 tool 调用 + usage；PTY 输出只用于 health/state 扫描（spawn.rs:530 HealthScanner）。\n\n4) canonical 事件归一化：flockmux transcript.rs 对 claude/codex **各写一个 parser**（parse_claude:534 / parse_codex:581），没有统一 canonical 事件层；但它本来只抽\"tool start/end + usage\"，落库的是**单行 label + result blurb**（transcript.rs:469-472 summarize），不存全量 tool 输出 → 所以 hermes 的\"32KB 截断\"对 flockmux 不适用（flockmux 根本不存全量，更省）。\n\n5) 本地代理：grep 全 crate **无 local-proxy / tee / canonical / 127.0.0.1 代理**（仅命中 http_proxy 透传与 path canonicalize，无关）。flockmux 完全没有\"在 CLI 与 provider 之间插代理\"这个能力。\n\n6) ACP/结构化 seam 已存在但未驱动：acp.rs:1-28 有 JSON-RPC-over-stdio 的 Connection 基础（codex app-server / ACP），codex.toml:54 structured_args=[\"app-server\"] 是元数据，spawn.rs:117-134 注释标了\"L4 transport seam\"分支点但默认仍走 PTY。billing.rs:27-55 强制：非 PTY transport / SDK/API 计费面必须显式 opt-in（FLOCKMUX_ALLOW_PAID_TRANSPORT）。\n\n7) resume：flockmux 已有 transcript_session_id + claude `--session-id` 强制（spawn.rs:337-342）+ extract_session_id ready step（spawn.rs:686），与 hermes 的 resume 思路对等。",
+      "swarmx_status": "partial",
+      "swarmx_evidence": "swarmx 已经能跑 claude/codex，但**走的是完全不同的路线**，且很多 hermes 的代理机制被 swarmx 的计费红线主动拒绝：\n\n1) 进程模型相反：swarmx 用 **交互式 PTY 订阅会话**（cli-plugins/claude.toml:14-19 `--dangerously-skip-permissions` + `billing_surface=\"interactive-subscription\"`；注释明确禁止切到 `claude -p`/SDK/ACP），不是 hermes 的 headless print。spawn.rs:4 用 PtyStream，全程 PTY。\n\n2) 凭据方向相反：swarmx **主动屏蔽** `ANTHROPIC_*` env（claude.toml:24 blocked_env_prefixes，spawn.rs:1221-1222 测试 env_blocked），就是不让 API key 进子进程，以免 claude 优先用 API 计费而非订阅。hermes 则是注入本地 token+baseUrl 走 API。\n\n3) 结构化数据来源不同：swarmx 不用代理 tee，而是**直接 tail CLI 自己写到磁盘的 JSONL transcript**（transcript.rs:418-421 parse_claude/parse_codex），从中抽 tool 调用 + usage；PTY 输出只用于 health/state 扫描（spawn.rs:530 HealthScanner）。\n\n4) canonical 事件归一化：swarmx transcript.rs 对 claude/codex **各写一个 parser**（parse_claude:534 / parse_codex:581），没有统一 canonical 事件层；但它本来只抽\"tool start/end + usage\"，落库的是**单行 label + result blurb**（transcript.rs:469-472 summarize），不存全量 tool 输出 → 所以 hermes 的\"32KB 截断\"对 swarmx 不适用（swarmx 根本不存全量，更省）。\n\n5) 本地代理：grep 全 crate **无 local-proxy / tee / canonical / 127.0.0.1 代理**（仅命中 http_proxy 透传与 path canonicalize，无关）。swarmx 完全没有\"在 CLI 与 provider 之间插代理\"这个能力。\n\n6) ACP/结构化 seam 已存在但未驱动：acp.rs:1-28 有 JSON-RPC-over-stdio 的 Connection 基础（codex app-server / ACP），codex.toml:54 structured_args=[\"app-server\"] 是元数据，spawn.rs:117-134 注释标了\"L4 transport seam\"分支点但默认仍走 PTY。billing.rs:27-55 强制：非 PTY transport / SDK/API 计费面必须显式 opt-in（SWARMX_ALLOW_PAID_TRANSPORT）。\n\n7) resume：swarmx 已有 transcript_session_id + claude `--session-id` 强制（spawn.rs:337-342）+ extract_session_id ready step（spawn.rs:686），与 hermes 的 resume 思路对等。",
       "candidates": [
         {
           "title": "凭据脱敏管线（落库/上屏前 redact Bearer/sk-*/api_key）",
-          "what": "把 hermes sanitizeCodingAgentTerminalOutput 的正则脱敏（Bearer xxx、sk-ant-/sk-proj-/sk-or-、api_key=…）移植成 Rust，挂在 flockmux 的 PTY 输出 → 落库/transcript 持久化/前端推流的边界上。flockmux 现在 PTY 输出和 transcript 内容直接进 store/WS，没有这层。",
-          "why_valuable": "flockmux 跑的是 agent，agent 完全可能在终端 echo 出环境里的 token、或 tool 输出里带 key。一旦落进 SQLite store 或 asciicast 录制（RecordingsPanel 回放），凭据就永久留痕、还能被回放看到。这是 flockmux 当前的真实泄密面，且与项目'诚实/安全'红线一致。",
+          "what": "把 hermes sanitizeCodingAgentTerminalOutput 的正则脱敏（Bearer xxx、sk-ant-/sk-proj-/sk-or-、api_key=…）移植成 Rust，挂在 swarmx 的 PTY 输出 → 落库/transcript 持久化/前端推流的边界上。swarmx 现在 PTY 输出和 transcript 内容直接进 store/WS，没有这层。",
+          "why_valuable": "swarmx 跑的是 agent，agent 完全可能在终端 echo 出环境里的 token、或 tool 输出里带 key。一旦落进 SQLite store 或 asciicast 录制（RecordingsPanel 回放），凭据就永久留痕、还能被回放看到。这是 swarmx 当前的真实泄密面，且与项目'诚实/安全'红线一致。",
           "feasibility": "high",
-          "feasibility_notes": "纯函数，Rust 用 regex/once_cell 即可，无外部依赖。难点：(1) 要找全注入点——PTY pump、transcript.rs 落库、recorder asciicast sink 三处都要过一遍；(2) 正则别误伤正常内容（hermes 的 sk- 前缀+长度下限是好范式）；(3) 录制回放历史数据不会被追溯脱敏，只能管新数据。建议抽一个 flockmux-server 内的 redact 模块复用。",
+          "feasibility_notes": "纯函数，Rust 用 regex/once_cell 即可，无外部依赖。难点：(1) 要找全注入点——PTY pump、transcript.rs 落库、recorder asciicast sink 三处都要过一遍；(2) 正则别误伤正常内容（hermes 的 sk- 前缀+长度下限是好范式）；(3) 录制回放历史数据不会被追溯脱敏，只能管新数据。建议抽一个 swarmx-server 内的 redact 模块复用。",
           "effort": "S",
           "borrow_type": "concept",
           "priority_guess": "P1"
@@ -256,27 +256,27 @@
         {
           "title": "baseUrl 根路径智能识别（为未来自定义 provider / 付费 transport 铺路）",
           "what": "移植 endpoint-resolver.ts 的 looksLikeOpenAiRoot/looksLikeAnthropicRoot 启发式：识别用户填的 baseUrl 是否已含 /v1、/openai、/api/paas/v4、/coding/vN 等根，再决定补不补路径。",
-          "why_valuable": "flockmux 现在 claude/codex 走订阅 PTY 不需要这个，但 acp.rs + structured_args 的'付费/结构化 transport' opt-in 一旦落地、或要接国产网关（智谱 /api/paas/v4、月之暗面 /v1、DeepSeek /openai 等），就会立刻撞上'baseUrl 到底要不要补 /v1'这个经典坑。hermes 已经用 provider-preset 测试把这些前缀枚举过一遍，是现成的踩坑清单。",
+          "why_valuable": "swarmx 现在 claude/codex 走订阅 PTY 不需要这个，但 acp.rs + structured_args 的'付费/结构化 transport' opt-in 一旦落地、或要接国产网关（智谱 /api/paas/v4、月之暗面 /v1、DeepSeek /openai 等），就会立刻撞上'baseUrl 到底要不要补 /v1'这个经典坑。hermes 已经用 provider-preset 测试把这些前缀枚举过一遍，是现成的踩坑清单。",
           "feasibility": "high",
-          "feasibility_notes": "纯字符串/URL 逻辑，Rust 用 url crate + 正则直译即可，零运行时依赖。难点低，主要是把 hermes 的 preset 测试用例一起搬过来当回归。仅在 flockmux 真的要支持自定义 baseUrl provider 时才需要——属于'提前存档，用时再上'。",
+          "feasibility_notes": "纯字符串/URL 逻辑，Rust 用 url crate + 正则直译即可，零运行时依赖。难点低，主要是把 hermes 的 preset 测试用例一起搬过来当回归。仅在 swarmx 真的要支持自定义 baseUrl provider 时才需要——属于'提前存档，用时再上'。",
           "effort": "S",
           "borrow_type": "algorithm",
           "priority_guess": "P3"
         },
         {
           "title": "本地代理 + 一次性 token 凭据隔离（仅限未来付费 transport 驱动落地时）",
-          "what": "若 flockmux 将来要驱动 acp.rs 的结构化/付费 transport（codex app-server 或 claude API 模式），借鉴 hermes target-registry 的模式：server 内存持有真 apiKey，写进 CLI 配置的只是一次性本地 token+本地回环 baseUrl，server 起一个回环代理用真 key 转发上游。",
-          "why_valuable": "flockmux 当前靠'屏蔽 ANTHROPIC_* 不让 key 进子进程'来防泄露（这对订阅 PTY 路线很对）。但一旦 opt-in 到 API/付费 transport，就必须把某种凭据交给 CLI——那时直接把真 key 写进 settings.json 会留在磁盘/被 CLI 日志带出。hermes 的'子进程只拿本地 token、真 key 不落子进程配置'是这条路线下的正确隔离姿势。",
+          "what": "若 swarmx 将来要驱动 acp.rs 的结构化/付费 transport（codex app-server 或 claude API 模式），借鉴 hermes target-registry 的模式：server 内存持有真 apiKey，写进 CLI 配置的只是一次性本地 token+本地回环 baseUrl，server 起一个回环代理用真 key 转发上游。",
+          "why_valuable": "swarmx 当前靠'屏蔽 ANTHROPIC_* 不让 key 进子进程'来防泄露（这对订阅 PTY 路线很对）。但一旦 opt-in 到 API/付费 transport，就必须把某种凭据交给 CLI——那时直接把真 key 写进 settings.json 会留在磁盘/被 CLI 日志带出。hermes 的'子进程只拿本地 token、真 key 不落子进程配置'是这条路线下的正确隔离姿势。",
           "feasibility": "low",
-          "feasibility_notes": "Rust 移植量大：要在 flockmux-server 起一个回环 HTTP 代理（axum/hyper）、做 SSE 转发与协议归一化、token 注册表、生命周期管理。且与 flockmux 现有 PTY+billing 红线（billing.rs）冲突，必须挂在 FLOCKMUX_ALLOW_PAID_TRANSPORT opt-in 后面。属于'方向正确但前置条件（付费 transport 驱动）尚未存在'，现在做是过早投资。仅当决定真正驱动 acp.rs 时再启动。",
+          "feasibility_notes": "Rust 移植量大：要在 swarmx-server 起一个回环 HTTP 代理（axum/hyper）、做 SSE 转发与协议归一化、token 注册表、生命周期管理。且与 swarmx 现有 PTY+billing 红线（billing.rs）冲突，必须挂在 SWARMX_ALLOW_PAID_TRANSPORT opt-in 后面。属于'方向正确但前置条件（付费 transport 驱动）尚未存在'，现在做是过早投资。仅当决定真正驱动 acp.rs 时再启动。",
           "effort": "XL",
           "borrow_type": "architecture",
           "priority_guess": "P3"
         },
         {
           "title": "teeAsyncIterable 流分叉模式（结构化 transport 落地时的配套）",
-          "what": "hermes 用 teeAsyncIterable 把一条 provider 流'既回 CLI 又自己抓结构化事件'。如果 flockmux 走结构化 transport（不再 tail 磁盘 transcript 而是直接消费 app-server/ACP 的 stdout JSON-RPC），会需要同样的'一份流喂多个消费者（落库 + WS 推送 + usage）'分叉。",
-          "why_valuable": "flockmux 现在靠 tail 磁盘 transcript 拿结构化数据（transcript.rs），这在 PTY 路线下很巧妙也很省。但结构化 transport 下数据是从子进程 stdout 实时来的、没有磁盘文件可 tail，就需要把这条 stdout 流 fan-out 给多个 sink。",
+          "what": "hermes 用 teeAsyncIterable 把一条 provider 流'既回 CLI 又自己抓结构化事件'。如果 swarmx 走结构化 transport（不再 tail 磁盘 transcript 而是直接消费 app-server/ACP 的 stdout JSON-RPC），会需要同样的'一份流喂多个消费者（落库 + WS 推送 + usage）'分叉。",
+          "why_valuable": "swarmx 现在靠 tail 磁盘 transcript 拿结构化数据（transcript.rs），这在 PTY 路线下很巧妙也很省。但结构化 transport 下数据是从子进程 stdout 实时来的、没有磁盘文件可 tail，就需要把这条 stdout 流 fan-out 给多个 sink。",
           "feasibility": "medium",
           "feasibility_notes": "Rust 里这个本来就有更地道的解法：tokio::sync::broadcast 或 tokio_stream 的 fan-out，不需要照抄 hermes 的手写 buffer/waiter（那是 JS 没有 channel 的无奈）。所以这是'概念提醒'而非代码移植——难点不在分叉本身，而在它依赖结构化 transport 先存在。",
           "effort": "M",
@@ -284,7 +284,7 @@
           "priority_guess": "P3"
         }
       ],
-      "verdict": "整体借鉴价值偏低：hermes 这套代理/归一化机制是为它'headless print + API 计费 + 多 provider 互转'路线服务的，而 flockmux 走的是相反的'交互式 PTY + 订阅计费 + tail 磁盘 transcript'路线，且用 billing.rs 明确把非 PTY/API 计费挡在 opt-in 之后——大部分代理机制（本地代理、tee、协议归一化）对 flockmux 当下不适用，是用时再说的存档。唯一现在就该落地的是凭据脱敏（P1，flockmux 真实泄密面、纯函数易移植）；endpoint-resolver 和代理隔离/tee 是'未来真要驱动 acp.rs 付费 transport 时'的正确范式，现在做属过早投资。",
+      "verdict": "整体借鉴价值偏低：hermes 这套代理/归一化机制是为它'headless print + API 计费 + 多 provider 互转'路线服务的，而 swarmx 走的是相反的'交互式 PTY + 订阅计费 + tail 磁盘 transcript'路线，且用 billing.rs 明确把非 PTY/API 计费挡在 opt-in 之后——大部分代理机制（本地代理、tee、协议归一化）对 swarmx 当下不适用，是用时再说的存档。唯一现在就该落地的是凭据脱敏（P1，swarmx 真实泄密面、纯函数易移植）；endpoint-resolver 和代理隔离/tee 是'未来真要驱动 acp.rs 付费 transport 时'的正确范式，现在做属过早投资。",
       "_key": "coding-agents",
       "_title": "Coding Agent 运行器与代理"
     },
@@ -297,20 +297,20 @@
         "/Users/wdx/opc/hermes-studio/packages/client/src/stores/hermes/kanban.ts:147-208 (事件流去抖+退避重连+切板失效), :239-248 (boardGeneration+seq+board 三元组 stale 守卫)",
         "/Users/wdx/opc/hermes-studio/packages/server/src/controllers/hermes/kanban.ts:52-89 (profile 可见性过滤+可重算 stats+assignee ACL), :341-383 (done/archived 任务反查会话挂详情)",
         "/Users/wdx/opc/hermes-studio/packages/client/src/views/hermes/KanbanView.vue:285-308 (stats-chip 即过滤器), :238-281 (板切换器+双过滤+dispatch)",
-        "/Users/wdx/opc/flockmux-core/.claude/worktrees/trusting-raman-23ed65/web/src/routes/tasks.tsx:37-45,59-92 (已有 7 态列+stale 守卫+visibility 感知轮询), 136 (仅按 status 分列、无过滤 UI)",
-        "/Users/wdx/opc/flockmux-core/.claude/worktrees/trusting-raman-23ed65/crates/flockmux-server/src/routes/tasks.rs:31-49 (effective_status 从生命周期信号派生、纯函数带单测)",
-        "/Users/wdx/opc/flockmux-core/.claude/worktrees/trusting-raman-23ed65/crates/flockmux-storage/src/models.rs:528-549 (TaskRecord 无 assignee/priority/board 字段)"
+        "/Users/wdx/opc/swarmx-core/.claude/worktrees/trusting-raman-23ed65/web/src/routes/tasks.tsx:37-45,59-92 (已有 7 态列+stale 守卫+visibility 感知轮询), 136 (仅按 status 分列、无过滤 UI)",
+        "/Users/wdx/opc/swarmx-core/.claude/worktrees/trusting-raman-23ed65/crates/swarmx-server/src/routes/tasks.rs:31-49 (effective_status 从生命周期信号派生、纯函数带单测)",
+        "/Users/wdx/opc/swarmx-core/.claude/worktrees/trusting-raman-23ed65/crates/swarmx-storage/src/models.rs:528-549 (TaskRecord 无 assignee/priority/board 字段)"
       ],
       "notable_techniques": [
         {
-          "name": "派生状态 + 人工覆盖（双方都有，flockmux 实现更优）",
-          "description": "任务状态默认从生命周期信号自动派生，人工覆盖时持久化并优先。hermes 状态来自 CLI 的 DB（薄包装），flockmux 则在 server 侧用纯函数 effective_status 从 alive/handoff/error/killed 真实信号派生且带单测——这点 flockmux 已对等甚至更扎实，不需借鉴。",
-          "evidence": "hermes-kanban.ts:28 vs flockmux tasks.rs:31-49"
+          "name": "派生状态 + 人工覆盖（双方都有，swarmx 实现更优）",
+          "description": "任务状态默认从生命周期信号自动派生，人工覆盖时持久化并优先。hermes 状态来自 CLI 的 DB（薄包装），swarmx 则在 server 侧用纯函数 effective_status 从 alive/handoff/error/killed 真实信号派生且带单测——这点 swarmx 已对等甚至更扎实，不需借鉴。",
+          "evidence": "hermes-kanban.ts:28 vs swarmx tasks.rs:31-49"
         },
         {
           "name": "Stale-response 三元组守卫",
-          "description": "切板/竞态下，用 boardGeneration+每类请求 requestSeq+当前 board 三者比对，旧响应一律丢弃，绝不覆盖新状态。flockmux 已有 reqIdRef 单序号守卫，但只防「新 load 覆盖旧 load」，未覆盖「workspace 切换后旧响应回填」的细分场景。",
-          "evidence": "kanban.ts(store):239-248 vs flockmux tasks.tsx:61-74"
+          "description": "切板/竞态下，用 boardGeneration+每类请求 requestSeq+当前 board 三者比对，旧响应一律丢弃，绝不覆盖新状态。swarmx 已有 reqIdRef 单序号守卫，但只防「新 load 覆盖旧 load」，未覆盖「workspace 切换后旧响应回填」的细分场景。",
+          "evidence": "kanban.ts(store):239-248 vs swarmx tasks.tsx:61-74"
         },
         {
           "name": "WebSocket watch 桥 + 去抖 + 退避重连",
@@ -319,12 +319,12 @@
         },
         {
           "name": "Profile-aware 多租户 RBAC 过滤",
-          "description": "按登录用户可见 profile 过滤任务/重算 stats/校验 assign 准入。flockmux 是单操作员桌面应用，此能力当前无用武之地。",
+          "description": "按登录用户可见 profile 过滤任务/重算 stats/校验 assign 准入。swarmx 是单操作员桌面应用，此能力当前无用武之地。",
           "evidence": "controllers/hermes/kanban.ts:52-89"
         },
         {
           "name": "Capability negotiation 优雅降级",
-          "description": "后端声明每能力 supported/partial/missing，前端 assertCapability 据此禁用/降级。对 flockmux 这种前后端同仓同版本发布的桌面应用价值低（不存在前后端版本漂移）。",
+          "description": "后端声明每能力 supported/partial/missing，前端 assertCapability 据此禁用/降级。对 swarmx 这种前后端同仓同版本发布的桌面应用价值低（不存在前后端版本漂移）。",
           "evidence": "hermes-kanban.ts:235-261 + store:80-105"
         },
         {
@@ -333,12 +333,12 @@
           "evidence": "KanbanView.vue:285-308"
         }
       ],
-      "flockmux_status": "present",
-      "flockmux_evidence": "flockmux 已有完整且成熟的 Kanban 看板，不是「有任务但没看板」。证据：web/src/routes/tasks.tsx 顶部注释自述「Kanban board (/tasks)」，COLUMNS 定义 triage/todo/ready/running/blocked/done/archived 7 状态列（:37-45）；后端 crates/flockmux-server/src/routes/tasks.rs effective_status 从生命周期信号派生状态、人工 override 优先并持久化（:31-49，含单测 :136-197）；前端已具备：optimistic write + 失败回滚（tasks.tsx:104-131）、stale-response 守卫（reqIdRef, :61-74）、visibility 感知轮询（document.hidden 暂停 + 回前台立刻刷新, :76-92）、per-card in-flight 自旋（:54-58）、a11y aria-label（:341-356）。缺口经 grep 核实：TaskRecord 无 assignee/priority/board 字段（models.rs:528-549，grep assignee/priority 空结果）；任务板仅按 workspace 分组、无 status/assignee 过滤 UI（tasks.tsx:136 仅 byCol）；无手动建任务入口（grep create 空——flockmux 的 task 本质是已 spawn 的 worker，不是手工录入的工单）；无单任务实时事件（靠 4s 轮询，注释明说 /ws/swarm 暂不带 task 事件 :10-12）；无多板/板切换概念。",
+      "swarmx_status": "present",
+      "swarmx_evidence": "swarmx 已有完整且成熟的 Kanban 看板，不是「有任务但没看板」。证据：web/src/routes/tasks.tsx 顶部注释自述「Kanban board (/tasks)」，COLUMNS 定义 triage/todo/ready/running/blocked/done/archived 7 状态列（:37-45）；后端 crates/swarmx-server/src/routes/tasks.rs effective_status 从生命周期信号派生状态、人工 override 优先并持久化（:31-49，含单测 :136-197）；前端已具备：optimistic write + 失败回滚（tasks.tsx:104-131）、stale-response 守卫（reqIdRef, :61-74）、visibility 感知轮询（document.hidden 暂停 + 回前台立刻刷新, :76-92）、per-card in-flight 自旋（:54-58）、a11y aria-label（:341-356）。缺口经 grep 核实：TaskRecord 无 assignee/priority/board 字段（models.rs:528-549，grep assignee/priority 空结果）；任务板仅按 workspace 分组、无 status/assignee 过滤 UI（tasks.tsx:136 仅 byCol）；无手动建任务入口（grep create 空——swarmx 的 task 本质是已 spawn 的 worker，不是手工录入的工单）；无单任务实时事件（靠 4s 轮询，注释明说 /ws/swarm 暂不带 task 事件 :10-12）；无多板/板切换概念。",
       "candidates": [
         {
           "title": "任务板接入实时事件流，替代 4 秒轮询",
-          "what": "把 /tasks 看板从 4s 定时轮询升级为事件驱动刷新：复用已有的 /ws/swarm（已推 AgentState/AgentActivity/BlackboardChanged，正是任务状态派生的上游信号），订阅后做 hermes 那套 100ms 去抖 refetch + 断线退避重连。不必照搬 hermes 的「每连接 spawn 子进程」桥（那是其 CLI 薄包装的无奈），flockmux 有原生 WS，直接在 useSwarmFeed 上加一个 task-board 订阅即可。",
+          "what": "把 /tasks 看板从 4s 定时轮询升级为事件驱动刷新：复用已有的 /ws/swarm（已推 AgentState/AgentActivity/BlackboardChanged，正是任务状态派生的上游信号），订阅后做 hermes 那套 100ms 去抖 refetch + 断线退避重连。不必照搬 hermes 的「每连接 spawn 子进程」桥（那是其 CLI 薄包装的无奈），swarmx 有原生 WS，直接在 useSwarmFeed 上加一个 task-board 订阅即可。",
           "why_valuable": "看板自述「/ws/swarm 暂不带 task 事件，故用轮询」是一条明确的 scope 债。轮询有最长 4s 的状态滞后，且 worker 状态变化（running→done/blocked）本就由 swarm 事件触发——事件驱动能让板「秒级」反映真相，契合项目对『状态不能撒谎/要反映 ground truth』的红线。去抖+退避重连是 hermes 验证过的生产级范式，直接搬思路。",
           "feasibility": "high",
           "feasibility_notes": "React 侧改动：tasks.tsx 已有 load()，把 setInterval 换成订阅 useSwarmFeed 的 AgentState/AgentActivity 事件→去抖触发 load()，保留轮询作兜底降频（如 30s）。无 Rust 改动（swarm 事件已存在）。难点仅在去抖窗口与「自己刚 optimistic 写完别被事件回刷盖掉」的协调，hermes 的 seq/generation 守卫已示范解法。",
@@ -348,8 +348,8 @@
         },
         {
           "title": "状态计数条做成可点击过滤器 + 加 assignee/role 维度过滤",
-          "what": "借鉴 hermes 的 stats-chip 一栏两用（KanbanView.vue:285-308）：在 /tasks 顶部加一行状态计数 chip，单击即把该状态设为过滤（aria-pressed 反映选中），再点取消。并补一个按 role（role_slug/role_label，flockmux 已有此字段）的过滤下拉——等价于 hermes 的 assignee 过滤，但用 flockmux 已有的 role 概念落地。",
-          "why_valuable": "flockmux 当前任务板只能按 workspace 分组、零过滤（tasks.tsx:136）。大 swarm 跑起来后一个板上几十张卡，operator 想『只看 blocked 的』『只看某 role 的』没有任何手段。这是纯前端的高性价比 UX 补强，且 role 维度是 flockmux 已有数据，不需后端建模。",
+          "what": "借鉴 hermes 的 stats-chip 一栏两用（KanbanView.vue:285-308）：在 /tasks 顶部加一行状态计数 chip，单击即把该状态设为过滤（aria-pressed 反映选中），再点取消。并补一个按 role（role_slug/role_label，swarmx 已有此字段）的过滤下拉——等价于 hermes 的 assignee 过滤，但用 swarmx 已有的 role 概念落地。",
+          "why_valuable": "swarmx 当前任务板只能按 workspace 分组、零过滤（tasks.tsx:136）。大 swarm 跑起来后一个板上几十张卡，operator 想『只看 blocked 的』『只看某 role 的』没有任何手段。这是纯前端的高性价比 UX 补强，且 role 维度是 swarmx 已有数据，不需后端建模。",
           "feasibility": "high",
           "feasibility_notes": "纯 React/前端，零 Rust。计数已可由现有 tasks 数组前端聚合（无需新接口）。role 过滤在客户端 filter 即可。唯一注意：与现有 COLUMN_CAP「show all」展开态、与列分组的交互要协调（选中某状态时可只展开该列）。hermes 的 visibleBoardStatuses 计算（KanbanView.vue:90-93）给了现成范式。",
           "effort": "S",
@@ -358,10 +358,10 @@
         },
         {
           "title": "卡片显示 assignee/role 头像 + 相对时间标签",
-          "what": "借鉴 KanbanTaskCard.vue:20-26,43-57：卡片上把 role 显示为带头像/色块的 tag（flockmux 已有 role 概念与可能的 avatar），并保留人类可读的相对时间。flockmux 卡片已有 role_label 和 relTime，差的是把 role 做成视觉化 tag（头像/色点）让大板上一眼区分『谁在干』。",
+          "what": "借鉴 KanbanTaskCard.vue:20-26,43-57：卡片上把 role 显示为带头像/色块的 tag（swarmx 已有 role 概念与可能的 avatar），并保留人类可读的相对时间。swarmx 卡片已有 role_label 和 relTime，差的是把 role 做成视觉化 tag（头像/色点）让大板上一眼区分『谁在干』。",
           "why_valuable": "提升大板的扫读性，让 operator 不读文字就能按角色聚类识别卡片。属锦上添花，价值中等。",
           "feasibility": "high",
-          "feasibility_notes": "纯前端。需确认 flockmux 是否已有 role→avatar/color 的映射（roles 注册表里可能有 color/icon 元数据，可复用）；若没有则退化为按 role_slug 取色的确定性 hash 色点，依然有效。",
+          "feasibility_notes": "纯前端。需确认 swarmx 是否已有 role→avatar/color 的映射（roles 注册表里可能有 color/icon 元数据，可复用）；若没有则退化为按 role_slug 取色的确定性 hash 色点，依然有效。",
           "effort": "S",
           "borrow_type": "ux",
           "priority_guess": "P3"
@@ -369,7 +369,7 @@
         {
           "title": "stale-response 守卫升级为 (generation+seq+scope) 三元组",
           "what": "把 tasks.tsx 现有的单序号 reqIdRef（:61-74）升级为 hermes store 的 boardGeneration+requestSeq+当前 scope 三元组（kanban store:239-248）：当 workspace 切换时 bump generation，凡 generation/scope 不匹配的旧响应一律丢弃。",
-          "why_valuable": "flockmux 现守卫只防『新 load 覆盖旧 load』，但 WorkspacePicker 切 workspace 后，切换前发出的旧请求若晚到，仍可能把 A 工作区的任务回填进 B 视图。这是一类隐蔽的『界面撒谎』。借鉴 hermes 的 generation 维度可堵死。",
+          "why_valuable": "swarmx 现守卫只防『新 load 覆盖旧 load』，但 WorkspacePicker 切 workspace 后，切换前发出的旧请求若晚到，仍可能把 A 工作区的任务回填进 B 视图。这是一类隐蔽的『界面撒谎』。借鉴 hermes 的 generation 维度可堵死。",
           "feasibility": "high",
           "feasibility_notes": "纯前端小重构。把 reqIdRef 升为 {gen,seq}，wsId 变更时 gen++，load 完成时同时比对 gen 与当前 wsId。约 10 行。若上面『接入实时事件流』一并做，这个守卫顺手一起加最省事。",
           "effort": "S",
@@ -377,7 +377,7 @@
           "priority_guess": "P2"
         }
       ],
-      "verdict": "flockmux 已有一块比 hermes 工程上更扎实的 Kanban（状态从真实生命周期派生、带单测、optimistic+回滚+stale 守卫），所以这个域不是「从无到有」而是「打磨」——真正值得借鉴的只有三件且都偏前端/低成本：把轮询升级成事件驱动（P1，复用已有 /ws/swarm，去抖+退避重连范式直接搬）、状态计数条做成可点过滤器 + 加 role 维度过滤（P2）、stale 守卫补 generation 维度防切 workspace 回填（P2）；而 hermes 的多板/profile-RBAC/capability-negotiation 对单操作员、前后端同版发布的 Tauri 桌面应用价值低，不建议引入。",
+      "verdict": "swarmx 已有一块比 hermes 工程上更扎实的 Kanban（状态从真实生命周期派生、带单测、optimistic+回滚+stale 守卫），所以这个域不是「从无到有」而是「打磨」——真正值得借鉴的只有三件且都偏前端/低成本：把轮询升级成事件驱动（P1，复用已有 /ws/swarm，去抖+退避重连范式直接搬）、状态计数条做成可点过滤器 + 加 role 维度过滤（P2）、stale 守卫补 generation 维度防切 workspace 回填（P2）；而 hermes 的多板/profile-RBAC/capability-negotiation 对单操作员、前后端同版发布的 Tauri 桌面应用价值低，不建议引入。",
       "_key": "kanban",
       "_title": "看板 Kanban"
     },
@@ -425,25 +425,25 @@
           "evidence": "codex-auth.ts:201-242"
         }
       ],
-      "flockmux_status": "absent",
-      "flockmux_evidence": "flockmux 在「provider 凭据/OAuth」这个域上几乎完全空白，但这是**有意的架构选择**而非缺陷——它把 auth 整体委托给被包裹的 CLI：\n\n1) `models_config.rs`（全 316 行已读）只是「抽象 tier(opus/sonnet/haiku)→每个 CLI 的具体 model id」映射，在 spawn chokepoint 解析。它不存 base_url、不存 api_key、没有 provider 概念、没有任何模型列表拉取。注释明确：「User config separate from the CLI's personal config … flockmux-local, not read from ~/.claude/~/.codex」。\n\n2) `ModelPicker.tsx` 只有三个硬编码 tier（opus/sonnet/haiku）+ effort 档位，没有 provider 下拉、没有账号、没有登录入口。\n\n3) `tokens.rs` 是 CJK-aware 的 token **估算**（观测用），与凭据无关；`billing.rs` 是「别把 claude 切走订阅计费」的 env 守卫（PAID_TRANSPORT/CLAUDE_PRINT opt-in），也与 OAuth 无关。\n\n4) flockmux 的 auth 模型 = 委托给 CLI：`plugins.rs:154` 注释「claude 打印 Not logged in · Run /login when no OAuth credential is present」；`spawn.rs:71` 透传 USER 让 claude 自己读 macOS Keychain 里的 OAuth token。用户登录是在 CLI 自己的 `/login` 流程里完成的，flockmux 不持有任何 provider token。\n\n5) cli-plugins 只有 `claude.toml`/`codex.toml` 两个，没有任何 OpenAI 兼容 provider 注册表。\n\ngrep `device_code|oauth|verification_uri` 在 .rs/.tsx 里**零命中**业务实现（只命中 spawn 透传注释）。结论：device flow / loopback PKCE / 凭据池 / 模型目录拉取在 flockmux 中**完全不存在**。",
+      "swarmx_status": "absent",
+      "swarmx_evidence": "swarmx 在「provider 凭据/OAuth」这个域上几乎完全空白，但这是**有意的架构选择**而非缺陷——它把 auth 整体委托给被包裹的 CLI：\n\n1) `models_config.rs`（全 316 行已读）只是「抽象 tier(opus/sonnet/haiku)→每个 CLI 的具体 model id」映射，在 spawn chokepoint 解析。它不存 base_url、不存 api_key、没有 provider 概念、没有任何模型列表拉取。注释明确：「User config separate from the CLI's personal config … swarmx-local, not read from ~/.claude/~/.codex」。\n\n2) `ModelPicker.tsx` 只有三个硬编码 tier（opus/sonnet/haiku）+ effort 档位，没有 provider 下拉、没有账号、没有登录入口。\n\n3) `tokens.rs` 是 CJK-aware 的 token **估算**（观测用），与凭据无关；`billing.rs` 是「别把 claude 切走订阅计费」的 env 守卫（PAID_TRANSPORT/CLAUDE_PRINT opt-in），也与 OAuth 无关。\n\n4) swarmx 的 auth 模型 = 委托给 CLI：`plugins.rs:154` 注释「claude 打印 Not logged in · Run /login when no OAuth credential is present」；`spawn.rs:71` 透传 USER 让 claude 自己读 macOS Keychain 里的 OAuth token。用户登录是在 CLI 自己的 `/login` 流程里完成的，swarmx 不持有任何 provider token。\n\n5) cli-plugins 只有 `claude.toml`/`codex.toml` 两个，没有任何 OpenAI 兼容 provider 注册表。\n\ngrep `device_code|oauth|verification_uri` 在 .rs/.tsx 里**零命中**业务实现（只命中 spawn 透传注释）。结论：device flow / loopback PKCE / 凭据池 / 模型目录拉取在 swarmx 中**完全不存在**。",
       "candidates": [
         {
           "title": "应用内 OAuth 登录（device flow + loopback PKCE），替代「去终端跑 /login」",
-          "what": "借鉴 copilot-device-flow.ts 的 RFC 8628 device flow 状态机 + xai-auth.ts 的 loopback PKCE（本地 127.0.0.1 回调 server 捕获 code）这两套 OAuth 流程骨架，让用户在 flockmux UI 里点一个按钮就能登录 claude/codex，而不是被赶去终端手敲 /login。前端复刻 CopilotLoginModal.vue 的「显示 user_code + 复制 + 打开链接 + 轮询」交互。",
-          "why_valuable": "flockmux 当前 auth 失败的唯一补救是 OrchestratorFailureCard 里「在终端运行 /login」+「打开终端登录」——这恰恰违反了项目 CLAUDE.md 头号原则『新用户全程零命令』。一个装完包的新用户第一次新建空间，如果 claude 没登录，现在只能去敲命令；hermes 的 device-flow 弹窗模式可以把这一步变成纯 GUI，是对 flockmux『诚实化/零命令』方向的直接补强。device flow 尤其适合桌面 app（无需本地端口，纯轮询，防火墙友好）。",
+          "what": "借鉴 copilot-device-flow.ts 的 RFC 8628 device flow 状态机 + xai-auth.ts 的 loopback PKCE（本地 127.0.0.1 回调 server 捕获 code）这两套 OAuth 流程骨架，让用户在 swarmx UI 里点一个按钮就能登录 claude/codex，而不是被赶去终端手敲 /login。前端复刻 CopilotLoginModal.vue 的「显示 user_code + 复制 + 打开链接 + 轮询」交互。",
+          "why_valuable": "swarmx 当前 auth 失败的唯一补救是 OrchestratorFailureCard 里「在终端运行 /login」+「打开终端登录」——这恰恰违反了项目 CLAUDE.md 头号原则『新用户全程零命令』。一个装完包的新用户第一次新建空间，如果 claude 没登录，现在只能去敲命令；hermes 的 device-flow 弹窗模式可以把这一步变成纯 GUI，是对 swarmx『诚实化/零命令』方向的直接补强。device flow 尤其适合桌面 app（无需本地端口，纯轮询，防火墙友好）。",
           "feasibility": "medium",
-          "feasibility_notes": "难点：(1) 必须摸清 claude/codex 各自 OAuth 的 client_id/endpoint/scope——hermes 的注释说这些都对齐上游 Python 实现，但 client_id 是『暂时复用』的，flockmux 直接抄可能违反对方 ToS，需要自己注册或确认可用性；(2) Rust 侧要重写：device flow 用 reqwest 轮询（约 150 行，直译 copilot-device-flow.ts 不难），loopback PKCE 要用 hyper/axum 起临时 server（flockmux 已有 axum，复用容易）+ sha2 算 S256 challenge；(3) 登录成功后 token 要写到 claude/codex 各自能读到的位置（~/.claude / macOS Keychain / ~/.codex auth.json），这一步 flockmux 没控制权，是最大不确定性——claude 的 keychain 存储格式未公开，可能只能支持 codex（文件式）。建议先只做 codex 的 device flow 做 PoC。React 前端复刻 modal 是 S。",
+          "feasibility_notes": "难点：(1) 必须摸清 claude/codex 各自 OAuth 的 client_id/endpoint/scope——hermes 的注释说这些都对齐上游 Python 实现，但 client_id 是『暂时复用』的，swarmx 直接抄可能违反对方 ToS，需要自己注册或确认可用性；(2) Rust 侧要重写：device flow 用 reqwest 轮询（约 150 行，直译 copilot-device-flow.ts 不难），loopback PKCE 要用 hyper/axum 起临时 server（swarmx 已有 axum，复用容易）+ sha2 算 S256 challenge；(3) 登录成功后 token 要写到 claude/codex 各自能读到的位置（~/.claude / macOS Keychain / ~/.codex auth.json），这一步 swarmx 没控制权，是最大不确定性——claude 的 keychain 存储格式未公开，可能只能支持 codex（文件式）。建议先只做 codex 的 device flow 做 PoC。React 前端复刻 modal 是 S。",
           "effort": "L",
           "borrow_type": "protocol",
           "priority_guess": "P1"
         },
         {
           "title": "应用内多 provider / OpenAI 兼容 endpoint 注册（preset + custom）",
-          "what": "借鉴 shared/providers.ts 的 provider 预设注册表（base_url/models/api_mode 单一事实来源）+ ProviderFormModal 的 custom OpenAI 兼容 provider 表单 + config-helpers 的 fetchProviderModels（打 /v1/models 自动拉模型）。让用户能在 flockmux 里加一个第三方 OpenAI 兼容 endpoint（如 OpenRouter、本地 LM Studio、各种中转），而不只是 claude/codex 订阅。",
-          "why_valuable": "flockmux 现在被锁死在 claude+codex 订阅计费两条路（billing.rs 甚至主动阻止切走）。但很多用户想用便宜的中转/自部署/OpenRouter。codex 本身就支持 custom model_providers（pre_spawn.rs:847 已有 `[model_providers.custom]` 处理），说明底层管道通的——只是 flockmux 没给 UI 让用户填 base_url/api_key/model。补上这块能解锁『自带 key 用任意兼容模型』。",
+          "what": "借鉴 shared/providers.ts 的 provider 预设注册表（base_url/models/api_mode 单一事实来源）+ ProviderFormModal 的 custom OpenAI 兼容 provider 表单 + config-helpers 的 fetchProviderModels（打 /v1/models 自动拉模型）。让用户能在 swarmx 里加一个第三方 OpenAI 兼容 endpoint（如 OpenRouter、本地 LM Studio、各种中转），而不只是 claude/codex 订阅。",
+          "why_valuable": "swarmx 现在被锁死在 claude+codex 订阅计费两条路（billing.rs 甚至主动阻止切走）。但很多用户想用便宜的中转/自部署/OpenRouter。codex 本身就支持 custom model_providers（pre_spawn.rs:847 已有 `[model_providers.custom]` 处理），说明底层管道通的——只是 swarmx 没给 UI 让用户填 base_url/api_key/model。补上这块能解锁『自带 key 用任意兼容模型』。",
           "feasibility": "medium",
-          "feasibility_notes": "难点：(1) flockmux 的 models_config.rs 是 tier→model 抽象层，加 provider 维度要扩 schema（新增 base_url/api_key/api_mode 字段并贯通到 spawn）——是结构性改动，不是加个字段；(2) api_key 要安全存储（不能明文进 models.json，建议进 OS keychain，Rust 用 keyring crate）；(3) fetchProviderModels 直译成 reqwest 很容易（约 30 行）；(4) 与 billing.rs 的『别切走订阅』守卫会冲突，要想清楚 custom provider 走 paid_transport opt-in 路径。整体是 provider 概念从 0 到 1 的引入，工作量偏大。React 表单 + 模型下拉是 M。",
+          "feasibility_notes": "难点：(1) swarmx 的 models_config.rs 是 tier→model 抽象层，加 provider 维度要扩 schema（新增 base_url/api_key/api_mode 字段并贯通到 spawn）——是结构性改动，不是加个字段；(2) api_key 要安全存储（不能明文进 models.json，建议进 OS keychain，Rust 用 keyring crate）；(3) fetchProviderModels 直译成 reqwest 很容易（约 30 行）；(4) 与 billing.rs 的『别切走订阅』守卫会冲突，要想清楚 custom provider 走 paid_transport opt-in 路径。整体是 provider 概念从 0 到 1 的引入，工作量偏大。React 表单 + 模型下拉是 M。",
           "effort": "XL",
           "borrow_type": "architecture",
           "priority_guess": "P2"
@@ -451,7 +451,7 @@
         {
           "title": "模型列表 live 拉取 + fallback 双源 + 磁盘缓存",
           "what": "借鉴 model-catalog-cache.ts：对已配置的 provider 后台并发打 /v1/models 拿真实模型列表，失败回退硬编码预设（标 source='fallback'），按 provider|base_url 缓存到磁盘并带 TTL；以及 copilot-models.ts 的『按账号分桶 + 正/负 TTL + inflight 合并』缓存模式。",
-          "why_valuable": "只有在『候选2（多 provider）』落地后才有意义——届时 flockmux 需要知道每个 endpoint 到底有哪些模型可选，而不是让用户手敲 model id。live+fallback 双源保证列表既新鲜又不会因网络抖动变空。inflight 合并 + 负缓存这套缓存纪律本身是好工程范式，Rust 里用 moka/dashmap 实现很自然。",
+          "why_valuable": "只有在『候选2（多 provider）』落地后才有意义——届时 swarmx 需要知道每个 endpoint 到底有哪些模型可选，而不是让用户手敲 model id。live+fallback 双源保证列表既新鲜又不会因网络抖动变空。inflight 合并 + 负缓存这套缓存纪律本身是好工程范式，Rust 里用 moka/dashmap 实现很自然。",
           "feasibility": "high",
           "feasibility_notes": "算法纯净、无平台耦合，Rust 移植直接：reqwest 拉 /v1/models、serde 解析、moka 做 TTL 缓存、tokio::sync 做 inflight 合并。难点几乎为零，唯一前提是先有 provider 概念（依赖候选2）。单独看是 high 可行，但价值绑定在候选2 上，所以排 P2/P3。Gemini 去 models/ 前缀、openrouter free_only 这些 quirk 直接照搬注释即可。",
           "effort": "M",
@@ -461,15 +461,15 @@
         {
           "title": "OAuth token JWT-exp 探针 + 主动续期（用于应用内登录后保活）",
           "what": "借鉴 codex-auth.ts:201-242：status 探针解码 access_token 的 JWT exp，剩余<120s 主动用 refresh_token 续期并回写凭据文件。",
-          "why_valuable": "只有在『候选1（应用内 OAuth）』落地后才需要——一旦 flockmux 自己持有 token，就得负责续期，否则用户登录一次几小时后又掉线，体验比委托 CLI 还差。这是 OAuth 自管的必备配套，不是独立功能。",
+          "why_valuable": "只有在『候选1（应用内 OAuth）』落地后才需要——一旦 swarmx 自己持有 token，就得负责续期，否则用户登录一次几小时后又掉线，体验比委托 CLI 还差。这是 OAuth 自管的必备配套，不是独立功能。",
           "feasibility": "high",
-          "feasibility_notes": "JWT exp 解码（base64 split 取 payload.exp）+ rerun refresh grant，Rust 用 jsonwebtoken/base64 + reqwest，约 40 行。技术上简单。但强依赖候选1，且只在 flockmux 决定『自己存 token』时才成立——如果候选1 最终只能委托 CLI 存 token，那续期也归 CLI，此项就不需要。属于条件性借鉴。",
+          "feasibility_notes": "JWT exp 解码（base64 split 取 payload.exp）+ rerun refresh grant，Rust 用 jsonwebtoken/base64 + reqwest，约 40 行。技术上简单。但强依赖候选1，且只在 swarmx 决定『自己存 token』时才成立——如果候选1 最终只能委托 CLI 存 token，那续期也归 CLI，此项就不需要。属于条件性借鉴。",
           "effort": "S",
           "borrow_type": "algorithm",
           "priority_guess": "P3"
         }
       ],
-      "verdict": "整体『部分值得借鉴，但要克制』：hermes 的 provider 注册表/凭据池/多家 OAuth 体系是它作为『凭据管理控制台』的核心，而 flockmux 是『把 claude/codex 包成 PTY』的 orchestrator，两者定位根本不同——flockmux 把 auth 委托给 CLI 是有意设计，不该照搬整套 provider 体系。真正高价值的单点是『应用内 device-flow/PKCE 登录』（候选1，P1）：它能消灭 flockmux 当前『未登录→去终端敲 /login』这个违反『零命令』头号原则的痛点；其余（多 provider、模型目录拉取、token 续期）都是围绕候选1/自管 provider 的配套，价值是条件性的，建议等候选1 验证后再决定是否引入。",
+      "verdict": "整体『部分值得借鉴，但要克制』：hermes 的 provider 注册表/凭据池/多家 OAuth 体系是它作为『凭据管理控制台』的核心，而 swarmx 是『把 claude/codex 包成 PTY』的 orchestrator，两者定位根本不同——swarmx 把 auth 委托给 CLI 是有意设计，不该照搬整套 provider 体系。真正高价值的单点是『应用内 device-flow/PKCE 登录』（候选1，P1）：它能消灭 swarmx 当前『未登录→去终端敲 /login』这个违反『零命令』头号原则的痛点；其余（多 provider、模型目录拉取、token 续期）都是围绕候选1/自管 provider 的配套，价值是条件性的，建议等候选1 验证后再决定是否引入。",
       "_key": "models-oauth",
       "_title": "模型管理与多家 OAuth"
     },
@@ -499,7 +499,7 @@
         },
         {
           "name": "单 WS + request_id 的请求/响应多路复用",
-          "description": "一条 WebSocket 上用 randomUUID 的 request_id 关联请求和响应（pendingRequests 表 + successTypes/errorTypes + 超时 reject），同时跑多个并发的 terminal/exec/file 操作，还能携带主动推送（terminal.data 流）。这套'在持久双工连接上做 RPC 复用'的模式与协议无关，是 flockmux 真正可借的工程范式。",
+          "description": "一条 WebSocket 上用 randomUUID 的 request_id 关联请求和响应（pendingRequests 表 + successTypes/errorTypes + 超时 reject），同时跑多个并发的 terminal/exec/file 操作，还能携带主动推送（terminal.data 流）。这套'在持久双工连接上做 RPC 复用'的模式与协议无关，是 swarmx 真正可借的工程范式。",
           "evidence": "lan-peer-socket.ts:369-395,596-615"
         },
         {
@@ -523,15 +523,15 @@
           "evidence": "device-pairing-code.ts:9-17 + login-limiter.ts:246-315 + controllers/devices.ts:404-409"
         }
       ],
-      "flockmux_status": "absent",
-      "flockmux_evidence": "flockmux 完全没有 LAN/设备/配对/发现/peer 概念，且架构定位与之根本对立：① 全仓 grep `mdns|lan_discovery|device_pairing|peer_socket|discovery|pairing`（crates/**/*.rs）零命中；前端 grep `lan|device|pairing|discover|peer`（web/src）只命中 `width=device-width` 这种无关串。② 服务端 crates/flockmux-server/src/main.rs:449 `let addr: SocketAddr = ([127,0,0,1], port).into()` —— 硬编码只绑 loopback；main.rs:9-11 注释明确写 \"Bind: 127.0.0.1:7777 (loopback only, single-user local). There is no token auth yet, but require_local_origin rejects any request carrying a non-local Origin header\"；main.rs:848-900 还专门有 require_local_origin + DNS-rebind 防护，安全模型就是\"拒绝一切非本机访问\"。③ Cargo.toml 无任何 mdns/zeroconf/socket2/libp2p/quinn 依赖。④ \"swarm\" crate（crates/flockmux-swarm）是单机多 agent 编排，grep `remote|machine|host|network|distributed` 无跨机器语义。结论：这是 flockmux 完全没有、且当前威胁模型主动排斥的能力。",
+      "swarmx_status": "absent",
+      "swarmx_evidence": "swarmx 完全没有 LAN/设备/配对/发现/peer 概念，且架构定位与之根本对立：① 全仓 grep `mdns|lan_discovery|device_pairing|peer_socket|discovery|pairing`（crates/**/*.rs）零命中；前端 grep `lan|device|pairing|discover|peer`（web/src）只命中 `width=device-width` 这种无关串。② 服务端 crates/swarmx-server/src/main.rs:449 `let addr: SocketAddr = ([127,0,0,1], port).into()` —— 硬编码只绑 loopback；main.rs:9-11 注释明确写 \"Bind: 127.0.0.1:7777 (loopback only, single-user local). There is no token auth yet, but require_local_origin rejects any request carrying a non-local Origin header\"；main.rs:848-900 还专门有 require_local_origin + DNS-rebind 防护，安全模型就是\"拒绝一切非本机访问\"。③ Cargo.toml 无任何 mdns/zeroconf/socket2/libp2p/quinn 依赖。④ \"swarm\" crate（crates/swarmx-swarm）是单机多 agent 编排，grep `remote|machine|host|network|distributed` 无跨机器语义。结论：这是 swarmx 完全没有、且当前威胁模型主动排斥的能力。",
       "candidates": [
         {
           "title": "自证身份 + 签名/nonce/timestamp 防重放握手（设备 ID = 公钥指纹）",
           "what": "借鉴 system-info.ts 的 device_id=sha256(pubkey)前缀 这套 self-certifying identity，以及 createDeviceSignature/verifyDeviceSignature 的 `id.nonce.timestamp` 签名 + |now-ts|<TTL + nonce 去重 防重放协议。不抄 TS，用 Rust 的 ed25519-dalek + sha2 重写，身份存 storage crate（沿用 spawn/storage 已有的本地数据目录）。",
-          "why_valuable": "这是 flockmux 任何未来'远程/跨机'故事（不只 LAN，也包括手机控制、自托管远程后端）的安全地基。即便短期不做 LAN，这套零 CA 的设备身份与挑战-应答握手也能复用到'给 loopback 之外开一道带认证的口子'。当前 flockmux 完全无 token/auth（main.rs:10 自己承认 there is no token auth yet），这是已知短板。",
+          "why_valuable": "这是 swarmx 任何未来'远程/跨机'故事（不只 LAN，也包括手机控制、自托管远程后端）的安全地基。即便短期不做 LAN，这套零 CA 的设备身份与挑战-应答握手也能复用到'给 loopback 之外开一道带认证的口子'。当前 swarmx 完全无 token/auth（main.rs:10 自己承认 there is no token auth yet），这是已知短板。",
           "feasibility": "high",
-          "feasibility_notes": "Rust 侧成熟：ed25519-dalek + sha2 + 用 SystemTime 做 timestamp + 一个 HashMap<(\"id:nonce\"), expiry> 做 nonce 表即可，无平台依赖、无打包痛点（密钥文件落 app 数据目录，不涉及 spells/roles 那类资源打包问题）。难点仅在'要不要给 flockmux 引入 auth'是产品决策，非技术。纯算法/协议移植，1-2 天。",
+          "feasibility_notes": "Rust 侧成熟：ed25519-dalek + sha2 + 用 SystemTime 做 timestamp + 一个 HashMap<(\"id:nonce\"), expiry> 做 nonce 表即可，无平台依赖、无打包痛点（密钥文件落 app 数据目录，不涉及 spells/roles 那类资源打包问题）。难点仅在'要不要给 swarmx 引入 auth'是产品决策，非技术。纯算法/协议移植，1-2 天。",
           "effort": "M",
           "borrow_type": "protocol",
           "priority_guess": "P2"
@@ -539,19 +539,19 @@
         {
           "title": "单 WebSocket + request_id 的请求/响应多路复用 RPC 范式",
           "what": "借鉴 lan-peer-socket.ts 的 pendingRequests 模式：在一条持久双工连接上用唯一 request_id 关联请求与响应（successTypes/errorTypes 分流 + 超时自动 reject + 连接关闭时统一 reject 所有 pending），同时混跑多路并发操作与服务端主动推送流。这是与 LAN 无关的纯工程范式。",
-          "why_valuable": "flockmux 已大量用 WS/SSE 跑 pty_stream、transcript 流。但'在一条连接上做带超时/错误分流的 RPC 复用'这套范式如果当前是散在各处手写的，可统一成一个 Rust 的 PendingTable<RequestId, oneshot::Sender> 抽象，复用到 acp/pty_stream/swarm 的内部消息往返。属于'借设计、不借场景'。",
+          "why_valuable": "swarmx 已大量用 WS/SSE 跑 pty_stream、transcript 流。但'在一条连接上做带超时/错误分流的 RPC 复用'这套范式如果当前是散在各处手写的，可统一成一个 Rust 的 PendingTable<RequestId, oneshot::Sender> 抽象，复用到 acp/pty_stream/swarm 的内部消息往返。属于'借设计、不借场景'。",
           "feasibility": "high",
-          "feasibility_notes": "Rust 用 tokio::sync::oneshot + DashMap/Mutex<HashMap<Uuid, Sender>> + tokio::time::timeout 就是惯用法，比 TS 的回调表更干净。难点是要先 grep 确认 flockmux 现有 WS 消息往返是否已有等价抽象（acp/pty_stream），避免重复造轮子——若已有则降为'对照优化'而非新建。纯架构借鉴。",
+          "feasibility_notes": "Rust 用 tokio::sync::oneshot + DashMap/Mutex<HashMap<Uuid, Sender>> + tokio::time::timeout 就是惯用法，比 TS 的回调表更干净。难点是要先 grep 确认 swarmx 现有 WS 消息往返是否已有等价抽象（acp/pty_stream），避免重复造轮子——若已有则降为'对照优化'而非新建。纯架构借鉴。",
           "effort": "M",
           "borrow_type": "architecture",
           "priority_guess": "P3"
         },
         {
           "title": "局域网多设备协作 / 把手机当输入端 整体能力（UDP 发现 + 配对 + peer 互控）",
-          "what": "完整搬 hermes 的'同网设备互相发现→配对→一台驱动另一台终端/exec/文件'闭环，让用户能在手机/平板/另一台电脑上发现并控制运行 flockmux 的主机（看 chat、批准 agent、甚至开远程终端）。",
-          "why_valuable": "场景本身对'让 AI agent 跑在工作站、人在沙发上用手机盯进度/批准危险操作'确有吸引力。但对 flockmux 当前形态价值偏低：flockmux 是单用户本机工具，没有多用户/账号体系，UI 也非移动端优先；hermes 之所以自然，是因为它本就是带 token+密码登录、可绑 LAN、移动端响应式的服务器级应用，LAN 只是其网络化形态的延伸。",
+          "what": "完整搬 hermes 的'同网设备互相发现→配对→一台驱动另一台终端/exec/文件'闭环，让用户能在手机/平板/另一台电脑上发现并控制运行 swarmx 的主机（看 chat、批准 agent、甚至开远程终端）。",
+          "why_valuable": "场景本身对'让 AI agent 跑在工作站、人在沙发上用手机盯进度/批准危险操作'确有吸引力。但对 swarmx 当前形态价值偏低：swarmx 是单用户本机工具，没有多用户/账号体系，UI 也非移动端优先；hermes 之所以自然，是因为它本就是带 token+密码登录、可绑 LAN、移动端响应式的服务器级应用，LAN 只是其网络化形态的延伸。",
           "feasibility": "low",
-          "feasibility_notes": "移植代价巨大且与 flockmux 架构对立：① 必须先打破 loopback-only（main.rs:449 硬绑 127.0.0.1）并新建完整 auth 体系——而 main.rs:9-11 的安全设计恰恰是'拒绝一切非本机'，等于推翻现有威胁模型。② Rust 侧 UDP 发现要 socket2 设 SO_REUSEADDR/SO_BROADCAST + 枚举网卡算广播地址（可用 if-addrs/local-ip-address crate），mDNS 想用标准协议可上 mdns-sd，但都要处理跨平台防火墙弹窗。③ 远程 pty/exec/file 要复用 flockmux-pty 但加一整套远程授权，安全面骤增。④ Tauri 打包：监听非 loopback 端口会触发 macOS/Windows 防火墙授权弹窗，与'下载→打开→零命令可用'的发版铁律冲突。⑤ 前端要新建 devices 页 + 移动端适配。属于'换栈重写 + 推翻安全模型'级别。建议不做整体，只摘上面两条 P2/P3 的子技术。",
+          "feasibility_notes": "移植代价巨大且与 swarmx 架构对立：① 必须先打破 loopback-only（main.rs:449 硬绑 127.0.0.1）并新建完整 auth 体系——而 main.rs:9-11 的安全设计恰恰是'拒绝一切非本机'，等于推翻现有威胁模型。② Rust 侧 UDP 发现要 socket2 设 SO_REUSEADDR/SO_BROADCAST + 枚举网卡算广播地址（可用 if-addrs/local-ip-address crate），mDNS 想用标准协议可上 mdns-sd，但都要处理跨平台防火墙弹窗。③ 远程 pty/exec/file 要复用 swarmx-pty 但加一整套远程授权，安全面骤增。④ Tauri 打包：监听非 loopback 端口会触发 macOS/Windows 防火墙授权弹窗，与'下载→打开→零命令可用'的发版铁律冲突。⑤ 前端要新建 devices 页 + 移动端适配。属于'换栈重写 + 推翻安全模型'级别。建议不做整体，只摘上面两条 P2/P3 的子技术。",
           "effort": "XL",
           "borrow_type": "concept",
           "priority_guess": "P3"
@@ -559,45 +559,45 @@
         {
           "title": "配对码 timingSafe 校验 + 私网免码/代理强制码 策略",
           "what": "若未来真做远程口子，借鉴 device-pairing-code.ts 的一次性配对码 + timingSafeEqual 防时序，以及 controllers/devices.ts:404-409 的 requiresPairingCode 判定（纯私网直连免码、经 x-forwarded-for 代理或公网源强制要码）+ login-limiter 的 per-IP+全局双层限流。",
-          "why_valuable": "是把'本地方便 vs 远程安全'平衡得很细的一段策略，可作为 flockmux 未来开 auth 口子时的现成设计参考，避免自己踩'局域网也强制输码很烦/公网不输码裸奔'两头坑。",
+          "why_valuable": "是把'本地方便 vs 远程安全'平衡得很细的一段策略，可作为 swarmx 未来开 auth 口子时的现成设计参考，避免自己踩'局域网也强制输码很烦/公网不输码裸奔'两头坑。",
           "feasibility": "medium",
-          "feasibility_notes": "纯逻辑，Rust 用 subtle crate 的 ConstantTimeEq 做常时比较、用 HashMap 做限流表即可。但价值完全依赖于'flockmux 先决定要 auth/远程'这个前置决策；在 loopback-only 形态下用不上。所以可行性中等、优先级低，属于'决策落地后再说'的储备项。",
+          "feasibility_notes": "纯逻辑，Rust 用 subtle crate 的 ConstantTimeEq 做常时比较、用 HashMap 做限流表即可。但价值完全依赖于'swarmx 先决定要 auth/远程'这个前置决策；在 loopback-only 形态下用不上。所以可行性中等、优先级低，属于'决策落地后再说'的储备项。",
           "effort": "S",
           "borrow_type": "concept",
           "priority_guess": "P3"
         }
       ],
-      "verdict": "整体不值得借鉴：LAN 设备发现/配对/互控这个域是 hermes \"服务器级、多用户、带 auth、移动端响应式\" 产品形态的自然延伸，而 flockmux 是 loopback-only、单用户、无 auth、安全模型主动拒绝一切非本机访问的桌面工具——整体搬运等于推翻 flockmux 的核心威胁模型且代价 XL。但有两块与 LAN 无关的高质量子技术值得单独摘出：① 自证身份(公钥指纹)+签名/nonce/防重放握手（P2，是 flockmux 补 auth 的现成地基），② 单 WS + request_id 的 RPC 多路复用范式（P3，纯架构借鉴）。",
+      "verdict": "整体不值得借鉴：LAN 设备发现/配对/互控这个域是 hermes \"服务器级、多用户、带 auth、移动端响应式\" 产品形态的自然延伸，而 swarmx 是 loopback-only、单用户、无 auth、安全模型主动拒绝一切非本机访问的桌面工具——整体搬运等于推翻 swarmx 的核心威胁模型且代价 XL。但有两块与 LAN 无关的高质量子技术值得单独摘出：① 自证身份(公钥指纹)+签名/nonce/防重放握手（P2，是 swarmx 补 auth 的现成地基），② 单 WS + request_id 的 RPC 多路复用范式（P3，纯架构借鉴）。",
       "_key": "lan-devices",
       "_title": "LAN 设备发现与配对"
     }
   ],
   "domains_12_recovered": null,
   "synthesis": {
-    "executive_summary": "研究覆盖 hermes-studio 全部 18 个域。结论分三类：(1) flockmux 整体在「与自身 PTY+订阅+SQLite 真相源架构对齐」的子域已对等或更强（流式 resume、kanban、终端持久会话、自注入 MCP、计费分层、reasoning effort、agent harness、鉴权/origin 防护、健康监控），不应照抄；(2) 真正高价值借鉴集中在「把 CLI/进程真正干了什么如实、完整呈现给用户」这一层（工具 diff 内联、cache 命中率、上下文占用条、sidecar 崩溃自愈、凭据脱敏、i18n 回归防线）；(3) 少量大件（应用内 OAuth 登录、外发 IM 通知、多 provider）方向正确但需立项。我从 60+ 个候选去重后排出 24 个，给出 6 个 quick wins（S/M 立即可做）和 4 个 big bets（L/XL 需立项），并诚实列出 6 个不必借鉴的域。hermes 没有运行时工作流引擎——它的「workflow」只有两层：CI/CD 发版工作流 + agent 开发 harness（元方法论），不存在像 n8n/Temporal 那样的可视化/可编程运行时编排引擎。",
-    "workflow_answer": "hermes 没有运行时工作流引擎。它的「workflow」一词在仓库里只对应两个完全不同的层面，都不是可视化/可编程的运行时编排：\n\n1) CI/CD 发版工作流（.github/workflows/*.yml）：desktop-release.yml、desktop-mac-update-manifest.yml 等。技术亮点是「幂等可重跑的分平台发版」（资产已存在则跳过、单平台失败可在既有 tag 上补产）+「双架构 mac 更新清单合并修复」（merge-mac-latest-yml.mjs 把 arm64/x64 两份 latest-mac.yml 的 files 列表 union，避免互相覆盖把另一架构用户喂错 dmg）。ci-workflows 域明文写「hermes has no runtime workflow engine; workflow equals CI/CD only」。\n\n2) Agent 开发 harness（元方法论，不是运行时引擎）：AGENTS.md/docs/harness/ + scripts/harness-check.mjs（diff-aware 跨文件不变量校验）+ docs/chat-chain-changes/（每 PR 一条变更笔记纪律）+ generate-openapi.mjs。这是「指导 agent 怎么开发本仓库」的纪律文件与机检脚本，约束的是开发流程，不是产品里跑给用户用的工作流。\n\n明确否定：hermes 没有 n8n/Temporal/Airflow 式的 DAG/可视化/可编程运行时工作流引擎，也没有用户可定义的「触发器→步骤→分支」编排。它的多 agent 协作靠 group-chat 的 @mention 路由 + mentionDepth 链式触发（一种轻量自组织，不是显式工作流图）。相比之下，flockmux 的 spell（多 agent 编排 recipe：[[agents]]+role_ref+depends_on+共享 workspace）+ orchestrator 角色 + 黑板台账，反而比 hermes 更接近「运行时编排」语义——这一层 flockmux 是更强的一方，无需向 hermes 借鉴工作流。\n\n所以你点名要看的「工作流」：CI/CD 那两条幂等发版/清单修复值得借鉴（已列 rank 2、rank 8，P1）；运行时工作流引擎 hermes 根本没有，无可借。",
+    "executive_summary": "研究覆盖 hermes-studio 全部 18 个域。结论分三类：(1) swarmx 整体在「与自身 PTY+订阅+SQLite 真相源架构对齐」的子域已对等或更强（流式 resume、kanban、终端持久会话、自注入 MCP、计费分层、reasoning effort、agent harness、鉴权/origin 防护、健康监控），不应照抄；(2) 真正高价值借鉴集中在「把 CLI/进程真正干了什么如实、完整呈现给用户」这一层（工具 diff 内联、cache 命中率、上下文占用条、sidecar 崩溃自愈、凭据脱敏、i18n 回归防线）；(3) 少量大件（应用内 OAuth 登录、外发 IM 通知、多 provider）方向正确但需立项。我从 60+ 个候选去重后排出 24 个，给出 6 个 quick wins（S/M 立即可做）和 4 个 big bets（L/XL 需立项），并诚实列出 6 个不必借鉴的域。hermes 没有运行时工作流引擎——它的「workflow」只有两层：CI/CD 发版工作流 + agent 开发 harness（元方法论），不存在像 n8n/Temporal 那样的可视化/可编程运行时编排引擎。",
+    "workflow_answer": "hermes 没有运行时工作流引擎。它的「workflow」一词在仓库里只对应两个完全不同的层面，都不是可视化/可编程的运行时编排：\n\n1) CI/CD 发版工作流（.github/workflows/*.yml）：desktop-release.yml、desktop-mac-update-manifest.yml 等。技术亮点是「幂等可重跑的分平台发版」（资产已存在则跳过、单平台失败可在既有 tag 上补产）+「双架构 mac 更新清单合并修复」（merge-mac-latest-yml.mjs 把 arm64/x64 两份 latest-mac.yml 的 files 列表 union，避免互相覆盖把另一架构用户喂错 dmg）。ci-workflows 域明文写「hermes has no runtime workflow engine; workflow equals CI/CD only」。\n\n2) Agent 开发 harness（元方法论，不是运行时引擎）：AGENTS.md/docs/harness/ + scripts/harness-check.mjs（diff-aware 跨文件不变量校验）+ docs/chat-chain-changes/（每 PR 一条变更笔记纪律）+ generate-openapi.mjs。这是「指导 agent 怎么开发本仓库」的纪律文件与机检脚本，约束的是开发流程，不是产品里跑给用户用的工作流。\n\n明确否定：hermes 没有 n8n/Temporal/Airflow 式的 DAG/可视化/可编程运行时工作流引擎，也没有用户可定义的「触发器→步骤→分支」编排。它的多 agent 协作靠 group-chat 的 @mention 路由 + mentionDepth 链式触发（一种轻量自组织，不是显式工作流图）。相比之下，swarmx 的 spell（多 agent 编排 recipe：[[agents]]+role_ref+depends_on+共享 workspace）+ orchestrator 角色 + 黑板台账，反而比 hermes 更接近「运行时编排」语义——这一层 swarmx 是更强的一方，无需向 hermes 借鉴工作流。\n\n所以你点名要看的「工作流」：CI/CD 那两条幂等发版/清单修复值得借鉴（已列 rank 2、rank 8，P1）；运行时工作流引擎 hermes 根本没有，无可借。",
     "ranked_candidates": [
       {
         "rank": 1,
         "title": "前端消费已有的 backend-sidecar-down 事件 + 给可点「重启后端」的诚实横幅",
         "domain": "桌面打包与运行时分发",
-        "what": "flockmux 后端已 emit backend-sidecar-down(lib.rs:117/129)但前端零监听(web/src 0 命中)，事件被丢弃。挂一个 app 级 listen()：收到后弹持久横幅显示 stderr tail(后端已带 20 行尾巴)+「重启后端」按钮。",
+        "what": "swarmx 后端已 emit backend-sidecar-down(lib.rs:117/129)但前端零监听(web/src 0 命中)，事件被丢弃。挂一个 app 级 listen()：收到后弹持久横幅显示 stderr tail(后端已带 20 行尾巴)+「重启后端」按钮。",
         "value": "直击诚实性红线：现在 sidecar 崩了前端只表现为各种 fetch 失败/loading 卡住，用户不知道是后端进程没了。stderr tail 已在 Rust 侧攒好，前端只需渲染。几乎零成本。",
         "feasibility": "high",
         "effort": "S",
         "priority": "P0",
-        "flockmux_gap": "partial"
+        "swarmx_gap": "partial"
       },
       {
         "rank": 2,
         "title": "i18n key 覆盖 + 英文回退的静态/CI 检查",
         "domain": "架构分层/鉴权/健康/UX",
         "what": "移植 hermes i18n-coverage.test 思路(非代码)：Node 脚本 walk web/src 抽 t('...') 字面量 key，断言每 key 在 en/zh 都存在 + 报告「zh 值与 en 逐字相同且含拉丁字母」的疑似回退；挂进 scripts/harness-check.mjs 作 CI 红线。",
-        "value": "实测当前 en=1174/zh=1173，zh 缺 home.workspaceCount_one/_other(复数化漏跟会致 zh 渲染异常)+约 28 个疑似英文回退(nav.debug/settings.plugins.installTitle/dag.handoff 等真漏翻)。flockmux i18n 大债靠反复手工批次修(f49f610/ec6b758/6056544)却无回归防护，一次投入换永久红线。",
+        "value": "实测当前 en=1174/zh=1173，zh 缺 home.workspaceCount_one/_other(复数化漏跟会致 zh 渲染异常)+约 28 个疑似英文回退(nav.debug/settings.plugins.installTitle/dag.handoff 等真漏翻)。swarmx i18n 大债靠反复手工批次修(f49f610/ec6b758/6056544)却无回归防护，一次投入换永久红线。",
         "feasibility": "high",
         "effort": "S",
         "priority": "P0",
-        "flockmux_gap": "partial"
+        "swarmx_gap": "partial"
       },
       {
         "rank": 3,
@@ -608,62 +608,62 @@
         "feasibility": "high",
         "effort": "M",
         "priority": "P0",
-        "flockmux_gap": "partial"
+        "swarmx_gap": "partial"
       },
       {
         "rank": 4,
         "title": "Cache 命中率指标(headline 卡 + 每模型/每日下钻)",
         "domain": "用量分析与成本",
         "what": "把已采集的 cache_read/(input+cache_read) 算成命中率，加 1 张 headline StatCard + by_model/by_day 表各加一列。借鉴 hermes cacheHitRate 派生公式。",
-        "value": "flockmux 全程采集了 cache_read/cache_write 真实值(数据已到客户端 api/types.ts:563/578/596)却从不告诉用户 prompt caching 省了多少——最直接的省钱信号。纯派生零新数据。诚实性：分母为 0 时显示「—」而非 0%。",
+        "value": "swarmx 全程采集了 cache_read/cache_write 真实值(数据已到客户端 api/types.ts:563/578/596)却从不告诉用户 prompt caching 省了多少——最直接的省钱信号。纯派生零新数据。诚实性：分母为 0 时显示「—」而非 0%。",
         "feasibility": "high",
         "effort": "S",
         "priority": "P1",
-        "flockmux_gap": "partial"
+        "swarmx_gap": "partial"
       },
       {
         "rank": 5,
         "title": "凭据脱敏管线(落库/上屏/录制前 redact Bearer/sk-*/api_key)",
         "domain": "Coding Agent 运行器",
         "what": "移植 hermes sanitizeCodingAgentTerminalOutput 的正则脱敏，挂在 PTY 输出→落库/transcript 持久化/前端推流/asciicast 录制四个边界。",
-        "value": "agent 可能在终端 echo 出 token、或 tool 输出带 key，一旦落进 SQLite 或 asciicast 录制就永久留痕、回放可见。这是 flockmux 当前真实泄密面，与诚实/安全红线一致。纯函数(regex/once_cell)易移植。",
+        "value": "agent 可能在终端 echo 出 token、或 tool 输出带 key，一旦落进 SQLite 或 asciicast 录制就永久留痕、回放可见。这是 swarmx 当前真实泄密面，与诚实/安全红线一致。纯函数(regex/once_cell)易移植。",
         "feasibility": "high",
         "effort": "S",
         "priority": "P1",
-        "flockmux_gap": "absent"
+        "swarmx_gap": "absent"
       },
       {
         "rank": 6,
         "title": "工具结果内联展示 + Edit/Write 的 unified diff 渲染",
         "domain": "聊天内核与流式",
         "what": "借鉴 hermes PR1289：transcript.rs 不只抽 48 字符 label，为 Edit/Write/MultiEdit 捕获结构化 old_string/new_string 或 codex patch，扩 ThoughtTraceStep 一个可选 payload 字段；MessagesPanel 对带 diff 的步骤走专门渲染(只显 diff body、长未改上下文折叠、可复制完整原文)。",
-        "value": "本研究 flockmux 最实在的体验差距：用户在聊天/轨迹里只看到「Edit src/foo.rs」，完全看不到改了什么，必须切终端/files 页验证。对「盯多 agent 干活」的控制台，看不到 diff=看不到价值产出。补上后 review agent 改动在 flockmux 内闭环。",
+        "value": "本研究 swarmx 最实在的体验差距：用户在聊天/轨迹里只看到「Edit src/foo.rs」，完全看不到改了什么，必须切终端/files 页验证。对「盯多 agent 干活」的控制台，看不到 diff=看不到价值产出。补上后 review agent 改动在 swarmx 内闭环。",
         "feasibility": "medium",
         "effort": "L",
         "priority": "P1",
-        "flockmux_gap": "partial"
+        "swarmx_gap": "partial"
       },
       {
         "rank": 7,
         "title": "边界/正则安全的 @mention 解析器 + @all 群发",
         "domain": "群聊房间(多agent)",
         "what": "把 hermes mention-routing.ts(findMentionRanges 前后边界字符校验 + escapeMentionName + @all 保留字)移植成 Rust，替换 MessagesPanel.tsx:651 的朴素正则 /(?:^|\\s)@(\\S+)/，并把 @all 升级成真群发(路由给房间内除发送者外所有活 agent)。",
-        "value": "flockmux 现在 @mention 只能选单接收者，没有@all 让所有在场 agent 各自回复——群体协作最自然的动作。现有朴素正则对邮箱/含点号名字/@all 还有边界 bug。hermes 有现成带单测纯函数模块，可作 Rust #[test] 黄金集。先做前端展开 @all(后端零改)。",
+        "value": "swarmx 现在 @mention 只能选单接收者，没有@all 让所有在场 agent 各自回复——群体协作最自然的动作。现有朴素正则对邮箱/含点号名字/@all 还有边界 bug。hermes 有现成带单测纯函数模块，可作 Rust #[test] 黄金集。先做前端展开 @all(后端零改)。",
         "feasibility": "high",
         "effort": "M",
         "priority": "P1",
-        "flockmux_gap": "partial"
+        "swarmx_gap": "partial"
       },
       {
         "rank": 8,
         "title": "幂等可重跑的分平台发版 + updater-manifest 修复工作流",
         "domain": "CI/CD 工作流",
         "what": "借鉴 hermes：①资产已存在则跳过、单平台失败可在既有 tag 上补产，避免一个平台失败就全量重跑(macOS notarize 昂贵)；②独立的 repair 工作流：从已发布资产重建 latest.json(不重新构建/签名)，gen-updater-manifest.mjs 接受 assets-dir。",
-        "value": "flockmux 发版非幂等、无独立 repair、无独立 sha256 资产。曾踩 v0.1.1 dropped-platform 坑。两条都是纯 YAML + gh CLI，直接修复这类发版事故。",
+        "value": "swarmx 发版非幂等、无独立 repair、无独立 sha256 资产。曾踩 v0.1.1 dropped-platform 坑。两条都是纯 YAML + gh CLI，直接修复这类发版事故。",
         "feasibility": "high",
         "effort": "M",
         "priority": "P1",
-        "flockmux_gap": "partial"
+        "swarmx_gap": "partial"
       },
       {
         "rank": 9,
@@ -674,40 +674,40 @@
         "feasibility": "high",
         "effort": "S",
         "priority": "P1",
-        "flockmux_gap": "absent"
+        "swarmx_gap": "absent"
       },
       {
         "rank": 10,
         "title": "任意文件「真下载」端点 + blob 客户端(不止图片)",
         "domain": "终端与文件浏览",
-        "what": "新增 GET /api/files/download，复用 files.rs 的 canon+is_sensitive+jail 校验，按扩展名查 MIME、设 Content-Disposition:attachment(含 RFC5987 filename*)流式下发；前端复用已有 lib/download.ts 的 fetch→blob→a.download(flockmux 已为录像下载写过)。",
+        "what": "新增 GET /api/files/download，复用 files.rs 的 canon+is_sensitive+jail 校验，按扩展名查 MIME、设 Content-Disposition:attachment(含 RFC5987 filename*)流式下发；前端复用已有 lib/download.ts 的 fetch→blob→a.download(swarmx 已为录像下载写过)。",
         "value": "当前非图片文件(zip/csv/pdf/构建产物/日志)在 UI 看得到名字却拿不下来，只能去终端 cp。唯一二进制端点 /api/file 限定仅图片。对 Tauri 跨域 webview 尤其必要(直接 a href 会导航走原始字节)。",
         "feasibility": "high",
         "effort": "S",
         "priority": "P1",
-        "flockmux_gap": "absent"
+        "swarmx_gap": "absent"
       },
       {
         "rank": 11,
         "title": "趋势图与模型分布改三段堆叠(input|output|cache)",
         "domain": "用量分析与成本",
         "what": "①UsageTrendChart 从单条总 token 改成 input/output/cache_read 三段堆叠(recharts Bar stackId)；②新增「按模型」水平堆叠条区块(稳定 hash 调色板)。",
-        "value": "现在趋势图把 by_day 已带的 cache 数据(usage.tsx:240-245)直接丢了，看不出某天 token 暴涨是真干活(output)还是 cache 重读(几乎免费)。flockmux 已用 recharts 不引新库；a11y sr-only 镜像表要补 cache 列。",
+        "value": "现在趋势图把 by_day 已带的 cache 数据(usage.tsx:240-245)直接丢了，看不出某天 token 暴涨是真干活(output)还是 cache 重读(几乎免费)。swarmx 已用 recharts 不引新库；a11y sr-only 镜像表要补 cache 列。",
         "feasibility": "high",
         "effort": "M",
         "priority": "P1",
-        "flockmux_gap": "partial"
+        "swarmx_gap": "partial"
       },
       {
         "rank": 12,
         "title": "Chat 内实时上下文窗口占用条",
         "domain": "用量分析 / 聊天内核",
         "what": "MessagesPanel 输入区加实时占用条：活跃 agent 的 context_peak/该模型 context_window，>60% 黄 >80% 红。借鉴 hermes ChatInput.vue 的 usagePercent/阈值/剩余 token。context_window_for(usage.rs:270)已有。",
-        "value": "hermes 有而 flockmux 完全空白、对多 agent swarm 价值大：每个 worker 各跑各的上下文，用户看不到「哪个 agent 快爆窗口」，只能等 CLI 截断/压缩后才发现。需打通实时数据链(usage_by_agent 加 context_peak 列或新轻量 endpoint)。诚实标注「估算~」。",
+        "value": "hermes 有而 swarmx 完全空白、对多 agent swarm 价值大：每个 worker 各跑各的上下文，用户看不到「哪个 agent 快爆窗口」，只能等 CLI 截断/压缩后才发现。需打通实时数据链(usage_by_agent 加 context_peak 列或新轻量 endpoint)。诚实标注「估算~」。",
         "feasibility": "medium",
         "effort": "M",
         "priority": "P1",
-        "flockmux_gap": "absent"
+        "swarmx_gap": "absent"
       },
       {
         "rank": 13,
@@ -718,18 +718,18 @@
         "feasibility": "high",
         "effort": "S",
         "priority": "P1",
-        "flockmux_gap": "present"
+        "swarmx_gap": "present"
       },
       {
         "rank": 14,
         "title": "Rust→TS 类型 codegen(ts-rs/typeshare)替代手写 web/src/api/types.ts",
         "domain": "Agent 开发 harness",
-        "what": "在 flockmux-protocol 的 REST DTO(rest.rs 33 个 struct)挂 ts-rs/typeshare 派生宏自动生成 types.ts，产物入库 + 加 harness 规则：rest.rs 改了但生成 types.ts 没同步则 CI 红。",
+        "what": "在 swarmx-protocol 的 REST DTO(rest.rs 33 个 struct)挂 ts-rs/typeshare 派生宏自动生成 types.ts，产物入库 + 加 harness 规则：rest.rs 改了但生成 types.ts 没同步则 CI 红。",
         "value": "当前 Rust↔TS 契约纯人肉同步，harness Rule1 只守两个 Rust 端 DTO、不守 web 的 TS 镜像——给 DTO 加字段 Rust 全对但 types.ts 忘改照样编译过、运行时前端静默丢字段。codegen 根除这条最高频跨语言静默漂移。build 期跑不引运行时依赖。",
         "feasibility": "high",
         "effort": "M",
         "priority": "P1",
-        "flockmux_gap": "partial"
+        "swarmx_gap": "partial"
       },
       {
         "rank": 15,
@@ -740,95 +740,95 @@
         "feasibility": "medium",
         "effort": "L",
         "priority": "P1",
-        "flockmux_gap": "absent"
+        "swarmx_gap": "absent"
       },
       {
         "rank": 16,
         "title": "外发关键事件到 1-2 个 IM 渠道(Telegram bot / Slack 或 Discord webhook)",
         "domain": "8 平台 IM 接入",
         "what": "给现有通知系统加外发出口：把 in-app 已产生的关键事件(任务完成、agent 需审批/输入、swarm 卡住、cron 失败)推到用户的 Telegram/Slack/Discord incoming webhook。不抄 hermes 的 8 平台双向聊天(重型 adapter 本在外部 Python gateway)，只做单向外发。借鉴其凭据/行为分离 + per-platform configured 检测。",
-        "value": "flockmux 长跑型多 agent 编排任务动辄几十分钟，目前必须盯屏才知道「orchestrator 在等审批」「swarm 死锁」。外发把盯屏变收推送，是桌面 agent 高频刚需。事件源(notif.ts)+reqwest 都现成，缺的只是出口。难点是新建用户级 secret 存储 + 事件路由去重限流。",
+        "value": "swarmx 长跑型多 agent 编排任务动辄几十分钟，目前必须盯屏才知道「orchestrator 在等审批」「swarm 死锁」。外发把盯屏变收推送，是桌面 agent 高频刚需。事件源(notif.ts)+reqwest 都现成，缺的只是出口。难点是新建用户级 secret 存储 + 事件路由去重限流。",
         "feasibility": "high",
         "effort": "M",
         "priority": "P2",
-        "flockmux_gap": "absent"
+        "swarmx_gap": "absent"
       },
       {
         "rank": 17,
         "title": "复活 skills-lock.json + 把锁定的 Anthropic skill 注入 worker 的 .claude/skills/",
         "domain": "技能系统 Skills",
-        "what": "flockmux 已有 skills-lock.json(锁 GitHub 上 SKILL.md)但全仓零代码读它。借鉴 hermes skill-injector：spawn 前按 lock 把 skill 目录注入 agent 的 .claude/skills/(pre_spawn 已在往 .claude 写 MCP/hook，同一路径)，配 sha256 三态同步+不覆盖用户改动。",
+        "what": "swarmx 已有 skills-lock.json(锁 GitHub 上 SKILL.md)但全仓零代码读它。借鉴 hermes skill-injector：spawn 前按 lock 把 skill 目录注入 agent 的 .claude/skills/(pre_spawn 已在往 .claude 写 MCP/hook，同一路径)，配 sha256 三态同步+不覆盖用户改动。",
         "value": "现在 agent 只能用用户机上碰巧存在的 ~/.claude/skills/，能力看天吃饭、不可复现。做实后每个 worker 带确定、版本锁定的能力库(find-skills/to-prd 等)，直接服务「装完即用」。难点：lock 源是 GitHub repo，编译期 include_str 嵌不进，建议发版预拉进 bundle.resources(撞打包痛点)。",
         "feasibility": "medium",
         "effort": "L",
         "priority": "P2",
-        "flockmux_gap": "absent"
+        "swarmx_gap": "absent"
       },
       {
         "rank": 18,
         "title": "外部 MCP 任意增删 + 真实连接状态管理面(接上闲置的 15 条 mcpCatalog)",
         "domain": "MCP 集成",
         "what": "把 hermes McpManagerView 的任意 CRUD+活体状态搬来：用已有 mcpCatalog.ts(15 条)做一键安装入口+自定义条目；mcp_admin.rs 扩展可写任意(保留 valid_name/env-key 安全校验)；连接状态靠解析 claude mcp list 或降级为只读配置。前端把写死的 2 条 SERVERS 改成消费整张 catalog。",
-        "value": "flockmux 当前只能开关 2 个硬编码 server，catalog 里 13 条(github/playwright/postgres/sentry/linear/figma)全接不上，用户想加 Playwright/Postgres MCP 只能命令行手敲。catalog 数据已备好。难点：Rust 侧拿不到 hermes agent bridge 那样的活体状态，需 ctx7 核实 claude mcp list 输出格式是否稳定/可 --json。务必保留 flockmux 已有的 MCP 安全硬化(防 argv 注入/env 不进 argv/打码/卸载 allowlist)。",
+        "value": "swarmx 当前只能开关 2 个硬编码 server，catalog 里 13 条(github/playwright/postgres/sentry/linear/figma)全接不上，用户想加 Playwright/Postgres MCP 只能命令行手敲。catalog 数据已备好。难点：Rust 侧拿不到 hermes agent bridge 那样的活体状态，需 ctx7 核实 claude mcp list 输出格式是否稳定/可 --json。务必保留 swarmx 已有的 MCP 安全硬化(防 argv 注入/env 不进 argv/打码/卸载 allowlist)。",
         "feasibility": "medium",
         "effort": "L",
         "priority": "P1",
-        "flockmux_gap": "partial"
+        "swarmx_gap": "partial"
       },
       {
         "rank": 19,
         "title": "状态计数条做成可点击过滤器 + 加 role 维度过滤",
         "domain": "看板 Kanban",
-        "what": "借鉴 hermes stats-chip 一栏两用：/tasks 顶部加状态计数 chip 单击即过滤(aria-pressed)，再补按 role(flockmux 已有 role_slug/role_label)的过滤下拉。",
+        "what": "借鉴 hermes stats-chip 一栏两用：/tasks 顶部加状态计数 chip 单击即过滤(aria-pressed)，再补按 role(swarmx 已有 role_slug/role_label)的过滤下拉。",
         "value": "当前任务板只能按 workspace 分组、零过滤。大 swarm 几十张卡时 operator 想「只看 blocked」「只看某 role」没手段。纯前端高性价比 UX，role 是已有数据不需后端建模。",
         "feasibility": "high",
         "effort": "S",
         "priority": "P2",
-        "flockmux_gap": "present"
+        "swarmx_gap": "present"
       },
       {
         "rank": 20,
         "title": "root 启动时自适应权限模式(--dangerously-skip-permissions 在 root 下失败的兜底)",
         "domain": "写入审批门",
         "what": "借鉴 hermes claude-root-permission-mode：检测被 spawn 的 claude 是否在 root/sudo 下(libc::geteuid()==0)，是则把 claude.toml 硬编码的 --dangerously-skip-permissions 换成 --permission-mode auto(claude 在 root 下拒绝前者)。",
-        "value": "flockmux 把 --dangerously-skip-permissions 当 claude.toml 硬编码 default_args。用户在容器/root 环境(Docker/某些 Linux/CI)跑时 claude 直接拒启→表现为「新建空间后 agent 起不来」，正中「装完包真实用户坏掉」红线。纯防御兜底。需 ctx7 核实 --permission-mode 当前取值。",
+        "value": "swarmx 把 --dangerously-skip-permissions 当 claude.toml 硬编码 default_args。用户在容器/root 环境(Docker/某些 Linux/CI)跑时 claude 直接拒启→表现为「新建空间后 agent 起不来」，正中「装完包真实用户坏掉」红线。纯防御兜底。需 ctx7 核实 --permission-mode 当前取值。",
         "feasibility": "high",
         "effort": "S",
         "priority": "P2",
-        "flockmux_gap": "absent"
+        "swarmx_gap": "absent"
       },
       {
         "rank": 21,
         "title": "趋势图连续日历日补零",
         "domain": "用量分析与成本",
         "what": "by_day 聚合后在窗口内每个 UTC 日补零行，保证趋势图 x 轴连续。借鉴 hermes sessions.ts 的 dayMap 填充，用同一 UTC 口径(usage.tsx:361 byDayUtc)。",
-        "value": "flockmux usage_by_day(store.rs:753)只返回有数据的日，跳过的天在趋势图被压成相邻，视觉误导(看起来每天都在用)、日均/斜率失真。小改动。",
+        "value": "swarmx usage_by_day(store.rs:753)只返回有数据的日，跳过的天在趋势图被压成相邻，视觉误导(看起来每天都在用)、日均/斜率失真。小改动。",
         "feasibility": "high",
         "effort": "S",
         "priority": "P2",
-        "flockmux_gap": "partial"
+        "swarmx_gap": "partial"
       },
       {
         "rank": 22,
         "title": "自证身份(公钥指纹)+签名/nonce/timestamp 防重放握手",
         "domain": "LAN 设备发现与配对",
         "what": "借鉴 hermes system-info.ts 的 device_id=sha256(pubkey)前缀 self-certifying identity + createDeviceSignature 的 id.nonce.timestamp 签名+TTL+nonce 去重防重放。用 Rust ed25519-dalek+sha2 重写，身份存 storage crate。",
-        "value": "是 flockmux 任何未来「远程/跨机/手机控制/给 loopback 外开认证口子」的安全地基。当前 flockmux 完全无 token auth(main.rs:10 自承认)是已知短板。零 CA、无打包痛点。但价值依赖「是否给 flockmux 引入 auth」这个产品决策。",
+        "value": "是 swarmx 任何未来「远程/跨机/手机控制/给 loopback 外开认证口子」的安全地基。当前 swarmx 完全无 token auth(main.rs:10 自承认)是已知短板。零 CA、无打包痛点。但价值依赖「是否给 swarmx 引入 auth」这个产品决策。",
         "feasibility": "high",
         "effort": "M",
         "priority": "P2",
-        "flockmux_gap": "absent"
+        "swarmx_gap": "absent"
       },
       {
         "rank": 23,
         "title": "文件浏览器从只读升级到可写(write/rename/delete/mkdir)",
         "domain": "终端与文件浏览",
         "what": "借鉴 hermes files.ts 端点形状，给文件浏览器加最小可写：保存编辑文本、新建文件夹、重命名、删除，全复用 jail+is_sensitive 守卫，写操作加二次确认(.env/凭据永不可写)。建议默认仍只读、写能力作显式开关。",
-        "value": "flockmux 是本地 dev 工具，用户常要顺手改 config/prompt/小脚本，目前必须切终端或外部编辑器。难点在风险：写必须 canon 后再校验(防 TOCTOU/symlink)，删除防递归误删，前端确认弹窗+乐观回滚。",
+        "value": "swarmx 是本地 dev 工具，用户常要顺手改 config/prompt/小脚本，目前必须切终端或外部编辑器。难点在风险：写必须 canon 后再校验(防 TOCTOU/symlink)，删除防递归误删，前端确认弹窗+乐观回滚。",
         "feasibility": "medium",
         "effort": "L",
         "priority": "P2",
-        "flockmux_gap": "absent"
+        "swarmx_gap": "absent"
       },
       {
         "rank": 24,
@@ -839,7 +839,7 @@
         "feasibility": "medium",
         "effort": "L",
         "priority": "P2",
-        "flockmux_gap": "absent"
+        "swarmx_gap": "absent"
       }
     ],
     "quick_wins": [
@@ -862,13 +862,13 @@
       "rank18 外部 MCP 任意 CRUD 管理面(L,P1)——接上闲置的 15 条 catalog 是用户直接能力缺口，但 Rust 侧拿活体连接状态需核实 claude mcp list 格式，可能只能降级只读"
     ],
     "skip_already_good": [
-      "流式机制本身(聊天内核管道层)：flockmux 的 pty_stream.rs 字节级 seq 游标 resume + Gap 检测 + SQLite 真相源 + 重连重拉 REST，比 hermes 的内存事件回放/cursor 双游标更贴合 PTY 架构、更稳健。hermes 的上下文 LLM 压缩/tiktoken 精确计量/bridge 子进程重启/goal LLM 判官续跑要么不适用(flockmux 不拥有上下文、CLI 自管 session)要么与 orchestrator 多 agent 范式冲突",
-      "成本/计费子域：flockmux 的可编辑分层定价(default+pricing.json+LiteLLM 1000+模型兜底)、≥诚实标注、per-agent 归因+可跳转、真实采集而非估算，全面强于 hermes(其控制平面根本不算成本，cost 由外部 Python agent 写)。不要抄 hermes 成本算法",
-      "reasoning effort + per-agent 模型配置：flockmux 是 per-direction 持久化进 DB(migration 0015)+抽象档位经 CLI manifest effort_levels 映射+ModelPicker UI，远胜 hermes 的 client-only localStorage；per-CLI tier→model + per-role default_model_tier + per-spawn override 比 hermes 按 profile 取默认那层抽象度更高",
-      "终端：flockmux terminal_ws.rs 有进程级持久会话注册表 + scrollback 环形缓冲 reattach 续传 + idle reaper + env allowlist，全面强于 hermes 断开即死、无续传的终端。只有 14 套 xterm 主题选择器是个零风险小糖(P3)",
-      "MCP 自注入：flockmux pre_spawn 比 hermes 更强——per-agent 隔离(--mcp-config 每 agent 独立文件+--strict-mcp-config 绕开共享 ~/.claude.json 竞争)+local-scope 写入避信任弹窗+原子写+lock 互斥+mcp-ready 活体握手(hermes 没有)。不该借鉴 hermes 自注入",
-      "鉴权安全/健康监控/分层：flockmux 是 loopback 单用户 Tauri 应用，有意无 token auth，require_local_origin(含 DNS-rebind/Host 防护、IPv6 字面量)比 hermes origin 检查更强；reaper.rs(确定性 waitpid 清扫根治界面撒谎)+wake.rs(事件驱动)比 hermes 轮询式 ops-monitor 更先进更贴诚实红线。hermes 的 JWT/多用户/per-profile/三计数器 login-limiter 整套是为它 LAN/多用户/远程配对服务，移植到 flockmux 是过度工程。完成通知 useAppSettingsBehaviors 已对等。kanban 状态从真实生命周期派生(effective_status 纯函数带单测)+optimistic+回滚+stale 守卫工程上比 hermes 更扎实；其多板/profile-RBAC/capability-negotiation 对单操作员桌面应用价值低。LAN 设备发现/配对/互控整体推翻 loopback-only 威胁模型、代价 XL，不做。agent harness 元方法论 flockmux 已对等或更深(7 条规则全针对 Rust/Tauri 真实踩过的静默坑+pre-commit 主闸+CI 隔离 smoke)"
+      "流式机制本身(聊天内核管道层)：swarmx 的 pty_stream.rs 字节级 seq 游标 resume + Gap 检测 + SQLite 真相源 + 重连重拉 REST，比 hermes 的内存事件回放/cursor 双游标更贴合 PTY 架构、更稳健。hermes 的上下文 LLM 压缩/tiktoken 精确计量/bridge 子进程重启/goal LLM 判官续跑要么不适用(swarmx 不拥有上下文、CLI 自管 session)要么与 orchestrator 多 agent 范式冲突",
+      "成本/计费子域：swarmx 的可编辑分层定价(default+pricing.json+LiteLLM 1000+模型兜底)、≥诚实标注、per-agent 归因+可跳转、真实采集而非估算，全面强于 hermes(其控制平面根本不算成本，cost 由外部 Python agent 写)。不要抄 hermes 成本算法",
+      "reasoning effort + per-agent 模型配置：swarmx 是 per-direction 持久化进 DB(migration 0015)+抽象档位经 CLI manifest effort_levels 映射+ModelPicker UI，远胜 hermes 的 client-only localStorage；per-CLI tier→model + per-role default_model_tier + per-spawn override 比 hermes 按 profile 取默认那层抽象度更高",
+      "终端：swarmx terminal_ws.rs 有进程级持久会话注册表 + scrollback 环形缓冲 reattach 续传 + idle reaper + env allowlist，全面强于 hermes 断开即死、无续传的终端。只有 14 套 xterm 主题选择器是个零风险小糖(P3)",
+      "MCP 自注入：swarmx pre_spawn 比 hermes 更强——per-agent 隔离(--mcp-config 每 agent 独立文件+--strict-mcp-config 绕开共享 ~/.claude.json 竞争)+local-scope 写入避信任弹窗+原子写+lock 互斥+mcp-ready 活体握手(hermes 没有)。不该借鉴 hermes 自注入",
+      "鉴权安全/健康监控/分层：swarmx 是 loopback 单用户 Tauri 应用，有意无 token auth，require_local_origin(含 DNS-rebind/Host 防护、IPv6 字面量)比 hermes origin 检查更强；reaper.rs(确定性 waitpid 清扫根治界面撒谎)+wake.rs(事件驱动)比 hermes 轮询式 ops-monitor 更先进更贴诚实红线。hermes 的 JWT/多用户/per-profile/三计数器 login-limiter 整套是为它 LAN/多用户/远程配对服务，移植到 swarmx 是过度工程。完成通知 useAppSettingsBehaviors 已对等。kanban 状态从真实生命周期派生(effective_status 纯函数带单测)+optimistic+回滚+stale 守卫工程上比 hermes 更扎实；其多板/profile-RBAC/capability-negotiation 对单操作员桌面应用价值低。LAN 设备发现/配对/互控整体推翻 loopback-only 威胁模型、代价 XL，不做。agent harness 元方法论 swarmx 已对等或更深(7 条规则全针对 Rust/Tauri 真实踩过的静默坑+pre-commit 主闸+CI 隔离 smoke)"
     ],
-    "markdown_report": "# hermes-studio → flockmux 借鉴决策报告（全 18 域）\n\n> 研究对象：hermes-studio（Vue3/Pinia/Naive UI + Koa/Socket.IO/SQLite + Electron，约 144K 行，核心 agent 推理在外部 Python `hermes-agent` 进程里，本仓库是控制平面+壳）。\n> 借鉴目标：flockmux（Rust 多 crate 后端 + React/Tauri 前端，PTY 驱动 claude/codex CLI 的多 agent 编排器）。\n> 方法：真读双方源码 + grep/读码核实 flockmux 现状（absent/partial/present），只借「概念/UX/架构/算法/协议」，不抄 TS 代码。\n\n---\n\n## 0. 先回答你点名的问题：hermes 有没有工作流？\n\n**没有运行时工作流引擎。** hermes 仓库里「workflow」只对应两层，都不是 n8n/Temporal/Airflow 式的可视化/可编程运行时编排：\n\n1. **CI/CD 发版工作流**（`.github/workflows/*.yml`）：`ci-workflows` 域明文写 *\"hermes has no runtime workflow engine; workflow equals CI/CD only\"*。亮点是 **幂等可重跑的分平台发版**（资产已存在则跳过、单平台失败可在既有 tag 上补产）+ **双架构 mac 更新清单合并修复**（`merge-mac-latest-yml.mjs` 把 arm64/x64 两份 `latest-mac.yml` union，避免互相覆盖把另一架构用户喂错 dmg）。**这两条值得借鉴**（见 rank 8）。\n\n2. **Agent 开发 harness**（元方法论，约束开发流程不是产品运行时）：`AGENTS.md` + `docs/harness/` + `scripts/harness-check.mjs`（diff-aware 跨文件不变量校验）+ `docs/chat-chain-changes/`（每 PR 一条变更笔记）。\n\n**关键反转**：真正接近「运行时编排」语义的反而是 flockmux——它的 **spell**（多 agent 编排 recipe：`[[agents]]` + `role_ref` + `depends_on` + 共享 workspace）+ orchestrator 角色 + 黑板台账，比 hermes 的 group-chat @mention 链式触发更显式、更像工作流图。**这一层 flockmux 是更强的一方，无可借。** hermes 的多 agent 协作只是 `mention-routing` 的自组织 @ 喊话 + `mentionDepth` 防循环，不是用户可定义的「触发器→步骤→分支」。\n\n---\n\n## 1. 总体判断：差距集中在「如实呈现」，不在「管道机制」\n\n把 18 域读完，一个清晰的模式浮现：\n\n- **凡是与 flockmux「PTY + 订阅计费 + SQLite 真相源 + tail 磁盘 transcript」架构对齐的子域，flockmux 已对等或更强**——流式 resume、断线重连、lag 自愈、kanban 状态派生、终端持久会话、MCP 自注入、计费分层、reasoning effort、agent harness、origin/DNS-rebind 防护、reaper 存活监控。这些**不应照抄 hermes**，硬抄反而引入它为「服务端拥有结构化聊天 / 多用户 / LAN / 自管上下文」设计的复杂度。\n\n- **真正的高价值借鉴，几乎全部落在「把 CLI/进程真正干了什么，如实、完整地呈现给用户」这一层**：工具 diff 内联、cache 命中率、上下文占用条、sidecar 崩溃自愈、凭据脱敏、i18n 回归防线。这与 flockmux 的「诚实性红线」高度同向——flockmux 底层数据**全已采集到位**，只是上层没把它们派生/呈现出来。\n\n- **少量大件**（应用内 OAuth、外发 IM 通知、多 provider、skills 注入）方向正确但需立项，多数有「需先建基座 / 撞打包痛点 / 需核实 CLI 能力」的前置条件。\n\n---\n\n## 2. 逐域速览（全 18 域，含 status 与一句话结论）\n\n| 域 | flockmux 现状 | 一句话结论 |\n|---|---|---|\n| 聊天内核与流式 | partial | 管道层已对等/更强；差距在**工具 diff 内联**(P1)+上下文占用条(P1) |\n| 群聊房间(多agent) | partial | 只缺**@all 群发+边界安全解析器**(P1)+agent 间链式 @(P2)；多人类社交外壳不适用 |\n| 终端与文件浏览 | partial | 终端更强不借；缺**任意文件真下载**(P1)+可写文件浏览器(P2) |\n| 写入审批门 | absent | 方向相反(故意 skip-permissions)；只借 **root 自适应权限兜底**(P2)+memory 写入门概念(P2) |\n| 桌面打包与分发 | partial | include_str! 内置比 hermes 更抗事故；缺**sidecar 崩溃自愈+诚实横幅**(P0) |\n| MCP 集成 | partial | 自注入更强不借；缺**外部 MCP 任意 CRUD 管理面**(P1，接上闲置 catalog) |\n| 技能系统 Skills | absent | 概念错位；**用量统计 zero-instrumentation**(P2)+**复活 skills-lock 注入**(P2) |\n| 用量分析与成本 | partial | 成本子域更强；缺**cache 命中率**(P1)+三段堆叠(P1)+补零(P2) |\n| 记忆与上下文引擎 | partial | 架构性不对等(CLI 自管上下文)；只借**结构化交接 prompt 重写台账压缩**(P1) |\n| Agent 开发 harness | present | 已对等/更深；只缺 **Rust→TS codegen**(P1)+脆弱链路变更笔记机检(P2) |\n| CI/CD 工作流 | partial | 缺**幂等分平台发版+manifest 修复工作流**(P1) |\n| 架构/鉴权/健康/UX | partial | 多数更强；只缺 **i18n 静态检查**(P0)+进程资源监控(P2) |\n| 8 平台 IM 接入 | absent | 重型 adapter 在外部无从抄；借**外发 IM 通知**(P2)+凭据/行为分离抽象 |\n| 语音 TTS/STT | absent | 完全空白；**TTS 朗读**(P2)+可复用 SSRF 防护(P2)，非核心刚需 |\n| Coding Agent 运行器 | partial | 路线相反；只借**凭据脱敏管线**(P1)，代理/tee 是付费 transport 的存档 |\n| 看板 Kanban | present | 比 hermes 更扎实；只借**事件流替代轮询**(P1)+可点过滤器(P2) |\n| 模型管理与 OAuth | absent | 委托 CLI 是有意设计；只借**应用内 OAuth 登录**(P1)，其余条件性 |\n| LAN 设备发现配对 | absent | 整体推翻 loopback 威胁模型不做；只摘**自证身份+防重放握手**(P2 地基) |\n\n---\n\n## 3. Quick Wins（S/M，立即可做）\n\n以下 10 条都已用 grep/读码核实过 flockmux 现状，可直接排期：\n\n### P0（直击头号原则/诚实红线，应最优先）\n\n**① 前端消费 backend-sidecar-down 事件 + 诚实横幅（S）**\n- 已核实：`web/src-tauri/src/lib.rs:117/129` 已 `emit(\"backend-sidecar-down\", ...)`，但 `web/src` **零 listener**——事件被白白丢弃。\n- 做法：app 级 `listen(\"backend-sidecar-down\")` → 持久横幅显示 stderr tail（Rust 侧已带 20 行尾巴）+「重启后端」按钮。`@tauri-apps/api` 的 `listen()` 在 `web/src/lib/updater.ts` 已是熟路。\n- 价值：现在 sidecar 崩了前端只表现为各种 fetch 失败/loading 卡住，用户不知道是后端进程没了——直接消费已有事件即可诚实化。\n\n**② i18n key 覆盖 + 英文回退静态检查（S）**\n- 已实测：`web/src/i18n/locales/` en=**1174** key / zh=**1173** key。zh 缺 `home.workspaceCount_one`/`_other`（en 已拆复数、zh 没跟 → zh 复数渲染异常），en 缺 `home.workspaceCount`；另有约 **28 条** zh 值与 en 逐字相同且含拉丁字母的疑似回退（`nav.debug`、`settings.plugins.installTitle`、`dag.handoff`、`agent.stat.*` 等看着是真漏翻，少数如 `repoUrl`/`appName` 是品牌名可白名单）。\n- 做法：Node 脚本 walk `web/src` 抽 `t('...')` 字面量 key，断言 en/zh 齐全 + 报告疑似回退，挂进 `scripts/harness-check.mjs` 作 CI 红线。react-i18next 的 `t(..., {defaultValue})` 形态要覆盖、对有 defaultValue 的可降级为 warning。\n- 价值：flockmux i18n 大债靠反复手工批次修（`f49f610`/`ec6b758`/`6056544`）却**无任何回归防护**，`app-qa.spec.ts` 只查 overflow/a11y 不查 key 齐全。一次投入换永久红线，正治「英文用户大面积看中文」那类事故。\n\n**③ Tauri sidecar 退避重生监管（M）**\n- 已核实：`lib.rs` 只在 `CommandEvent::Terminated` 分支 emit 事件，**无 respawn/spawn_supervised/attempts** 任何监管逻辑。\n- 做法：移植 hermes `gateway-runner.ts` 算法——Terminated 后延迟 2s 重生、封顶 3 次、连续稳定跑满 30s 清零失败计数、重生前清 pending 计时器防与手动 relaunch 竞态导致 7777 双开、封顶后升级为「后端永久 down」。约 40 行状态机：`Mutex<RespawnState{attempts,last_started,timer_handle}>` + `tauri::async_runtime::spawn` + `tokio::time::sleep`。注意把 `CommandChild` 句柄在重生时替换进 `ServerSidecar(Mutex)`。\n- 价值：现状 sidecar 崩溃后 app 永远连不上后端、只能手动退出重开（`en.json:809` 已坦白），违反「打开→立刻能用、零命令」头号原则。「稳定运行重置」区分崩溃循环与偶发抖动。**①③ 配套做最佳。**\n\n### P1（高价值、低成本）\n\n**④ Cache 命中率指标（S）**——`cache_read/(input+cache_read)`，加 1 张 headline 卡 + by_model/by_day 各加一列。已核实数据全到客户端（`api/types.ts:563/578/596` 都带 `cache_read_tokens`）却从未派生（grep `cacheHit/hitRate` 全仓 0 命中）。纯前端零后端。诚实性：分母 0 时显「—」非 0%。\n\n**⑤ 凭据脱敏管线（S）**——移植 hermes `sanitizeCodingAgentTerminalOutput` 的正则（`Bearer xxx`、`sk-ant-/sk-proj-/sk-or-`、`api_key=`），挂在 PTY 输出 → 落库/transcript/前端推流/**asciicast 录制** 四个边界。agent 可能 echo token，落进 SQLite 或录制就永久留痕、回放可见。纯函数（regex/once_cell），易移植。\n\n**⑥ 结构化交接式 prompt 重写台账压缩（S）**——把 `rest.rs:2757` 的一行 `COMPACT_META_PROMPT` 升级成 hermes 结构化模板（`## 未完成任务 / 关键决策 / 产出物路径 / 阻塞与错误`）+ 头部加「这是只读背景、别把已完成任务再执行一遍」守则。orchestrator 断点续跑全靠读 `task.ledger.md`+`progress.ledger.md`，当前自由文本摘要易丢「哪些已做/没做」边界甚至重做。纯 prompt + 中文本地化。建议配真实 live 验证。\n\n**⑦ 任意文件真下载端点 + blob 客户端（S）**——新增 `GET /api/files/download`，复用 `files.rs` 的 canon+is_sensitive+jail 校验，按扩展名查 MIME + `Content-Disposition: attachment`（含 RFC5987 `filename*`）流式下发；前端复用已有 `lib/download.ts` 的 fetch→blob→a.download（flockmux 已为录像下载写过）。当前非图片文件（zip/csv/pdf/日志）在 UI 看得到名字却拿不下来，唯一二进制端点 `/api/file` 限定仅图片。对 Tauri 跨域 webview 尤其必要。\n\n**⑧ 任务板接入 /ws/swarm 事件流替代 4s 轮询（S）**——`/tasks` 自述「/ws/swarm 暂不带 task 事件故用轮询」是明确 scope 债。复用已有 `/ws/swarm`（已推 AgentState/AgentActivity/BlackboardChanged，正是状态派生上游）做 100ms 去抖 refetch + 退避重连，保留 30s 轮询兜底。无 Rust 改动。注意与「自己刚 optimistic 写完别被事件回刷盖掉」协调（hermes 的 seq/generation 守卫已示范）。\n\n**⑨ 边界安全 @mention 解析器 + @all 群发（M）**——移植 `mention-routing.ts`（前后边界字符校验 + `escapeMentionName` + `@all` 保留字）替换 `MessagesPanel.tsx:651` 朴素正则，`@all` 升级成真群发。hermes 有现成 vitest 用例可作 Rust `#[test]` 黄金集。先做前端把 `@all` 展开成对每个活成员各发一条（后端零改）；注意 flockmux role 可重名，命中后按 `agent_id` 去重并排除发送者。\n\n**⑩ 幂等分平台发版 + manifest 修复工作流（M/S）**——纯 YAML + gh CLI。①资产已存在则跳过、单平台失败可在既有 tag 补产（避 macOS notarize 全量重跑）；②独立 repair 工作流从已发布资产重建 `latest.json` 不重新签名（`gen-updater-manifest.mjs` 接受 assets-dir）。直接修复 v0.1.1 dropped-platform 那类事故。\n\n---\n\n## 4. Big Bets（L/XL，需立项）\n\n**rank 6 工具结果内联 unified diff 渲染（L，P1）**——本研究 **flockmux 最实在的体验差距**。当前 `transcript.rs:723-803` 只抽 48 字符 label，`ThoughtTraceStep` 不携带 input/output 更没 diff，用户在聊天/轨迹里看不到 Edit 改了什么，必须切终端/files 页。做法：`transcript.rs` 为 Edit/Write/MultiEdit 捕获 old_string/new_string（claude transcript 已含）或 codex patch，用 `similar` crate 生成 unified diff，扩 `ThoughtTraceStep` 一个可选 payload；前端引轻量 diff 渲染（react-diff-view）。难点：跨 5 处（解析→SQLite thought_trace→协议→前端类型→渲染）+ payload 体积要设上限（hermes 有 tool-output-storage-limit/tool-payload-boundaries 两 PR 专门处理）+ 与虚拟化 MessagesPanel 的行高/折叠测量集成。\n\n**rank 15 应用内 OAuth 登录 device flow/PKCE（L，P1）**——消灭「auth 失败→去终端跑 /login」违反「零命令」头号原则的痛点（现在 `OrchestratorFailureCard` 只能引导用户开终端）。借鉴 `copilot-device-flow.ts`（RFC 8628 状态机，约 150 行直译 reqwest 轮询）+ `xai-auth.ts`（本地 127.0.0.1 回调，复用已有 axum）。**最大不确定性**：claude OAuth client_id/endpoint 需自己确认可用性（hermes 注释说是「暂时复用」上游，直接抄可能违 ToS）+ token 写入位置（claude 走 macOS Keychain 格式未公开）。**建议先做 codex 的 device flow PoC（文件式 auth.json 可控）。** 配套需 JWT-exp 探针主动续期（codex-auth.ts:201）。\n\n**rank 16 外发 IM 通知（实质 M+基座，P2）**——长跑多 agent 编排任务动辄几十分钟，目前必须盯屏才知道「orchestrator 在等审批/swarm 死锁」。给现有通知系统（`notif.ts` 事件源现成）加外发出口：Telegram `sendMessage` / Slack/Discord incoming webhook，单个 `reqwest::Client` POST，**不需任何平台 SDK**（重型 adapter 本在外部 Python gateway）。难点不在协议在基座：flockmux 现无「用户级 secret 存储」抽象，要新建（建议借 hermes `.env`+0600 思路或 OS keyring）+ 事件→渠道路由去重限流（借 hermes require_mention/allow-list 的「行为」那半）。\n\n**rank 17 复活 skills-lock 注入 worker 能力库（L，P2）**——flockmux 已有 `skills-lock.json`（锁 GitHub 上 SKILL.md）但**全仓零代码读它**（孤儿配置）。借鉴 hermes `skill-injector` 的 sha256 三态同步（装/更新/skip 不覆盖用户改动）：spawn 前按 lock 把 skill 注入 agent 的 `.claude/skills/`（`pre_spawn` 已在往 `.claude` 写 MCP/hook，同构）。现在 agent 只能用用户机上碰巧存在的 skill、能力看天吃饭。难点：lock 源是 GitHub repo，**编译期 include_str 嵌不进**，须发版预拉进 `bundle.resources`（撞 CLAUDE.md 打包痛点）。\n\n**rank 18 外部 MCP 任意 CRUD 管理面（L，P1）**——flockmux 当前只能开关 2 个硬编码 server，`mcpCatalog.ts` 里 13 条（github/playwright/postgres/sentry/linear/figma）**全接不上**（McpPanel 只用了 2 条，catalog 躺着没接），用户想加 Playwright/Postgres MCP 只能命令行手敲。借鉴 hermes `McpManagerView` 的任意 CRUD + 活体连接状态/工具计数。难点：Rust 侧**拿不到** hermes agent bridge 那样的活体状态——需用 ctx7 核实 `claude mcp list` 输出格式是否稳定/可 `--json`，否则降级为「只读配置不显活体」（仍比现状强）。**务必保留 flockmux 已有的 MCP 安全硬化**（防 argv 注入 / env 不进 argv / 打码 / 卸载 allowlist），这点 flockmux 比 hermes 更严谨。\n\n---\n\n## 5. 明确不必借鉴（flockmux 已对等或更好）\n\n**1. 流式机制本身**——`pty_stream.rs` 字节级 seq 游标 resume + Gap 检测 + SQLite 真相源 + 重连重拉 REST，比 hermes 内存事件回放/cursor 双游标更贴 PTY 架构、更稳健。hermes 的上下文 LLM 压缩 / tiktoken 精确计量 / bridge 子进程 reattach / goal LLM 判官续跑，要么不适用（flockmux 不拥有上下文、CLI 自管 session），要么与 orchestrator 多 agent 范式冲突。\n\n**2. 成本/计费子域**——flockmux 的可编辑分层定价（default + `pricing.json` + LiteLLM 1000+ 模型兜底）、≥ 诚实标注、per-agent 归因+可跳转、真实采集而非估算，**全面强于** hermes（其控制平面根本不算成本，cost 由外部 Python agent 写库）。\n\n**3. reasoning effort + per-agent 模型配置**——flockmux 是 per-direction 持久化进 DB（migration 0015）+ 抽象档位经 CLI manifest `effort_levels` 映射 + ModelPicker UI，远胜 hermes 的 client-only localStorage；per-CLI tier→model + per-role default_model_tier + per-spawn override 比 hermes 按 profile 取默认那层抽象度更高。\n\n**4. 终端**——`terminal_ws.rs` 进程级持久会话注册表 + scrollback reattach 续传 + idle reaper + env allowlist，全面强于 hermes 断开即死的终端。只有 14 套 xterm 主题选择器是零风险小糖（P3）。\n\n**5. MCP 自注入**——`pre_spawn` 比 hermes 更强：per-agent 隔离（`--mcp-config` 每 agent 独立文件 + `--strict-mcp-config` 绕开共享 `~/.claude.json` 竞争）+ local-scope 避信任弹窗 + 原子写 + lock 互斥 + mcp-ready 活体握手（hermes 没有）。\n\n**6. 鉴权安全 / 健康监控 / 分层 / kanban 工程质量 / LAN / harness**——flockmux 是 loopback 单用户 Tauri 应用，有意无 token auth，`require_local_origin`（含 DNS-rebind/Host/IPv6 字面量防护）比 hermes 更强；`reaper.rs`（确定性 waitpid 清扫根治界面撒谎）+ `wake.rs`（事件驱动）比 hermes 轮询式 ops-monitor 更先进。hermes 的 JWT/多用户/per-profile/三计数器 login-limiter 是为它 LAN/多用户/远程配对服务，移植到 flockmux 是过度工程。kanban 的 `effective_status` 纯函数派生+单测+optimistic+回滚比 hermes 更扎实，其多板/RBAC/capability-negotiation 对单操作员桌面应用价值低。LAN 设备发现整体推翻 loopback 威胁模型、代价 XL，不做（只摘自证身份+防重放握手作未来 auth 地基，rank 22）。agent harness 已对等或更深（7 条规则全针对 Rust/Tauri 真实静默坑 + pre-commit 主闸 + CI 隔离 smoke）。\n\n---\n\n## 6. 落地建议\n\n**第一波（一个迭代内清掉，全 S/M）**：① backend-sidecar-down 横幅 + ③ sidecar 自愈（配套）→ ② i18n 静态检查 → ⑤ 凭据脱敏 → ④ cache 命中率 + ⑦ 文件真下载 + ⑥ 台账 prompt + ⑧ 任务板事件流。这一波全是「已有数据/已有事件/纯前端派生/纯 prompt」，风险极低，且每一条都正中诚实性红线或头号原则。\n\n**第二波（选 1-2 个 big bet 立项）**：优先 rank 6（工具 diff 内联，最实在体验差距）和 rank 18（外部 MCP 管理面，接上闲置 catalog 是直接能力缺口）。rank 15（应用内 OAuth）建议先 codex PoC 验证可行性再投入。\n\n**需用 ctx7/联网核实的前置**（按你的全局规则）：rank 15 claude/codex OAuth client_id/endpoint/scope + token 写入位置；rank 18 `claude mcp list --json` 输出格式；rank 20 claude `--permission-mode` 当前取值；rank 14 ts-rs vs typeshare 对 serde flatten/enum tag 的支持。这些都不要凭训练数据下结论。"
+    "markdown_report": "# hermes-studio → swarmx 借鉴决策报告（全 18 域）\n\n> 研究对象：hermes-studio（Vue3/Pinia/Naive UI + Koa/Socket.IO/SQLite + Electron，约 144K 行，核心 agent 推理在外部 Python `hermes-agent` 进程里，本仓库是控制平面+壳）。\n> 借鉴目标：swarmx（Rust 多 crate 后端 + React/Tauri 前端，PTY 驱动 claude/codex CLI 的多 agent 编排器）。\n> 方法：真读双方源码 + grep/读码核实 swarmx 现状（absent/partial/present），只借「概念/UX/架构/算法/协议」，不抄 TS 代码。\n\n---\n\n## 0. 先回答你点名的问题：hermes 有没有工作流？\n\n**没有运行时工作流引擎。** hermes 仓库里「workflow」只对应两层，都不是 n8n/Temporal/Airflow 式的可视化/可编程运行时编排：\n\n1. **CI/CD 发版工作流**（`.github/workflows/*.yml`）：`ci-workflows` 域明文写 *\"hermes has no runtime workflow engine; workflow equals CI/CD only\"*。亮点是 **幂等可重跑的分平台发版**（资产已存在则跳过、单平台失败可在既有 tag 上补产）+ **双架构 mac 更新清单合并修复**（`merge-mac-latest-yml.mjs` 把 arm64/x64 两份 `latest-mac.yml` union，避免互相覆盖把另一架构用户喂错 dmg）。**这两条值得借鉴**（见 rank 8）。\n\n2. **Agent 开发 harness**（元方法论，约束开发流程不是产品运行时）：`AGENTS.md` + `docs/harness/` + `scripts/harness-check.mjs`（diff-aware 跨文件不变量校验）+ `docs/chat-chain-changes/`（每 PR 一条变更笔记）。\n\n**关键反转**：真正接近「运行时编排」语义的反而是 swarmx——它的 **spell**（多 agent 编排 recipe：`[[agents]]` + `role_ref` + `depends_on` + 共享 workspace）+ orchestrator 角色 + 黑板台账，比 hermes 的 group-chat @mention 链式触发更显式、更像工作流图。**这一层 swarmx 是更强的一方，无可借。** hermes 的多 agent 协作只是 `mention-routing` 的自组织 @ 喊话 + `mentionDepth` 防循环，不是用户可定义的「触发器→步骤→分支」。\n\n---\n\n## 1. 总体判断：差距集中在「如实呈现」，不在「管道机制」\n\n把 18 域读完，一个清晰的模式浮现：\n\n- **凡是与 swarmx「PTY + 订阅计费 + SQLite 真相源 + tail 磁盘 transcript」架构对齐的子域，swarmx 已对等或更强**——流式 resume、断线重连、lag 自愈、kanban 状态派生、终端持久会话、MCP 自注入、计费分层、reasoning effort、agent harness、origin/DNS-rebind 防护、reaper 存活监控。这些**不应照抄 hermes**，硬抄反而引入它为「服务端拥有结构化聊天 / 多用户 / LAN / 自管上下文」设计的复杂度。\n\n- **真正的高价值借鉴，几乎全部落在「把 CLI/进程真正干了什么，如实、完整地呈现给用户」这一层**：工具 diff 内联、cache 命中率、上下文占用条、sidecar 崩溃自愈、凭据脱敏、i18n 回归防线。这与 swarmx 的「诚实性红线」高度同向——swarmx 底层数据**全已采集到位**，只是上层没把它们派生/呈现出来。\n\n- **少量大件**（应用内 OAuth、外发 IM 通知、多 provider、skills 注入）方向正确但需立项，多数有「需先建基座 / 撞打包痛点 / 需核实 CLI 能力」的前置条件。\n\n---\n\n## 2. 逐域速览（全 18 域，含 status 与一句话结论）\n\n| 域 | swarmx 现状 | 一句话结论 |\n|---|---|---|\n| 聊天内核与流式 | partial | 管道层已对等/更强；差距在**工具 diff 内联**(P1)+上下文占用条(P1) |\n| 群聊房间(多agent) | partial | 只缺**@all 群发+边界安全解析器**(P1)+agent 间链式 @(P2)；多人类社交外壳不适用 |\n| 终端与文件浏览 | partial | 终端更强不借；缺**任意文件真下载**(P1)+可写文件浏览器(P2) |\n| 写入审批门 | absent | 方向相反(故意 skip-permissions)；只借 **root 自适应权限兜底**(P2)+memory 写入门概念(P2) |\n| 桌面打包与分发 | partial | include_str! 内置比 hermes 更抗事故；缺**sidecar 崩溃自愈+诚实横幅**(P0) |\n| MCP 集成 | partial | 自注入更强不借；缺**外部 MCP 任意 CRUD 管理面**(P1，接上闲置 catalog) |\n| 技能系统 Skills | absent | 概念错位；**用量统计 zero-instrumentation**(P2)+**复活 skills-lock 注入**(P2) |\n| 用量分析与成本 | partial | 成本子域更强；缺**cache 命中率**(P1)+三段堆叠(P1)+补零(P2) |\n| 记忆与上下文引擎 | partial | 架构性不对等(CLI 自管上下文)；只借**结构化交接 prompt 重写台账压缩**(P1) |\n| Agent 开发 harness | present | 已对等/更深；只缺 **Rust→TS codegen**(P1)+脆弱链路变更笔记机检(P2) |\n| CI/CD 工作流 | partial | 缺**幂等分平台发版+manifest 修复工作流**(P1) |\n| 架构/鉴权/健康/UX | partial | 多数更强；只缺 **i18n 静态检查**(P0)+进程资源监控(P2) |\n| 8 平台 IM 接入 | absent | 重型 adapter 在外部无从抄；借**外发 IM 通知**(P2)+凭据/行为分离抽象 |\n| 语音 TTS/STT | absent | 完全空白；**TTS 朗读**(P2)+可复用 SSRF 防护(P2)，非核心刚需 |\n| Coding Agent 运行器 | partial | 路线相反；只借**凭据脱敏管线**(P1)，代理/tee 是付费 transport 的存档 |\n| 看板 Kanban | present | 比 hermes 更扎实；只借**事件流替代轮询**(P1)+可点过滤器(P2) |\n| 模型管理与 OAuth | absent | 委托 CLI 是有意设计；只借**应用内 OAuth 登录**(P1)，其余条件性 |\n| LAN 设备发现配对 | absent | 整体推翻 loopback 威胁模型不做；只摘**自证身份+防重放握手**(P2 地基) |\n\n---\n\n## 3. Quick Wins（S/M，立即可做）\n\n以下 10 条都已用 grep/读码核实过 swarmx 现状，可直接排期：\n\n### P0（直击头号原则/诚实红线，应最优先）\n\n**① 前端消费 backend-sidecar-down 事件 + 诚实横幅（S）**\n- 已核实：`web/src-tauri/src/lib.rs:117/129` 已 `emit(\"backend-sidecar-down\", ...)`，但 `web/src` **零 listener**——事件被白白丢弃。\n- 做法：app 级 `listen(\"backend-sidecar-down\")` → 持久横幅显示 stderr tail（Rust 侧已带 20 行尾巴）+「重启后端」按钮。`@tauri-apps/api` 的 `listen()` 在 `web/src/lib/updater.ts` 已是熟路。\n- 价值：现在 sidecar 崩了前端只表现为各种 fetch 失败/loading 卡住，用户不知道是后端进程没了——直接消费已有事件即可诚实化。\n\n**② i18n key 覆盖 + 英文回退静态检查（S）**\n- 已实测：`web/src/i18n/locales/` en=**1174** key / zh=**1173** key。zh 缺 `home.workspaceCount_one`/`_other`（en 已拆复数、zh 没跟 → zh 复数渲染异常），en 缺 `home.workspaceCount`；另有约 **28 条** zh 值与 en 逐字相同且含拉丁字母的疑似回退（`nav.debug`、`settings.plugins.installTitle`、`dag.handoff`、`agent.stat.*` 等看着是真漏翻，少数如 `repoUrl`/`appName` 是品牌名可白名单）。\n- 做法：Node 脚本 walk `web/src` 抽 `t('...')` 字面量 key，断言 en/zh 齐全 + 报告疑似回退，挂进 `scripts/harness-check.mjs` 作 CI 红线。react-i18next 的 `t(..., {defaultValue})` 形态要覆盖、对有 defaultValue 的可降级为 warning。\n- 价值：swarmx i18n 大债靠反复手工批次修（`f49f610`/`ec6b758`/`6056544`）却**无任何回归防护**，`app-qa.spec.ts` 只查 overflow/a11y 不查 key 齐全。一次投入换永久红线，正治「英文用户大面积看中文」那类事故。\n\n**③ Tauri sidecar 退避重生监管（M）**\n- 已核实：`lib.rs` 只在 `CommandEvent::Terminated` 分支 emit 事件，**无 respawn/spawn_supervised/attempts** 任何监管逻辑。\n- 做法：移植 hermes `gateway-runner.ts` 算法——Terminated 后延迟 2s 重生、封顶 3 次、连续稳定跑满 30s 清零失败计数、重生前清 pending 计时器防与手动 relaunch 竞态导致 7777 双开、封顶后升级为「后端永久 down」。约 40 行状态机：`Mutex<RespawnState{attempts,last_started,timer_handle}>` + `tauri::async_runtime::spawn` + `tokio::time::sleep`。注意把 `CommandChild` 句柄在重生时替换进 `ServerSidecar(Mutex)`。\n- 价值：现状 sidecar 崩溃后 app 永远连不上后端、只能手动退出重开（`en.json:809` 已坦白），违反「打开→立刻能用、零命令」头号原则。「稳定运行重置」区分崩溃循环与偶发抖动。**①③ 配套做最佳。**\n\n### P1（高价值、低成本）\n\n**④ Cache 命中率指标（S）**——`cache_read/(input+cache_read)`，加 1 张 headline 卡 + by_model/by_day 各加一列。已核实数据全到客户端（`api/types.ts:563/578/596` 都带 `cache_read_tokens`）却从未派生（grep `cacheHit/hitRate` 全仓 0 命中）。纯前端零后端。诚实性：分母 0 时显「—」非 0%。\n\n**⑤ 凭据脱敏管线（S）**——移植 hermes `sanitizeCodingAgentTerminalOutput` 的正则（`Bearer xxx`、`sk-ant-/sk-proj-/sk-or-`、`api_key=`），挂在 PTY 输出 → 落库/transcript/前端推流/**asciicast 录制** 四个边界。agent 可能 echo token，落进 SQLite 或录制就永久留痕、回放可见。纯函数（regex/once_cell），易移植。\n\n**⑥ 结构化交接式 prompt 重写台账压缩（S）**——把 `rest.rs:2757` 的一行 `COMPACT_META_PROMPT` 升级成 hermes 结构化模板（`## 未完成任务 / 关键决策 / 产出物路径 / 阻塞与错误`）+ 头部加「这是只读背景、别把已完成任务再执行一遍」守则。orchestrator 断点续跑全靠读 `task.ledger.md`+`progress.ledger.md`，当前自由文本摘要易丢「哪些已做/没做」边界甚至重做。纯 prompt + 中文本地化。建议配真实 live 验证。\n\n**⑦ 任意文件真下载端点 + blob 客户端（S）**——新增 `GET /api/files/download`，复用 `files.rs` 的 canon+is_sensitive+jail 校验，按扩展名查 MIME + `Content-Disposition: attachment`（含 RFC5987 `filename*`）流式下发；前端复用已有 `lib/download.ts` 的 fetch→blob→a.download（swarmx 已为录像下载写过）。当前非图片文件（zip/csv/pdf/日志）在 UI 看得到名字却拿不下来，唯一二进制端点 `/api/file` 限定仅图片。对 Tauri 跨域 webview 尤其必要。\n\n**⑧ 任务板接入 /ws/swarm 事件流替代 4s 轮询（S）**——`/tasks` 自述「/ws/swarm 暂不带 task 事件故用轮询」是明确 scope 债。复用已有 `/ws/swarm`（已推 AgentState/AgentActivity/BlackboardChanged，正是状态派生上游）做 100ms 去抖 refetch + 退避重连，保留 30s 轮询兜底。无 Rust 改动。注意与「自己刚 optimistic 写完别被事件回刷盖掉」协调（hermes 的 seq/generation 守卫已示范）。\n\n**⑨ 边界安全 @mention 解析器 + @all 群发（M）**——移植 `mention-routing.ts`（前后边界字符校验 + `escapeMentionName` + `@all` 保留字）替换 `MessagesPanel.tsx:651` 朴素正则，`@all` 升级成真群发。hermes 有现成 vitest 用例可作 Rust `#[test]` 黄金集。先做前端把 `@all` 展开成对每个活成员各发一条（后端零改）；注意 swarmx role 可重名，命中后按 `agent_id` 去重并排除发送者。\n\n**⑩ 幂等分平台发版 + manifest 修复工作流（M/S）**——纯 YAML + gh CLI。①资产已存在则跳过、单平台失败可在既有 tag 补产（避 macOS notarize 全量重跑）；②独立 repair 工作流从已发布资产重建 `latest.json` 不重新签名（`gen-updater-manifest.mjs` 接受 assets-dir）。直接修复 v0.1.1 dropped-platform 那类事故。\n\n---\n\n## 4. Big Bets（L/XL，需立项）\n\n**rank 6 工具结果内联 unified diff 渲染（L，P1）**——本研究 **swarmx 最实在的体验差距**。当前 `transcript.rs:723-803` 只抽 48 字符 label，`ThoughtTraceStep` 不携带 input/output 更没 diff，用户在聊天/轨迹里看不到 Edit 改了什么，必须切终端/files 页。做法：`transcript.rs` 为 Edit/Write/MultiEdit 捕获 old_string/new_string（claude transcript 已含）或 codex patch，用 `similar` crate 生成 unified diff，扩 `ThoughtTraceStep` 一个可选 payload；前端引轻量 diff 渲染（react-diff-view）。难点：跨 5 处（解析→SQLite thought_trace→协议→前端类型→渲染）+ payload 体积要设上限（hermes 有 tool-output-storage-limit/tool-payload-boundaries 两 PR 专门处理）+ 与虚拟化 MessagesPanel 的行高/折叠测量集成。\n\n**rank 15 应用内 OAuth 登录 device flow/PKCE（L，P1）**——消灭「auth 失败→去终端跑 /login」违反「零命令」头号原则的痛点（现在 `OrchestratorFailureCard` 只能引导用户开终端）。借鉴 `copilot-device-flow.ts`（RFC 8628 状态机，约 150 行直译 reqwest 轮询）+ `xai-auth.ts`（本地 127.0.0.1 回调，复用已有 axum）。**最大不确定性**：claude OAuth client_id/endpoint 需自己确认可用性（hermes 注释说是「暂时复用」上游，直接抄可能违 ToS）+ token 写入位置（claude 走 macOS Keychain 格式未公开）。**建议先做 codex 的 device flow PoC（文件式 auth.json 可控）。** 配套需 JWT-exp 探针主动续期（codex-auth.ts:201）。\n\n**rank 16 外发 IM 通知（实质 M+基座，P2）**——长跑多 agent 编排任务动辄几十分钟，目前必须盯屏才知道「orchestrator 在等审批/swarm 死锁」。给现有通知系统（`notif.ts` 事件源现成）加外发出口：Telegram `sendMessage` / Slack/Discord incoming webhook，单个 `reqwest::Client` POST，**不需任何平台 SDK**（重型 adapter 本在外部 Python gateway）。难点不在协议在基座：swarmx 现无「用户级 secret 存储」抽象，要新建（建议借 hermes `.env`+0600 思路或 OS keyring）+ 事件→渠道路由去重限流（借 hermes require_mention/allow-list 的「行为」那半）。\n\n**rank 17 复活 skills-lock 注入 worker 能力库（L，P2）**——swarmx 已有 `skills-lock.json`（锁 GitHub 上 SKILL.md）但**全仓零代码读它**（孤儿配置）。借鉴 hermes `skill-injector` 的 sha256 三态同步（装/更新/skip 不覆盖用户改动）：spawn 前按 lock 把 skill 注入 agent 的 `.claude/skills/`（`pre_spawn` 已在往 `.claude` 写 MCP/hook，同构）。现在 agent 只能用用户机上碰巧存在的 skill、能力看天吃饭。难点：lock 源是 GitHub repo，**编译期 include_str 嵌不进**，须发版预拉进 `bundle.resources`（撞 CLAUDE.md 打包痛点）。\n\n**rank 18 外部 MCP 任意 CRUD 管理面（L，P1）**——swarmx 当前只能开关 2 个硬编码 server，`mcpCatalog.ts` 里 13 条（github/playwright/postgres/sentry/linear/figma）**全接不上**（McpPanel 只用了 2 条，catalog 躺着没接），用户想加 Playwright/Postgres MCP 只能命令行手敲。借鉴 hermes `McpManagerView` 的任意 CRUD + 活体连接状态/工具计数。难点：Rust 侧**拿不到** hermes agent bridge 那样的活体状态——需用 ctx7 核实 `claude mcp list` 输出格式是否稳定/可 `--json`，否则降级为「只读配置不显活体」（仍比现状强）。**务必保留 swarmx 已有的 MCP 安全硬化**（防 argv 注入 / env 不进 argv / 打码 / 卸载 allowlist），这点 swarmx 比 hermes 更严谨。\n\n---\n\n## 5. 明确不必借鉴（swarmx 已对等或更好）\n\n**1. 流式机制本身**——`pty_stream.rs` 字节级 seq 游标 resume + Gap 检测 + SQLite 真相源 + 重连重拉 REST，比 hermes 内存事件回放/cursor 双游标更贴 PTY 架构、更稳健。hermes 的上下文 LLM 压缩 / tiktoken 精确计量 / bridge 子进程 reattach / goal LLM 判官续跑，要么不适用（swarmx 不拥有上下文、CLI 自管 session），要么与 orchestrator 多 agent 范式冲突。\n\n**2. 成本/计费子域**——swarmx 的可编辑分层定价（default + `pricing.json` + LiteLLM 1000+ 模型兜底）、≥ 诚实标注、per-agent 归因+可跳转、真实采集而非估算，**全面强于** hermes（其控制平面根本不算成本，cost 由外部 Python agent 写库）。\n\n**3. reasoning effort + per-agent 模型配置**——swarmx 是 per-direction 持久化进 DB（migration 0015）+ 抽象档位经 CLI manifest `effort_levels` 映射 + ModelPicker UI，远胜 hermes 的 client-only localStorage；per-CLI tier→model + per-role default_model_tier + per-spawn override 比 hermes 按 profile 取默认那层抽象度更高。\n\n**4. 终端**——`terminal_ws.rs` 进程级持久会话注册表 + scrollback reattach 续传 + idle reaper + env allowlist，全面强于 hermes 断开即死的终端。只有 14 套 xterm 主题选择器是零风险小糖（P3）。\n\n**5. MCP 自注入**——`pre_spawn` 比 hermes 更强：per-agent 隔离（`--mcp-config` 每 agent 独立文件 + `--strict-mcp-config` 绕开共享 `~/.claude.json` 竞争）+ local-scope 避信任弹窗 + 原子写 + lock 互斥 + mcp-ready 活体握手（hermes 没有）。\n\n**6. 鉴权安全 / 健康监控 / 分层 / kanban 工程质量 / LAN / harness**——swarmx 是 loopback 单用户 Tauri 应用，有意无 token auth，`require_local_origin`（含 DNS-rebind/Host/IPv6 字面量防护）比 hermes 更强；`reaper.rs`（确定性 waitpid 清扫根治界面撒谎）+ `wake.rs`（事件驱动）比 hermes 轮询式 ops-monitor 更先进。hermes 的 JWT/多用户/per-profile/三计数器 login-limiter 是为它 LAN/多用户/远程配对服务，移植到 swarmx 是过度工程。kanban 的 `effective_status` 纯函数派生+单测+optimistic+回滚比 hermes 更扎实，其多板/RBAC/capability-negotiation 对单操作员桌面应用价值低。LAN 设备发现整体推翻 loopback 威胁模型、代价 XL，不做（只摘自证身份+防重放握手作未来 auth 地基，rank 22）。agent harness 已对等或更深（7 条规则全针对 Rust/Tauri 真实静默坑 + pre-commit 主闸 + CI 隔离 smoke）。\n\n---\n\n## 6. 落地建议\n\n**第一波（一个迭代内清掉，全 S/M）**：① backend-sidecar-down 横幅 + ③ sidecar 自愈（配套）→ ② i18n 静态检查 → ⑤ 凭据脱敏 → ④ cache 命中率 + ⑦ 文件真下载 + ⑥ 台账 prompt + ⑧ 任务板事件流。这一波全是「已有数据/已有事件/纯前端派生/纯 prompt」，风险极低，且每一条都正中诚实性红线或头号原则。\n\n**第二波（选 1-2 个 big bet 立项）**：优先 rank 6（工具 diff 内联，最实在体验差距）和 rank 18（外部 MCP 管理面，接上闲置 catalog 是直接能力缺口）。rank 15（应用内 OAuth）建议先 codex PoC 验证可行性再投入。\n\n**需用 ctx7/联网核实的前置**（按你的全局规则）：rank 15 claude/codex OAuth client_id/endpoint/scope + token 写入位置；rank 18 `claude mcp list --json` 输出格式；rank 20 claude `--permission-mode` 当前取值；rank 14 ts-rs vs typeshare 对 serde flatten/enum tag 的支持。这些都不要凭训练数据下结论。"
   }
 }

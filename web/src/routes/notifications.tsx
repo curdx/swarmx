@@ -1,7 +1,7 @@
 /**
  * Notification Center — Pencil frame COJDW.
  *
- * Read-only feed assembled from the events flockmux-server already emits
+ * Read-only feed assembled from the events swarmx-server already emits
  * via /ws/swarm: messages, blackboard writes, agent state transitions.
  *
  * No new backend endpoint is needed today — when /api/events lands we'll
@@ -85,7 +85,7 @@ const KIND_ICON: Record<NotifKind, typeof Bell> = {
   completed: CheckCircle2,
 };
 
-const READ_KEY = "flockmux:notif:read:v1";
+const READ_KEY = "swarmx:notif:read:v1";
 
 function loadRead(): Set<string> {
   try {

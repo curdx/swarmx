@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Refresh the embedded LiteLLM pricing snapshot that backs /api/usage.
 //
-// flockmux can't ask claude/codex for spend, so it scrapes token counts and
+// swarmx can't ask claude/codex for spend, so it scrapes token counts and
 // applies a pricing table. The 4 hand-maintained rules (opus/sonnet/haiku/
 // gpt-5) stay the editable PRIMARY layer; this snapshot is the FALLBACK so a
 // brand-new model id auto-prices instead of showing tokens-only. Source is
@@ -18,7 +18,7 @@ import { dirname, join } from "node:path";
 const SRC =
   "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const OUT = join(ROOT, "crates/flockmux-server/resources/litellm_pricing.json");
+const OUT = join(ROOT, "crates/swarmx-server/resources/litellm_pricing.json");
 const M = 1_000_000;
 
 const isNum = (v) => typeof v === "number" && Number.isFinite(v);

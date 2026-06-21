@@ -36,7 +36,7 @@ import {
 import { cn } from "@/lib/cn";
 import { useAvailableUpdate } from "@/lib/updater";
 
-const MENU_KEY = "flockmux:mcp:menuCollapsed:v1";
+const MENU_KEY = "swarmx:mcp:menuCollapsed:v1";
 
 /** Top nav group — app-level destinations (each a standalone route). Keep
  *  labels/icons in sync with NAV in components/CommandPalette.tsx. */

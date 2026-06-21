@@ -55,9 +55,9 @@ export default function ChatHome() {
   // CommandPalette → 新建 workspace 走 window event。
   useEffect(() => {
     const onOpen = () => setWizardOpen(true);
-    window.addEventListener("flockmux:open-wizard", onOpen as EventListener);
+    window.addEventListener("swarmx:open-wizard", onOpen as EventListener);
     return () =>
-      window.removeEventListener("flockmux:open-wizard", onOpen as EventListener);
+      window.removeEventListener("swarmx:open-wizard", onOpen as EventListener);
   }, []);
 
   const refreshAgents = async () => {
@@ -226,7 +226,7 @@ export default function ChatHome() {
               <p className="max-w-sm font-caption text-xs text-foreground-tertiary">
                 {t("home.backendUnreachableDesc", {
                   defaultValue:
-                    "flockmux 后端 (127.0.0.1:7777) 没有响应，所以读不到你的工作空间。请确认服务在运行，然后重试。",
+                    "swarmx 后端 (127.0.0.1:7777) 没有响应，所以读不到你的工作空间。请确认服务在运行，然后重试。",
                 })}
               </p>
               <Button

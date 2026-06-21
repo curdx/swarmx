@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to flockmux are documented here. The format follows
+All notable changes to swarmx are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project aims to
 follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
@@ -20,15 +20,15 @@ Production-readiness hardening from the 2026-06 maturity audit
 - **Liveness reaper**: a periodic sweep that retires any agent whose child
   process actually died without emitting a `ShimExit`, killing the "forever
   green dot" fake state.
-- **`flockmux-server doctor`** preflight self-check (shim/mcp binaries, CLIs on
+- **`swarmx-server doctor`** preflight self-check (shim/mcp binaries, CLIs on
   PATH, free port, writable data dir) and an `effective config` startup dump.
 - **Periodic retention prune** (every 6h), now also covering the high-frequency
   `agent_usage` / `agent_activities` tables.
-- **Daily-rolled file logging** under `~/.flockmux/logs/`.
+- **Daily-rolled file logging** under `~/.swarmx/logs/`.
 - **Frontend tests in CI**: vitest unit tests (DAG-edge derivation invariants) +
   Playwright e2e as hard gates; ESLint flat config (react-hooks); cargo-audit +
   npm audit + Dependabot.
-- `docs/configuration.md` documenting every `FLOCKMUX_*` variable (harness-check
+- `docs/configuration.md` documenting every `SWARMX_*` variable (harness-check
   guards completeness); a top-level `LICENSE` (MIT).
 
 ### Changed

@@ -603,14 +603,14 @@ expanded:
 ---
 
 **关键文件锚点（绝对路径）**
-- 主组件：`/Users/wdx/opc/flockmux-core/web/src/components/MessagesPanel.tsx`（系统消息壳 `:1178-1201` 待替换；USER `:1211`；ORCH `:1278`；`buildRows` `:219`；TimeDivider `:1571`；NewMessagesDivider `:1587`；ReasoningDisclosure `:1606`；PendingBubble `:1670`；过滤 `:528`）
-- 标记/markdown：`/Users/wdx/opc/flockmux-core/web/src/components/ChatMarkdown.tsx`
-- 失败卡模板（待泛化）：`/Users/wdx/opc/flockmux-core/web/src/components/workspace/OrchestratorFailureCard.tsx`
-- 身份：`/Users/wdx/opc/flockmux-core/web/src/lib/agent.ts:42-265`；小团队树边：`/Users/wdx/opc/flockmux-core/web/src/lib/dagEdgeDerivation.ts:51-95`
-- 类型：`/Users/wdx/opc/flockmux-core/web/src/api/types.ts`（MessageMeta `:143-152`；MessageRecord `:154-168`；ThoughtTrace `:177-189`；AgentActivity `:454-462`；SwarmAgentState `:429-441`；AgentInfo `:81-135`）
-- 后端 meta 模式（各 subtype emit 参照）：`/Users/wdx/opc/flockmux-core/crates/flockmux-server/src/wake.rs:389-396,849-858`
-- 后端事实：`/Users/wdx/opc/flockmux-core/crates/flockmux-server/src/routes/rest.rs`（看门狗 `:33,711-743`；Spawning 同步发 `:670-672`；activity 端点 in-memory ring `:1125-1136`）；`/Users/wdx/opc/flockmux-core/crates/flockmux-storage/src/store.rs`（messages kind+meta `:1070`；last_activity_at `:438-452`；未读 `:1531-1575`）
-- token：`/Users/wdx/opc/flockmux-core/web/src/styles/global.css`
-- i18n：`/Users/wdx/opc/flockmux-core/web/src/i18n/locales/zh.json`、`en.json`
+- 主组件：`/Users/wdx/opc/swarmx-core/web/src/components/MessagesPanel.tsx`（系统消息壳 `:1178-1201` 待替换；USER `:1211`；ORCH `:1278`；`buildRows` `:219`；TimeDivider `:1571`；NewMessagesDivider `:1587`；ReasoningDisclosure `:1606`；PendingBubble `:1670`；过滤 `:528`）
+- 标记/markdown：`/Users/wdx/opc/swarmx-core/web/src/components/ChatMarkdown.tsx`
+- 失败卡模板（待泛化）：`/Users/wdx/opc/swarmx-core/web/src/components/workspace/OrchestratorFailureCard.tsx`
+- 身份：`/Users/wdx/opc/swarmx-core/web/src/lib/agent.ts:42-265`；小团队树边：`/Users/wdx/opc/swarmx-core/web/src/lib/dagEdgeDerivation.ts:51-95`
+- 类型：`/Users/wdx/opc/swarmx-core/web/src/api/types.ts`（MessageMeta `:143-152`；MessageRecord `:154-168`；ThoughtTrace `:177-189`；AgentActivity `:454-462`；SwarmAgentState `:429-441`；AgentInfo `:81-135`）
+- 后端 meta 模式（各 subtype emit 参照）：`/Users/wdx/opc/swarmx-core/crates/swarmx-server/src/wake.rs:389-396,849-858`
+- 后端事实：`/Users/wdx/opc/swarmx-core/crates/swarmx-server/src/routes/rest.rs`（看门狗 `:33,711-743`；Spawning 同步发 `:670-672`；activity 端点 in-memory ring `:1125-1136`）；`/Users/wdx/opc/swarmx-core/crates/swarmx-storage/src/store.rs`（messages kind+meta `:1070`；last_activity_at `:438-452`；未读 `:1531-1575`）
+- token：`/Users/wdx/opc/swarmx-core/web/src/styles/global.css`
+- i18n：`/Users/wdx/opc/swarmx-core/web/src/i18n/locales/zh.json`、`en.json`
 
 **新建文件（建议落点）**：`web/src/components/chat/SystemCard.tsx`、`web/src/components/chat/cards/*.tsx`、`web/src/components/chat/MemberSubThread.tsx`、`web/src/lib/activityVerb.ts`、`web/src/lib/messageClassify.ts`、`web/src/hooks/useAutoMarkRead.ts`

@@ -1,0 +1,23 @@
+[package]
+name = "swarmx-swarm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+tokio.workspace = true
+dashmap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+anyhow.workspace = true
+parking_lot.workspace = true
+notify = { workspace = true }
+notify-debouncer-full = { workspace = true }
+sha2 = { workspace = true }
+swarmx-protocol = { path = "../swarmx-protocol" }
+swarmx-storage = { path = "../swarmx-storage" }
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { workspace = true, features = ["full", "test-util"] }

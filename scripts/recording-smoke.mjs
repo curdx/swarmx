@@ -15,11 +15,11 @@
 //      sequence \x1b]633;A\x07 (the shim emits it before exec) — proves the
 //      recorder captured the OSC lifecycle markers.
 //   9. Cleanup: best-effort delete the .cast file from disk (the recorder
-//      lives under FLOCKMUX_RECORDINGS_DIR if set; we don't poke the filesystem
+//      lives under SWARMX_RECORDINGS_DIR if set; we don't poke the filesystem
 //      directly here — the SQLite row stays around as history).
 //
 // Assumptions:
-//   * flockmux-server is running at 127.0.0.1:7777.
+//   * swarmx-server is running at 127.0.0.1:7777.
 //   * `codex` is on PATH and previously authenticated (or `claude` if argv[2]).
 
 const BASE = "http://127.0.0.1:7777";
@@ -176,7 +176,7 @@ async function main() {
   check(events.length > 0, `≥1 output event recorded (got ${events.length})`);
 
   // 7. At least one event must contain the shim's OSC ready marker.
-  // \x1b]633;A\x07 — emitted by flockmux-shim before exec.
+  // \x1b]633;A\x07 — emitted by swarmx-shim before exec.
   const concat = events.map((e) => e[2]).join("");
   check(
     concat.includes("\x1b]633;A\x07"),

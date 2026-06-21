@@ -11,7 +11,7 @@ I have all verified anchors. Here is the spec.
 ## 1. 目的与边界
 
 ### 解决的诊断 / 原则
-- **诊断 2（撒谎）**：PendingBubble 在成员静默死亡后仍挂 60s。根因 = 前端没绑 `AgentState::Error/Exited`（`crates/flockmux-protocol/src/ws_swarm.rs:115-116`），尽管后端 90s 看门狗已 `record_agent_error("watchdog")` 并 publish `AgentState::Error`（`crates/flockmux-server/src/routes/rest.rs:731-734`）。
+- **诊断 2（撒谎）**：PendingBubble 在成员静默死亡后仍挂 60s。根因 = 前端没绑 `AgentState::Error/Exited`（`crates/swarmx-protocol/src/ws_swarm.rs:115-116`），尽管后端 90s 看门狗已 `record_agent_error("watchdog")` 并 publish `AgentState::Error`（`crates/swarmx-server/src/routes/rest.rs:731-734`）。
 - **诊断 3（重连空白）**：`GET /api/agent/:id/activity` 只读 in-memory ring（`rest.rs:1131-1136`，注释 :1125-1130 自承），刷新/重连后活动归零。
 - **doomscrolling gap**：队长收消息后 1-2s 空窗内只有"盯绿点"，无 proof-of-life。
 - **原则 1（事实律）**：首个真实输出前绝不出现绿色/"工作中"。
@@ -364,15 +364,15 @@ token 定义见 `web/src/styles/global.css`（亮 :23-95 / 暗 :151-208）。
 ---
 
 ## 关键文件锚点（绝对路径）
-- 复用诚实层：`/Users/wdx/opc/flockmux-core/web/src/lib/agent.ts`（`resolveMemberVisual:265`、`formatActivityLine:363`、`roleColor*:42-56`、阈值 `:126-128`）
-- 复用时间线：`/Users/wdx/opc/flockmux-core/web/src/components/agent/AgentActivityLog.tsx`（glyph/滚动/空态）
-- 复用树边：`/Users/wdx/opc/flockmux-core/web/src/lib/dagEdgeDerivation.ts:51-95`
-- 改造点：`/Users/wdx/opc/flockmux-core/web/src/components/MessagesPanel.tsx`（PendingBubble `:1670-1729`、tick `:1682`）
-- 协议/状态源：`/Users/wdx/opc/flockmux-core/crates/flockmux-protocol/src/ws_swarm.rs`（AgentActivity `:81-97`、AgentState 七态 `:102-117`）
-- 后端事实：`/Users/wdx/opc/flockmux-core/crates/flockmux-server/src/routes/rest.rs`（Spawning 同步发 `:670-673`、看门狗 `:33,709-734`、activity 端点读 ring `:1125-1136`、spawn_bootstrap_inject `:1161-1250`）
-- label 构造：`/Users/wdx/opc/flockmux-core/crates/flockmux-server/src/transcript.rs`（`summarize:723-746`、`prettify_tool_name:713`）
-- 持久化模式：`/Users/wdx/opc/flockmux-core/crates/flockmux-storage/src/store.rs`（`touch_agent_activity:438-452`、messages kind+meta `:1070-1081`）；wake 示范 `/Users/wdx/opc/flockmux-core/crates/flockmux-server/src/wake.rs:389-396`
-- design token：`/Users/wdx/opc/flockmux-core/web/src/styles/global.css`（state/status `:70-95`、foreground/surface/accent `:23-58`）
-- i18n：`/Users/wdx/opc/flockmux-core/web/src/i18n/locales/zh.json`（新增 `messages.live.*` / `messages.dispatch.*` / `messages.verb.*`，与 `messages.reasoning.*` 平级）
+- 复用诚实层：`/Users/wdx/opc/swarmx-core/web/src/lib/agent.ts`（`resolveMemberVisual:265`、`formatActivityLine:363`、`roleColor*:42-56`、阈值 `:126-128`）
+- 复用时间线：`/Users/wdx/opc/swarmx-core/web/src/components/agent/AgentActivityLog.tsx`（glyph/滚动/空态）
+- 复用树边：`/Users/wdx/opc/swarmx-core/web/src/lib/dagEdgeDerivation.ts:51-95`
+- 改造点：`/Users/wdx/opc/swarmx-core/web/src/components/MessagesPanel.tsx`（PendingBubble `:1670-1729`、tick `:1682`）
+- 协议/状态源：`/Users/wdx/opc/swarmx-core/crates/swarmx-protocol/src/ws_swarm.rs`（AgentActivity `:81-97`、AgentState 七态 `:102-117`）
+- 后端事实：`/Users/wdx/opc/swarmx-core/crates/swarmx-server/src/routes/rest.rs`（Spawning 同步发 `:670-673`、看门狗 `:33,709-734`、activity 端点读 ring `:1125-1136`、spawn_bootstrap_inject `:1161-1250`）
+- label 构造：`/Users/wdx/opc/swarmx-core/crates/swarmx-server/src/transcript.rs`（`summarize:723-746`、`prettify_tool_name:713`）
+- 持久化模式：`/Users/wdx/opc/swarmx-core/crates/swarmx-storage/src/store.rs`（`touch_agent_activity:438-452`、messages kind+meta `:1070-1081`）；wake 示范 `/Users/wdx/opc/swarmx-core/crates/swarmx-server/src/wake.rs:389-396`
+- design token：`/Users/wdx/opc/swarmx-core/web/src/styles/global.css`（state/status `:70-95`、foreground/surface/accent `:23-58`）
+- i18n：`/Users/wdx/opc/swarmx-core/web/src/i18n/locales/zh.json`（新增 `messages.live.*` / `messages.dispatch.*` / `messages.verb.*`，与 `messages.reasoning.*` 平级）
 
 **新建文件**：`web/src/lib/activityVerb.ts`、`web/src/components/messages/{CaptainTypingRow,MemberHeartbeatRow,DispatchCard,InlineTeamTree}.tsx`
