@@ -233,7 +233,7 @@ jobs:
           test -n "$(find "$output_dir" -type f -print -quit)"
 
       - name: Upload desktop artifacts
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: swarmx-${{ matrix.target }}
           path: |
