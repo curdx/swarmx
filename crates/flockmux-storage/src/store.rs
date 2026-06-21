@@ -1374,6 +1374,25 @@ impl Store {
         tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<MessageRecord> {
             // `meta` is a structured JSON value persisted as TEXT.
             let meta_txt = msg.meta.as_ref().map(|v| v.to_string());
+            // Sanitize a dangling `in_reply_to` BEFORE insert. The column is
+            // `REFERENCES messages(id)`, so an id that doesn't exist makes the
+            // INSERT fail the FK constraint and 500s the whole send — the
+            // agent's reply is then lost (live-observed: an opencode worker
+            // referencing a stale id got four 500s before a retry landed). An
+            // LLM can easily emit a hallucinated / cross-thread / not-yet-
+            // committed parent id, so treat a missing parent as "no reply
+            // linkage": the message still delivers, just unthreaded.
+            let reply_to = match msg.in_reply_to {
+                Some(rid) => {
+                    let exists: i64 = conn.query_row(
+                        "SELECT COUNT(1) FROM messages WHERE id = ?1",
+                        params![rid],
+                        |r| r.get(0),
+                    )?;
+                    if exists > 0 { Some(rid) } else { None }
+                }
+                None => None,
+            };
             conn.execute(
                 "INSERT INTO messages (from_agent, to_agent, kind, body, sent_at, in_reply_to, thread_id, meta) \
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
@@ -1383,7 +1402,7 @@ impl Store {
                     msg.kind,
                     msg.body,
                     msg.sent_at,
-                    msg.in_reply_to,
+                    reply_to,
                     thread_id,
                     meta_txt
                 ],
@@ -1400,7 +1419,7 @@ impl Store {
                 sent_at: msg.sent_at,
                 delivered_at: None,
                 read_at: None,
-                in_reply_to: msg.in_reply_to,
+                in_reply_to: reply_to,
                 thread_id: thread_id.clone(),
                 meta: msg.meta.clone(),
                 thought_trace: None,

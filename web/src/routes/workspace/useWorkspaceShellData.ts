@@ -370,26 +370,41 @@ export function useWorkspaceShellData(
           }
           break;
         }
-        case "message_read":
+        case "message_read": {
           setLiveRead({ ids: ev.ids, to_agent: ev.to_agent, at: ev.at });
-          setUnreadByFrom((prev) => {
-            const next = { ...prev };
-            for (const id of ev.ids) {
-              // Only subtract ids we actually counted as USER unread. Skips
-              // agent↔agent reads and non-counted (wake/system/completion) ids,
-              // so an agent reading its mailbox can't deflate the user's badge.
-              if (!countedUnreadRef.current.has(id)) continue;
-              countedUnreadRef.current.delete(id);
-              const from = idToFromRef.current.get(id);
-              if (!from) continue;
-              const cur = next[from] ?? 0;
-              const dec = Math.max(0, cur - 1);
-              if (dec === 0) delete next[from];
-              else next[from] = dec;
-            }
-            return next;
-          });
+          // Resolve which counted ids to drop HERE — outside the state updater.
+          // A `setState` updater must be pure: React StrictMode (dev) and
+          // concurrent rendering can invoke it more than once, and mutating
+          // `countedUnreadRef` inside it poisons the replay — the first
+          // (discarded) pass deletes the id, the second (kept) pass sees it gone
+          // and skips the decrement, so the badge never goes down and lies at
+          // the cumulative arrival count (live-observed: stuck at "3 未读" with 0
+          // actually unread, only a reload reconciled it). Mutate the ref once
+          // here, then apply a pure, idempotent updater.
+          const decByFrom: Record<string, number> = {};
+          for (const id of ev.ids) {
+            // Only subtract ids we actually counted as USER unread. Skips
+            // agent↔agent reads and non-counted (wake/system/completion) ids,
+            // so an agent reading its mailbox can't deflate the user's badge.
+            if (!countedUnreadRef.current.has(id)) continue;
+            countedUnreadRef.current.delete(id);
+            const from = idToFromRef.current.get(id);
+            if (!from) continue;
+            decByFrom[from] = (decByFrom[from] ?? 0) + 1;
+          }
+          if (Object.keys(decByFrom).length > 0) {
+            setUnreadByFrom((prev) => {
+              const next = { ...prev };
+              for (const [from, dec] of Object.entries(decByFrom)) {
+                const cur = (next[from] ?? 0) - dec;
+                if (cur <= 0) delete next[from];
+                else next[from] = cur;
+              }
+              return next;
+            });
+          }
           break;
+        }
         case "blackboard_changed":
           // workspace name / accent now live in the `workspaces` table,
           // not the blackboard, so we don't react to blackboard events

@@ -388,6 +388,21 @@ impl Swarm {
             .context("store.insert_message")?;
         let mut record = record;
 
+        // An agent that just sent a coherent message is provably alive and
+        // working, so clear any stale error latch on it. This is the same
+        // "recovered → clear the latch" rule the transcript tailer applies on
+        // the next real activity — but the tailer only runs for engines with a
+        // JSONL transcript (claude/codex). opencode (TUI via /tui) and reasonix
+        // (serve/SSE) have no tailer, so a false first-response-watchdog error
+        // ("启动后无响应（可能未登录或卡住）") would otherwise stick forever even
+        // after they deliver. Live-observed: a working opencode worker stayed
+        // shown as errored after reporting. Covers agent→user and agent→agent.
+        if record.from_agent != USER_AGENT_ID && record.from_agent != SYSTEM_AGENT_ID {
+            if let Err(err) = self.store.clear_agent_error(record.from_agent.clone()).await {
+                tracing::debug!(?err, agent = %record.from_agent, "clear_agent_error on send failed");
+            }
+        }
+
         if is_user_to_agent(&record.from_agent, &record.to_agent) {
             let workspace_id = self
                 .store
