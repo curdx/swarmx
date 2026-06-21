@@ -849,10 +849,25 @@ impl ReadyPlanRunner {
             let now = Instant::now();
             if let Some(dl) = self.deadline {
                 if now > dl {
-                    tracing::warn!(
-                        agent = %self.agent_id, step = self.cursor,
-                        "ready_plan: step timed out waiting for its needle; advancing",
-                    );
+                    // An `answer_dialog` step auto-answers a startup dialog IF it
+                    // appears — a timeout just means the dialog never showed,
+                    // which is the NORMAL case, not a fault. e.g. codex's "Hooks
+                    // need review" prompt is suppressed entirely when we launch
+                    // with `--dangerously-bypass-hook-trust` (codex >=0.131), so
+                    // that step times out on every spawn. Log it at debug. A
+                    // gating `wait_for` / `extract_session_id` needle that never
+                    // shows IS a real readiness gap → keep that at warn.
+                    if self.steps[self.cursor].kind == ReadyStepKind::AnswerDialog {
+                        tracing::debug!(
+                            agent = %self.agent_id, step = self.cursor,
+                            "ready_plan: answer_dialog needle never appeared (dialog not shown); advancing",
+                        );
+                    } else {
+                        tracing::warn!(
+                            agent = %self.agent_id, step = self.cursor,
+                            "ready_plan: step timed out waiting for its needle; advancing",
+                        );
+                    }
                     self.cursor += 1;
                     self.arm_deadline(now);
                     continue;
