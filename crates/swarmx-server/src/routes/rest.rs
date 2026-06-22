@@ -430,10 +430,16 @@ fn select_spawn_plugin_with<'a>(
     is_installed: &impl Fn(&CliPlugin) -> bool,
 ) -> Result<(&'a CliPlugin, Option<&'a CliPlugin>), (StatusCode, String)> {
     let requested = registry.get(requested_cli).ok_or_else(|| {
-        (
-            StatusCode::NOT_FOUND,
-            format!("unknown cli plugin: {requested_cli}"),
-        )
+        // Mirror the unknown-ROLE error (closest_match + valid list) so an LLM
+        // that typo'd the cli (`claud`) or named a nonexistent engine (`gpt4`)
+        // gets the same self-correctable hint instead of a dead-end string.
+        let valid: Vec<String> = registry.list().into_iter().map(|p| p.id.clone()).collect();
+        let mut msg = format!("unknown cli plugin: {requested_cli}");
+        if let Some(s) = closest_match(requested_cli, &valid) {
+            msg.push_str(&format!(" — did you mean '{s}'?"));
+        }
+        msg.push_str(&format!(" valid engines: {valid:?}"));
+        (StatusCode::NOT_FOUND, msg)
     })?;
     if is_installed(requested) {
         return Ok((requested, None));
@@ -3727,6 +3733,18 @@ mod p0_tests {
             select_spawn_plugin_with(&registry, "claude", &|p| p.id == "claude").unwrap();
         assert_eq!(selected.id, "claude");
         assert!(fallback_from.is_none());
+    }
+
+    #[test]
+    fn select_spawn_plugin_unknown_cli_suggests_and_lists() {
+        // A typo'd engine must get the same self-correctable hint the unknown-
+        // ROLE path gives: a did-you-mean + the valid list, not a dead-end.
+        let registry = test_registry();
+        let err = select_spawn_plugin_with(&registry, "claud", &|_| true).unwrap_err();
+        assert_eq!(err.0, StatusCode::NOT_FOUND);
+        assert!(err.1.contains("unknown cli plugin: claud"), "msg: {}", err.1);
+        assert!(err.1.contains("did you mean 'claude'"), "missing suggestion: {}", err.1);
+        assert!(err.1.contains("valid engines:"), "missing valid list: {}", err.1);
     }
 
     #[test]
