@@ -19,7 +19,7 @@ const RENAME = path.join(HERE, "rename-release-assets.mjs");
 const MANIFEST = path.join(HERE, "gen-updater-manifest.mjs");
 const VERSION = "0.1.2";
 const TAG = "v0.1.2";
-const REPO = "curdx/swarmx-core";
+const REPO = "curdx/swarmx";
 
 // Exactly what the bundler emits per target (the v0.1.2 assets, with the old
 // Rust-triple prefix stripped — i.e. the raw bundler basenames).

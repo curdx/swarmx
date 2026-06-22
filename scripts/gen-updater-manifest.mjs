@@ -15,7 +15,7 @@
 // Usage: node scripts/gen-updater-manifest.mjs <assets-dir> <tag> <repo> [date]
 //   <assets-dir>  dir holding the downloaded release assets (with `.sig` files)
 //   <tag>         release tag, e.g. v0.2.0
-//   <repo>        owner/name, e.g. curdx/swarmx-core
+//   <repo>        owner/name, e.g. curdx/swarmx
 //   [date]        RFC3339 pub_date (pass from the workflow; Date.now isn't used)
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
