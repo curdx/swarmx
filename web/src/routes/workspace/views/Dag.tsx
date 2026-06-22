@@ -102,7 +102,7 @@ function AgentNode({ data }: NodeProps<Node<AgentNodeData>>) {
   return (
     <div
       className={cn(
-        "flex w-[200px] flex-col gap-1 rounded-lg border-2 bg-surface-elevated px-3 py-2 shadow-sm",
+        "flex w-[200px] !cursor-pointer flex-col gap-1 rounded-lg border-2 bg-surface-elevated px-3 py-2 shadow-sm transition-shadow hover:shadow-md",
         data.selected
           ? "border-accent-primary shadow-lg"
           : "border-border-subtle",
