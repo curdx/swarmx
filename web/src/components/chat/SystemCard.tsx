@@ -14,7 +14,7 @@
 import { useTranslation } from "react-i18next";
 import { CircleCheck, ChevronRight, Cpu, Split } from "lucide-react";
 import { cn } from "@/lib/cn";
-import { roleColorClass as roleColor } from "@/lib/agent";
+import { roleColorClass as roleColor, roleDisplayName } from "@/lib/agent";
 import type { MessageRecord } from "../../api/types";
 
 export function SystemCard({
@@ -33,7 +33,8 @@ export function SystemCard({
 
   // ── delivery card: a worker finished its task (farewell / completion) ──
   if (subtype === "completion") {
-    const role = fromRole ?? t("chat.role.member", { defaultValue: "成员" });
+    const rawRole = fromRole ?? t("chat.role.member", { defaultValue: "成员" });
+    const role = roleDisplayName(rawRole);
     const agent = message.from_agent;
     const clickable = onOpenAgent != null;
     const body = message.body?.trim();
@@ -82,6 +83,7 @@ export function SystemCard({
 
   if (subtype === "dispatch") {
     const childRole = message.meta?.child_role ?? t("chat.role.member", { defaultValue: "成员" });
+    const childRoleLabel = roleDisplayName(childRole);
     const childAgent = message.meta?.child_agent ?? null;
     const clickable = childAgent != null && onOpenAgent != null;
     return (
@@ -91,7 +93,7 @@ export function SystemCard({
         onClick={() => childAgent && onOpenAgent?.(childAgent)}
         title={
           clickable
-            ? t("chat.dispatch.open", { role: childRole, defaultValue: "查看 {{role}}" })
+            ? t("chat.dispatch.open", { role: childRoleLabel, defaultValue: "查看 {{role}}" })
             : undefined
         }
         className={cn(
@@ -103,7 +105,7 @@ export function SystemCard({
           <Split className="size-3.5" />
         </span>
         <span className="min-w-0 truncate font-body text-xs text-foreground-primary">
-          {t("chat.dispatch.title", { role: childRole, defaultValue: "派给 {{role}}" })}
+          {t("chat.dispatch.title", { role: childRoleLabel, defaultValue: "派给 {{role}}" })}
         </span>
         {/* role-color tick so the worker's identity reads consistently */}
         <span
