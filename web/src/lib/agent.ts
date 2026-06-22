@@ -167,6 +167,15 @@ const WORKING_WINDOW_MS = 60_000;
 const STALL_RUNNING_MS = 300_000;
 const STARTUP_GRACE_MS = 45_000;
 const NO_RESPONSE_MS = 300_000;
+/** A worker that WAS active (passed the first-response watchdog) but then went
+ *  silent mid-task — no tool activity, no outbound, no delivery, still alive,
+ *  no error — for this long. The backend's first-response watchdog only covers
+ *  the FIRST turn; once a worker speaks once, nothing server-side flags it if it
+ *  later hangs forever. This is the UI-only honesty backstop for that gap: a
+ *  soft amber "no recent activity" hint, NOT a kill (the user decides whether to
+ *  stop/wake it). Set well above STALL_RUNNING/NO_RESPONSE so it only fires for a
+ *  worker that's genuinely gone quiet, never a legitimately long single step. */
+const IDLE_AFTER_ACTIVE_MS = 600_000;
 
 /** Pure function: given an agent and recent message history, return
  *  the best-guess semantic state. Caller is responsible for passing
@@ -377,6 +386,25 @@ export function resolveMemberVisual(
     if (age >= NO_RESPONSE_MS) return stalled(labels.noResponse);
     // 中间地带:安静但还不到报警,给中性绿点(不撒谎说在干活)。
     return { dotClass: "bg-state-success", label: "", typing: false, isError: false };
+  }
+
+  // 3c-bis) 起跑后中途卡死:worker 曾经活跃(过了首响应看门狗),之后长时间
+  //     零活动、没交付、仍存活、无 error。后端的首响应看门狗只覆盖第一回合,
+  //     worker 说过一次话后再挂死就没有任何服务端机制兜底(见 reaper/watchdog
+  //     覆盖盲区)。这里是纯 UI 的诚实兜底:软琥珀\"长时间无活动\",不杀进程
+  //     (停/唤由用户决定)。阈值远高于 STALL/NO_RESPONSE,只对真静默的 worker
+  //     触发,绝不误伤合法的长单步。
+  if (agent.parent_agent_id && everActive && !agent.last_error) {
+    const lastSignalAt = Math.max(
+      agent.last_activity_at ?? 0,
+      act?.at ?? 0,
+      ...messages
+        .filter((m) => m.from_agent === agent.agent_id)
+        .map((m) => m.sent_at ?? 0),
+    );
+    if (lastSignalAt > 0 && now - lastSignalAt >= IDLE_AFTER_ACTIVE_MS) {
+      return stalled(labels.noResponse);
+    }
   }
 
   // 3d) 冷加载诚实层:live error 事件在刷新后丢失(WS 无 resume),但持久化的
