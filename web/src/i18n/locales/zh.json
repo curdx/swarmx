@@ -992,6 +992,7 @@
     "send": "发送",
     "sending": "发送中…",
     "sendHintDesktop": "{{send}} 发送 · {{newline}} 换行",
+    "sendHintInterrupt": "{{interrupt}} 打断队长并发送 · {{send}} 发送",
     "sendHintMobile": "回车换行 · 点发送按钮发送",
     "optimize": "优化输入",
     "optimizeTooltip": "用 AI 把你的输入改写得更清晰（保留技术细节，不臆造需求）",

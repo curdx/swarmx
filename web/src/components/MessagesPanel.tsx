@@ -1330,12 +1330,26 @@ export function MessagesPanel({
       ? t("messages.composerPlaceholderRevive")
       : t("messages.composerPlaceholderEmpty");
   const platform = getClientPlatformInfo();
+  // Surface the otherwise-hidden ⌘/Ctrl+Enter "interrupt the captain mid-reply
+  // and send this as a course-correction" power (handleKeyDown :1294) — but
+  // ONLY while the captain is actually replying, so the hint is contextual
+  // (discoverable exactly when it's useful) instead of permanent noise.
+  const interruptCaptain = explicitRecipient ?? defaultRecipient;
+  const captainReplying =
+    !platform.isMobileLike &&
+    interruptCaptain != null &&
+    pendingResponders.some((p) => p.agentId === interruptCaptain.agent_id);
   const sendHint = platform.isMobileLike
     ? t("messages.sendHintMobile")
-    : t("messages.sendHintDesktop", {
-        send: platform.sendKeyLabel,
-        newline: platform.newlineKeyLabel,
-      });
+    : captainReplying
+      ? t("messages.sendHintInterrupt", {
+          interrupt: `${platform.modifierKeyLabel}${platform.isApple ? "" : "+"}${platform.sendKeyLabel}`,
+          send: platform.sendKeyLabel,
+        })
+      : t("messages.sendHintDesktop", {
+          send: platform.sendKeyLabel,
+          newline: platform.newlineKeyLabel,
+        });
 
   return (
     // flex-1 + min-h-0 (not h-full): MessagesPanel must take the *remaining*
