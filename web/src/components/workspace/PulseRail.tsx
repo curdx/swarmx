@@ -13,7 +13,7 @@
 import { useTranslation } from "react-i18next";
 import { Users } from "lucide-react";
 import { cn } from "@/lib/cn";
-import { resolveMemberVisual, roleColorClass } from "@/lib/agent";
+import { resolveMemberVisual, roleColorClass, roleDisplayName } from "@/lib/agent";
 import type { AgentInfo, AgentLiveState, MessageRecord } from "../../api/types";
 
 // The rail shows dots only, no status text, so the labels are stubbed — only
@@ -78,8 +78,8 @@ export function PulseRail({
               key={a.agent_id}
               type="button"
               onClick={() => onOpenAgent(a.agent_id)}
-              title={a.role}
-              aria-label={a.role}
+              title={roleDisplayName(a.role)}
+              aria-label={roleDisplayName(a.role)}
               className="relative shrink-0 transition-transform hover:scale-105"
             >
               <span

@@ -59,6 +59,7 @@ import { cn } from "@/lib/cn";
 import { toast } from "@/lib/toast";
 import {
   roleColorClass as roleColor,
+  roleDisplayName,
   resolveMemberVisual,
   formatActivityLine,
   agentIsWorkable,
@@ -1221,7 +1222,7 @@ export default function ChatView() {
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
                     <span className="truncate font-heading text-sm text-foreground-primary">
-                      {a.role}
+                      {roleDisplayName(a.role)}
                     </span>
                     {isOrchestrator && (
                       <span className="shrink-0 rounded-full bg-accent-primary-soft px-1.5 py-0.5 font-caption text-[9px] font-semibold text-accent-primary">

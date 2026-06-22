@@ -2038,7 +2038,7 @@ export function MessagesPanel({
                           className={cn("size-2 shrink-0 rounded-full", roleColor(m.role))}
                         />
                         <span className="min-w-0 flex-1 truncate text-foreground-primary">
-                          {m.role}
+                          {roleDisplayName(m.role)}
                         </span>
                         <button
                           type="button"
