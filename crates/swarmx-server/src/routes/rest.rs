@@ -1183,22 +1183,31 @@ pub async fn list_agents(State(state): State<AppState>) -> impl IntoResponse {
     // `<handoff_signal>.error` instead of its success key. `handoff_signal`
     // (now backfilled from the workers row above) always holds the DECLARED
     // success key, so without this pass a failed worker looks identical to a
-    // delivered one in the DAG. Batch-check the `.error` variant of every
-    // non-empty handoff_signal in one query (no N+1) and flag the matches.
-    let error_keys: Vec<String> = items
-        .iter()
-        .filter(|it| !it.handoff_signal.is_empty())
-        .map(|it| format!("{}.error", it.handoff_signal))
-        .collect();
-    if !error_keys.is_empty() {
-        match state.store.blackboard_paths_present(error_keys).await {
+    // delivered one in the DAG.
+    //
+    // IMPORTANT: a failure only counts when the `.error` key exists AND the
+    // success key does NOT. When a worker aborts but the orchestrator (or a
+    // retry) then writes the success key as a fallback, BOTH keys end up on
+    // the blackboard — that's a net SUCCESS, not a failure, so we must not
+    // flag it. Querying both variants in one batch lets us require
+    // `error_present && !success_present`.
+    let mut probe_keys: Vec<String> = Vec::new();
+    for it in items.iter().filter(|it| !it.handoff_signal.is_empty()) {
+        probe_keys.push(it.handoff_signal.clone());
+        probe_keys.push(format!("{}.error", it.handoff_signal));
+    }
+    if !probe_keys.is_empty() {
+        match state.store.blackboard_paths_present(probe_keys).await {
             Ok(present) => {
                 for it in items.iter_mut() {
-                    if !it.handoff_signal.is_empty()
-                        && present.contains(&format!("{}.error", it.handoff_signal))
-                    {
-                        it.handoff_failed = true;
+                    if it.handoff_signal.is_empty() {
+                        continue;
                     }
+                    let error_present =
+                        present.contains(&format!("{}.error", it.handoff_signal));
+                    let success_present = present.contains(&it.handoff_signal);
+                    // Failed only if it errored and was never (fallback-)delivered.
+                    it.handoff_failed = error_present && !success_present;
                 }
             }
             Err(e) => {
