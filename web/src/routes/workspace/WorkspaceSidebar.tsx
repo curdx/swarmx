@@ -62,21 +62,21 @@ import { cn } from "@/lib/cn";
  *  violet for a tool/utility project. Two distinct hues so the two kinds of
  *  attachment are scannable at a glance in the tree. */
 function RoleChip({ role, label }: { role: string; label: string }) {
-  // Four distinct tints so node kinds are scannable at a glance: the primary
-  // project is the loud solid accent; peer projects soft-blue; tools violet;
-  // dependencies a quiet neutral (the most common kind, kept low-key).
+  // Node kinds stay scannable by COLOR alone — no loud solid pill. The pill's
+  // filled background + uppercase tracking made every source row shout; in a
+  // 264px column with an icon, name, path and chevron already competing, a
+  // quiet tinted label carries the same "dep vs tool vs peer" signal without
+  // the visual weight. Project = accent, tool = violet, dependency = muted.
   const cls =
-    role === "main"
-      ? "bg-accent-primary text-foreground-on-accent"
-      : role === "project"
-        ? "bg-accent-primary-soft text-accent-primary"
-        : role === "tool"
-          ? "bg-accent-purple-soft text-accent-purple"
-          : "bg-surface-tertiary text-foreground-secondary";
+    role === "main" || role === "project"
+      ? "text-accent-primary"
+      : role === "tool"
+        ? "text-accent-purple"
+        : "text-foreground-tertiary";
   return (
     <span
       className={cn(
-        "shrink-0 rounded px-1 py-px font-caption text-[9px] font-medium uppercase tracking-wide",
+        "shrink-0 font-caption text-[10px] font-medium lowercase",
         cls,
       )}
     >
@@ -94,7 +94,7 @@ function BranchCaption({ branch }: { branch?: string | null }) {
   if (!branch) return null;
   return (
     <span
-      className="flex items-center gap-1 truncate font-mono text-[9px] leading-tight text-foreground-tertiary"
+      className="flex items-center gap-1 truncate font-mono text-[10px] leading-tight text-foreground-tertiary/70"
       title={branch}
     >
       <GitBranch className="size-2.5 shrink-0" />
@@ -373,7 +373,7 @@ function RootTree({
                   <BranchCaption branch={node.root.branch} />
                 ) : (
                   node.parent && (
-                    <span className="truncate font-mono text-[9px] leading-tight text-foreground-tertiary">
+                    <span className="truncate font-mono text-[10px] leading-tight text-foreground-tertiary/70">
                       {node.parent}
                     </span>
                   )
