@@ -16,6 +16,7 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Loader2, Sparkles, X, type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/cn";
+import { roleDisplayName } from "@/lib/agent";
 
 export type TaskStatus = "pending" | "spawning" | "ready";
 
@@ -75,9 +76,14 @@ function TaskRow({
 
   const elapsedSec = Math.floor((now - task.startedAt) / 1000);
   const { icon: Icon, key } = STATUS_LABEL[task.status];
+  // Display layer localizes the role labels — spawnedRoles holds the raw,
+  // orchestrator-minted slugs (e.g. "Code Reviewer") which Chat.tsx matches
+  // against a.role, so we MUST NOT mutate the stored values. roleDisplayName
+  // normalizes + aliases them to the localized name (代码审查员) for display
+  // only; without it a zh UI leaks raw English role names here.
   const label = t(key, {
     count: task.spawnedRoles.length,
-    roles: task.spawnedRoles.join(" · "),
+    roles: task.spawnedRoles.map(roleDisplayName).join(" · "),
   });
 
   return (
