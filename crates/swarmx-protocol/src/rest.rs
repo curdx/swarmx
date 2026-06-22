@@ -174,6 +174,16 @@ pub struct AgentInfo {
     /// Unix-ms the `last_error` was recorded. `None` when no error.
     #[serde(default)]
     pub last_error_at: Option<i64>,
+    /// True when this agent's handoff FAILED — i.e. instead of writing its
+    /// success key (`handoff_signal`), it (or the exit-fallback) wrote
+    /// `<handoff_signal>.error`. Computed at list time by checking the
+    /// blackboard for the `.error` variant. The DAG uses it to render the
+    /// node/edge as a failed delivery rather than a successful one — without
+    /// it a worker that aborted looked identical to one that succeeded, since
+    /// `handoff_signal` always holds the (declared) success key. `false` for
+    /// agents with no handoff_signal or whose `.error` key was never written.
+    #[serde(default)]
+    pub handoff_failed: bool,
 }
 
 /// One tool-level activity row, served by `GET /api/agent/:id/activity`. Same

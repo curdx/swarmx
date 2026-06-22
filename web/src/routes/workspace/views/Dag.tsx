@@ -150,8 +150,18 @@ function AgentNode({ data }: NodeProps<Node<AgentNodeData>>) {
         {a.cli} · {a.agent_id.slice(-8)}
       </div>
       {a.handoff_signal && (
-        <div className="truncate font-mono text-[10px] text-state-success">
-          → {a.handoff_signal}
+        <div
+          className={cn(
+            "truncate font-mono text-[10px]",
+            // A failed handoff (worker wrote `<signal>.error`) renders in the
+            // danger color with an ✗ so the DAG distinguishes an aborted
+            // delivery from a successful one — the key string itself is the
+            // same declared success key in both cases.
+            a.handoff_failed ? "text-state-danger" : "text-state-success",
+          )}
+        >
+          {a.handoff_failed ? "✗" : "→"} {a.handoff_signal}
+          {a.handoff_failed && ".error"}
         </div>
       )}
       <Handle type="source" position={Position.Bottom} className="!bg-foreground-tertiary" />

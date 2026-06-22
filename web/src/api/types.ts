@@ -148,6 +148,11 @@ export interface AgentInfo {
   /** Blackboard key this agent will write when its phase completes.
    *  Empty for roles with no handoff_signal (e.g. planner). */
   handoff_signal?: string;
+  /** True when the agent's handoff FAILED — it wrote `<handoff_signal>.error`
+   *  instead of the success key (computed server-side from the blackboard).
+   *  `handoff_signal` always holds the declared success key, so the DAG needs
+   *  this flag to tell a failed delivery from a successful one. */
+  handoff_failed?: boolean;
   /** FK into the workspaces table. Null for pre-migration rows or for
    *  legacy spawn paths from before Step 3. The frontend groups the
    *  left nav by this — historical rows fall through to the unnamed

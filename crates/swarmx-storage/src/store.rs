@@ -1971,6 +1971,48 @@ impl Store {
 
     // ── blackboard ───────────────────────────────────────────────────────
 
+    /// Of the given blackboard paths, return the subset that has at least one
+    /// op recorded (i.e. the key was written/exists). One query, chunked under
+    /// the SQLite variable cap. Used by `list_agents` to detect failed handoffs
+    /// (a worker that wrote `<handoff_signal>.error` instead of the success
+    /// key) so the DAG can render the node as failed rather than delivered.
+    pub async fn blackboard_paths_present(
+        &self,
+        paths: Vec<String>,
+    ) -> Result<std::collections::HashSet<String>> {
+        if paths.is_empty() {
+            return Ok(std::collections::HashSet::new());
+        }
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || {
+            with_busy_retry(
+                &pool,
+                |conn| -> rusqlite::Result<std::collections::HashSet<String>> {
+                    const CHUNK: usize = 900;
+                    let mut present = std::collections::HashSet::new();
+                    for chunk in paths.chunks(CHUNK) {
+                        let placeholders = vec!["?"; chunk.len()].join(",");
+                        let sql = format!(
+                            "SELECT DISTINCT path FROM blackboard_ops WHERE path IN ({placeholders})"
+                        );
+                        let mut stmt = conn.prepare(&sql)?;
+                        let binds: Vec<rusqlite::types::Value> =
+                            chunk.iter().map(|p| p.clone().into()).collect();
+                        let rows = stmt.query_map(rusqlite::params_from_iter(binds.iter()), |row| {
+                            row.get::<_, String>(0)
+                        })?;
+                        for r in rows {
+                            present.insert(r?);
+                        }
+                    }
+                    Ok(present)
+                },
+            )
+        })
+        .await
+        .context("spawn_blocking blackboard_paths_present")?
+    }
+
     pub async fn insert_blackboard_op(&self, op: NewBlackboardOp) -> Result<BlackboardOpRecord> {
         let pool = self.pool.clone();
         tokio::task::spawn_blocking(move || {

@@ -1071,6 +1071,8 @@ pub async fn list_agents(State(state): State<AppState>) -> impl IntoResponse {
                 last_error: None,
                 last_error_kind: None,
                 last_error_at: None,
+                // Backfilled in the batch `.error` pass after the SQLite union.
+                handoff_failed: false,
             },
         );
     }
@@ -1120,6 +1122,8 @@ pub async fn list_agents(State(state): State<AppState>) -> impl IntoResponse {
                         last_error: row.last_error,
                         last_error_kind: row.last_error_kind,
                         last_error_at: row.last_error_at,
+                        // Backfilled in the batch `.error` pass below.
+                        handoff_failed: false,
                     });
                 }
             }
@@ -1170,6 +1174,37 @@ pub async fn list_agents(State(state): State<AppState>) -> impl IntoResponse {
                 tracing::warn!(
                     ?e,
                     "list_agents: list_workers_by_ids failed; parent edges omitted"
+                );
+            }
+        }
+    }
+
+    // Failed-handoff detection: a worker that aborted writes
+    // `<handoff_signal>.error` instead of its success key. `handoff_signal`
+    // (now backfilled from the workers row above) always holds the DECLARED
+    // success key, so without this pass a failed worker looks identical to a
+    // delivered one in the DAG. Batch-check the `.error` variant of every
+    // non-empty handoff_signal in one query (no N+1) and flag the matches.
+    let error_keys: Vec<String> = items
+        .iter()
+        .filter(|it| !it.handoff_signal.is_empty())
+        .map(|it| format!("{}.error", it.handoff_signal))
+        .collect();
+    if !error_keys.is_empty() {
+        match state.store.blackboard_paths_present(error_keys).await {
+            Ok(present) => {
+                for it in items.iter_mut() {
+                    if !it.handoff_signal.is_empty()
+                        && present.contains(&format!("{}.error", it.handoff_signal))
+                    {
+                        it.handoff_failed = true;
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    ?e,
+                    "list_agents: blackboard_paths_present failed; handoff_failed flags omitted"
                 );
             }
         }
