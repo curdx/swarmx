@@ -22,6 +22,7 @@ import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { Loader2, RefreshCw, RotateCcw, Save } from "lucide-react";
 import { api, ApiError } from "@/api/http";
+import { roleDisplayName } from "@/lib/agent";
 import { toast } from "@/lib/toast";
 import type {
   UsageAgentRow,
@@ -760,7 +761,7 @@ function AgentUsageCell({
   row: UsageAgentRow;
   workspaceSlug: string | null;
 }) {
-  const label = row.role || row.agent_id.slice(0, 12);
+  const label = row.role ? roleDisplayName(row.role) : row.agent_id.slice(0, 12);
   const body = (
     <span className="flex min-w-0 flex-col">
       <span className="truncate font-mono text-foreground-primary">{label}</span>
