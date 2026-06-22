@@ -302,6 +302,15 @@ export default function LedgerView() {
             at={task.at}
             nowTick={nowTick}
             snap={task}
+            // When the run is terminally done (progress ledger says all_done),
+            // force any leftover `- [ ]` plan boxes to render checked. The
+            // orchestrator is *told* to check them off (orchestrator.md), but
+            // it's an LLM and sometimes forgets — without this guard a finished
+            // plan shows an unchecked step next to an "all done" status, which
+            // reads as "not actually finished". Belt to the prompt's suspenders.
+            forceAllChecked={/(^|\n)\s*(?:[-*]\s+)?Status:\s*all_done\b/i.test(
+              progress.content ?? "",
+            )}
             emptyHint={t(
               "ledger.taskEmpty",
               "还没写。orchestrator 第一次 wake 时会自动建立。",
@@ -418,6 +427,7 @@ const LedgerCard = memo(function LedgerCard({
   nowTick,
   snap,
   emptyHint,
+  forceAllChecked = false,
 }: {
   icon: React.ReactNode;
   title: string;
@@ -426,6 +436,7 @@ const LedgerCard = memo(function LedgerCard({
   nowTick: number;
   snap: LedgerSnap;
   emptyHint: string;
+  forceAllChecked?: boolean;
 }) {
   const { t } = useTranslation();
   // Memo the markdown parse on the raw content. Without this the per-second
@@ -433,17 +444,23 @@ const LedgerCard = memo(function LedgerCard({
   // (potentially large) ledger every second.
   const body = useMemo(() => {
     if (!snap.content) return null;
+    // all_done guard: flip leftover GFM task boxes to checked so a terminally
+    // finished plan never shows an unchecked step (see the forceAllChecked
+    // comment at the call site). Only touches `- [ ]` markers, nothing else.
+    const content = forceAllChecked
+      ? snap.content.replace(/^(\s*[-*]\s+)\[ \]/gm, "$1[x]")
+      : snap.content;
     return (
       <article className="prose prose-sm max-w-none font-body text-[13px] text-foreground-primary">
         <ReactMarkdown
           remarkPlugins={[remarkGfm]}
           components={{ a: MarkdownLink, input: MarkdownInput }}
         >
-          {stripLedgerHeading(snap.content)}
+          {stripLedgerHeading(content)}
         </ReactMarkdown>
       </article>
     );
-  }, [snap.content]);
+  }, [snap.content, forceAllChecked]);
   return (
     <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-border-subtle bg-surface-elevated">
       <div className="flex shrink-0 items-center gap-2 border-b border-border-subtle px-4 py-3">
