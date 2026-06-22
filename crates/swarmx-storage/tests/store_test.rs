@@ -1113,6 +1113,59 @@ async fn insert_and_list_round_trip_in_reply_to() {
 
 // ── blackboard ───────────────────────────────────────────────────────────
 
+/// Regression guard for the put-then-delete tombstone bug: `blackboard_paths_present`
+/// must report a key as ABSENT once its latest op is a `delete` — otherwise the
+/// only production caller (`list_agents` handoff detection) keeps a deleted
+/// handoff key "present", freezing a DAG node green and suppressing
+/// `handoff_missing`. Verified live (delete left the path's write row in the
+/// append-only ledger, so a bare `SELECT DISTINCT path` still matched).
+#[tokio::test]
+async fn paths_present_excludes_deleted_tombstones() {
+    let (_dir, store) = fresh_store().await;
+    let sig = "ws/main/reviewer.done";
+
+    // 1) write → present
+    store.insert_blackboard_op(bb(sig, "PASS", ts(1))).await.unwrap();
+    let present = store
+        .blackboard_paths_present(vec![sig.into()])
+        .await
+        .unwrap();
+    assert!(present.contains(sig), "written key must be present");
+
+    // 2) delete → ABSENT (the bug: it used to stay present)
+    store
+        .record_blackboard_delete(Some("u".into()), sig.into(), ts(2))
+        .await
+        .unwrap();
+    let present = store
+        .blackboard_paths_present(vec![sig.into()])
+        .await
+        .unwrap();
+    assert!(
+        !present.contains(sig),
+        "deleted key must be absent (latest op is a delete tombstone)"
+    );
+
+    // 3) re-write after delete → present again (delete isn't permanent)
+    store.insert_blackboard_op(bb(sig, "PASS again", ts(3))).await.unwrap();
+    let present = store
+        .blackboard_paths_present(vec![sig.into()])
+        .await
+        .unwrap();
+    assert!(
+        present.contains(sig),
+        "re-written key must be present again after a prior delete"
+    );
+
+    // 4) a never-written key is absent; a multi-key probe returns only live ones
+    let present = store
+        .blackboard_paths_present(vec![sig.into(), "ws/main/never.done".into()])
+        .await
+        .unwrap();
+    assert!(present.contains(sig));
+    assert!(!present.contains("ws/main/never.done"));
+}
+
 #[tokio::test]
 async fn blackboard_insert_and_history() {
     let (_dir, store) = fresh_store().await;

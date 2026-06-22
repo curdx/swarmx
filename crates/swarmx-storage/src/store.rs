@@ -1992,8 +1992,24 @@ impl Store {
                     let mut present = std::collections::HashSet::new();
                     for chunk in paths.chunks(CHUNK) {
                         let placeholders = vec!["?"; chunk.len()].join(",");
+                        // "Present" = the path's LATEST op is not a delete
+                        // tombstone. A bare `SELECT DISTINCT path` would count a
+                        // put-then-deleted key as present (its write row lingers
+                        // in this append-only ledger forever), so a handoff key
+                        // the user deleted via the blackboard panel would keep a
+                        // DAG node green / suppress `handoff_missing` even though
+                        // the deliverable is gone. Take MAX(id) per path (latest
+                        // row) and exclude `op = 'delete'` — same semantics as
+                        // `list_blackboard_paths` (routes/swarm.rs) and the
+                        // readiness gate, so "does this key exist" has ONE
+                        // definition across the codebase. idx_blackboard_path_id
+                        // (path, id) serves the grouped MAX(id) lookup.
                         let sql = format!(
-                            "SELECT DISTINCT path FROM blackboard_ops WHERE path IN ({placeholders})"
+                            "SELECT b.path FROM blackboard_ops b \
+                             JOIN (SELECT path, MAX(id) AS mid FROM blackboard_ops \
+                                   WHERE path IN ({placeholders}) GROUP BY path) m \
+                               ON b.id = m.mid \
+                             WHERE b.op != 'delete'"
                         );
                         let mut stmt = conn.prepare(&sql)?;
                         let binds: Vec<rusqlite::types::Value> =
