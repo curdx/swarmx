@@ -29,7 +29,7 @@ import type { AgentInfo, RecordingInfo } from "../../../api/types";
 import { useSwarmFeed } from "../../../hooks/useSwarmFeed";
 import { Button } from "@/components/ui/button";
 import { AgentChip } from "@/components/agent/AgentChip";
-import { resolveRole } from "@/lib/agent";
+import { resolveRole, roleDisplayName } from "@/lib/agent";
 import { cn } from "@/lib/cn";
 import { useWorkspaceContext } from "../Shell";
 
@@ -255,7 +255,7 @@ export default function ReplaysView() {
                 onClick={() => setActiveTag(tag)}
                 className="h-8 shrink-0 rounded-full"
               >
-                {tag === "all" ? t("replays.tagAll") : tag}
+                {tag === "all" ? t("replays.tagAll") : roleDisplayName(tag)}
               </Button>
             );
           })}
