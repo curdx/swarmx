@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import { api } from "@/api/http";
 import type { GoalEvidenceRecord, GoalRecord, GoalStatus, ThreadInfo } from "@/api/types";
+import { fmtTokens } from "@/lib/format";
 import { WorkspacePicker } from "@/components/WorkspacePicker";
 import {
   Select,
@@ -77,9 +78,7 @@ function parseCriteria(input: string): string[] {
 
 function formatBudget(n: number | null): string {
   if (!n) return "—";
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
-  return String(n);
+  return fmtTokens(n);
 }
 
 export default function GoalsRoute() {

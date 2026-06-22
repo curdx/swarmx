@@ -23,6 +23,7 @@ import { useTranslation } from "react-i18next";
 import { Loader2, RefreshCw, RotateCcw, Save } from "lucide-react";
 import { api, ApiError } from "@/api/http";
 import { roleDisplayName } from "@/lib/agent";
+import { fmtTokens } from "@/lib/format";
 import { toast } from "@/lib/toast";
 import type {
   UsageAgentRow,
@@ -38,11 +39,6 @@ import {
   type ConfirmActionState,
 } from "@/components/ConfirmActionDialog";
 
-function fmtTokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
-  return String(n);
-}
 function fmtCost(n: number): string {
   if (n === 0) return "$0";
   if (n < 0.01) return "<$0.01";

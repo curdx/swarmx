@@ -1,4 +1,5 @@
 import { useTranslation } from "react-i18next";
+import { fmtTokens } from "@/lib/format";
 import {
   ResponsiveContainer,
   BarChart,
@@ -12,12 +13,6 @@ import {
 export type DayDatum = { day: string; tokens: number; input: number; output: number };
 
 const INITIAL_CHART_SIZE = { width: 640, height: 168 };
-
-function fmtTokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
-  return String(n);
-}
 
 function fmtDay(day: string): string {
   const p = day.split("-");
