@@ -498,6 +498,21 @@ export function WorkspaceList({
   // expanded (a fresh id is absent from the set), so newly-attached deps are
   // visible without a click.
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  // Filter the workspace list by name. The search box only appears once the
+  // list is long enough to be a chore to scan (>= SEARCH_THRESHOLD); below that
+  // it would just be chrome. Matching is case-insensitive substring on the
+  // display name. The ACTIVE workspace is always kept visible even if it
+  // doesn't match, so filtering never hides the room you're currently in.
+  const SEARCH_THRESHOLD = 6;
+  const [wsQuery, setWsQuery] = useState("");
+  const showWsSearch = workspaces.length >= SEARCH_THRESHOLD;
+  const wsQ = wsQuery.trim().toLowerCase();
+  const visibleWorkspaces =
+    showWsSearch && wsQ
+      ? workspaces.filter(
+          (ws) => ws.id === activeId || ws.name.toLowerCase().includes(wsQ),
+        )
+      : workspaces;
   const toggleCollapsed = (id: string) =>
     setCollapsed((prev) => {
       const next = new Set(prev);
@@ -531,6 +546,18 @@ export function WorkspaceList({
           <TooltipContent side="bottom">{t("chat.newWorkspace")}</TooltipContent>
         </Tooltip>
       </div>
+      {showWsSearch && (
+        <div className="px-2">
+          <Input
+            type="search"
+            value={wsQuery}
+            onChange={(e) => setWsQuery(e.target.value)}
+            placeholder={t("chat.searchWorkspaces", "搜索工作空间…")}
+            aria-label={t("chat.searchWorkspaces", "搜索工作空间…")}
+            className="h-8 text-[13px]"
+          />
+        </div>
+      )}
       <nav className="flex flex-col gap-0.5 overflow-y-auto">
         {isLoading && (
           <div className="mx-2 rounded-lg border border-border-subtle bg-surface-elevated px-3 py-3">
@@ -556,7 +583,12 @@ export function WorkspaceList({
             </p>
           )
         )}
-        {workspaces.map((ws) => {
+        {showWsSearch && wsQ && visibleWorkspaces.length === 0 && (
+          <p className="mx-3 mt-2 font-caption text-[11px] leading-relaxed text-foreground-tertiary">
+            {t("chat.noWorkspaceMatch", "没有匹配的工作空间")}
+          </p>
+        )}
+        {visibleWorkspaces.map((ws) => {
           const active = ws.id === activeId;
           const hasRoots = ws.roots.length > 0;
           const expanded = hasRoots && !collapsed.has(ws.id);

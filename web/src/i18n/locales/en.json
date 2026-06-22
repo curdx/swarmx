@@ -494,6 +494,8 @@
       "setupEngine": "Install an AI engine"
     },
     "workspaces": "Workspaces",
+    "searchWorkspaces": "Search workspaces…",
+    "noWorkspaceMatch": "No matching workspaces",
     "newWorkspace": "New workspace",
     "noActiveAgents": "No active agents · go to",
     "emptyStateTitle": "Create your first workspace",

@@ -494,6 +494,8 @@
       "setupEngine": "去安装 AI 引擎"
     },
     "workspaces": "工作空间",
+    "searchWorkspaces": "搜索工作空间…",
+    "noWorkspaceMatch": "没有匹配的工作空间",
     "newWorkspace": "新建工作空间",
     "noActiveAgents": "暂无活跃 agent · 去",
     "emptyStateTitle": "新建一个工作空间",
