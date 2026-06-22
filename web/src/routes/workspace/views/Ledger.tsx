@@ -158,6 +158,37 @@ export default function LedgerView() {
     }
   }, [keyPrefix]);
 
+  // Incremental single-key reload, used by the event path so a worker
+  // heartbeat doesn't trigger a full N+1 re-fetch of every breadcrumb. The
+  // `blackboard_changed` event carries the exact path + op, so we read JUST
+  // that one key and upsert/remove it. `op === "delete"` drops the row.
+  const suffix = ".progress.md";
+  const applyBreadcrumb = useCallback(
+    async (path: string, op: string) => {
+      const role = path.slice(keyPrefix.length, -suffix.length);
+      if (op === "delete") {
+        if (mountedRef.current) {
+          setBreadcrumbs((prev) => prev.filter((b) => b.role !== role));
+        }
+        return;
+      }
+      try {
+        const snap = (await api.readBlackboard(path)) as BlackboardSnapshot | null;
+        if (!snap || !mountedRef.current) return;
+        const row = { role, content: snap.content.trim(), at: snap.at };
+        setBreadcrumbs((prev) => {
+          const next = prev.filter((b) => b.role !== role);
+          next.push(row);
+          next.sort((a, b) => b.at - a.at); // newest first
+          return next;
+        });
+      } catch {
+        // a transient read failure just leaves the prior row in place
+      }
+    },
+    [keyPrefix],
+  );
+
   const refresh = useCallback(async () => {
     setRefreshing(true);
     try {
@@ -233,7 +264,43 @@ export default function LedgerView() {
 
   // 监听 blackboard_changed —— orchestrator 写 ledger 时立即重拉,
   // 别等用户手动 refresh。
+  //
+  // Incremental dispatch (was: full N+1 refresh on EVERY event):
+  //   - a ledger key change reloads JUST that one ledger snapshot;
+  //   - a single breadcrumb change upserts/removes JUST that row;
+  // so a worker heartbeat costs 1 read, not `1 + 2 + N`. A trailing debounce
+  // (80ms) coalesces the burst the orchestrator emits when it writes
+  // task + progress + several assignments in one turn. The id-equality guard
+  // still drops exact-duplicate redeliveries.
   const lastEventIdRef = useRef<number>(0);
+  const pendingRef = useRef<{ ledgers: Set<string>; crumbs: Map<string, string> }>(
+    { ledgers: new Set(), crumbs: new Map() },
+  );
+  const debounceRef = useRef<number | null>(null);
+  const flushPending = useCallback(() => {
+    const { ledgers, crumbs } = pendingRef.current;
+    pendingRef.current = { ledgers: new Set(), crumbs: new Map() };
+    for (const key of ledgers) {
+      const setter = key === taskKey ? setTask : setProgress;
+      // Reuse loadOne's single-key read by faking a one-entry "present" list.
+      void loadOne(key, [{ path: key } as BlackboardEntry], setter);
+    }
+    for (const [path, op] of crumbs) {
+      void applyBreadcrumb(path, op);
+    }
+  }, [taskKey, loadOne, applyBreadcrumb]);
+  const scheduleFlush = useCallback(() => {
+    if (debounceRef.current != null) window.clearTimeout(debounceRef.current);
+    debounceRef.current = window.setTimeout(() => {
+      debounceRef.current = null;
+      flushPending();
+    }, 80);
+  }, [flushPending]);
+  useEffect(() => {
+    return () => {
+      if (debounceRef.current != null) window.clearTimeout(debounceRef.current);
+    };
+  }, []);
   useSwarmFeed({
     onEvent: (ev: SwarmEvent) => {
       if (ev.type !== "blackboard_changed") return;
@@ -243,7 +310,9 @@ export default function LedgerView() {
         ev.path.startsWith(keyPrefix) && ev.path.endsWith(".progress.md");
       if (!isLedger && !isBreadcrumb) return;
       lastEventIdRef.current = ev.id;
-      refresh();
+      if (isLedger) pendingRef.current.ledgers.add(ev.path);
+      else pendingRef.current.crumbs.set(ev.path, ev.op);
+      scheduleFlush();
     },
     onReconnect: () => refresh(),
   });
