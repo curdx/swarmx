@@ -676,7 +676,20 @@ export function WorkspaceList({
                       </span>
                     )}
                   </span>
-                  <span className="self-start font-caption text-[10px] font-semibold text-foreground-tertiary">
+                  <span
+                    title={t("chat.workspaceStatAgents", { count: ws.members.length })}
+                    aria-label={t("chat.workspaceStatAgents", { count: ws.members.length })}
+                    className={cn(
+                      "self-start font-caption text-[10px] font-semibold tabular-nums",
+                      // The bare number was ambiguous (read as an unread count);
+                      // the tooltip/aria now name it as the live-agent count. Dim
+                      // it further at 0 so a sidebar full of idle workspaces reads
+                      // as quiet rather than a column of attention-grabbing zeros.
+                      ws.members.length > 0
+                        ? "text-foreground-secondary"
+                        : "text-foreground-tertiary/50",
+                    )}
+                  >
                     {ws.members.length}
                   </span>
                 </NavLink>
