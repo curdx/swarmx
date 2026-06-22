@@ -69,6 +69,23 @@ export function roleDisplayName(role: string | null | undefined): string {
   if (r === "orchestrator" || r === "captain" || r === "self") {
     return i18n.t("chat.role.captain", { defaultValue: "队长" });
   }
+  // Built-in worker roles get a localized label so the DAG / chips / member
+  // list don't surface raw English slugs in a Chinese UI. Keys are the role
+  // ids shipped in roles/*.md; the English name stays the i18n default so an
+  // untranslated locale still reads sensibly. Unknown (custom) roles fall
+  // through to the backend-sent label. Color + avatar initial still key off
+  // the raw slug, so theming is untouched.
+  const KNOWN: Record<string, { key: string; en: string }> = {
+    reviewer: { key: "chat.role.reviewer", en: "Code Reviewer" },
+    researcher: { key: "chat.role.researcher", en: "Researcher" },
+    "docs-writer": { key: "chat.role.docsWriter", en: "Docs Writer" },
+    backend: { key: "chat.role.backend", en: "Backend Engineer" },
+    frontend: { key: "chat.role.frontend", en: "Frontend Engineer" },
+    "test-runner": { key: "chat.role.testRunner", en: "Test Runner" },
+    fixer: { key: "chat.role.fixer", en: "Fixer" },
+  };
+  const hit = KNOWN[r];
+  if (hit) return i18n.t(hit.key, { defaultValue: hit.en });
   return role ?? "agent";
 }
 

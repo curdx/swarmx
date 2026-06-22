@@ -612,7 +612,14 @@
     "paused": "Paused",
     "role": {
       "captain": "Captain",
-      "member": "Member"
+      "member": "Member",
+      "reviewer": "Code Reviewer",
+      "researcher": "Researcher",
+      "docsWriter": "Docs Writer",
+      "backend": "Backend Engineer",
+      "frontend": "Frontend Engineer",
+      "testRunner": "Test Runner",
+      "fixer": "Fixer"
     },
     "ago": {
       "seconds": "{{n}}s ago",

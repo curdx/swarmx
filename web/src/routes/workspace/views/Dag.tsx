@@ -61,7 +61,6 @@ import {
 import {
   deriveHandoffEdges,
   deriveSpawnEdges,
-  liveAgents,
 } from "@/lib/dagEdgeDerivation";
 import { useState } from "react";
 
@@ -168,11 +167,18 @@ interface CanvasProps {
 
 function Canvas({ agents, bbAt, selectedId, onSelect, showMinimap, focusNonce }: CanvasProps) {
   const { t } = useTranslation();
-  const live = useMemo(() => liveAgents(agents), [agents]);
-
+  // Draw the FULL roster (live + already-exited), not just live. Workers are
+  // ephemeral by design — they deliver a `*.done` and get killed (the
+  // Magentic-One / Anthropic orchestrator-worker model). If the canvas only
+  // painted live agents, a completed swarm collapsed back to a lone
+  // orchestrator the instant its workers finished, erasing the very topology
+  // the graph exists to show. Keeping exited nodes (rendered dimmed + a "done"
+  // dot by AgentNode) preserves "what team just ran" without keeping any
+  // process alive. Edges derive from the full set so a dead parent still
+  // anchors its children and a completed handoff still renders.
   const edges = useMemo<Edge[]>(() => {
-    const handoff = deriveHandoffEdges(live, bbAt);
-    const spawn = deriveSpawnEdges(live);
+    const handoff = deriveHandoffEdges(agents, bbAt);
+    const spawn = deriveSpawnEdges(agents);
     const handoffEdges: Edge[] = handoff.map((e, i) => ({
       id: `h-${i}-${e.producerId}-${e.dependentId}`,
       source: e.producerId,
@@ -221,17 +227,20 @@ function Canvas({ agents, bbAt, selectedId, onSelect, showMinimap, focusNonce }:
       },
     }));
     return [...spawnEdges, ...handoffEdges];
-  }, [live, bbAt]);
+  }, [agents, bbAt]);
 
   const nodes = useMemo<Node[]>(() => {
-    const raw: Node[] = live.map((a) => ({
+    // Full roster so exited workers stay on the canvas as dimmed "done"
+    // nodes (see the Canvas-level comment). `live` is still derived above for
+    // any live-only consumers, but the drawn node set is the whole team.
+    const raw: Node[] = agents.map((a) => ({
       id: a.agent_id,
       type: "agent",
       position: { x: 0, y: 0 },
       data: { info: a, selected: a.agent_id === selectedId },
     }));
     return layout(raw, edges);
-  }, [live, edges, selectedId]);
+  }, [agents, edges, selectedId]);
 
   const flow = useReactFlow();
   useEffect(() => {
@@ -481,6 +490,19 @@ export default function DagView() {
         ? liveAgents
         : liveAgents.filter((a) => a.role.toLowerCase() === roleFilter),
     [liveAgents, roleFilter],
+  );
+
+  // Canvas roster: thread-scoped + role-filtered like `filteredAgents`, but it
+  // KEEPS exited agents (no live-only filter). The left member list stays
+  // live-only (operators act on live agents); the graph shows the full team
+  // including finished workers as dimmed "done" nodes, so an ephemeral swarm
+  // that already delivered doesn't collapse back to a lone orchestrator.
+  const canvasAgents = useMemo(
+    () =>
+      roleFilter === "all"
+        ? agents
+        : agents.filter((a) => a.role.toLowerCase() === roleFilter),
+    [agents, roleFilter],
   );
 
   const selected = useMemo(
@@ -832,14 +854,15 @@ export default function DagView() {
         ) : (
           <ReactFlowProvider>
             <Canvas
-              // P2: role 过滤同时作用于画布,与左侧成员列表语义一致 ——
-              // 过去只过列表、画布照画全部,看起来像过滤器坏了。filteredAgents
-              // 已是 live-only + 按 role 过滤的集合。
-              agents={filteredAgents}
+              // Role filter applies to the canvas too (parity with the left
+              // member list). Unlike the list, this set KEEPS exited agents so
+              // finished ephemeral workers stay visible as dimmed "done" nodes
+              // instead of vanishing the moment they deliver.
+              agents={canvasAgents}
               bbAt={bbAt}
               selectedId={selectedId}
               onSelect={setSelectedId}
-              showMinimap={filteredAgents.length > 4}
+              showMinimap={canvasAgents.length > 4}
               focusNonce={focusNonce}
             />
           </ReactFlowProvider>

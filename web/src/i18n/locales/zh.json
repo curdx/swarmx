@@ -612,7 +612,14 @@
     "paused": "已暂停",
     "role": {
       "captain": "队长",
-      "member": "成员"
+      "member": "成员",
+      "reviewer": "代码审查",
+      "researcher": "研究员",
+      "docsWriter": "文档撰写",
+      "backend": "后端工程师",
+      "frontend": "前端工程师",
+      "testRunner": "测试工程师",
+      "fixer": "修复工程师"
     },
     "ago": {
       "seconds": "{{n}}s 前",
