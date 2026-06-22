@@ -374,7 +374,7 @@
       "appName": "swarmx",
       "version": "版本 v{{v}}",
       "repo": "仓库",
-      "repoUrl": "github.com/curdx/swarmx-core",
+      "repoUrl": "github.com/curdx/swarmx",
       "endpointTitle": "后端地址",
       "endpointHint": "本地 swarmx-server 监听的回环端口（loopback only）",
       "cratesTitle": "Rust crate 列表",

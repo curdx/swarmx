@@ -981,8 +981,8 @@ mod tests {
     #[test]
     fn encode_cwd_matches_claude_rule() {
         assert_eq!(
-            encode_cwd(Path::new("/Users/wdx/opc/swarmx-core")),
-            "-Users-wdx-opc-swarmx-core"
+            encode_cwd(Path::new("/Users/wdx/opc/swarmx")),
+            "-Users-wdx-opc-swarmx"
         );
         // `/.swarmx` → `--swarmx` (both `/` and `.` map to `-`).
         assert_eq!(

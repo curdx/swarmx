@@ -374,7 +374,7 @@
       "appName": "swarmx",
       "version": "Version v{{v}}",
       "repo": "Repository",
-      "repoUrl": "github.com/curdx/swarmx-core",
+      "repoUrl": "github.com/curdx/swarmx",
       "endpointTitle": "Backend endpoint",
       "endpointHint": "Loopback port swarmx-server listens on (localhost only)",
       "cratesTitle": "Rust crates",
