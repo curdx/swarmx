@@ -107,6 +107,10 @@ export interface ShellOutletContext {
   /** Historical id set (alive + killed) of agents in the ACTIVE direction.
    *  MessagesPanel filters by it so each direction is a self-contained room. */
   threadAgentIds: string[];
+  /** Agents in the active direction that EXITED without delivering their
+   *  declared handoff (server-computed `handoff_missing`). Empty in the common
+   *  healthy case. The chat shows a quiet, actionable banner when non-empty. */
+  handoffMissingAgents: AgentInfo[];
   /** Append-only bounded buffer of live swarm messages. Children merge by id —
    *  never a single slot (batched arrivals would overwrite all but the last). */
   liveMessages: MessageRecord[];
@@ -198,6 +202,7 @@ export default function WorkspaceShell() {
     workspaceAgentIds,
     threadAgentIds,
     threadMembers,
+    handoffMissingAgents,
     liveMessages,
     liveRead,
     agentStateById,
@@ -529,6 +534,7 @@ export default function WorkspaceShell() {
     threadSlug: activeThreadSlug,
     activeMembers: activeWs.members,
     threadMembers,
+    handoffMissingAgents,
     allAliveAgents,
     workspaceAgentIds,
     threadAgentIds,

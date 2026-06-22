@@ -121,6 +121,10 @@ interface Props {
   /** All agents alive across every workspace; drives the "X is responding"
    *  pending-bubble inference. Defaults to activeMembers when absent. */
   allAliveAgents?: AgentInfo[];
+  /** Active-direction agents that exited without delivering their declared
+   *  handoff (server-computed `handoff_missing`). Drives the premature-handoff
+   *  banner — empty in the healthy case so nothing renders. */
+  handoffMissingAgents?: AgentInfo[];
   /** Agent ids that historically belonged to the active workspace (live +
    *  killed). When provided, only messages whose from/to hits this set are
    *  rendered — so each workspace is a self-contained chat room. Omitting it
@@ -211,6 +215,7 @@ export function MessagesPanel({
   unreadByFrom,
   activeMembers = [],
   allAliveAgents,
+  handoffMissingAgents = [],
   workspaceAgentIds,
   workspaceSlug,
   activeThreadId,
@@ -1857,6 +1862,33 @@ export function MessagesPanel({
       {/* ── composer ─────────────────────────────────────────────────── */}
       <div className="flex shrink-0 flex-col gap-1.5 border-t border-border-subtle bg-surface-secondary px-3 py-2.5">
         <div className="mx-auto flex w-full flex-col gap-1.5 px-6">
+        {handoffMissingAgents.length > 0 && (
+          // Premature/silent-handoff guard (research direction B): a member left
+          // the turn without ever delivering its declared handoff key. Unlike a
+          // failed handoff there's no `.error` to notice, so without this the
+          // user could be misled by a finished-looking turn. Honest + actionable:
+          // name who dropped, and offer a one-tap nudge to send a follow-up.
+          <div className="flex items-start gap-2 self-stretch rounded-md border border-state-warning/40 bg-status-warning-soft px-2.5 py-1.5 text-[11px] text-state-warning">
+            <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
+            <div className="min-w-0 flex-1">
+              <p className="font-medium">
+                {t("chat.handoffMissing.title", {
+                  count: handoffMissingAgents.length,
+                  defaultValue: "{{count}} 个成员退出时没有交付结果",
+                })}
+              </p>
+              <p className="text-foreground-tertiary">
+                {handoffMissingAgents
+                  .map((a) => roleDisplayName(a.role))
+                  .join("、")}
+                {" · "}
+                {t("chat.handoffMissing.hint", {
+                  defaultValue: "黑板上没有它声明的交付，可发条消息让队长补救",
+                })}
+              </p>
+            </div>
+          </div>
+        )}
         {inReplyTo != null && (
           <div className="flex items-center gap-2 self-start rounded-md bg-accent-primary-soft px-2 py-1 text-[11px] text-accent-primary-deep">
             <CornerUpLeft className="size-3" />

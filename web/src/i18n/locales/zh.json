@@ -634,7 +634,11 @@
       "minutes": "{{n}}m 前",
       "hours": "{{n}}h 前"
     },
-    "typingIndicator": "AI 正在输入"
+    "typingIndicator": "AI 正在输入",
+    "handoffMissing": {
+      "title": "{{count}} 个成员退出时没有交付结果",
+      "hint": "黑板上没有它声明的交付，可发条消息让队长补救"
+    }
   },
   "dag": {
     "a11y": {

@@ -68,6 +68,9 @@ export interface WorkspaceShellData {
   threadAgentIds: string[];
   /** Alive agents in the active direction (subset of `activeWs.members`). */
   threadMembers: AgentInfo[];
+  /** Active-direction agents that exited without delivering their declared
+   *  handoff (`handoff_missing`). Empty in the healthy case. */
+  handoffMissingAgents: AgentInfo[];
   liveMessages: MessageRecord[];
   liveRead: LiveRead | null;
   /** Per-agent live state + latest activity, accumulated incrementally from
@@ -523,6 +526,19 @@ export function useWorkspaceShellData(
     [activeWs, agentInActiveThread],
   );
 
+  // Agents in THIS direction that exited without delivering their declared
+  // handoff (premature/silent handoff — neither success nor `.error` key on the
+  // blackboard; computed server-side as `handoff_missing`). These are gone from
+  // the alive lists, so we filter the full `agents` roster. The chat surfaces
+  // them so a finished-looking turn that silently dropped work doesn't mislead.
+  const handoffMissingAgents = useMemo(
+    () =>
+      activeWs
+        ? agents.filter((a) => a.handoff_missing && agentInActiveThread(a))
+        : [],
+    [agents, activeWs, agentInActiveThread],
+  );
+
   // Unread is scoped to the ACTIVE direction (not the whole workspace) so the
   // toolbar badge + per-member counts match the room the user is looking at —
   // a sibling direction's unread doesn't leak into this view. (For a main-only
@@ -600,6 +616,7 @@ export function useWorkspaceShellData(
     workspaceAgentIds,
     threadAgentIds,
     threadMembers,
+    handoffMissingAgents,
     liveMessages,
     liveRead,
     agentStateById,

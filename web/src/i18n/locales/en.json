@@ -634,7 +634,11 @@
       "minutes": "{{n}}m ago",
       "hours": "{{n}}h ago"
     },
-    "typingIndicator": "AI is typing"
+    "typingIndicator": "AI is typing",
+    "handoffMissing": {
+      "title": "{{count}} member(s) exited without delivering",
+      "hint": "no declared handoff on the blackboard — send a message to have the captain recover it"
+    }
   },
   "dag": {
     "a11y": {

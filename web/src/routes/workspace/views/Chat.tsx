@@ -448,6 +448,7 @@ export default function ChatView() {
     // Members + room are scoped to the ACTIVE direction (thread), not the whole
     // workspace, so each direction is its own self-contained chat.
     threadMembers: activeMembers,
+    handoffMissingAgents,
     allAliveAgents,
     threadAgentIds,
     liveMessages,
@@ -1079,6 +1080,7 @@ export default function ChatView() {
           unreadByFrom={activeWorkspaceUnread}
           activeMembers={activeMembers}
           allAliveAgents={allAliveAgents}
+          handoffMissingAgents={handoffMissingAgents}
           workspaceAgentIds={threadAgentIds}
           workspaceSlug={workspace.id}
           activeThreadId={activeThread?.id}

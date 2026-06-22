@@ -184,6 +184,16 @@ pub struct AgentInfo {
     /// agents with no handoff_signal or whose `.error` key was never written.
     #[serde(default)]
     pub handoff_failed: bool,
+    /// True when this agent EXITED without delivering its declared
+    /// `handoff_signal` at all — neither the success key NOR the `.error`
+    /// variant is on the blackboard. This is the "premature handoff / silent
+    /// drop" failure mode (it left, the work it promised never landed, and
+    /// unlike `handoff_failed` there isn't even an `.error` marker to notice).
+    /// Only set for agents that have a `handoff_signal`, have exited
+    /// (`killed_at` or `shim_exit`), and whose keys are both absent. Live
+    /// (still-running) agents are never flagged — they may yet deliver.
+    #[serde(default)]
+    pub handoff_missing: bool,
 }
 
 /// One tool-level activity row, served by `GET /api/agent/:id/activity`. Same

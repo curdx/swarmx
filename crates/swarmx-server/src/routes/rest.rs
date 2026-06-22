@@ -1079,6 +1079,7 @@ pub async fn list_agents(State(state): State<AppState>) -> impl IntoResponse {
                 last_error_at: None,
                 // Backfilled in the batch `.error` pass after the SQLite union.
                 handoff_failed: false,
+                handoff_missing: false,
             },
         );
     }
@@ -1130,6 +1131,7 @@ pub async fn list_agents(State(state): State<AppState>) -> impl IntoResponse {
                         last_error_at: row.last_error_at,
                         // Backfilled in the batch `.error` pass below.
                         handoff_failed: false,
+                        handoff_missing: false,
                     });
                 }
             }
@@ -1214,6 +1216,14 @@ pub async fn list_agents(State(state): State<AppState>) -> impl IntoResponse {
                     let success_present = present.contains(&it.handoff_signal);
                     // Failed only if it errored and was never (fallback-)delivered.
                     it.handoff_failed = error_present && !success_present;
+                    // Premature/silent handoff: the agent has EXITED but neither
+                    // the success key nor the `.error` marker exists — it left
+                    // without delivering anything. Live agents are exempt (they
+                    // may still deliver). This is the failure the chat surfaces
+                    // because, unlike handoff_failed, there's no `.error` trail.
+                    let exited = it.killed_at.is_some() || it.shim_exit.is_some();
+                    it.handoff_missing =
+                        exited && !success_present && !error_present;
                 }
             }
             Err(e) => {
