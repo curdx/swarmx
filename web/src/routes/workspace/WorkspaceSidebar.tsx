@@ -132,14 +132,14 @@ function SidebarSection({
   action,
   children,
 }: {
-  label: string;
+  label: ReactNode;
   action?: ReactNode;
   children: ReactNode;
 }) {
   return (
     <div className="flex flex-col gap-1.5">
       <div className="flex min-h-6 items-center gap-2 px-1">
-        <span className="flex-1 font-caption text-[10px] font-semibold uppercase tracking-[0.12em] text-foreground-tertiary">
+        <span className="flex flex-1 items-center font-caption text-[10px] font-semibold uppercase tracking-[0.12em] text-foreground-tertiary">
           {label}
         </span>
         {action}
@@ -520,6 +520,20 @@ export function WorkspaceList({
       else next.add(id);
       return next;
     });
+  // Source-context tree is collapsed-by-default per workspace: selecting a
+  // workspace otherwise balloons a 248px block (5+ collapsed rows tall) that
+  // shoves the rest of the list out of the 421px viewport. We track which
+  // workspaces have the tree EXPANDED (empty set = all collapsed), so the
+  // common "I just want to switch rooms" case stays compact while anyone who
+  // wants the tree expands it once and that workspace remembers.
+  const [srcTreeOpen, setSrcTreeOpen] = useState<Set<string>>(new Set());
+  const toggleSrcTree = (id: string) =>
+    setSrcTreeOpen((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
   const containerClass = mobile
     ? "flex h-full min-h-0 flex-col gap-3 bg-surface-secondary px-2 py-3"
     : "hidden w-[264px] shrink-0 flex-col gap-3 border-r border-border-subtle bg-surface-secondary px-2 py-3 lg:flex";
@@ -839,38 +853,65 @@ export function WorkspaceList({
                     </div>
                   </SidebarSection>
 
-                  {(!hasRoots || expanded) && (
-                    <SidebarSection
-                      label={t("chat.workspaceSources")}
-                      action={
-                        onRootsChanged && (
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <button
-                                type="button"
-                                onClick={() => setManageRoots(ws)}
-                                className="flex size-6 items-center justify-center rounded text-foreground-tertiary hover:bg-surface-tertiary hover:text-foreground-primary"
-                                aria-label={t("chat.manageRoots", { name: ws.name })}
-                              >
-                                <FolderPlus className="size-3.5" />
-                              </button>
-                            </TooltipTrigger>
-                            <TooltipContent side="right">
-                              {t("chat.manageRootsTooltip")}
-                            </TooltipContent>
-                          </Tooltip>
-                        )
-                      }
-                    >
-                      <div className="flex flex-col border-l border-border-subtle pl-1.5">
-                        <RootTree
-                          nodes={buildWorkspaceRootForest(ws)}
-                          collapsed={collapsed}
-                          toggle={toggleCollapsed}
-                        />
-                      </div>
-                    </SidebarSection>
-                  )}
+                  {(!hasRoots || expanded) &&
+                    (() => {
+                      const srcOpen = srcTreeOpen.has(ws.id);
+                      // roots excludes the primary project; +1 counts it in.
+                      const srcCount = ws.roots.length + 1;
+                      return (
+                        <SidebarSection
+                          label={
+                            <button
+                              type="button"
+                              onClick={() => toggleSrcTree(ws.id)}
+                              aria-expanded={srcOpen}
+                              className="flex flex-1 items-center gap-1 text-left hover:text-foreground-secondary"
+                            >
+                              {srcOpen ? (
+                                <ChevronDown className="size-3 shrink-0" />
+                              ) : (
+                                <ChevronRight className="size-3 shrink-0" />
+                              )}
+                              <span>{t("chat.workspaceSources")}</span>
+                              {!srcOpen && (
+                                <span className="font-normal normal-case tracking-normal text-foreground-tertiary/70">
+                                  {srcCount}
+                                </span>
+                              )}
+                            </button>
+                          }
+                          action={
+                            onRootsChanged && (
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <button
+                                    type="button"
+                                    onClick={() => setManageRoots(ws)}
+                                    className="flex size-6 items-center justify-center rounded text-foreground-tertiary hover:bg-surface-tertiary hover:text-foreground-primary"
+                                    aria-label={t("chat.manageRoots", { name: ws.name })}
+                                  >
+                                    <FolderPlus className="size-3.5" />
+                                  </button>
+                                </TooltipTrigger>
+                                <TooltipContent side="right">
+                                  {t("chat.manageRootsTooltip")}
+                                </TooltipContent>
+                              </Tooltip>
+                            )
+                          }
+                        >
+                          {srcOpen && (
+                            <div className="flex flex-col border-l border-border-subtle pl-1.5">
+                              <RootTree
+                                nodes={buildWorkspaceRootForest(ws)}
+                                collapsed={collapsed}
+                                toggle={toggleCollapsed}
+                              />
+                            </div>
+                          )}
+                        </SidebarSection>
+                      );
+                    })()}
                 </div>
               )}
             </div>
