@@ -1398,6 +1398,7 @@
     "agoSeconds": "{{n}}s 前",
     "agoMinutes": "{{n}}m 前",
     "agoHours": "{{n}}h 前",
+    "agoDays": "{{n}}d 前",
     "title": "AI 工作台账",
     "subtitle": "队长的思考过程都在这里。左侧是任务台账(目标 + 计划),右侧是进展状态。",
     "compactHint": "用小模型把台账压缩(保留关键信息,旧版进 op-log 可恢复)",

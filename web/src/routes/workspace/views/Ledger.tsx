@@ -37,7 +37,9 @@ function fmtAgo(at: number | null, nowTick: number, t: TFunction): string {
   const min = Math.floor(sec / 60);
   if (min < 60) return t("ledger.agoMinutes", { n: min, defaultValue: "{{n}}m 前" });
   const hr = Math.floor(min / 60);
-  return t("ledger.agoHours", { n: hr, defaultValue: "{{n}}h 前" });
+  if (hr < 24) return t("ledger.agoHours", { n: hr, defaultValue: "{{n}}h 前" });
+  const day = Math.floor(hr / 24);
+  return t("ledger.agoDays", { n: day, defaultValue: "{{n}}d 前" });
 }
 
 interface LedgerSnap {

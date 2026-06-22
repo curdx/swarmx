@@ -1398,6 +1398,7 @@
     "agoSeconds": "{{n}}s ago",
     "agoMinutes": "{{n}}m ago",
     "agoHours": "{{n}}h ago",
+    "agoDays": "{{n}}d ago",
     "title": "AI Work Ledger",
     "subtitle": "The captain's thinking lives here. Task ledger (goals + plan) on the left, progress on the right.",
     "compactHint": "Compact the ledger with a small model (keeps key info; the old version stays recoverable in the op-log)",
