@@ -1347,7 +1347,7 @@ export default function ChatView() {
                 >
                   <div className="flex items-baseline gap-2">
                     <span className="shrink-0 font-mono text-[10px] font-semibold text-accent-primary">
-                      {b.role}
+                      {roleDisplayName(b.role)}
                     </span>
                     <span className="ml-auto shrink-0 font-caption text-[9px] text-foreground-tertiary">
                       {b.ago}

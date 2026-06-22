@@ -78,7 +78,7 @@ import {
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/cn";
 import { toast } from "@/lib/toast";
-import { roleColorClass as roleColor } from "@/lib/agent";
+import { roleColorClass as roleColor, roleDisplayName } from "@/lib/agent";
 import { directionBase, directionSlugFromKey } from "@/lib/thread";
 
 type TabId = "terminal" | "activity" | "recordings" | "messages" | "context";
@@ -449,7 +449,7 @@ function Header({
         <div className="flex min-w-0 flex-1 flex-col gap-1">
           <div className="flex items-center gap-2">
             <span className="font-heading text-base font-bold text-foreground-primary">
-              {role}
+              {roleDisplayName(role)}
             </span>
             <span className="rounded bg-surface-cool-tint px-1.5 py-0.5 font-mono text-[10px] text-foreground-secondary">
               {cli}

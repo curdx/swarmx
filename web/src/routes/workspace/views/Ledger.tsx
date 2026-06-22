@@ -26,6 +26,7 @@ import type { BlackboardEntry, BlackboardSnapshot, SwarmEvent } from "../../../a
 import { useSwarmFeed } from "../../../hooks/useSwarmFeed";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
+import { roleDisplayName } from "@/lib/agent";
 import { useWorkspaceContext } from "../Shell";
 import { MarkdownInput, MarkdownLink } from "@/lib/markdownLinks";
 
@@ -389,7 +390,7 @@ function BreadcrumbsCard({
                 className="flex items-baseline gap-3 rounded-md bg-surface-tertiary px-3 py-2"
               >
                 <span className="shrink-0 font-mono text-[11px] font-semibold text-accent-primary">
-                  {r.role}
+                  {roleDisplayName(r.role)}
                 </span>
                 <span className="min-w-0 flex-1 truncate font-body text-[13px] text-foreground-primary">
                   {r.content}
