@@ -580,7 +580,7 @@ export type SwarmEvent =
       type: "thought_trace_event";
       trigger_message_id: number;
       agent_id: string;
-      steps: { phase: string; label: string; source: string; at: number }[];
+      steps: ThoughtTraceStep[];
       at: number;
     };
 
