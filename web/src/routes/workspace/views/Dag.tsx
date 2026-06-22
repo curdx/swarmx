@@ -107,6 +107,13 @@ function AgentNode({ data }: NodeProps<Node<AgentNodeData>>) {
           ? "border-accent-primary shadow-lg"
           : "border-border-subtle",
         paused && !data.selected && "border-dashed opacity-75",
+        // Exited/reaped workers stay on the canvas (full-roster) but are dimmed
+        // so they read as "done, no longer running" vs the bright live nodes —
+        // without this an ephemeral swarm that already delivered looks identical
+        // to one still working. The status dot already goes idle-gray; this
+        // fades the whole card. `selected` keeps full opacity so a clicked dead
+        // node is still clearly inspectable.
+        !live && !data.selected && "opacity-50",
       )}
     >
       <Handle type="target" position={Position.Top} className="!bg-foreground-tertiary" />
