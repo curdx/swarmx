@@ -17,6 +17,7 @@ import { Loader2 } from "lucide-react";
 import { api, ApiError } from "@/api/http";
 import type { TaskRow } from "@/api/types";
 import { cn } from "@/lib/cn";
+import { roleDisplayName } from "@/lib/agent";
 import { relTime } from "@/lib/relTime";
 import { toast } from "@/lib/toast";
 import { useToolWorkspaces } from "@/lib/useToolWorkspaces";
@@ -137,7 +138,10 @@ export default function TasksRoute() {
 
   const requestStatus = useCallback(
     (task: TaskRow, status: string | null) => {
-      const role = task.role_label || task.role_slug || task.agent_id.slice(0, 8);
+      const role =
+        (task.role_slug ? roleDisplayName(task.role_slug) : task.role_label) ||
+        task.role_label ||
+        task.agent_id.slice(0, 8);
       const actionKey = status ?? "reopen";
       setConfirm({
         title: t(`tasks.confirm.${actionKey}.title`, { role }),
@@ -250,7 +254,10 @@ function TaskCard({
 }) {
   // a11y: the same role label requestStatus uses, so an action's aria-label
   // names which card it acts on (e.g. "Mark done — orchestrator").
-  const role = task.role_label || task.role_slug || task.agent_id.slice(0, 8);
+  const role =
+    (task.role_slug ? roleDisplayName(task.role_slug) : task.role_label) ||
+    task.role_label ||
+    task.agent_id.slice(0, 8);
   return (
     <div className="flex flex-col gap-2 rounded-lg border border-border-subtle bg-surface-secondary p-3">
       <div className="flex items-center justify-between gap-2">
@@ -262,7 +269,7 @@ function TaskCard({
             />
           )}
           <span className="truncate font-medium text-sm text-foreground-primary" title={task.role_label}>
-            {task.role_label || task.role_slug || t("tasks.untitled")}
+            {role}
           </span>
         </span>
         {task.overridden && (
