@@ -57,6 +57,7 @@ import { cn } from "@/lib/cn";
 import {
   roleColorClass as roleColor,
   roleColorHex as roleHex,
+  roleDisplayName,
 } from "@/lib/agent";
 import {
   deriveHandoffEdges,
@@ -119,7 +120,7 @@ function AgentNode({ data }: NodeProps<Node<AgentNodeData>>) {
           {role.slice(0, 1).toUpperCase()}
         </span>
         <span className="flex-1 truncate font-heading text-sm font-semibold text-foreground-primary">
-          {role}
+          {roleDisplayName(role)}
         </span>
         {paused && (
           <Pause
@@ -758,7 +759,7 @@ export default function DagView() {
                       style={{ background: roleHex(r) }}
                     />
                   )}
-                  <span>{r === "all" ? t("common.all") : r}</span>
+                  <span>{r === "all" ? t("common.all") : roleDisplayName(r)}</span>
                 </button>
               ))}
             </div>
@@ -786,7 +787,7 @@ export default function DagView() {
                     )}
                   />
                   <span className="truncate font-heading text-xs text-foreground-primary">
-                    {a.role}
+                    {roleDisplayName(a.role)}
                   </span>
                   <span className="ml-auto truncate font-mono text-[10px] text-foreground-tertiary">
                     {a.agent_id.slice(-8)}
@@ -888,7 +889,7 @@ export default function DagView() {
               </span>
               <div className="flex min-w-0 flex-1 flex-col">
                 <span className="font-heading text-sm font-bold text-foreground-primary">
-                  {selected.role}
+                  {roleDisplayName(selected.role)}
                 </span>
                 <span className="truncate font-mono text-[10px] text-foreground-tertiary">
                   {selected.agent_id}

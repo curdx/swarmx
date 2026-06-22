@@ -70,21 +70,30 @@ export function roleDisplayName(role: string | null | undefined): string {
     return i18n.t("chat.role.captain", { defaultValue: "队长" });
   }
   // Built-in worker roles get a localized label so the DAG / chips / member
-  // list don't surface raw English slugs in a Chinese UI. Keys are the role
-  // ids shipped in roles/*.md; the English name stays the i18n default so an
-  // untranslated locale still reads sensibly. Unknown (custom) roles fall
-  // through to the backend-sent label. Color + avatar initial still key off
-  // the raw slug, so theming is untouched.
+  // list don't surface raw English slugs in a Chinese UI. The match is on a
+  // NORMALIZED key (lowercased, runs of whitespace/underscores collapsed to a
+  // single hyphen) because the role the orchestrator spawns a worker with is
+  // FREE-FORM TEXT, not a fixed slug — it routinely sends "Code Reviewer"
+  // (spaced, title-cased), not "reviewer". Normalizing + aliasing both spellings
+  // is what makes those labels actually localize. The English name stays the
+  // i18n default so an untranslated locale still reads sensibly; unknown
+  // (custom) roles fall through to the backend-sent label. Color + avatar
+  // initial still key off the raw slug, so theming is untouched.
+  const norm = r.replace(/[\s_]+/g, "-");
   const KNOWN: Record<string, { key: string; en: string }> = {
     reviewer: { key: "chat.role.reviewer", en: "Code Reviewer" },
+    "code-reviewer": { key: "chat.role.reviewer", en: "Code Reviewer" },
     researcher: { key: "chat.role.researcher", en: "Researcher" },
     "docs-writer": { key: "chat.role.docsWriter", en: "Docs Writer" },
+    "doc-writer": { key: "chat.role.docsWriter", en: "Docs Writer" },
     backend: { key: "chat.role.backend", en: "Backend Engineer" },
+    "backend-engineer": { key: "chat.role.backend", en: "Backend Engineer" },
     frontend: { key: "chat.role.frontend", en: "Frontend Engineer" },
+    "frontend-engineer": { key: "chat.role.frontend", en: "Frontend Engineer" },
     "test-runner": { key: "chat.role.testRunner", en: "Test Runner" },
     fixer: { key: "chat.role.fixer", en: "Fixer" },
   };
-  const hit = KNOWN[r];
+  const hit = KNOWN[norm];
   if (hit) return i18n.t(hit.key, { defaultValue: hit.en });
   return role ?? "agent";
 }
