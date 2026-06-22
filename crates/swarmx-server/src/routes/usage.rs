@@ -544,4 +544,31 @@ mod tests {
         assert!(rate_for("totally-made-up-model-xyz", &rules).is_none());
         assert!(cost_of(Some("totally-made-up-model-xyz"), 100, 100, 0, 0, &rules).is_none());
     }
+
+    #[test]
+    fn cost_of_computes_the_actual_money() {
+        // The pricing-LOOKUP tests above all verify which RATE matches a model,
+        // but none asserted the arithmetic that turns tokens+rate into dollars.
+        // Pin it against a hand-computed value so a swapped rate, a `+`→`*`
+        // typo, or a drifted /1e6 divisor can't slip through.
+        //
+        // opus: input 15, output 75, cache_read 1.5, cache_write 18.75 (USD/Mtok).
+        // 1M input + 1M output + 1M cache_read + 1M cache_write should be exactly
+        // the sum of the four rates: 15 + 75 + 1.5 + 18.75 = 110.25.
+        let rules = default_pricing_rules();
+        let c = cost_of(Some("claude-opus-4-1"), 1_000_000, 1_000_000, 1_000_000, 1_000_000, &rules)
+            .expect("opus is priced");
+        assert!((c - 110.25).abs() < 1e-9, "expected 110.25, got {c}");
+
+        // Each token class is weighted by ITS OWN rate, not lumped together:
+        // 2M output @75 = 150; nothing else. Catches an input/output swap.
+        let out_only = cost_of(Some("claude-opus-4-1"), 0, 2_000_000, 0, 0, &rules).unwrap();
+        assert!((out_only - 150.0).abs() < 1e-9, "expected 150.0, got {out_only}");
+
+        // Linear in token count and starts at zero.
+        let half = cost_of(Some("claude-opus-4-1"), 500_000, 0, 0, 0, &rules).unwrap();
+        assert!((half - 7.5).abs() < 1e-9, "expected 7.5, got {half}");
+        let zero = cost_of(Some("claude-opus-4-1"), 0, 0, 0, 0, &rules).unwrap();
+        assert_eq!(zero, 0.0);
+    }
 }

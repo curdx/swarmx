@@ -707,9 +707,22 @@ fn parse_usage(flavor: Flavor, v: &Value) -> Option<UsageDelta> {
             }
             let info = payload.get("info")?;
             let last = info.get("last_token_usage")?;
-            let input = usage_num(last, "input_tokens");
+            // Codex/OpenAI semantics DIFFER from Anthropic: `input_tokens` is the
+            // TOTAL prompt size and `cached_input_tokens` is a SUBSET already
+            // counted inside it (verified against real ~/.codex transcripts:
+            // input+output == total_tokens, cached <= input). cost_of treats
+            // input and cache_read as DISJOINT (it bills each at its own rate),
+            // matching Anthropic where they're reported separately. So we must
+            // subtract the cached portion out of `input` here — otherwise the
+            // cached tokens get billed twice (once at full input rate, once at
+            // the cache-read rate), badly overstating codex cost on the common
+            // high-cache-hit turn.
+            let raw_input = usage_num(last, "input_tokens");
             let output = usage_num(last, "output_tokens");
             let cache_read = usage_num(last, "cached_input_tokens");
+            // Saturating: never let a malformed line where cached > input
+            // produce a negative (and thus a negative cost).
+            let input = (raw_input - cache_read).max(0);
             if input == 0 && output == 0 && cache_read == 0 {
                 return None;
             }
@@ -1023,9 +1036,24 @@ mod tests {
         let v: Value = serde_json::from_str(line).unwrap();
         let u = parse_usage(Flavor::Codex, &v).expect("usage");
         // per-turn delta, NOT the cumulative total
-        assert_eq!(u.input, 80);
+        // Codex `input_tokens` (80) is the TOTAL prompt and INCLUDES the 5 cached
+        // tokens; we subtract them so input(75) and cache_read(5) are disjoint and
+        // cost_of doesn't bill the cached tokens twice. 75 + 5 == 80 (the raw total).
+        assert_eq!(u.input, 75);
         assert_eq!(u.output, 20);
         assert_eq!(u.cache_read, 5);
+    }
+
+    #[test]
+    fn codex_cached_never_exceeds_input_goes_negative() {
+        // Defensive: a malformed line where cached > input must clamp input to 0,
+        // never produce a negative token count (which would yield negative cost).
+        let line = r#"{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":5,"output_tokens":10,"cached_input_tokens":9999}}}}"#;
+        let v: Value = serde_json::from_str(line).unwrap();
+        let u = parse_usage(Flavor::Codex, &v).expect("usage");
+        assert_eq!(u.input, 0);
+        assert_eq!(u.output, 10);
+        assert_eq!(u.cache_read, 9999);
     }
 
     #[test]
