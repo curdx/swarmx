@@ -1,61 +1,40 @@
-# swarmx-core
+# swarmx
 
 <p align="center">
-  <strong>把真实的 <code>claude</code>、<code>codex</code> CLI 拉起在 PTY 里，串成蜂群，让它们互相发消息协作完成任务的浏览器面板。</strong>
+  <strong>一个浏览器仪表盘:在 PTY 下拉起真实的 <code>claude</code> / <code>codex</code> / <code>opencode</code> / <code>reasonix</code> CLI,把它们组成一个 swarm,让它们互相发消息、协作完成一个任务。</strong>
 </p>
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="MIT License"></a>
   <img src="https://img.shields.io/badge/Rust-1.83%2B-orange.svg" alt="Rust 1.83+">
   <img src="https://img.shields.io/badge/Node-22%2B-brightgreen.svg" alt="Node 22+">
-  <img src="https://img.shields.io/badge/状态-M1–M6c%20已交付-success" alt="status">
+  <img src="https://img.shields.io/badge/desktop-Tauri-9cf.svg" alt="Tauri">
   <a href="README.md"><img src="https://img.shields.io/badge/Lang-English-blue" alt="English"></a>
 </p>
 
-swarmx 直接拉起你磁盘上**订阅版的真实 CLI**——就是你已经登录过的 `claude`
-和 `codex` 二进制——把它们装进同一个浏览器标签页里。每个 agent 拿到一个
-PTY 后端的终端 pane（基于 xterm.js + WebGL 加速）。在这之上叠一层协调层，
-给 agent 提供 4 个独立运行时没有的能力：
+swarmx 在一个浏览器标签页(或 Tauri 桌面应用)里跑**真实的订阅模式 CLI** ——
+就是你磁盘上已有的 `claude`、`codex`、`opencode`、`reasonix` 二进制本身。
+每个 agent 有自己独立的、PTY 支撑的终端面板(xterm.js,WebGL 加速)。
+上面薄薄一层协调机制,给这些 agent 加上了它们单独运行时没有的能力:
 
-1. **共享收件箱**。任何 agent 都能调 `swarm_send_message` 给另一个 agent
-   按 id 发消息；接收方在它下一个 turn 边界通过 Stop hook 触发的
-   wake-check 自动看见。
-2. **共享黑板**。一个带 FTS5 全文搜索、版本历史、`/ws/swarm` 实时推送的
-   markdown KV 存储。任何 agent 编辑都广播给所有连着的客户端。
-3. **法术（Spells）+ 角色库**。一个文件声明多 agent 拓扑，`[[agents]]` 既
-   可以内联 `role/cli/system_prompt`（`critic-loop` 老风格），也可以用
-   `role_ref="<id>"` 从 `roles/<id>.md` SOP 模板继承（`fullstack-feature`
-   新风格）。内置 `critic-loop` 跑写手 → 批评家 → 编辑；`fullstack-feature`
-   在**同一个共享 monorepo workspace** 里同时拉起前端 / 后端 / 测试，三方
-   能直接 `git commit` 和读对方的代码。
-4. **推送式唤醒（M6b）**。角色用 `depends_on = ["<key>"]` 声明它在等哪个
-   黑板信号。该 key 一被写入，服务端立刻给订阅者推一条 mailbox note 并
-   往它 PTY 注入 `\x15…\r`——已经 stop 在空邮箱的 agent 也能被立刻唤醒，
-   无轮询、无死锁。
-5. **自然语言派活（M6c）**。`auto-dispatch` spell 包了一个 `planner`
-   角色，把你输入的中英文任务读一遍，调 `swarm_list_spells` 看可选
-   spell，挑最匹配的，sharpen 一下任务描述，调 `swarm_run_spell` 启动
-   下游 spell。顶栏一个紫色 `✨ Auto` 主按钮一键走这条路径。生产者 agent
-   中途 die 不再让下游永远等——服务端自动写 `<role>.error` 并直接唤醒
-   原 signal 的订阅者。swarm drawer 多了个 `graph` tab，SVG 画出 live
-   agent DAG，边按 wake state 染色（黄虚线=等中，绿实线=已完成），一眼
-   看出谁卡在等谁。
-6. **人在回路审批闸（M6c）**。`fullstack-feature-gated` spell 多了个
-   `architect` 角色：先写一份 `design.md`（技术栈、数据模型、API 接口、
-   UX 草图、待确认问题）然后 stop。FE/BE 同时被 spawn 但**被卡住**——
-   spell 给它们的 bootstrap prompt 加了 `system_prompt_prefix`，强制
-   先检查 `design.approved` 黑板 key，没批准就 idle。你（operator）在
-   浏览器 blackboard tab 看完 design.md、手动写一条 `design.approved`，
-   FE/BE 同毫秒被唤醒开始干活。新 DB 端到端实测 9.5 分钟全自动跑完，
-   除了 approve 那一下没有任何人手干预。
+1. **共享收件箱。** 任何 agent 都能调 `swarm_send_message` 按 id 给另一个 agent 发消息;
+   收件方在自己下一个回合边界、通过 Stop hook 驱动的 wake-check 看到这条消息。
+2. **共享黑板。** 一个带 FTS5 全文检索、版本化历史的 markdown KV 存储,任何 agent
+   改动它都会通过 `/ws/swarm` 实时推送通知。
+3. **唯一的对话入口 —— orchestrator。** 每个 workspace 会启动一个常驻 orchestrator agent。
+   你用自然语言跟它说话,它按任务规模自己决定:直接回答、自己动手干、还是用
+   `swarm_spawn_worker` 派 worker 出去。团队规模随任务伸缩(Magentic-One 模型),
+   而不是预先声明一套固定拓扑。
+4. **推送式唤醒。** 当某个 role `depends_on` 的黑板 key 被写入时,服务端既投递一条
+   mailbox note,又往订阅者的 PTY 注入 `\x15…\r` —— 这样一个已经空闲停下的 agent,
+   能在它的上游一落地就被当场唤醒。无轮询,无死锁。
 
-面板还会把每个 agent 的会话存成 asciicast v2 `.cast` 文件，在浏览器内用
-官方 `asciinema-player`（WASM 渲染、完整键盘控制）回放。
+仪表盘把每个会话都录成 asciicast v2 `.cast` 文件,并用官方的 `asciinema-player`
+(WASM 渲染,完整键盘控制)在浏览器里回放。
 
-swarmx **绝不读、绝不持久化** 你的 OAuth token。它只把 `HOME` 透传给子
-进程，让 claude / codex 自己去读 `~/.claude/` / `~/.codex/` 里你已经登录
-好的凭据。这是 `tmux` 复用 shell session 凭据的同款模型——详见
-[安全与凭据策略](#安全与凭据策略)。
+swarmx **从不读取、也从不持久化你的 OAuth token。** 它只把 `HOME` 透传给子进程,
+让每个工具复用你已经存在 `~/.claude/`、`~/.codex/` 里的凭据 —— 这跟 `tmux` 管理
+会话凭据的模型完全一样。详见 [安全与凭据](#安全与凭据)。
 
 ---
 
@@ -63,65 +42,56 @@ swarmx **绝不读、绝不持久化** 你的 OAuth token。它只把 `HOME` 透
 
 - [为什么做这个](#为什么做这个)
 - [功能特性](#功能特性)
-- [截图](#截图)
 - [快速开始](#快速开始)
 - [核心概念](#核心概念)
-- [演练: orchestrator 派活](#演练-orchestrator-派活)
 - [架构](#架构)
 - [配置参考](#配置参考)
 - [REST 与 WebSocket API](#rest-与-websocket-api)
-- [安全与凭据策略](#安全与凭据策略)
+- [安全与凭据](#安全与凭据)
+- [打包桌面应用](#打包桌面应用)
 - [常见问题](#常见问题)
-- [路线图](#路线图)
-- [致谢](#致谢)
 - [贡献](#贡献)
+- [致谢](#致谢)
 - [License](#license)
 
 ---
 
 ## 为什么做这个
 
-主流的"agent 编排"项目要么从零写一个 LLM 客户端（丢掉订阅版 CLI 那些
-"难用但你已经付了钱"的功能），要么在错误的层包了一下（比如 ACP，绕不开
-订阅版认证）。swarmx 是有意做成尽可能最薄的协调层——**不替换任何东西**：
+大多数「agent 编排」项目,要么从头重写一个 LLM 客户端(丢掉了订阅用户真正付费买到的
+官方 CLI 订阅鉴权),要么在错误的层去包 CLI(比如 ACP,没法复用订阅会话)。
+swarmx 刻意做成「能加协调、又不替换任何东西」的最简单的一层:
 
-- **底层是 PTY**。每个 agent 都是没改过的 `claude` / `codex`，跑在
-  `portable-pty` 里。OAuth、限流、套餐限制的行为和你直接在 shell 里敲
-  `claude` 一模一样。
-- **上层是 MCP**。蜂群消息通过 stdio JSON-RPC MCP 协议作为原生 tool 暴露
-  给 LLM——`swarmx-mcp` 是每个 agent 的 CLI 自己拉起的小子进程，stdio
-  通信。
-- **中间一个薄薄的 shim**。`swarmx-shim` 是 ~70 行 Rust，`execvp` 真实
-  CLI 同时发两个 OSC 序列（`ready` / `exit`）告诉 swarmx"我起来了 /
-  我退出了"。CLI 本身完全感知不到。
+- **最底层是 PTY。** 每个 agent 都是未经修改的 `claude` / `codex` / `opencode` /
+  `reasonix` 二进制,跑在 `portable-pty` 下。OAuth、限流、套餐限制的行为,跟你在
+  自己终端里敲这个命令完全一致。
+- **中间一层薄 shim。** `swarmx-shim` 是约 70 行 Rust,`execvp` 真 CLI 并发两个 OSC
+  序列(`ready` / `exit`)。CLI 根本不知道它存在。
+- **最上层是 MCP。** swarm 消息以原生 MCP 工具的形式暴露给 LLM,走 stdio JSON-RPC ——
+  `swarmx-mcp` 是个很小的二进制,每个 agent 的 CLI 把它作为子进程拉起、用 stdio 通信。
 
-整个抽象就这 3 层。其他一切——WebSocket 桥、录像、wake-check、法术加载
-器——都建在这 3 层之上，对 CLI 侧零额外要求。
+整个抽象就这么多。其余的一切 —— WebSocket 桥接、录制管线、wake-check、spell 加载器 ——
+都建在这三块之上,对 CLI 侧零新增要求。
+
+各引擎的差异都吸收在服务端的 per-CLI 适配器里
+(`crates/swarmx-server/src/cli/{claude,codex,opencode,reasonix}.rs`):
+opencode 当队长时走全屏 TUI + 它官方的 `/tui` HTTP 控制接口;reasonix 走
+`reasonix serve` 的 HTTP/SSE 而非 PTY。从仪表盘视角看,它们都只是 agent。
 
 ## 功能特性
 
 | | |
 |---|---|
-| **跑真实订阅版 CLI** | 拉起的就是你 `$PATH` 里那个 `claude` 和 `codex`。OAuth 复用你 `~/.claude/` / `~/.codex/` 已有凭据——swarmx 绝不读、绝不持久化 token。 |
-| **多 agent 网格** | 任意数量 agent，每个一个 pane，WebGL 加速。浏览器 WebGL context 数有限制（Chrome 16 / Safari 8），冷却池满了自动降级 DOM 渲染。 |
-| **蜂群消息** | `POST /api/message` 或 CLI 内 `swarm_send_message` tool 发消息，字段含 `from` / `to` / `kind` / `body` / 可选 `in_reply_to`。全部入 SQLite + FTS5。 |
-| **共享黑板** | `~/.swarmx/blackboard/` 下的 markdown 文件，每次写入是一条历史记录，FTS5 搜索、文件系统 watcher 直接编辑也能同步，`/ws/swarm` 实时推送变更。 |
-| **Turn 边界 wake-check** | claude 和 codex 的 Stop hook 都调 `swarmx-mcp wake-check`，未读 > 0 时 hook 返回 `decision:block` 让 agent 续 turn 读消息——0 轮询。 |
-| **黑板写入推送式唤醒（M6b）** | `WakeCoordinator` 订阅 `SwarmEvent::BlackboardChanged`。黑板 key 一被写入，所有声明了 `depends_on=["<key>"]` 的角色立即收到 `kind="wake"` mailbox note **同时**被注入 `\x15<msg>\r` 到 PTY——已经 stop 在空邮箱的 agent 也能被立刻拉起。补上 M5b wake-check（单次 Stop hook）无法唤醒已停止 agent 的空白。 |
-| **生产者死亡自动 fallback（M6c）** | 同一个 coordinator 还订阅 `SwarmEvent::AgentState{Exited}`。agent 死前没写出自己的 `handoff_signal` ⇒ 服务端写一条 `<role>.error`（JSON body 含 agent_id / role / signal / reason / at）**并**直接唤醒该 signal 的订阅者。下游 role prompt 已经按惯例查 `<role>.error`，看到就进入 upstream-failed 分支，不会再永久等。 |
-| **自然语言派活 + DAG 可视化（M6c）** | `auto-dispatch` 是一个单 agent spell，里面的 `planner` 角色调 `swarm_list_spells` + `swarm_run_spell` 自动选 spell 并启动。顶栏一个紫色 `✨ Auto` 主按钮默认走这条路径。swarm drawer 多 `graph` tab，SVG 画 live agent DAG，边按 wake state 染色。 |
-| **HITL 闸通过 `system_prompt_prefix`（M6c）** | Spell 可以在 role 原 SOP 之前注入一段 gate 段落（不改 role 模板）。`fullstack-feature-gated` 用这个让 FE/BE 每次 wake（含初次 bootstrap，单纯 `depends_on` 拦不住）都检查 `design.approved`。Operator 在 blackboard 编辑器手动写 approve key——不加新 endpoint、不加 UI 按钮。 |
-| **Codex 抗 bracketed-paste 的 wake 注入（M6c）** | `WakeCoordinator` 把 PTY wake 注入拆成 `\x15<text>` → 150 ms 间隔 → `\r`。Codex 0.130+ 的 Ratatui 把"含文本+\r 的单 chunk"当 paste 含换行处理（插入但不 submit）。中间这一停让 codex 退出 paste mode，最后的 `\r` 才被当成 typed Enter 触发提交。Claude 不受影响；跟 spell bootstrap inject 一贯就对 codex 工作的写法对齐。 |
-| **codex 首次启动信任弹窗自动确认** | codex 0.130+ 第一次看到新 hook 路径会弹"Hooks need review"，swarmx 服务端监控 PTY 输出自动按 `2 + Enter`，用户视觉无感。 |
-| **asciicast 录制 + 浏览器回放** | 每个 session 一个 `.cast` 文件，录像抽屉里点 ▶ 直接用官方 `asciinema-player`（WASM 渲染、全屏、跳进度）在 sidebar 内回放。 |
-| **法术（Spells）+ 角色库** | TOML front-matter + markdown body 声明多 agent 拓扑（`[[agents]]`）。每个 agent 块可以内联 `role/cli/system_prompt`（老风格，`critic-loop`），也可以用 `role_ref="<id>"` 从 `roles/<id>.md` SOP 模板继承（新风格，`fullstack-feature`）。`POST /api/spell/run` 解析合并，替换 `{task}` / `{<role>_id}` 占位符，注入每个 agent 的引导 prompt。 |
-| **共享 monorepo workspace** | spell 设 `shared_workspace = true` 时，三个 agent 共享同一 cwd，能直接读对方文件、`git commit` 到同一棵树——这是全栈流程的唯一合理姿势（FE 调用 BE 的 API、test agent 跑 e2e 同时测两端）。每 claude agent 一个独立 `--mcp-config` 文件保证身份不串台（绕开 `~/.claude.json` 按 cwd 当 key 的坑）。 |
-| **本地优先** | 只绑 `127.0.0.1:7777`，无鉴权（单用户）。除了 CLI 自己往各家 LLM provider 的请求，swarmx 不发任何对外网络请求。 |
-
-## 截图
-
-> _截图 / asciicast GIF 待补。在此之前请按 [快速开始](#快速开始)
-> 自己跑一遍，或参考 [60 秒演练](#演练-60-秒跑-critic-loop)。_
+| **真实订阅 CLI** | 拉起的就是你 `$PATH` 上那个 `claude` / `codex` / `opencode` / `reasonix` 二进制。OAuth 用你已有的 `~/.claude/`、`~/.codex/`… 凭据 —— swarmx 从不读取或持久化 token。 |
+| **多 agent 网格** | 可同时拉任意多个 agent,每个有自己的面板,xterm.js + WebGL 加速。一个冷却池把浏览器控制在 WebGL 上下文上限内,溢出时静默降级到 DOM。 |
+| **Orchestrator 派活** | 每个 workspace 启动一个常驻 orchestrator,在黑板上维护 `task.ledger.md` + `progress.ledger.md`,按需用 `swarm_spawn_worker` 派 worker(Magentic-One 模型 —— 团队随任务伸缩,无预声明拓扑)。 |
+| **swarm 消息** | `POST /api/message` 或 CLI 内的 `swarm_send_message` 工具,发出带 `from`、`to`、`kind`、`body` 和可选 `in_reply_to` 线程父级的消息。全部持久化到 SQLite + FTS5。 |
+| **共享黑板** | `~/.swarmx/blackboard/` 下的 markdown 文件,带 FTS5 检索、版本化历史(每次写都是一行),改动时 `/ws/swarm` 推事件。 |
+| **回合边界 wake-check** | Stop hook 调 `swarmx-mcp wake-check`;agent 若有未读则发 `decision:block` 续跑,让它在下一回合读收件箱 —— 零轮询。opencode 没有阻塞式 Stop hook,用插件给等价的唤醒。 |
+| **黑板写入触发的推送式唤醒** | `WakeCoordinator` 订阅 `SwarmEvent::BlackboardChanged`。某 key 被写时,所有 role 声明了 `depends_on=["<key>"]` 的 agent 在同一 tick 被唤醒:既落一条 `kind="wake"` mailbox note,又往订阅者 PTY 注入 `\x15<msg>\r` —— 把已经停下空闲的 agent 重新拉起。 |
+| **Directions(git worktree)** | 一个 workspace 可以把一条隔离的 *direction* fork 进它自己的 git worktree,让并行的工作互不冲突;ledger key 按 `workspace_id` + direction slug 命名空间隔离。 |
+| **会话录制** | 每个 PTY 会话录成 asciicast v2(`~/.swarmx/recordings/*.cast`),在浏览器里用 `asciinema-player` 回放。 |
+| **桌面应用** | 以 Tauri 应用形式发布,把 server、shim、MCP 三个二进制作为 sidecar 打进包。下载 → 安装 → 打开 → 直接用,全程零命令。 |
 
 ## 快速开始
 
@@ -129,464 +99,321 @@ swarmx **绝不读、绝不持久化** 你的 OAuth token。它只把 `HOME` 透
 
 | 工具 | 版本 | 用途 |
 |---|---|---|
-| Rust | 1.83+ | 工作区工具链（`rust-toolchain.toml` 锁定） |
+| Rust | 1.83+ | workspace 工具链(`rust-toolchain.toml` 钉死) |
 | Node | 22+ | Vite 开发服务器 / 生产构建 |
-| `claude` | 任意近期版本 | 至少跑过一次 `claude` 完成浏览器 OAuth |
-| `codex` | **0.132+** | 必须 0.132 及以上：0.132 才支持 `--dangerously-bypass-hook-trust`，没有这个 flag wake-check 跑不起来 |
+| `claude` | 任意较新版本 | 跑一次 `claude` 完成浏览器 OAuth 登录 |
+| `codex` | 0.132+ | 用 `codex login` 登录。**必须 0.132**,因为它才有 `--dangerously-bypass-hook-trust`,wake-check 循环要靠它才能自动触发。 |
+| `opencode` / `reasonix` | 可选 | 只有当你想拉这两种引擎时才需要。 |
 
-### 编译 & 启动
+### 编译 & 启动(开发)
 
 ```bash
-# 克隆仓库
-git clone https://github.com/curdx/swarmx-core.git
-cd swarmx-core
+# 克隆
+git clone https://github.com/curdx/swarmx.git
+cd swarmx
 
-# 一次构建所有 crate
+# 一次构建所有 crate(服务端启动需要 shim 二进制在场)
 cargo build --workspace
 cd web && npm install && cd ..
 
-# 终端 1：后端
+# 终端 1：后端(必须从仓库根目录跑,才能就近找到 spells/roles/cli-plugins)
 cargo run -p swarmx-server      # 监听 127.0.0.1:7777
 
-# 终端 2：前端（开发模式，带热更新）
-cd web && npm run dev             # vite 起在 5173，反代 /api 和 /ws 到 7777
+# 终端 2:前端(开发模式,带热更新)
+cd web && npm run dev           # vite 在 5173,代理 /api + /ws → 7777
 
 # 打开面板
 open http://localhost:5173
 ```
 
-如果要生产单端口部署（让 axum 自己 serve 静态资源），先跑
-`cd web && npm run build`，下次 `cargo run` 之后直接打开
-`http://127.0.0.1:7777` 就行。
+想要生产式的单端口部署(axum 自己 serve 构建好的 bundle),先 `cd web && npm run build`,
+然后下次 `cargo run` 后直接访问 `http://127.0.0.1:7777`。
 
 ### 第一次 spawn
 
-1. 顶部点 **+ Claude Code**，新出现一个 pane。如果是首次，在嵌入的终端
-   里完成 OAuth 流程，跟你在 shell 里跑 `claude` 完全一样。
-2. 点 **+ Codex CLI**。首次启动 codex 会弹 `Hooks need review` 对话框，
-   swarmx 的自动应答会在 ~500 毫秒内按掉，你直接进入 prompt。
-   （日志里能看到 `auto-answered codex Hooks-need-review dialog`。）
-3. 在任何一个 pane 里打字，确认 agent 能正常对话。
+1. 点击头部的 **+ Claude Code**。出现一个新面板;若是第一次,在内嵌终端里完成 OAuth,
+   跟你在 shell 里跑 `claude` 一模一样。
+2. 点击 **+ Codex CLI**。首次 codex 会弹一个 `Hooks need review` 对话框 —— swarmx 的
+   自动应答在约 500ms 内介入,你直接到达提示符。(可在服务端日志里看到
+   `auto-answered codex Hooks-need-review dialog`。)
+3. 在任一面板里敲个提示,确认 agent 能回话。
 
-### 接通蜂群
+### 跟你 workspace 的 orchestrator 对话
 
-右侧 **messages** 抽屉里：
+创建一个指向真实项目目录的 workspace。swarmx 会跑内置的 `spells/init.md`,在那个目录里
+spawn 一个 **orchestrator** agent(claude)。它扫描你的项目(约 30 秒),往黑板写
+`task.ledger.md` + `progress.ledger.md`,然后跟你打招呼。
 
-1. **to** 字段填一个 agent id。
-2. **body** 字段输入"what is your favorite color, briefly?"。
-3. 点 **send**。
-4. 在那个 agent 的 pane 里随便打个 prompt（比如 `say hi`）。
-5. 看：agent 跑完 `say hi` 这个 turn 后，Stop hook 触发
-   `swarmx-mcp wake-check`，看到 `unread=1`，让 agent 续一个 turn 调
-   `swarm_list_messages` 拿到消息再调 `swarm_send_message` 回复。回复
-   会出现在 messages 抽屉里，带正确的 `in_reply_to` 父链接。
+从此你只用自然语言跟它说话。orchestrator 按任务决定:直接回答、自己动手干、还是用
+`swarm_spawn_worker` 派一个或一群 worker —— 团队随任务伸缩(Magentic-One 模型),
+而不是预先分配一套固定拓扑。worker 在 swarm 抽屉里来来去去,orchestrator 常驻。
 
-### 跟工作空间的 orchestrator 对话
-
-swarmx 给每个工作空间一个统一入口：一个 **orchestrator** agent（claude），
-在你创建工作空间时自动拉起（内置的 `spells/init.md`）。它扫描你的项目
-（~30s），把 `task.ledger.md` + `progress.ledger.md` 写到黑板，然后跟你打招呼。
-
-之后你就用自然语言跟它对话。orchestrator 按任务决定：直接回答、自己动手，
-还是用 `swarm_spawn_worker` 派一个或多个 worker——按任务规模调度团队
-（Magentic-One 模型），而不是预分配固定拓扑。worker 在 swarm drawer 里来来去去，
-orchestrator 一直在。
-
-> 不再有"从下拉菜单选一个法术"这一步：早期预声明的多 agent 法术
-> （`critic-loop` / `fullstack-feature*` / `auto-dispatch`）已移除，改用这种
-> 运行时按需调度。仍在用的唯一法术见 `spells/init.md` 与 `roles/orchestrator.md`。
+> 这里没有「从下拉框选一个 spell」这一步。早先那批预声明的多 agent spell
+> (`critic-loop` / `fullstack-feature*` / `auto-dispatch`)已被这套运行时伸缩派活取代。
+> 现在唯一还发的 spell 是 `spells/init.md`;它的 prompt 见 `roles/orchestrator.md`。
+> 多 agent 机制(`role_ref` / `allow_cycles` / `shared_workspace`)仍完整实现并带单测,
+> 留作未来用。
 
 ## 核心概念
 
-| 概念 | 一句话定义 | 代码位置 |
+| 概念 | 一句话定义 | 在哪 |
 |---|---|---|
-| **Agent** | 一个跑在 PTY + shim + recorder 下的订阅版 CLI 进程。ID 形如 `<plugin>-<8 位 hex>`（例如 `claude-de332d7b`）。 | `swarmx-server::spawn`, `swarmx-pty` |
-| **Plugin** | `cli-plugins/<id>.toml`，声明怎么 spawn 这个 CLI：二进制、默认参数、就绪检测、MCP 注入方式、hook 安装开关。 | `cli-plugins/`, `swarmx-server::plugins` |
-| **Workspace** | 每个 agent 一个目录在 `~/.swarmx/workspaces/<agent_id>/`，里面装这个 agent 自己的 `.claude/` 或 `.codex/` 配置 override。pre-spawn 阶段写好这些文件让 CLI 一启动就认为是受信任的、已配置好的项目。 | `swarmx-server::pre_spawn` |
-| **Swarm message** | `messages` 表里的一行（SQLite），地址形如 `from_agent → to_agent`，可选 `in_reply_to`。通过 `POST /api/message` 或 `swarm_send_message` MCP tool 发送，`/ws/swarm` 广播。 | `swarmx-swarm`, `swarmx-storage` |
-| **Blackboard** | `<root>/<path>.md` 路径下的 markdown KV，全程版本化。读：`swarm_read_blackboard` / `GET /api/blackboard/...`；写：反方向。notify-debouncer 监听文件系统变更，外部直接编辑也能同步。 | `swarmx-swarm::watcher`, `swarmx-storage` |
-| **Wake-check** | `swarmx-mcp wake-check` 子命令。从 Stop hook 的 stdin JSON 解析 `agent_id`（优先用 spawn 注入的 `SWARMX_AGENT_ID` env，fallback 才是 cwd basename），调 `/api/message/unread_count`，未读 > 0 就输出 `{decision:"block", reason:"..."}`。**单次性**——只在 Stop 那一刻触发，不能唤醒已停止的 agent（那是 WakeCoordinator 的活）。`~/.swarmx/wake/<id>.json` 文件做滑动窗口节流。 | `swarmx-mcp::wake_check` |
-| **Spell** | `spells/<name>.md`，TOML front-matter 声明 `[[agents]]`。每个 agent 块可以内联 `role/cli/system_prompt` 或者用 `role_ref="<id>"` 从 `roles/<id>.md` 模板继承。`shared_workspace = true` 把 spawn 从"每 agent 一个目录"切到"共享同一个 cwd"。`POST /api/spell/run {name, task, workspace_dir?}` 拉起。 | `spells/`, `swarmx-server::spells` |
-| **Role** | `roles/<id>.md`——可被多个 spell 复用的 SOP 模板。带 `default_cli`、`artifact_paths`、`handoff_signal`、`depends_on` 和 `system_prompt_template`（含 `{task}` / `{<role>_id}` 占位符）。多个 spell 共用同一份 FE/BE/test prompt 不用复制粘贴。 | `roles/`, `swarmx-server::roles` |
-| **`depends_on` + WakeCoordinator（M6b）** | 角色声明它订阅哪些黑板 key。spell 启动时 `register_wake_subs` 在 `AppState` 里建 `Map<agent_id, Vec<key>>`。`WakeCoordinator` task 订阅 `Swarm::events_tx`，遇到 `BlackboardChanged{key}` 就给所有订阅者（排除 writer 自己）写一条 `kind="wake"` mailbox note 并往他们 PTY 注入 `\x15<msg>\r`。spawn 前先 BFS 检测 `depends_on` 循环。 | `swarmx-server::wake` |
-| **Shim** | `swarmx-shim`，~70 行二进制。`execvp` 真实 CLI 同时发 OSC `ready` / `exit` 序列，让 swarmx 0 轮询就能检测生命周期。 | `swarmx-shim` |
-| **MCP** | `swarmx-mcp`，stdio JSON-RPC 服务，给 LLM 暴露 `swarm_send_message` / `swarm_list_messages` / 黑板工具。pre-spawn 自动写到每个 agent 的 CLI 配置里，LLM 把它们当原生 tool 用。claude agent 额外拿一份独立的 `--mcp-config` 文件 `~/.swarmx/mcp/<agent_id>.json`，避免共享 workspace 下 `~/.claude.json` 里身份串台。 | `swarmx-mcp` |
-
-## 演练: orchestrator 派活
-
-```bash
-# 1. 拉起后端 + 前端
-cargo run -p swarmx-server &
-cd web && npm run dev &
-```
-
-2. 打开 web UI，创建一个指向真实项目目录的工作空间。swarmx 会跑内置的
-   `spells/init.md`，在该目录拉起一个 orchestrator（claude）。
-3. orchestrator pane 扫描仓库（~30s），把 `task.ledger.md` +
-   `progress.ledger.md` 写到黑板，然后跟你打招呼。
-4. 用自然语言输入任务。看它决定：小事自己答或自己做；大事拆开用
-   `swarm_spawn_worker` 派给 worker。每个 worker 出现在 swarm drawer，
-   手把通过 messages 抽屉和黑板流转。
-
-每一次手把都是架构驱动的——agent 的 Stop hook fire 出 `swarmx-mcp wake-check`，
-看到未读邮件或变更的黑板 key，续 turn 调 `swarm_list_messages` →
-`swarm_send_message`。没有轮询，除了首次引导之外没有人去戳 PTY。
+| **Agent** | 一个跑在 PTY + shim + recorder 下的订阅 CLI 进程,id 形如 `<plugin>-<8hex>`(如 `claude-de332d7b`)。 | `swarmx-server::spawn`、`swarmx-pty` |
+| **Plugin** | `cli-plugins/<id>.toml`,声明怎么拉一种 CLI:二进制、默认参数、就绪检测、MCP 注入方式、hook 开关。内置 `claude`、`codex`、`opencode`、`reasonix`。 | `cli-plugins/`、`swarmx-server::plugins` |
+| **Workspace** | swarm 操作的一个项目,承载 orchestrator、ledger 和派出的 worker。per-agent 的 CLI 配置覆盖落在 `~/.swarmx/`。 | `swarmx-server::routes::workspaces` |
+| **Direction** | workspace 内一条可选的隔离工作分支,背后是独立的 git worktree,让并行 direction 互不踩踏。 | `swarmx-server::worktree` |
+| **Orchestrator** | 每个 workspace 唯一的常驻 agent。跑 Magentic-One 双 ledger 循环:扫描 → 打招呼 → 在 workspace 生命周期内持续派活 / 干活 / 对话。 | `roles/orchestrator.md`、`spells/init.md` |
+| **swarm 消息** | `messages` 表(SQLite)里一行,寻址 `from_agent → to_agent`,可选 `in_reply_to`。经 `POST /api/message` 或 `swarm_send_message` 工具发出,在 `/ws/swarm` 广播。 | `swarmx-swarm`、`swarmx-storage` |
+| **黑板** | `<root>/<path>.md` 的 markdown KV,带完整历史。读用 `swarm_read_blackboard` / `GET /api/blackboard`,写用其反向接口。notify-debouncer 监听文件系统的直接编辑。 | `swarmx-swarm::watcher`、`swarmx-storage` |
+| **wake-check** | `swarmx-mcp wake-check` 子命令。读 Stop hook 传来的 stdin JSON,解析 `agent_id`,查未读数,有信则发 `{decision:"block", reason:"…"}`。每个 Stop 事件单次触发 —— 不重启已停下的 agent(那是 WakeCoordinator 的活)。 | `swarmx-mcp::wake_check` |
+| **WakeCoordinator** | role 用 `depends_on` 声明要订阅的黑板 key。`BlackboardChanged{key}` 时,给每个订阅者(写入者除外)落一条 `kind="wake"` mailbox note,**并**往其 PTY 注入 `\x15<msg>\r`。spawn 前先做环路检测。 | `swarmx-server::wake` |
+| **Spell** | `spells/<name>.md`,TOML front-matter 声明 `[[agents]]`。每个块要么内联 `role/cli/system_prompt`,要么用 `role_ref="<id>"` 继承一个 `roles/<id>.md` 模板。`shared_workspace = true` 把 spawn 从 per-agent 目录切到一个共享 cwd。今天只发 `init.md`。 | `spells/`、`swarmx-server::spells` |
+| **Role** | `roles/<id>.md` —— 可复用的 SOP 模板,被 spell 引用。带 `default_cli`、`artifact_paths`、`handoff_signal`、`depends_on`,以及含 `{task}` / `{<role>_id}` 占位符的 `system_prompt_template`。内置:orchestrator、frontend、backend、reviewer、test-runner、docs-writer、researcher、fixer。 | `roles/`、`swarmx-server::roles` |
+| **Shim** | `swarmx-shim` —— 约 70 行的二进制,`execvp` 真 CLI 并发 OSC `ready` / `exit` 序列,让 swarmx 无需轮询就能感知生命周期。 | `swarmx-shim` |
+| **MCP** | `swarmx-mcp` —— stdio JSON-RPC server,暴露各 `swarm_*` 工具。自动装进每个 agent 的 CLI 配置,让 LLM 当原生工具调。claude 拿到的是 per-agent 的 `--mcp-config` 文件,免得共享 workspace 的 agent 互相覆盖身份。 | `swarmx-mcp` |
 
 ## 架构
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│ 浏览器 (Vite + React 18, xterm.js + WebGL 池)                       │
+│ 浏览器 / Tauri webview(Vite + React 18,xterm.js + WebGL 池)        │
 │                                                                     │
 │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────────────┐    │
 │  │ Pane #1  │  │ Pane #2  │  │ Pane #N  │  │ swarm 抽屉 +     │    │
-│  │ xterm.js │  │ xterm.js │  │ xterm.js │  │ recordings +     │    │
-│  └────┬─────┘  └────┬─────┘  └────┬─────┘  │ spells launcher  │    │
+│  │ xterm.js │  │ xterm.js │  │ xterm.js │  │ 录制 +           │    │
+│  └────┬─────┘  └────┬─────┘  └────┬─────┘  │ DAG / 黑板       │    │
 │       │             │             │        └────────┬─────────┘    │
 └───────┼─────────────┼─────────────┼─────────────────┼──────────────┘
         │ /ws/pty/    │             │                 │ /ws/swarm
         │ <agent_id>  │             │                 │ + /api/*
         ▼             ▼             ▼                 ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│ swarmx-server (axum, 127.0.0.1:7777，仅 loopback)                 │
+│ swarmx-server(axum,127.0.0.1:7777,仅 loopback)                     │
 │                                                                     │
-│   /api/agent    /api/message    /api/blackboard    /api/recording   │
-│   /api/spells   /api/spell/run  /api/plugins                        │
+│   /api/agent  /api/message  /api/blackboard  /api/recording         │
+│   /api/spells /api/spell/run /api/plugins   /api/roles  /api/worker │
 │                                                                     │
 │   ┌─ AppState ────────────────────────────────────────────────┐    │
-│   │ PluginRegistry · SpellRegistry · Registry (live PTY 槽位) │    │
-│   │ Store (SQLite) · Swarm · BlackboardWatcher                │    │
-│   └────────────────────────────────────────────────────────────┘    │
+│   │ PluginRegistry · SpellRegistry · RoleRegistry · Registry  │    │
+│   │ Store (SQLite) · Swarm · BlackboardWatcher · WakeCoord    │    │
+│   └────────────────────────────────────────────────────────────┘   │
+│   per-CLI 适配器:cli/{claude,codex,opencode,reasonix}.rs           │
 └──────────────┬──────────────────────────────────────────────────────┘
                │ stdin / stdout (PTY)
                ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│ swarmx-shim (每个 agent 一个，~70 行 Rust 包装)                   │
-│   - execvp("claude" | "codex" ...)                                  │
+│ swarmx-shim(每 agent 一个,极薄的 Rust 包装)                       │
+│   - execvp("claude" | "codex" | "opencode" | "reasonix")            │
 │   - 发 OSC ready / exit 序列                                        │
 └──────────────┬──────────────────────────────────────────────────────┘
                │
                ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│ 真实 CLI (claude / codex 0.132+)                                    │
-│                                                                     │
-│   spawns ─►  swarmx-mcp (stdio)  ◄─►  /api/message 等             │
-│              wake-check (Stop hook)                                 │
+│ 真实 CLI                                                            │
+│   拉起 ─►  swarmx-mcp (stdio)  ◄─►  /api/message 等                 │
+│           wake-check (Stop hook)                                    │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Crate 布局
 
-| Crate | 行数 | 职责 |
-|---|---|---|
-| `swarmx-protocol` | ~250 | WebSocket 帧结构、REST DTO。server 和客户端共享。 |
-| `swarmx-shim` | ~70 | 发 OSC 的薄包装，`execvp` 真实 CLI。 |
-| `swarmx-pty` | ~300 | `portable-pty` 包装 + 双线程桥 + 单调递增 seq 环形缓冲。 |
-| `swarmx-server` | ~5700 | axum HTTP/WS gateway。路由、生命周期、pre-spawn 补丁、dialog 自动应答、spell 执行器、角色注册表、**`WakeCoordinator`**（M6b）。 |
-| `swarmx-swarm` | ~600 | 每 agent 收件箱、黑板 CRUD、notify-debouncer watcher。 |
-| `swarmx-mcp` | ~2000 | stdio JSON-RPC MCP server。也是 Stop hook 调用的 `wake-check` 子命令的宿主。 |
-| `swarmx-storage` | ~800 | SQLite + FTS5。迁移、agents / messages / recordings / blackboard 表。 |
-| `swarmx-recorder` | ~250 | asciicast v2 writer，EOF 时自动 finalize。 |
-| `swarmx-cli` | ~50 | 薄入口（`swarmx up` 拉起 server + 打开面板）。 |
-| `cli-plugins/` | — | 每 CLI 一个 `.toml`：`claude.toml`、`codex.toml`。 |
-| `roles/` | — | 每个角色一个 `.md` SOP 模板：`frontend.md`、`backend.md`、`test.md`（M6a）；`planner.md`（M6c-2）、`critic.md`（M6c-6）、`architect.md`（M6c-7）。 |
-| `spells/` | — | 每个法术一个 `.md`。**现状（刻意精简）**：磁盘上只有 `init.md`（建 workspace 时拉起单个 orchestrator）；下游全部由 orchestrator 用 `swarm_spawn_worker` 临时派活（Magentic-One 模型，不预设固定拓扑）。早期的 `critic-loop` / `fullstack-feature*` / `auto-dispatch` 等多 agent 法术已移除，`swarm_run_spell` MCP 工具也已移除。多 agent 法术机制（`role_ref` / `allow_cycles` / shared_workspace 等）仍完整实现+单测，备未来需要。 |
-| `docs/handoff-protocol.md` | — | `fullstack-feature` 及任何想约定 FE/BE/test 黑板契约的 spell 使用的 key 约定文档。 |
-| `web/` | — | Vite + React + xterm.js + asciinema-player 前端。 |
+| Crate | 职责 |
+|---|---|
+| `swarmx-protocol` | WebSocket 帧 schema、REST DTO。server 与各 client 共享。 |
+| `swarmx-shim` | `execvp` 真 CLI 的 OSC 包装(每 agent 一个)。harness-check 校验它进了 Tauri 的 `externalBin`。 |
+| `swarmx-pty` | `portable-pty` 包装 + 双线程桥接 + 单调 seq 环形缓冲。 |
+| `swarmx-server` | axum HTTP/WS 网关。路由、生命周期、pre-spawn 补丁、spell 执行器、role 注册表、`WakeCoordinator`、reaper、billing、engine-probe。per-CLI 适配在 `src/cli/{claude,codex,opencode,reasonix}.rs`。 |
+| `swarmx-swarm` | 每 agent 收件箱、黑板 CRUD、notify-debouncer 文件监听。 |
+| `swarmx-mcp` | stdio JSON-RPC MCP server。同时托管被 Stop hook 调用的 `wake-check` 子命令。 |
+| `swarmx-storage` | SQLite + FTS5。迁移、agents/messages/recordings/blackboard 表。 |
+| `swarmx-recorder` | asciicast v2 写入器,EOF 时 finalize。 |
+| `swarmx-cli` | 极薄的 `swarmx up` 入口(目前是 stub —— 请跑 `cargo run -p swarmx-server`)。 |
 
-### 一次 spawn 的数据流
+### 运行时资源(随包发,非 crate)
 
-```
-1.  浏览器点 "+ Codex CLI"。
-2.  POST /api/agent { cli: "codex" }
-3.  Server: PluginRegistry.get("codex") → CliPlugin
-            spawn::spawn_agent() fork swarmx-shim → exec codex
-            pre_spawn::run_codex_patches 写：
-              <workspace>/.codex/config.toml  (mcp_servers.swarmx-swarm)
-              <workspace>/.codex/hooks.json   (Stop hook → wake-check)
-            DialogAutoAnswer 起 30 秒窗口监听 "Hooks need review"
-            Recorder 在 recordings_root 下打开 .cast 文件
-4.  PTY pump 扫字节流找 OSC_READY → 广播 ShimReady
-            Recorder 把每个 chunk 写入 asciicast v2
-            Registry 存 AgentSlot（bridge、input_tx、lifecycle_tx）
-5.  浏览器开 /ws/pty/codex-XXXX → 双向二进制流
-6.  浏览器也开 /ws/swarm → 收 agent_state、message 等事件
-7.  codex 启动；swarmx-mcp 作为子进程被它拉起用于 tool 调用
-8.  每个 turn 结束：codex Stop hook → swarmx-mcp wake-check → REST
-    /api/message/unread_count → 若 >0，输出 {decision:block, reason:...}
-    → codex 续一个 turn 读消息并响应。
-```
+这些通过 `include_str!` 编译**进**服务端二进制,所以打包后的应用在 `CWD=/`、无环境变量
+的情况下也能跑:
+
+- `spells/init.md` —— 唯一发的 spell(spawn orchestrator)。
+- `roles/*.md` —— 8 个 role SOP 模板(含 orchestrator)。
+- `cli-plugins/*.toml` —— 4 个引擎清单(claude / codex / opencode / reasonix)。
+
+唯一必须作为文件随包发(它是 JS、要交给 opencode/node 执行,没法 embed)的资源是
+`cli-plugins/opencode/swarmx-wake.js`,通过 Tauri `bundle.resources` 打包。
 
 ## 配置参考
+
+每个 `SWARMX_*` 环境变量都在 [`docs/configuration.md`](docs/configuration.md) 里
+有文档(CI 的 harness 检查守住它的完整性)。要点:
+
+| 变量 | 用途 |
+|---|---|
+| `SWARMX_PORT` | 服务端口(默认 `7777`)。 |
+| `SWARMX_DB_PATH` | SQLite 路径(默认 `~/.swarmx/swarmx.db`)。 |
+| `SWARMX_MAX_LIVE_AGENTS` | 并发存活 agent 上限。 |
+| `SWARMX_RETENTION_DAYS` | 录制 / 活动的保留窗口。 |
+| `SWARMX_SHIM_PATH` / `SWARMX_MCP_PATH` | 覆盖打包二进制的位置(由 Tauri sidecar 设置)。 |
+| `SWARMX_{SPELLS,ROLES,CLI_PLUGINS}_DIR` | 在编译进去的 builtin 之上做磁盘 overlay(可选)。 |
 
 ### `cli-plugins/<id>.toml`
 
 ```toml
-id                       = "codex"          # `<id>-<8 位 hex>` agent 前缀来源
+id                       = "codex"          # 用作 `<id>-<8hex>` agent 前缀
 display_name             = "Codex CLI"
-binary                   = "codex"          # 通过 $PATH 解析
+binary                   = "codex"          # 经 $PATH 解析
 default_args             = ["--dangerously-bypass-approvals-and-sandbox"]
 ready_detect             = "shim_osc"       # 或 "prompt_pattern" | "none"
 mcp_inject               = "codex_global_toml"
 home_env                 = "HOME"
 
-# 每个 `auto_*` 开关切换一项 pre-spawn 补丁。全置 false 表示 swarmx
-# 只是裸 spawn CLI，要自己手动信任 workspace、装 MCP 等。
+# 每个 `auto_*` 开关切换一项 pre-spawn 补丁。全置 false 表示 swarmx 只是裸 spawn
+# CLI,你得自己手动信任 workspace、装 MCP 等。
 auto_inject_mcp          = true
 auto_trust_workspace     = true   # 写 `[projects.<ws>] trust_level = "trusted"`
-auto_dismiss_update      = true   # codex 专属：跳过"有新版本"弹窗
-auto_inject_stop_hook    = true   # 在 workspace 写 .codex/hooks.json
-auto_answer_hooks_dialog = true   # 监听 PTY 看到 "Hooks need review" 自动发 "2\r"
+auto_dismiss_update      = true   # 设 dismissed_version = latest(仅 codex)
+auto_inject_stop_hook    = true   # 写 workspace .codex/hooks.json Stop hook
+auto_answer_hooks_dialog = true   # 监听 PTY 的 "Hooks need review" 并发 "2\r"
 ```
-
-### `spells/<name>.md`
-
-```markdown
-+++
-name        = "critic-loop"
-description = "writer → critic → editor"
-
-[[agents]]
-role          = "writer"
-cli           = "claude"
-system_prompt = """
-你是 WRITER。任务：{task}
-通过 swarm_send_message 把初稿交给 critic={critic_id}，editor={editor_id}。
-"""
-
-[[agents]]
-role          = "critic"
-cli           = "codex"
-system_prompt = """..."""
-
-[[agents]]
-role          = "editor"
-cli           = "claude"
-system_prompt = """..."""
-+++
-
-# 自由发挥的 markdown 正文（文档说明，解析器不读）。
-```
-
-运行时替换规则：
-- `{task}` → `POST /api/spell/run` 传的任务字符串。
-- `{<role>_id}` → 那个 role 实际分到的 `agent_id`（比如 `{writer_id}`
-  变成 `claude-890b3c93`）。
-- 未知的 `{…}` 占位符保留字面量（故意的——静默丢弃会把法术作者的 bug
-  藏起来）。
 
 ## REST 与 WebSocket API
 
-### REST（仅 loopback）
+### REST(仅 loopback)
 
-| Method | Path | 用途 |
+| 方法 | 路径 | 用途 |
 |---|---|---|
-| `GET` | `/api/plugins` | 列已加载的 CLI 插件。 |
-| `POST` | `/api/agent` | spawn 一个 agent。Body：`{ cli, role?, workspace? }`。 |
-| `GET` | `/api/agent` | 列活的 + 历史 agent。 |
-| `DELETE` | `/api/agent/:id` | kill 一个 agent。 |
-| `GET` | `/api/message` | 列消息，可选 `from` / `to` / `since` 过滤。 |
-| `POST` | `/api/message` | 发蜂群消息。 |
+| `GET` | `/api/plugins` | 列出已加载的 CLI 插件。 |
+| `GET` | `/api/roles` | 列出已加载的 role。 |
+| `GET` | `/api/spells` | 列出已加载的 spell 清单。 |
+| `POST` | `/api/spell/run` | 跑一个 spell。Body:`{ name, task, workspace_dir? }`。 |
+| `POST` | `/api/worker` | spawn 一个 worker agent(`swarm_spawn_worker` 用)。 |
+| `GET` `DELETE` | `/api/agent` · `/api/agent/:id` | 列出 / 杀死 agent。 |
+| `POST` | `/api/agent/:id/{interrupt,resume,wake}` | 生命周期控制。 |
+| `POST` | `/api/message` *(经 swarm 工具)* | 发一条 swarm 消息。 |
 | `POST` | `/api/message/read` | 标记消息已读。 |
-| `GET` | `/api/message/unread_count` | 查未读数（wake-check 在用）。 |
-| `GET` | `/api/blackboard` | 列黑板文件。 |
-| `GET` | `/api/blackboard/*path` | 读黑板文件。 |
-| `PUT` | `/api/blackboard/*path` | 写黑板文件。 |
-| `GET` | `/api/blackboard-history/*path` | 黑板路径的版本历史。 |
-| `GET` | `/api/recording` | 列录像。 |
-| `GET` | `/api/recording/:id` | 流式返回 `.cast` 原文。 |
-| `GET` | `/api/spells` | 列已加载的法术。 |
-| `POST` | `/api/spell/run` | 跑一个法术。Body：`{ name, task }`。 |
+| `GET` `PUT` | `/api/blackboard` | 列出 / 读 / 写黑板文件。 |
+| `GET` | `/api/recording` · `/api/recording/:id` | 列出 / 流式读 `.cast` 文件。 |
+| `GET` | `/api/usage` | 每 agent 的 token / 计费用量。 |
+| `GET` | `/api/files/list` · `/api/files/read` | 沙箱文件浏览器(凭据路径走 denylist)。 |
 
 ### WebSocket
 
-| Path | 用途 |
+| 路径 | 用途 |
 |---|---|
-| `/ws/pty/:agent_id` | 双向 PTY 桥。二进制帧格式 `[4B BE seq][bytes…]`；文本帧是控制 JSON（`resize`、`ack`、`hello`、`shim_ready`、`shim_exit`）。 |
-| `/ws/swarm` | server → 客户端事件流：`agent_state`、`message`、`message_read`、`blackboard`、`shim_event`、`mcp_health`。 |
+| `/ws/pty/:agent_id` | 双向 PTY 桥。二进制帧是 `[4B BE seq][bytes…]`;文本帧是控制 JSON(`resize`、`ack`、`hello`、`shim_ready`、`shim_exit`)。 |
+| `/ws/swarm` | server → client 事件流:`agent_state`、`message`、`message_read`、`blackboard`、`shim_event`、`mcp_health`。 |
 
-## 安全与凭据策略
+## 安全与凭据
 
-swarmx 采用 **PTY 透传凭据模型**，和 `tmux`、`screen`、`ttyd`、官方
-`claude` & `codex` CLI 自己用的是同一种模型：
+swarmx 遵循 **PTY-only 凭据模型**,和 `tmux`、`screen`、`ttyd` 以及官方 CLI 本身用的
+是同一套:
 
-- swarmx **绝不读**`~/.claude/` 或 `~/.codex/` 下的任何文件。
-- swarmx **绝不持久化**任何 OAuth token、refresh token、API key。
-- swarmx **只**把 `HOME` 传给子 CLI，让它去读*它自己*的配置——和你直
-  接在 shell 里跑它一模一样。PATH 也透传，方便 CLI 找到自己的子命令。
+- swarmx **从不读取** `~/.claude/`、`~/.codex/` 等目录下的文件。
+- swarmx **从不持久化** OAuth token、refresh token、API key。
+- swarmx **只**把 `HOME`(和 `PATH`)透传给子进程,让它读*自己*的配置,就跟你在 shell
+  里跑它一样。
 
-swarmx **会**写的东西（都是用户每次执行就明确同意的）：
+swarmx 实际写的东西(里面没有任何凭据):
 
-- `~/.swarmx/workspaces/<agent_id>/` 每个 agent 一个工作目录，里面是
-  CLI 的每项目配置 override（MCP 服务条目、Stop hook 配置、workspace
-  trust 标记）。**这里面不含任何凭据**。
-- `~/.swarmx/recordings/*.cast` 录像（只录终端输出字节，不录键盘输入、
-  不录环境变量、不录凭据）。
-- `~/.swarmx/swarmx.db` SQLite 数据库（agent 元数据、消息、黑板
-  镜像、录像元数据）。
-- `~/.swarmx/wake/<agent_id>.json` 小小的 wake-check 节流文件
-  （epoch ms + 计数器）。
+- `~/.swarmx/` 下的 per-agent CLI 配置覆盖(MCP server 条目、Stop hook 配置、workspace
+  信任标记)。
+- `~/.swarmx/recordings/*.cast` 录制(只有终端输出字节)。
+- `~/.swarmx/swarmx.db` 的 SQLite 库(agent 元数据、消息、黑板镜像、录制元数据)。
+- `~/.swarmx/wake/<agent_id>.json` 一个小的 wake-check 节流文件。
 
-server **只**绑 `127.0.0.1:7777`。没有鉴权，因为没有远程访问——和
-`cargo run` 或 `vite dev` 同等安全级别。多机 / 远程访问的方案在
-[路线图](#路线图)里。
+服务端**只**绑 `127.0.0.1:7777`。没有鉴权,因为没有远程访问 —— 跟 `cargo run` 或
+`vite dev` 同样的姿态。DNS-rebind 防御:无 Origin 的请求还要求 Host 是 loopback。
+文件浏览器在每次请求上硬拒凭据路径(`~/.ssh`、`~/.aws`、`*.pem`/`*.key`、
+`~/.claude.json`…)。
+
+## 打包桌面应用
+
+swarmx 以 Tauri 应用形式发布,把三个服务端二进制(`swarmx-server`、`swarmx-shim`、
+`swarmx-mcp`)作为 sidecar 打进包,用户下载 → 安装 → 打开 → 直接用,全程零命令。
+
+```bash
+cd web
+npm run sidecar:release   # 编译 release 后端 + 拷成 Tauri sidecar
+npm run tauri:build       # 出真实安装包(.app / .dmg / …)
+npm run tauri:dev         # Tauri 开发(debug 模式不会自动拉后端)
+```
+
+> **打包不变量:** 运行时要读的任何东西,要么通过 `include_str!` / `sqlx::migrate!`
+> 编译进去,要么通过 Tauri `bundle.resources` 随包发、并在启动 sidecar 时用 `SWARMX_*`
+> 环境变量把绝对路径注进去。打包后的应用以 `CWD=/`、且(除非显式设置)无 `SWARMX_*`
+> 环境变量运行,所以任何「在仓库根目录跑得好好的相对路径查找」在装好的应用里都会失败。
+> 完整发版清单见 `CLAUDE.md`。
 
 ## 常见问题
 
 <details>
-<summary><b>"我的 codex agent 不响应蜂群消息"</b></summary>
+<summary><b>「我的 codex agent 不理 swarm 消息。」</b></summary>
 
-先确认 codex 版本：`codex --version` 必须 **0.132 或更高**。codex 0.132
-才有 `--dangerously-bypass-hook-trust`，更早的版本会静默拒绝跑
-swarmx 的 Stop hook。修复办法：`brew upgrade codex` 或
-`npm install -g @openai/codex@latest`，然后重启 server（swarmx 每个
-进程只探测一次 flag）。
-
-确认 probe 跑了：`grep 'binary flag probe result' /tmp/.../server.log`
-应该能看到 `flag="--dangerously-bypass-hook-trust" supported=true`。
+查 codex 版本:`codex --version` 必须报 **0.132 或更高**。codex 0.132 才有
+`--dangerously-bypass-hook-trust`;更早的版本会静默拒绝触发 swarmx 的 Stop hook。
+修法:`brew upgrade codex` 或 `npm install -g @openai/codex@latest`,然后重启服务端
+(swarmx 每进程探测一次这个 flag)。可在服务端日志确认:
+`binary flag probe result … flag="--dangerously-bypass-hook-trust" supported=true`。
 </details>
 
 <details>
-<summary><b>"codex 每次都弹 'Hooks need review' 对话框"</b></summary>
+<summary><b>「codex 每次都弹 'Hooks need review' 对话框。」</b></summary>
 
-这是 codex 0.130+ 的正常信任门。swarmx 在 `cli-plugins/codex.toml`
-里默认开了 `auto_answer_hooks_dialog`，会起一个服务端 watcher 在
-~500 毫秒内合成 `2 + Enter` 把它按掉。如果你看不到 dialog 被自动关掉，
-查日志里有没有 `auto-answered codex Hooks-need-review dialog`。如果
-没有，说明 watcher 30 秒窗口期内 dialog 没出现——一般是 codex 启动太慢。
-把 `spawn::DialogAutoAnswer` 的 `WINDOW` 常量调大，重新编译。
+那是 codex 0.130+ 正常的信任门。swarmx 的 `auto_answer_hooks_dialog` 开关
+(`cli-plugins/codex.toml` 里默认开)会武装一个服务端 watcher,在约 500ms 内合成
+`2 + Enter`。若没自动消失,查服务端日志的 `auto-answered codex Hooks-need-review
+dialog`;缺这一行通常是 codex 启动时间超过了 watcher 的窗口。
 </details>
 
 <details>
-<summary><b>"claude 说 'I don't have a swarm_send_message tool available'"</b></summary>
+<summary><b>「claude 说 'I don't have a swarm_send_message tool available'。」</b></summary>
 
-这是 agent 在 MCP 子进程握手完成之前就开始第一个 turn 了。swarmx 的
-spell executor 已经在 `ShimReady` 之后等 2.5 秒缓解这个；如果你是手动
-`POST /api/agent` 然后立刻自己注入 prompt，也得自己加这个等待。
+这发生在 agent 的第一回合早于 MCP 子进程完成握手时。swarmx 在 `ShimReady` 之后已经
+等了一段时间来缓解;如果你在 `POST /api/agent` 之后立刻自己注入提示,请加同样的延迟。
 </details>
 
 <details>
-<summary><b>"录像抽屉空空的，但 agent 明明在跑"</b></summary>
+<summary><b>「明明有 agent 在跑,录制抽屉却是空的。」</b></summary>
 
-录像只在 agent 的 PTY EOF（即 CLI 退出）时才 finalize。正在录的会以
-`● live` 标记出现在抽屉里，只要它有任何字节落盘。如果整条记录都消失了
-检查 `tail -f ~/.swarmx/recordings/*.cast` 看文件有没有增长。
+录制只在 agent 的 PTY EOF(CLI 退出)时才 finalize。活动中的录制一旦有字节刷出,会在
+抽屉里显示 `● live`。如果整行都缺,`tail -f ~/.swarmx/recordings/*.cast` 看文件是否在涨。
 </details>
-
-<details>
-<summary><b>"浏览器上显示 'WS closed (code 1005)'，那个 pane 刚才还在"</b></summary>
-
-说明那个 pane 的 PTY 退出了（底层 CLI 崩了或正常退出）。XtermPane 组件
-会在状态栏显示退出码。这只是个提示，不是 swarmx 自己的错误。
-</details>
-
-## 路线图
-
-### 已完成（M1 – M6c）
-
-- ✅ **M1** 单 agent PTY + OAuth + WebSocket 桥 + WebGL 池
-- ✅ **M2** 多 CLI（claude + codex）+ GridView + WebGL 冷却
-- ✅ **M3** 蜂群 L2：每 agent 收件箱、黑板、asciicast 录制
-- ✅ **M4** 蜂群 L3：`swarmx-mcp` 暴露 `swarm_send_message` /
-            `swarm_list_messages` / 黑板工具
-- ✅ **M5a** 可观测性：`read_at`、`in_reply_to`、黑板历史
-- ✅ **M5b** Turn 边界 wake-check（claude + codex 0.132）
-- ✅ **M5c** 法术（`critic-loop`）+ 浏览器内 asciicast 回放
-- ✅ **M6a** 角色库（`roles/<id>.md`）+ `shared_workspace = true` 法术
-            + `fullstack-feature`（前端 / 后端 / 测试 一个 monorepo）
-            + `docs/handoff-protocol.md`
-- ✅ **M6b** `WakeCoordinator`：黑板写入自动唤醒任何声明了
-            `depends_on = ["<key>"]` 的 agent。Mailbox note（source of
-            truth）+ PTY 注入（belt-and-suspenders）。spawn 前 BFS 检
-            测循环依赖。每 claude agent 一份独立 `--mcp-config` 文件，
-            破共享 workspace 下 `~/.claude.json` 身份串台坑。
-- ✅ **M6c** (1) `swarm_list_spells` / `swarm_run_spell` MCP 工具让任
-            一 agent 都能 chain-call 启新 crew；(2) `planner` 角色 +
-            `auto-dispatch` spell，自然语言一句话自动选 spell；(3)
-            launcher 顶栏 `✨ Auto` 主按钮；(4) swarm drawer `graph`
-            tab 实时 DAG 可视化；(5) 生产者 agent 死掉 → 服务端写
-            `<role>.error` 并直接唤醒原 signal 的订阅者，下游进入
-            upstream-failed 分支而不是永久等；(6) `critic` 角色 +
-            `fullstack-feature-reviewed` spell 在 FE/BE 和 test 之间
-            插入 advisory 代码评审；(7) `architect` 角色 +
-            `fullstack-feature-gated` spell + `system_prompt_prefix`
-            字段实现人在回路审批闸（FE/BE 在写代码前等 operator 批
-            准）；(8) codex bracketed-paste 兼容的 wake 注入（拆成
-            两次写中间夹 150ms，codex Ratatui 才会把最后那个 `\r`
-            当 typed Enter 而不是 paste 内嵌换行）。
-
-### Backlog
-
-| 优先级 | 内容 | 工作量 |
-|---|---|---|
-| P1 | M6d — critic 真闸 + fixer 回环：critic verdict=block 触发 fixer agent 修复 | 新角色 + spell 按 review.verdict 分支 |
-| P1 | `cli-plugins/gemini.toml`（Google Gemini CLI） | 一个 toml 文件 + 人工验证一遍 OAuth |
-| P1 | `cli-plugins/qwen.toml`（阿里千问 CLI） | 同 gemini；`ready_detect = "prompt_pattern"` |
-| P1 | `spells/tree-executor.md`（递归任务分解） | 一个 md 文件 |
-| P1 | `spells/map-reduce.md`（并行 worker + reducer） | 一个 md 文件 |
-| P2 | M6d — blackboard tab 加专门的「Approve」「Reject」按钮（今天 operator 手动写 key） | 纯前端 |
-| P2 | M6d — Architect rejection 回环：架构师订阅 `design.rejected` 自动重写，不用 kill + 重跑 | architect role `depends_on=["design.rejected"]` + prompt 分支 |
-| P2 | M6d — Test prompt：`*.error` 只在文件真的能读到时才进入 upstream-failed 分支（不被前一次 run 残留的 DB row 骗到） | Prompt 改 |
-| P2 | M6d — TTL fallback：`depends_on` key 在 N 秒内没到但 producer 还活着 → swarm message 戳一下 producer | wake.rs ~40 行 |
-| P2 | M6d — agent 在 thinking 时跳过 PTY 注入，避免 wake kick 撞上 model 流式输出 | 跟踪每 PTY 的状态（OSC + stop hook） |
-| P2 | `cli-plugins/opencode.toml`、`cli-plugins/aider.toml` | 每个 CLI 的 OAuth 适配调研 |
-| P2 | `spells/werewolf.md`、`spells/red-team.md` | 每个法术一个 md |
-| P3 | session token 鉴权 + CORS 远程访问 | 借鉴 hermes-agent 的 `_SESSION_TOKEN` 设计 |
-| P3 | Tauri 桌面打包 | 借鉴 golutra 的 `src-tauri/` |
-| P3 | Agent 沙箱（Docker / SSH 隔离） | 借鉴 openclaw 的 `agents/sandbox/` |
-
-## 致谢
-
-swarmx 站在几个开源项目的肩膀上：
-
-- **[hermes-agent](https://github.com/NousResearch/hermes-agent)** — PTY
-  桥 + 多渠道 gateway 架构。wake-check 的 JSON 线协议直接受 Hermes shell
-  hooks 启发。
-- **[OpenClaw](https://github.com/openclaw/openclaw)** — 法术 front-matter
-  约定、MCP 动态加载、agent 沙箱设计。
-- **[swarm-ide](https://github.com/swarm-ide)** — "create + send" 两原语
-  哲学、每 agent runner 模型、拓扑即法术的概念。
-- **[golutra](https://github.com/golutra)** — Tauri 侧 PTY 管线、WebGL
-  冷却池设计、OSC shim 模式、CLI 插件 manifest。
-- **[asciinema-player](https://github.com/asciinema/asciinema-player)** —
-  浏览器内录像回放。WASM 渲染、完整键盘控制。
-- **[portable-pty](https://docs.rs/portable-pty)** — 每个 agent 跑在它上
-  面的 PTY 抽象。
 
 ## 贡献
 
-swarmx 目前是个人项目。欢迎 PR 和 issue，但响应时间可能很慢。
+欢迎 PR 和 issue。CI 硬门禁是:`node scripts/harness-check.mjs`(跨文件不变量静态检查)、
+`cargo build/test --workspace --locked`、`web` 的 `npm run build`(tsc 类型检查),以及
+隔离后端的 `directions-smoke.mjs`。需要真实登录 CLI 的 swarm/resume/stress 烟测是手动的
+(`scripts/golden-cli-test.sh`)。
 
-提新 CLI 插件（Gemini / Qwen / OpenCode / ...）时，请附上一段录像
-（asciicast 或视频）证明这个插件在新克隆上能 OAuth + 跑通端到端。MVP
-只发了 claude + codex 是因为这两个是亲自验证过的。
+提议新 CLI 插件时,请附一段录好的 OAuth 验证(asciicast 或视频),证明它在全新 checkout
+上端到端能跑通。
 
-更大的结构性改动请先读设计方案文档（在维护者私人 `~/.claude/plans/` 下，
-需要可以问要一份）。
-
-本仓库的 commit 身份用 per-repo git config 设置：
+commit 身份用 per-repo 的 local git config 设置;**commit message 用英文**写:
 
 ```bash
-git config user.name  "你的名字"
-git config user.email "你的@邮箱"
+git config user.name  "your-name"
+git config user.email "your@email"
 # 别动 global git config。
 ```
 
-## 作为 MCP server 挂到外部 Claude Code / IDE
-
-swarmx 既是 MCP 客户端(给 worker 注入工具),也可作为 **MCP server** 暴露给你自己的外部
-Claude Code / Codex / IDE——让它们直接读黑板、查 agent、发消息、派 worker:
+想跑一个隔离的全栈实例来验证真 UI 改动、又不碰长期开着的 dev 会话:
 
 ```bash
-# swarmx 在 127.0.0.1:7777 跑着时:
-claude mcp add swarmx -- env SWARMX_SERVER_URL=http://127.0.0.1:7777 /path/to/swarmx-mcp
+bash scripts/test-stack.sh        # 在 7788/5188 端口 build + 起,数据在 /tmp
+bash scripts/test-stack.sh stop   # 拆掉
 ```
 
-无需 agent 身份(默认以 `external` 操作)。暴露的工具:`swarm_read_blackboard` /
-`swarm_write_blackboard` / `swarm_list_blackboard` / `swarm_list_agents` /
-`swarm_send_message` / `swarm_list_messages` / `swarm_search_messages` /
-`swarm_spawn_worker` / `swarm_list_roles` / `swarm_name_thread`。
+## 致谢
+
+swarmx 站在若干开源项目的肩膀上:
+
+- **[portable-pty](https://docs.rs/portable-pty)** —— 每个 agent 跑在上面的 PTY 抽象。
+- **[asciinema-player](https://github.com/asciinema/asciinema-player)** ——
+  浏览器内录制回放,WASM 渲染、完整键盘控制。
+- **[axum](https://github.com/tokio-rs/axum)** / **[Tauri](https://tauri.app/)**
+  / **[xterm.js](https://xtermjs.org/)** —— 服务端、桌面端、终端层。
+- **Magentic-One** 编排模型 —— orchestrator 设计背后「团队随任务伸缩」的洞见。
 
 ## License
 
-[MIT](LICENSE)。许可证全文见 LICENSE 文件。
+[MIT](LICENSE)。完整文本见该文件。
