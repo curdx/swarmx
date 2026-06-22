@@ -116,6 +116,27 @@ export function activityVerb(label: string, kind: "tool" | "system" = "tool"): A
   if (t === "todowrite" || t === "todo") {
     return { key: "chat.verb.todo", params: {}, fallback: "更新计划" };
   }
+  // Swarm MCP tools — the heart of multi-agent coordination, so the trace
+  // timeline should name them plainly instead of a generic "处理中". Match on
+  // the `swarm_` prefix the MCP server exposes (swarm_send_message,
+  // swarm_read_blackboard, swarm_write_blackboard, swarm_list_messages,
+  // swarm_spawn_worker, swarm_run_spell, …).
+  if (t.startsWith("swarm_")) {
+    const op = t.slice("swarm_".length);
+    if (op.includes("send") || op.includes("message")) {
+      return { key: "chat.verb.swarmMessage", params: {}, fallback: "收发消息" };
+    }
+    if (op.includes("blackboard")) {
+      const write = op.includes("write");
+      return write
+        ? { key: "chat.verb.swarmWrite", params: {}, fallback: "写黑板" }
+        : { key: "chat.verb.swarmRead", params: {}, fallback: "读黑板" };
+    }
+    if (op.includes("spawn") || op.includes("worker") || op.includes("spell")) {
+      return { key: "chat.verb.swarmSpawn", params: {}, fallback: "派成员" };
+    }
+    return { key: "chat.verb.swarmCoord", params: {}, fallback: "协调 swarm" };
+  }
 
   // Unknown leading token: NEVER echo a raw English tool name (jargon-firewall).
   // A "system"-kind step is a non-tool phase; render the neutral "推进中".

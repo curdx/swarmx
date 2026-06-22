@@ -438,10 +438,16 @@
       "task": "Delegating a subtask",
       "todo": "Updating the plan",
       "advance": "Working",
-      "generic": "Working"
+      "generic": "Working",
+      "swarmMessage": "messaging",
+      "swarmWrite": "writing blackboard",
+      "swarmRead": "reading blackboard",
+      "swarmSpawn": "spawning member",
+      "swarmCoord": "coordinating swarm"
     },
     "live": {
-      "memberStalled": "Idle for {{secs}}s"
+      "memberStalled": "Idle for {{secs}}s",
+      "traceSteps": "{{count}} steps"
     },
     "dispatch": {
       "title": "Dispatched to {{role}}",

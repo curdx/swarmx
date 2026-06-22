@@ -1804,6 +1804,9 @@ export function MessagesPanel({
               trigger={trigger}
               live={agentLiveStateById?.[agentId]}
               liveReasoning={reasoningById?.[agentId]}
+              turnSteps={(agentActivityById?.[agentId] ?? []).filter(
+                (a) => a.at >= trigger.sent_at,
+              )}
             />
           ))}
           {vanishedTurns.map((v) => (
@@ -2234,6 +2237,7 @@ function PendingBubble({
   trigger,
   live,
   liveReasoning,
+  turnSteps = [],
 }: {
   role: string;
   label: string;
@@ -2241,9 +2245,17 @@ function PendingBubble({
   trigger: MessageRecord;
   live?: AgentLiveState;
   liveReasoning?: ReasoningSummary;
+  /** Tool/step events from THIS turn (at >= trigger.sent_at), oldest-first.
+   *  Drives the collapsible execution-trace timeline — the in-chat answer to
+   *  "what has it actually done so far", instead of only the latest verb. */
+  turnSteps?: AgentActivity[];
 }) {
   const { t } = useTranslation();
   const [now, setNow] = useState(Date.now());
+  // Trace timeline is collapsed by default so the bubble stays a quiet
+  // one-liner (avoids the "response overload" the chatbox-cognition research
+  // warns about); the user opens it only when they want to inspect the steps.
+  const [traceOpen, setTraceOpen] = useState(false);
   useEffect(() => {
     const id = window.setInterval(() => setNow(Date.now()), 500);
     return () => window.clearInterval(id);
@@ -2273,6 +2285,10 @@ function PendingBubble({
   // Real latest tool event drives the "what it's doing right now" verb line.
   const act = live?.activity;
   const verb = act ? activityVerb(act.label, act.kind) : null;
+  // Completed steps THIS turn (finished tool calls). The running one is already
+  // represented by the live verb line above, so the timeline shows the trail of
+  // what's DONE — the in-chat execution trace (research direction A).
+  const doneSteps = turnSteps.filter((s) => s.phase !== "running");
   const sinceActivityMs = act ? Math.max(0, now - act.at) : 0;
   const stale =
     act != null && act.phase === "running" && sinceActivityMs >= HEARTBEAT_STALE_MS;
@@ -2366,6 +2382,63 @@ function PendingBubble({
                 {formatElapsed(elapsedSinceTrigger)}
               </span>
             </span>
+          )}
+          {doneSteps.length > 0 && (
+            <div className="mt-1 border-t border-border-subtle/60 pt-1">
+              <button
+                type="button"
+                onClick={() => setTraceOpen((v) => !v)}
+                aria-expanded={traceOpen}
+                className="flex w-full items-center gap-1 px-1 py-0.5 font-caption text-[11px] text-foreground-tertiary hover:text-foreground-secondary"
+              >
+                {traceOpen ? (
+                  <ChevronDown className="size-3 shrink-0" />
+                ) : (
+                  <ChevronRight className="size-3 shrink-0" />
+                )}
+                <span>
+                  {t("chat.live.traceSteps", {
+                    count: doneSteps.length,
+                    defaultValue: "{{count}} 步轨迹",
+                  })}
+                </span>
+              </button>
+              {traceOpen && (
+                <ol className="mt-0.5 flex flex-col gap-0.5 px-1">
+                  {doneSteps.map((s, i) => {
+                    const v = activityVerb(s.label, s.kind);
+                    return (
+                      <li
+                        key={`${s.seq}-${i}`}
+                        className="flex items-center gap-1.5"
+                        title={s.label}
+                      >
+                        <span
+                          className={cn(
+                            "shrink-0 font-mono text-[10px]",
+                            s.phase === "error"
+                              ? "text-status-danger"
+                              : "text-status-success",
+                          )}
+                        >
+                          {s.phase === "error" ? "✕" : "✓"}
+                        </span>
+                        <span className="min-w-0 flex-1 truncate font-body text-[11px] text-foreground-secondary">
+                          {t(v.key, { ...v.params, defaultValue: v.fallback })}
+                        </span>
+                        {s.duration_ms != null && (
+                          <span className="shrink-0 font-mono text-[9px] tabular-nums text-foreground-tertiary">
+                            {s.duration_ms < 1000
+                              ? `${s.duration_ms}ms`
+                              : `${(s.duration_ms / 1000).toFixed(1)}s`}
+                          </span>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ol>
+              )}
+            </div>
           )}
         </div>
       </div>

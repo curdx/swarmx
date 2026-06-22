@@ -438,10 +438,16 @@
       "task": "派子任务",
       "todo": "更新计划",
       "advance": "推进中",
-      "generic": "处理中"
+      "generic": "处理中",
+      "swarmMessage": "收发消息",
+      "swarmWrite": "写黑板",
+      "swarmRead": "读黑板",
+      "swarmSpawn": "派成员",
+      "swarmCoord": "协调 swarm"
     },
     "live": {
-      "memberStalled": "已 {{secs}}s 无活动"
+      "memberStalled": "已 {{secs}}s 无活动",
+      "traceSteps": "{{count}} 步轨迹"
     },
     "dispatch": {
       "title": "派给 {{role}}",
