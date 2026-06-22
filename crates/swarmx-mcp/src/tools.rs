@@ -300,7 +300,45 @@ async fn send_message(ctx: &ToolContext, args: &Value) -> Result<String, String>
     if let Some(parent) = in_reply_to {
         out.push_str(&format!(" In reply to #{parent}."));
     }
+    // Silent-blackhole guard: `to` is free-form and the server persists the row
+    // regardless of whether the recipient exists. An LLM that hallucinates or
+    // typos a teammate id (`codex-wrongid`) otherwise gets a clean "Sent" and
+    // waits forever on a reply that can't come. Best-effort roster check: warn
+    // (don't fail — the row IS persisted, and `user` / not-yet-spawned targets
+    // are legitimate) so the sender can self-correct. Never blocks the send: any
+    // lookup error is swallowed.
+    if to != "user" && !recipient_is_known(ctx, to).await.unwrap_or(true) {
+        out.push_str(&format!(
+            "\n⚠️  WARNING: '{to}' is not a known agent id — this message will sit \
+             unread (no such recipient). Call swarm_list_agents to get valid ids, \
+             then resend to the correct one."
+        ));
+    }
     Ok(out)
+}
+
+/// Best-effort check that `to` matches a live (non-killed) agent in the roster.
+/// Returns `Ok(true)`/`Ok(false)` on a successful lookup, `Err` on transport/
+/// parse failure so the caller can default to "assume known" and never block a
+/// send on a flaky roster fetch.
+async fn recipient_is_known(ctx: &ToolContext, to: &str) -> Result<bool, String> {
+    let url = format!("{}/api/agent", ctx.server_url);
+    let resp = ctx
+        .http
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("roster fetch failed: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("roster fetch HTTP {}", resp.status()));
+    }
+    let rows: Vec<Value> = resp
+        .json()
+        .await
+        .map_err(|e| format!("roster parse failed: {e}"))?;
+    Ok(rows
+        .iter()
+        .any(|a| a.get("agent_id").and_then(|v| v.as_str()) == Some(to)))
 }
 
 async fn list_messages(ctx: &ToolContext, args: &Value) -> Result<String, String> {
@@ -1342,5 +1380,53 @@ mod tests {
         // The freshly-marked row is the child (#42); parent stays ✓.
         assert!(text.contains("★ [0] #42"), "star marker for unread child missing: {text}");
         assert!(text.contains("✓ [1] #38"), "check marker for read parent missing: {text}");
+    }
+
+    #[tokio::test]
+    async fn send_to_unknown_recipient_warns_but_still_sends() {
+        let (addr, _state) = start_stub().await;
+        let ctx = ctx_for(addr, "claude-aaa");
+        // The stub roster only knows claude-aaa + codex-bbb. A hallucinated id
+        // must still SEND (isError=false, persisted) but carry a ⚠️ so the LLM
+        // learns it's a blackhole and can resend to a real teammate.
+        let out = call_tool(&ctx, "swarm_send_message", &json!({
+            "to": "codex-hallucinated",
+            "kind": "note",
+            "body": "are you there?"
+        })).await;
+        assert_eq!(out["isError"], json!(false), "send must still succeed");
+        let text = out["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("Sent message #1"), "message still persisted: {text}");
+        assert!(text.contains("not a known agent"), "missing blackhole warning: {text}");
+        assert!(text.contains("codex-hallucinated"), "warning should name the bad id: {text}");
+    }
+
+    #[tokio::test]
+    async fn send_to_known_recipient_has_no_warning() {
+        let (addr, _state) = start_stub().await;
+        let ctx = ctx_for(addr, "claude-aaa");
+        // codex-bbb IS in the roster (even though killed) — a known id never
+        // gets the blackhole warning.
+        let out = call_tool(&ctx, "swarm_send_message", &json!({
+            "to": "codex-bbb",
+            "kind": "note",
+            "body": "hi"
+        })).await;
+        let text = out["content"][0]["text"].as_str().unwrap();
+        assert!(!text.contains("not a known agent"), "false-positive warning: {text}");
+    }
+
+    #[tokio::test]
+    async fn send_to_user_never_warns() {
+        let (addr, _state) = start_stub().await;
+        let ctx = ctx_for(addr, "claude-aaa");
+        // `user` is the human, never in the agent roster — must be exempt.
+        let out = call_tool(&ctx, "swarm_send_message", &json!({
+            "to": "user",
+            "kind": "note",
+            "body": "done"
+        })).await;
+        let text = out["content"][0]["text"].as_str().unwrap();
+        assert!(!text.contains("not a known agent"), "user must be exempt: {text}");
     }
 }
