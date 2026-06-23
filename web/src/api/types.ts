@@ -848,6 +848,9 @@ export interface FusionJudgeResponse {
   judge_thread_id: string;
   base: string | null;
   contestants: FusionContestantDiff[];
+  /** Auto-judge only: the spawned CLI agent driving the verdict (`?auto=true`).
+   *  null in manual mode (no agent spawned). */
+  judge_agent_id?: string | null;
 }
 
 /** `POST /api/workspaces/:id/fusion/:bid/decide` body. `merge` defaults true. */

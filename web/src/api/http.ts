@@ -387,9 +387,12 @@ export const api = {
     requestEndpoint<FusionBatch>(apiRoutes.workspaces.createFusion(id), req),
   // Enter the judge stage: spawn a judge direction + return each contestant's
   // diff bundle for review.
-  judgeFusion: (id: string, bid: string) =>
+  // Enter the judge stage. `auto=true` additionally spawns a real CLI agent in
+  // the judge direction that reads each contestant's diff and calls decide on
+  // its own (judge_agent_id set); omitted/false = manual (human picks winner).
+  judgeFusion: (id: string, bid: string, auto?: boolean) =>
     requestEndpoint<FusionJudgeResponse>(
-      apiRoutes.workspaces.judgeFusion(id, bid),
+      apiRoutes.workspaces.judgeFusion(id, bid, auto),
     ),
   // Record the verdict: pick ONE winning contestant; the batch flips to 'done'
   // and (unless merge=false) the winner's branch is merged back into base.

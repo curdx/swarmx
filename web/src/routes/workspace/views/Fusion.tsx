@@ -275,12 +275,17 @@ function BatchCard({
   const [deciding, setDeciding] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const runJudge = async () => {
+  const runJudge = async (auto?: boolean) => {
     setJudging(true);
     setError(null);
     try {
-      const resp = await api.judgeFusion(workspaceId, batch.id);
+      const resp = await api.judgeFusion(workspaceId, batch.id, auto);
       setJudge(resp);
+      if (auto && resp.judge_agent_id) {
+        toast.success(
+          t("fusion.autoJudgeStarted", { defaultValue: "已派出评审 agent，由它自动评出赢家" }),
+        );
+      }
       onChanged();
     } catch (e) {
       setError(e instanceof ApiError ? e.detail : (e as Error).message);
@@ -358,12 +363,19 @@ function BatchCard({
           </p>
         </div>
         {canJudge && (
-          <Button size="sm" onClick={runJudge} disabled={judging}>
-            <Gavel className="size-3.5" />
-            {judging
-              ? t("fusion.judging", { defaultValue: "评判中…" })
-              : t("fusion.judge", { defaultValue: "进入评判" })}
-          </Button>
+          <div className="flex shrink-0 items-center gap-2">
+            <Button size="sm" variant="secondary" onClick={() => runJudge(false)} disabled={judging}>
+              <Gavel className="size-3.5" />
+              {judging
+                ? t("fusion.judging", { defaultValue: "评判中…" })
+                : t("fusion.judge", { defaultValue: "进入评判" })}
+            </Button>
+            <Button size="sm" onClick={() => runJudge(true)} disabled={judging}
+              title={t("fusion.autoJudgeHint", { defaultValue: "派一个 CLI agent 自动读 diff 并评出赢家" })}>
+              <Gavel className="size-3.5" />
+              {t("fusion.autoJudge", { defaultValue: "自动评判" })}
+            </Button>
+          </div>
         )}
       </div>
 
@@ -443,9 +455,13 @@ function BatchCard({
       {hasDiffs && judge?.judge_thread_id && (
         <p className="flex items-center gap-1.5 font-caption text-[11px] text-foreground-tertiary">
           <Gavel className="size-3" />
-          {t("fusion.judgeThread", {
-            defaultValue: "评委方向已创建,可在聊天中查看其判决推理。",
-          })}
+          {judge?.judge_agent_id
+            ? t("fusion.autoJudgeRunning", {
+                defaultValue: "评审 agent 正在自动读 diff 并评出赢家,完成后会自动落判决。",
+              })
+            : t("fusion.judgeThread", {
+                defaultValue: "评委方向已创建,可在聊天中查看其判决推理。",
+              })}
         </p>
       )}
 
