@@ -2933,15 +2933,16 @@ impl Store {
         let pool = self.pool.clone();
         let contestant_json = serde_json::to_string(&rec.contestant_thread_ids)
             .unwrap_or_else(|_| "[]".to_string());
+        let check_cmd = rec.check_cmd.clone().filter(|c| !c.trim().is_empty());
         tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<FusionBatchRecord> {
             let mut stmt = conn.prepare(
                 "INSERT INTO fusion_batches \
-                   (id, workspace_id, slug, need, contestant_thread_ids_json, judge_thread_id, status, created_at) \
-                 VALUES (lower(hex(randomblob(16))), ?1, ?2, ?3, ?4, NULL, 'running', ?5) \
-                 RETURNING id, workspace_id, slug, need, contestant_thread_ids_json, judge_thread_id, status, created_at, deleted_at",
+                   (id, workspace_id, slug, need, contestant_thread_ids_json, judge_thread_id, status, check_cmd, created_at) \
+                 VALUES (lower(hex(randomblob(16))), ?1, ?2, ?3, ?4, NULL, 'running', ?5, ?6) \
+                 RETURNING id, workspace_id, slug, need, contestant_thread_ids_json, judge_thread_id, status, check_cmd, created_at, deleted_at",
             )?;
             let mut rows = stmt.query(params![
-                rec.workspace_id, rec.slug, rec.need, contestant_json, created_at,
+                rec.workspace_id, rec.slug, rec.need, contestant_json, check_cmd, created_at,
             ])?;
             let row = rows.next()?.ok_or(rusqlite::Error::QueryReturnedNoRows)?;
             let ids_json: String = row.get(4)?;
@@ -2954,8 +2955,9 @@ impl Store {
                 judge_thread_id: row.get(5)?,
                 status: row.get(6)?,
                 winner_thread_id: None,
-                created_at: row.get(7)?,
-                deleted_at: row.get(8)?,
+                check_cmd: row.get(7)?,
+                created_at: row.get(8)?,
+                deleted_at: row.get(9)?,
             })
         }))
         .await
@@ -2967,7 +2969,7 @@ impl Store {
         let pool = self.pool.clone();
         tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<Vec<FusionBatchRecord>> {
             let mut stmt = conn.prepare(
-                "SELECT id, workspace_id, slug, need, contestant_thread_ids_json, judge_thread_id, status, created_at, deleted_at, winner_thread_id \
+                "SELECT id, workspace_id, slug, need, contestant_thread_ids_json, judge_thread_id, status, created_at, deleted_at, winner_thread_id, check_cmd \
                  FROM fusion_batches WHERE workspace_id = ?1 AND deleted_at IS NULL \
                  ORDER BY created_at DESC",
             )?;
@@ -2982,6 +2984,7 @@ impl Store {
                     judge_thread_id: row.get(5)?,
                     status: row.get(6)?,
                     winner_thread_id: row.get(9)?,
+                    check_cmd: row.get(10)?,
                     created_at: row.get(7)?,
                     deleted_at: row.get(8)?,
                 })

@@ -1242,6 +1242,7 @@ async fn fusion_batch_crud_roundtrip() {
                 slug: "login-api".into(),
                 need: "implement JWT login".into(),
                 contestant_thread_ids: vec!["t-alpha".into(), "t-beta".into(), "t-gamma".into()],
+                check_cmd: None,
             },
             ts(1),
         )

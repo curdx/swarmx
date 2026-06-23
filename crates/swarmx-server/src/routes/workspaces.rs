@@ -824,6 +824,12 @@ pub async fn create_fusion_handler(
         base_batch_slug.chars().take(40).collect::<String>()
     };
 
+    // Optional auto-implement panel: label → CLI. Labels present here get a
+    // real CLI agent spawned in their worktree to implement `need` autonomously
+    // (OpenRouter-fusion-style full-auto panel). Labels absent stay user-driven.
+    let panel = req.panel.clone().unwrap_or_default();
+    let valid_clis = ["claude", "codex", "opencode", "reasonix"];
+
     // Create one isolated contestant direction per label.
     let mut contestant_ids: Vec<String> = Vec::with_capacity(labels.len());
     for label in &labels {
@@ -849,14 +855,58 @@ pub async fn create_fusion_handler(
             .map_err(|e| {
                 (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()})))
             })?;
-        // Kick the background worktree takeover (same as a named direction).
-        spawn_thread_worktree(
-            state.clone(),
-            rec.id.clone(),
-            workspace_id.clone(),
-            ws.cwd.clone(),
-            slug.clone(),
-        );
+
+        // Does this label want an auto-implement agent? Only if it maps to a
+        // known CLI in the panel; otherwise it's the original user-driven model.
+        let panel_cli = panel
+            .get(label)
+            .map(|c| c.trim().to_lowercase())
+            .filter(|c| valid_clis.contains(&c.as_str()));
+
+        if let Some(cli) = panel_cli {
+            // Auto-implement: synchronously isolate THIS contestant's worktree
+            // (we need the dir to spawn the agent in it) WITHOUT going through
+            // spawn_thread_worktree — whose success path reroots an orchestrator
+            // that would kill the contestant agent we're about to spawn. Then
+            // spawn the CLI agent with a prompt to implement `need`. Best-effort:
+            // an isolation/spawn failure degrades the contestant to an empty
+            // user-driven worktree rather than failing the whole batch.
+            match spawn_panel_contestant(
+                &state,
+                &workspace_id,
+                &rec.id,
+                &slug,
+                &ws.cwd,
+                &cli,
+                need,
+            )
+            .await
+            {
+                Ok(()) => {}
+                Err((_, msg)) => {
+                    tracing::warn!(label = %label, cli = %cli, msg = %msg, "fusion panel: auto-implement spawn failed; contestant left user-driven");
+                    // Fall back to the normal background isolation so the user
+                    // can still drive it by hand.
+                    spawn_thread_worktree(
+                        state.clone(),
+                        rec.id.clone(),
+                        workspace_id.clone(),
+                        ws.cwd.clone(),
+                        slug.clone(),
+                    );
+                }
+            }
+        } else {
+            // User-driven contestant: kick the background worktree takeover
+            // (same as a named direction). The user drives it from the chat.
+            spawn_thread_worktree(
+                state.clone(),
+                rec.id.clone(),
+                workspace_id.clone(),
+                ws.cwd.clone(),
+                slug.clone(),
+            );
+        }
         publish_thread_changed(&state, &workspace_id, &rec.id, "created");
         contestant_ids.push(rec.id);
     }
@@ -871,6 +921,7 @@ pub async fn create_fusion_handler(
                 slug: batch_slug,
                 need: need.to_string(),
                 contestant_thread_ids: contestant_ids,
+                check_cmd: req.check_cmd.clone(),
             },
             now_ms(),
         )
@@ -941,6 +992,11 @@ pub async fn judge_fusion_handler(
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?
     };
 
+    // The objective gate command, if this batch carries one. Only runs in auto
+    // mode (the auto-judge is what consumes the result); manual judging is left
+    // exactly as before.
+    let check_cmd = batch.check_cmd.clone().filter(|c| !c.trim().is_empty());
+
     // Gather each contestant's diff bundle.
     let mut contestants: Vec<swarmx_protocol::rest::FusionContestantDiff> = Vec::new();
     for tid in &batch.contestant_thread_ids {
@@ -961,6 +1017,31 @@ pub async fn judge_fusion_handler(
             }
             _ => Vec::new(),
         };
+        // OBJECTIVE GATE: in auto mode with a check_cmd, RUN the check in this
+        // contestant's worktree before any LLM deliberation. This catches the
+        // "looks correct but fails at runtime" class a pure-diff judge misses.
+        // The contestant's worktree dir is derived the same way isolation does.
+        let (check_passed, check_output) = if auto && check_cmd.is_some() {
+            match (&th.isolation == "worktree", th.branch.as_deref()) {
+                (true, Some(br)) if !br.is_empty() => {
+                    let dir = crate::worktree::worktree_dest(&cwd, br)
+                        .to_string_lossy()
+                        .into_owned();
+                    let (passed, out) =
+                        run_contestant_check(&dir, check_cmd.as_deref().unwrap()).await;
+                    (Some(passed), Some(out))
+                }
+                // Degraded contestant (no isolated worktree) — can't run an
+                // isolated check; report as failed gate so the judge doesn't
+                // treat unverifiable work as passing.
+                _ => (
+                    Some(false),
+                    Some("no isolated worktree — check could not be run".to_string()),
+                ),
+            }
+        } else {
+            (None, None)
+        };
         contestants.push(swarmx_protocol::rest::FusionContestantDiff {
             thread_id: th.id,
             slug: th.slug,
@@ -968,6 +1049,8 @@ pub async fn judge_fusion_handler(
             branch,
             files,
             degraded,
+            check_passed,
+            check_output,
         });
     }
 
@@ -1108,6 +1191,146 @@ pub async fn judge_fusion_handler(
     }))
 }
 
+/// Auto-implement one panel contestant: synchronously isolate its worktree,
+/// then spawn a real CLI agent inside it to implement `need` autonomously. This
+/// is the OpenRouter-fusion-style full-auto panel — instead of the user driving
+/// each contestant from the chat, every panel contestant is its own independent
+/// model implementing the SAME need in isolation. Mirrors the auto-judge's
+/// synchronous-isolation pattern (must NOT use spawn_thread_worktree, whose
+/// success path reroots an orchestrator that would kill the agent we spawn).
+async fn spawn_panel_contestant(
+    state: &AppState,
+    workspace_id: &str,
+    thread_id: &str,
+    slug: &str,
+    ws_cwd: &str,
+    cli: &str,
+    need: &str,
+) -> Result<(), (StatusCode, String)> {
+    // Synchronous isolation: we need the worktree dir on hand before spawning.
+    let cwd_for_git = ws_cwd.to_string();
+    let branch_for_git = slug.to_string();
+    let dest = tokio::task::spawn_blocking(move || {
+        crate::worktree::isolate_into_worktree(
+            std::path::Path::new(&cwd_for_git),
+            &branch_for_git,
+        )
+    })
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let dest_str = dest.to_string_lossy().into_owned();
+
+    // Mark the thread as isolated (worktree + branch + ready), same as the
+    // auto-judge isolation success path.
+    let _ = state
+        .store
+        .update_thread(
+            thread_id.to_string(),
+            None,
+            None,
+            Some("worktree".to_string()),
+            Some(slug.to_string()),
+            Some(dest_str.clone()),
+            Some("ready".to_string()),
+        )
+        .await;
+    write_deps_context_into_dir(state, workspace_id, &dest_str).await;
+    publish_thread_changed(state, workspace_id, thread_id, "isolated");
+
+    // The implement prompt: do the need, commit, then stop. Kept deliberately
+    // minimal — the contestant must NOT talk to other contestants (it can't see
+    // them) and must NOT touch the judge; it just implements and commits.
+    let system_prompt = format!(
+        "你是一次 fusion 多模型竞赛中的一名『参赛选手』。你和其它选手拿到的是**同一个需求**，\
+         各自在自己隔离的 git worktree 里独立实现，互相看不到对方的代码。\n\n\
+         ## 你的需求\n{need}\n\n\
+         ## 你要做的\n\
+         1. 你当前的工作目录就是你专属的隔离 worktree，放手实现这个需求，把代码写进合适的文件。\n\
+         2. 追求正确、完整、可读：真正满足需求，处理好边界情况，别留明显 bug。\n\
+         3. 实现完成后，用 git 把你的改动**提交**（`git add -A && git commit -m \"...\"`）。\n\
+         4. 提交后用 swarm_send_message 给 `user` 发一句话简述你的实现思路，然后停止。\n\n\
+         注意：只实现你自己的版本，别去找别的选手，也别管裁判——评比是后续独立的环节。",
+    );
+
+    let layout = WorkspaceLayout::Shared {
+        dir: std::path::PathBuf::from(dest_str),
+    };
+    let spawn_ms = now_ms();
+    let out = spawn_with_bookkeeping(
+        state,
+        cli,
+        Some("fusion-contestant".to_string()),
+        None,
+        None,
+        layout,
+        workspace_id.to_string(),
+        None,
+        Some(thread_id.to_string()),
+    )
+    .await?;
+    spawn_bootstrap_inject(
+        state.registry.clone(),
+        out.lifecycle_rx.resubscribe(),
+        out.agent_id.clone(),
+        system_prompt,
+        BootstrapCtx {
+            source: "worker",
+            spell: String::new(),
+            role_keys: Vec::new(),
+        },
+        Vec::new(),
+        state.swarm.clone(),
+        spawn_ms,
+        state.server_url.clone(),
+    );
+    Ok(())
+}
+
+/// Run the batch's objective check command inside one contestant's worktree
+/// and return (passed, output_tail). This is the OBJECTIVE gate that a pure-diff
+/// judge lacks: code that LOOKS correct but fails at runtime (a `>` that should
+/// be `>=`, a deadlock) is caught by RUNNING it, not reading it. Best-effort: a
+/// missing worktree / spawn failure is reported as a failed check with the error
+/// as output, so a contestant is never silently passed. Output is tail-truncated
+/// to keep the judge prompt bounded.
+async fn run_contestant_check(worktree_dir: &str, check_cmd: &str) -> (bool, String) {
+    let dir = worktree_dir.to_string();
+    let cmd = check_cmd.to_string();
+    let result = tokio::task::spawn_blocking(move || {
+        use std::process::Command;
+        Command::new("sh")
+            .arg("-c")
+            .arg(&cmd)
+            .current_dir(&dir)
+            .output()
+    })
+    .await;
+
+    match result {
+        Ok(Ok(out)) => {
+            let mut combined = String::from_utf8_lossy(&out.stdout).into_owned();
+            combined.push_str(&String::from_utf8_lossy(&out.stderr));
+            // Tail-truncate: the failure usually surfaces at the end (assertion,
+            // traceback, compiler error summary).
+            let tail = tail_chars(&combined, 1500);
+            (out.status.success(), tail)
+        }
+        Ok(Err(e)) => (false, format!("failed to run check command: {e}")),
+        Err(e) => (false, format!("check task panicked/cancelled: {e}")),
+    }
+}
+
+/// Keep the last `max` chars of `s`, prefixing an ellipsis when truncated.
+fn tail_chars(s: &str, max: usize) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    if chars.len() <= max {
+        return s.to_string();
+    }
+    let tail: String = chars[chars.len() - max..].iter().collect();
+    format!("…(truncated)…\n{tail}")
+}
+
 /// Spawn a one-shot CLI agent inside the judge direction's worktree to perform
 /// the verdict autonomously: read every contestant's diff (`git diff base...branch`),
 /// pick a winner on quality, and POST the decide endpoint via curl to land it.
@@ -1141,16 +1364,41 @@ async fn spawn_auto_judge(
             c.files.join("、")
         };
         let degraded = if c.degraded { "（已降级，谨慎评估）" } else { "" };
+        // Objective gate result, when a check was run. This is the single most
+        // important signal — code that FAILS the check is objectively broken no
+        // matter how clean its diff reads.
+        let check_line = match (c.check_passed, c.check_output.as_deref()) {
+            (Some(true), _) => "\n   ✅ 客观检查：通过（已在该选手 worktree 真实跑过 check 命令）".to_string(),
+            (Some(false), Some(out)) => format!(
+                "\n   ❌ 客观检查：失败（已在该选手 worktree 真实跑过 check 命令）——这是硬证据，\
+                 无论 diff 读起来多漂亮，失败就是失败。检查输出尾部：\n   ```\n{out}\n   ```",
+            ),
+            (Some(false), None) => "\n   ❌ 客观检查：失败".to_string(),
+            (None, _) => String::new(),
+        };
         roster.push_str(&format!(
-            "{}. 选手 slug=`{}`，thread_id=`{}`，分支=`{}`{}\n   改动文件：{}\n",
+            "{}. 选手 slug=`{}`，thread_id=`{}`，分支=`{}`{}\n   改动文件：{}{}\n",
             i + 1,
             c.slug,
             c.thread_id,
             branch,
             degraded,
             files,
+            check_line,
         ));
     }
+
+    // Whether any objective check ran at all (drives the extra prompt rule).
+    let any_check_ran = contestants.iter().any(|c| c.check_passed.is_some());
+    let check_rule = if any_check_ran {
+        "\n\n## 客观检查优先（最高优先级，硬规则）\n\
+         上面每位选手都已在各自的 worktree 里真实跑过一条 check 命令（编译/测试）。\
+         这是比你读 diff 更可靠的证据：**任何客观检查失败的选手，一律不得当选**，\
+         哪怕它的代码看起来最优雅。只在客观检查通过的选手里挑赢家；\
+         若只有一个通过，它就是赢家；若全部失败，选其中失败最轻、最接近正确的那个并在留言里如实说明。\n"
+    } else {
+        ""
+    };
 
     let server_url = state.server_url.clone();
     let decide_url = format!(
@@ -1178,7 +1426,7 @@ async fn spawn_auto_judge(
          把 `<选中的thread_id>` 换成你选中的那位选手上面列出的 thread_id（形如 `th-xxxx`）。\n\
          5. curl 返回成功（HTTP 200 + 含 winner_thread_id 的 JSON）后，用 swarm_send_message 给 `user` \
          发一句话，说明你选了谁、为什么选它、其它选手输在哪。然后停止。\n\n\
-         注意：只读 diff、只调用一次 decide，不要去改任何选手的代码，也不要自己动手合并——合并由 decide 端点负责。"
+         注意：只读 diff、只调用一次 decide，不要去改任何选手的代码，也不要自己动手合并——合并由 decide 端点负责。{check_rule}"
     );
 
     let layout = WorkspaceLayout::Shared {
@@ -1381,6 +1629,7 @@ fn fusion_record_to_wire(r: swarmx_storage::FusionBatchRecord) -> swarmx_protoco
         judge_thread_id: r.judge_thread_id,
         status: r.status,
         winner_thread_id: r.winner_thread_id,
+        check_cmd: r.check_cmd,
         created_at: r.created_at,
     }
 }

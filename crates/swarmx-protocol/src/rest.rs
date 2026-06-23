@@ -691,6 +691,22 @@ pub struct UpdateThreadRequest {
 pub struct CreateFusionRequest {
     pub need: String,
     pub labels: Vec<String>,
+    /// Optional objective gate: a shell command run inside each contestant's
+    /// worktree by the auto-judge BEFORE the LLM deliberates (e.g. `pytest -q`,
+    /// `cargo test`, `npm test`). Contestants whose check fails are objectively
+    /// out; pass/fail + output tails are injected into the judge prompt so the
+    /// verdict is grounded in execution, not aesthetics. None/empty = no gate
+    /// (judge falls back to pure-diff reading — the original behaviour).
+    #[serde(default)]
+    pub check_cmd: Option<String>,
+    /// Optional auto-implement panel: per-label CLI to spawn so each contestant
+    /// implements `need` autonomously (OpenRouter-fusion-style full-auto panel).
+    /// Key = label (must match an entry in `labels`), value = CLI name
+    /// ("claude" | "codex" | "opencode" | "reasonix"). Labels absent from this
+    /// map get an empty worktree the user drives by hand (the original model).
+    /// Empty/None = no auto-implement (every contestant is user-driven).
+    #[serde(default)]
+    pub panel: Option<std::collections::HashMap<String, String>>,
 }
 
 /// A fusion competition binding N isolated contestant directions (and later a
@@ -709,6 +725,10 @@ pub struct FusionBatch {
     /// 'done'); None until a verdict is reached.
     #[serde(default)]
     pub winner_thread_id: Option<String>,
+    /// The objective check command run per contestant by the auto-judge, if the
+    /// batch was created with one. None = no objective gate (pure-diff judging).
+    #[serde(default)]
+    pub check_cmd: Option<String>,
     pub created_at: i64,
 }
 
@@ -727,6 +747,16 @@ pub struct FusionContestantDiff {
     /// True if the contestant never got an isolated worktree (degraded to
     /// shared) — its work isn't separable, surfaced so the judge/UI is honest.
     pub degraded: bool,
+    /// Objective check outcome, present only when the batch carried a check_cmd
+    /// and the auto-judge ran it in this contestant's worktree. None = no gate
+    /// was run (pure-diff judging). Some(true) = check passed, Some(false) =
+    /// failed (objectively out before the LLM ever deliberates).
+    #[serde(default)]
+    pub check_passed: Option<bool>,
+    /// Tail of the check command's combined stdout/stderr (truncated), so the
+    /// judge + UI can see WHY a contestant failed, not just that it did.
+    #[serde(default)]
+    pub check_output: Option<String>,
 }
 
 /// `POST /api/workspaces/:id/fusion/:bid/judge` response: the freshly-created

@@ -569,6 +569,12 @@ pub struct FusionBatchRecord {
     /// when the batch reaches a verdict (status → 'done'). NULL until decided.
     #[serde(default)]
     pub winner_thread_id: Option<String>,
+    /// Optional shell command run inside each contestant's worktree by the
+    /// auto-judge BEFORE the LLM deliberates (e.g. `pytest -q`, `cargo test`).
+    /// NULL/empty = no objective gate (judge falls back to pure-diff reading).
+    /// See migration 0028.
+    #[serde(default)]
+    pub check_cmd: Option<String>,
     pub created_at: i64,
     #[serde(default)]
     pub deleted_at: Option<i64>,
@@ -583,5 +589,8 @@ pub struct NewFusionBatch {
     pub slug: String,
     pub need: String,
     pub contestant_thread_ids: Vec<String>,
+    /// Optional per-contestant check command (see FusionBatchRecord::check_cmd).
+    #[serde(default)]
+    pub check_cmd: Option<String>,
 }
 
