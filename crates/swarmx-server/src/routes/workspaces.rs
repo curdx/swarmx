@@ -903,7 +903,18 @@ pub async fn list_fusion_handler(
 pub async fn judge_fusion_handler(
     State(state): State<AppState>,
     Path((workspace_id, batch_id)): Path<(String, String)>,
+    Query(params): Query<HashMap<String, String>>,
 ) -> Result<Json<swarmx_protocol::rest::FusionJudgeResponse>, (StatusCode, Json<serde_json::Value>)> {
+    // `?auto=true` (default false) flips on the auto-judge: instead of just
+    // creating the judge direction + handing the human its diffs, we ALSO spawn
+    // a real CLI agent inside the judge worktree that reads every contestant's
+    // diff, picks a winner, and calls the decide endpoint itself — closing the
+    // loop with zero human input. The manual flow (judge → human decide) is the
+    // default and entirely unchanged.
+    let auto = params
+        .get("auto")
+        .map(|v| matches!(v.as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false);
     let ws = require_workspace(&state, &workspace_id).await?;
     let batches = state
         .store
@@ -981,14 +992,64 @@ pub async fn judge_fusion_handler(
         )
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
-    spawn_thread_worktree(
-        state.clone(),
-        judge_rec.id.clone(),
-        workspace_id.clone(),
-        ws.cwd.clone(),
-        judge_slug,
-    );
-    publish_thread_changed(&state, &workspace_id, &judge_rec.id, "created");
+    // The judge worktree dir, populated synchronously ONLY in auto mode (we
+    // need it on hand to spawn the judge agent there). In manual mode we keep
+    // the original fire-and-forget isolation so the existing flow is untouched.
+    let mut judge_cwd = ws.cwd.clone();
+    if auto {
+        // Synchronous isolation: we must know the judge worktree dir before we
+        // can spawn the agent in it, and — critically — we must NOT go through
+        // spawn_thread_worktree, whose success path runs reroot_thread_orchestrator
+        // (it kills every agent on the thread and respawns an `init` orchestrator),
+        // which would tear down the judge agent we're about to spawn.
+        let cwd_for_git = ws.cwd.clone();
+        let branch_for_git = judge_slug.clone();
+        let git_result = tokio::task::spawn_blocking(move || {
+            crate::worktree::isolate_into_worktree(
+                std::path::Path::new(&cwd_for_git),
+                &branch_for_git,
+            )
+        })
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        match git_result {
+            Ok(dest) => {
+                let dest_str = dest.to_string_lossy().into_owned();
+                let _ = state
+                    .store
+                    .update_thread(
+                        judge_rec.id.clone(),
+                        None,
+                        None,
+                        Some("worktree".to_string()),
+                        Some(judge_slug.clone()),
+                        Some(dest_str.clone()),
+                        Some("ready".to_string()),
+                    )
+                    .await;
+                write_deps_context_into_dir(&state, &workspace_id, &dest_str).await;
+                judge_cwd = dest_str;
+                publish_thread_changed(&state, &workspace_id, &judge_rec.id, "isolated");
+            }
+            Err(e) => {
+                // Isolation failed — degrade to shared (judge runs in main cwd),
+                // stay honest. The judge agent can still diff contestants via
+                // their branches; it just isn't itself in a private worktree.
+                tracing::warn!(?e, thread = %judge_rec.id, "auto-judge: git isolation failed; judge stays shared");
+                degrade_thread_to_shared(&state, &judge_rec.id).await;
+                publish_thread_changed(&state, &workspace_id, &judge_rec.id, "updated");
+            }
+        }
+    } else {
+        spawn_thread_worktree(
+            state.clone(),
+            judge_rec.id.clone(),
+            workspace_id.clone(),
+            ws.cwd.clone(),
+            judge_slug,
+        );
+        publish_thread_changed(&state, &workspace_id, &judge_rec.id, "created");
+    }
 
     // Bind the judge to the batch + flip to 'judging'.
     state
@@ -1010,12 +1071,148 @@ pub async fn judge_fusion_handler(
             (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": "batch vanished after update"})))
         })?;
 
+    // Auto mode: spawn the real judge CLI agent in the judge worktree, inject a
+    // Chinese system prompt that tells it to diff every contestant's branch,
+    // pick a winner, and curl the decide endpoint to close the loop. Best-effort:
+    // a spawn failure leaves the manual flow available, so we report the agent id
+    // when it spawned and None otherwise rather than failing the whole request.
+    let judge_agent_id = if auto {
+        match spawn_auto_judge(
+            &state,
+            &workspace_id,
+            &batch_id,
+            &judge_rec.id,
+            &judge_cwd,
+            &batch.need,
+            base.as_deref(),
+            &contestants,
+        )
+        .await
+        {
+            Ok(id) => Some(id),
+            Err((_, msg)) => {
+                tracing::warn!(batch = %batch_id, msg = %msg, "auto-judge: spawning judge agent failed");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     Ok(Json(swarmx_protocol::rest::FusionJudgeResponse {
         batch: updated,
         judge_thread_id: judge_rec.id,
         base,
         contestants,
+        judge_agent_id,
     }))
+}
+
+/// Spawn a one-shot CLI agent inside the judge direction's worktree to perform
+/// the verdict autonomously: read every contestant's diff (`git diff base...branch`),
+/// pick a winner on quality, and POST the decide endpoint via curl to land it.
+/// Mirrors `spawn_merge_resolver`'s spawn_with_bookkeeping + spawn_bootstrap_inject
+/// two-step. The agent lands on the judge thread_id so it operates in the judge
+/// worktree, with cross-read access to all contestant branches (they all live in
+/// the same underlying git repo).
+#[allow(clippy::too_many_arguments)]
+async fn spawn_auto_judge(
+    state: &AppState,
+    workspace_id: &str,
+    batch_id: &str,
+    judge_thread_id: &str,
+    judge_cwd: &str,
+    need: &str,
+    base: Option<&str>,
+    contestants: &[swarmx_protocol::rest::FusionContestantDiff],
+) -> Result<String, (StatusCode, String)> {
+    let cli = resolver_cli(state, workspace_id).await;
+    let n = contestants.len();
+    let base_branch = base.unwrap_or("(未知，请用 git branch 自行确认主线)");
+
+    // Build a per-contestant briefing: slug + branch + the files it touched, so
+    // the judge knows exactly which branches to diff and what to expect.
+    let mut roster = String::new();
+    for (i, c) in contestants.iter().enumerate() {
+        let branch = c.branch.as_deref().unwrap_or("(无独立分支——隔离降级，无法 diff)");
+        let files = if c.files.is_empty() {
+            "(没有改动任何文件)".to_string()
+        } else {
+            c.files.join("、")
+        };
+        let degraded = if c.degraded { "（已降级，谨慎评估）" } else { "" };
+        roster.push_str(&format!(
+            "{}. 选手 slug=`{}`，thread_id=`{}`，分支=`{}`{}\n   改动文件：{}\n",
+            i + 1,
+            c.slug,
+            c.thread_id,
+            branch,
+            degraded,
+            files,
+        ));
+    }
+
+    let server_url = state.server_url.clone();
+    let decide_url = format!(
+        "{}/api/workspaces/{}/fusion/{}/decide",
+        server_url.trim_end_matches('/'),
+        workspace_id,
+        batch_id,
+    );
+
+    let system_prompt = format!(
+        "你是本次 fusion 多模型竞赛的『裁判』。一个需求被 {n} 个互相隔离的选手各自独立实现，\
+         现在轮到你评出唯一的赢家并把结果落地。\n\n\
+         ## 本次需求\n{need}\n\n\
+         ## 主线（base）分支\n`{base_branch}`\n\n\
+         ## 参赛选手\n{roster}\n\
+         ## 你的任务（务必逐步执行）\n\
+         1. 你当前的工作目录就是裁判专用的 git worktree，所有选手的分支都在同一个 git 仓库里可见。\n\
+         2. 逐个检查每位选手的改动：对每个选手分支跑 `git diff {base_branch}...<选手分支名>`，\
+         逐行读懂它实现了什么、质量如何（正确性、完整性、可读性、是否真正满足需求、有无明显 bug）。\n\
+         3. 基于客观质量，评出**唯一一个**赢家。不要含糊、不要并列。\n\
+         4. 评出赢家后，**通过 curl 调用 decide 端点把结果落地**，使用赢家的 thread_id：\n\
+         ```\n\
+         curl -X POST {decide_url} -H 'content-type: application/json' -d '{{\"winner_thread_id\":\"<选中的thread_id>\"}}'\n\
+         ```\n\
+         把 `<选中的thread_id>` 换成你选中的那位选手上面列出的 thread_id（形如 `th-xxxx`）。\n\
+         5. curl 返回成功（HTTP 200 + 含 winner_thread_id 的 JSON）后，用 swarm_send_message 给 `user` \
+         发一句话，说明你选了谁、为什么选它、其它选手输在哪。然后停止。\n\n\
+         注意：只读 diff、只调用一次 decide，不要去改任何选手的代码，也不要自己动手合并——合并由 decide 端点负责。"
+    );
+
+    let layout = WorkspaceLayout::Shared {
+        dir: std::path::PathBuf::from(judge_cwd),
+    };
+    let spawn_ms = now_ms();
+    let out = spawn_with_bookkeeping(
+        state,
+        &cli,
+        Some("fusion-judge".to_string()),
+        None,
+        None,
+        layout,
+        workspace_id.to_string(),
+        None,
+        Some(judge_thread_id.to_string()),
+    )
+    .await?;
+    spawn_bootstrap_inject(
+        state.registry.clone(),
+        out.lifecycle_rx.resubscribe(),
+        out.agent_id.clone(),
+        system_prompt,
+        BootstrapCtx {
+            source: "worker",
+            spell: String::new(),
+            role_keys: Vec::new(),
+        },
+        Vec::new(),
+        state.swarm.clone(),
+        spawn_ms,
+        state.server_url.clone(),
+    );
+    Ok(out.agent_id)
 }
 
 /// `POST /api/workspaces/:id/fusion/:bid/decide` — the verdict / terminal stage.

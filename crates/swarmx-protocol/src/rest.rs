@@ -737,6 +737,12 @@ pub struct FusionJudgeResponse {
     pub judge_thread_id: String,
     pub base: Option<String>,
     pub contestants: Vec<FusionContestantDiff>,
+    /// Set only when the judge was started in auto mode (`?auto=true`): the id
+    /// of the real CLI agent spawned inside the judge direction to read every
+    /// contestant's diff, pick a winner, and call the decide endpoint itself.
+    /// None for the manual flow (judge → human decide), which is unchanged.
+    #[serde(default)]
+    pub judge_agent_id: Option<String>,
 }
 
 /// `POST /api/workspaces/:id/fusion/:bid/decide` — the verdict. The caller picks
