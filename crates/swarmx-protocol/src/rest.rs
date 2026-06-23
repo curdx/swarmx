@@ -707,3 +707,30 @@ pub struct FusionBatch {
     pub status: String,
     pub created_at: i64,
 }
+
+/// One contestant's changeset, gathered for the judge: which direction, its
+/// branch, and the repo-relative files it changed vs the base. The judge reads
+/// these to compare/synthesize without the contestants ever seeing each other.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FusionContestantDiff {
+    pub thread_id: String,
+    pub slug: String,
+    pub name: Option<String>,
+    pub branch: Option<String>,
+    /// Files this contestant changed vs the base branch (empty if it produced
+    /// nothing, or isolation degraded so it has no branch to diff).
+    pub files: Vec<String>,
+    /// True if the contestant never got an isolated worktree (degraded to
+    /// shared) — its work isn't separable, surfaced so the judge/UI is honest.
+    pub degraded: bool,
+}
+
+/// `POST /api/workspaces/:id/fusion/:bid/judge` response: the freshly-created
+/// judge direction plus every contestant's diff bundle for review.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FusionJudgeResponse {
+    pub batch: FusionBatch,
+    pub judge_thread_id: String,
+    pub base: Option<String>,
+    pub contestants: Vec<FusionContestantDiff>,
+}

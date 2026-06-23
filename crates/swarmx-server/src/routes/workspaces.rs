@@ -893,6 +893,131 @@ pub async fn list_fusion_handler(
     Ok(Json(batches.into_iter().map(fusion_record_to_wire).collect()))
 }
 
+/// `POST /api/workspaces/:id/fusion/:bid/judge` — enter the judge stage. Creates
+/// ONE privileged judge direction (its own isolated worktree off the base) and
+/// gathers every contestant's diff bundle (branch + changed files vs base) for
+/// review, then flips the batch to `judging`. The judge is the deliberate
+/// inverse of contestant isolation: it cross-reads all contestants' changesets
+/// (via each one's branch diff) so it can compare and synthesize — the
+/// contestants never saw each other, but the judge sees them all.
+pub async fn judge_fusion_handler(
+    State(state): State<AppState>,
+    Path((workspace_id, batch_id)): Path<(String, String)>,
+) -> Result<Json<swarmx_protocol::rest::FusionJudgeResponse>, (StatusCode, Json<serde_json::Value>)> {
+    let ws = require_workspace(&state, &workspace_id).await?;
+    let batches = state
+        .store
+        .list_fusion_batches(workspace_id.clone())
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+    let batch = batches
+        .into_iter()
+        .find(|b| b.id == batch_id)
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": format!("unknown fusion batch: {batch_id}")})),
+            )
+        })?;
+
+    // Base = the branch checked out at the workspace cwd (what contestants
+    // forked from). Computed once; contestant diffs are taken vs this.
+    let cwd = std::path::PathBuf::from(&ws.cwd);
+    let base = {
+        let cwd = cwd.clone();
+        tokio::task::spawn_blocking(move || crate::worktree::current_branch(&cwd))
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?
+    };
+
+    // Gather each contestant's diff bundle.
+    let mut contestants: Vec<swarmx_protocol::rest::FusionContestantDiff> = Vec::new();
+    for tid in &batch.contestant_thread_ids {
+        let th = match state.store.get_thread(tid.clone()).await {
+            Ok(Some(t)) => t,
+            _ => continue, // contestant deleted mid-competition — skip, stay honest
+        };
+        let branch = th.branch.clone().filter(|b| !b.is_empty());
+        let degraded = th.isolation != "worktree" || branch.is_none();
+        let files = match (&base, &branch) {
+            (Some(b), Some(f)) => {
+                let cwd = cwd.clone();
+                let b = b.clone();
+                let f = f.clone();
+                tokio::task::spawn_blocking(move || crate::worktree::diff_summary(&cwd, &b, &f))
+                    .await
+                    .unwrap_or_default()
+            }
+            _ => Vec::new(),
+        };
+        contestants.push(swarmx_protocol::rest::FusionContestantDiff {
+            thread_id: th.id,
+            slug: th.slug,
+            name: th.name,
+            branch,
+            files,
+            degraded,
+        });
+    }
+
+    // Create the judge direction (named → isolated worktree off base, same
+    // machinery as a contestant; it just gets cross-read privileges via this
+    // response rather than any special isolation).
+    let judge_base_slug = format!("{}-judge", batch.slug);
+    let judge_slug = unique_thread_slug(&state, &workspace_id, &judge_base_slug).await;
+    let judge_rec = state
+        .store
+        .create_thread(
+            NewThread {
+                workspace_id: workspace_id.clone(),
+                slug: judge_slug.clone(),
+                name: Some(format!("{} · judge", batch.need)),
+                isolation: "shared".to_string(),
+                branch: None,
+                cwd: ws.cwd.clone(),
+                state: "preparing".to_string(),
+            },
+            now_ms(),
+        )
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+    spawn_thread_worktree(
+        state.clone(),
+        judge_rec.id.clone(),
+        workspace_id.clone(),
+        ws.cwd.clone(),
+        judge_slug,
+    );
+    publish_thread_changed(&state, &workspace_id, &judge_rec.id, "created");
+
+    // Bind the judge to the batch + flip to 'judging'.
+    state
+        .store
+        .set_fusion_judge(batch.id.clone(), judge_rec.id.clone())
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+
+    // Re-read so the returned batch reflects the judge + 'judging' status.
+    let updated = state
+        .store
+        .list_fusion_batches(workspace_id.clone())
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?
+        .into_iter()
+        .find(|b| b.id == batch.id)
+        .map(fusion_record_to_wire)
+        .ok_or_else(|| {
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": "batch vanished after update"})))
+        })?;
+
+    Ok(Json(swarmx_protocol::rest::FusionJudgeResponse {
+        batch: updated,
+        judge_thread_id: judge_rec.id,
+        base,
+        contestants,
+    }))
+}
+
 /// Map a storage FusionBatchRecord onto the wire DTO.
 fn fusion_record_to_wire(r: swarmx_storage::FusionBatchRecord) -> swarmx_protocol::rest::FusionBatch {
     swarmx_protocol::rest::FusionBatch {
