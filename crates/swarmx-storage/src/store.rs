@@ -2953,6 +2953,7 @@ impl Store {
                 contestant_thread_ids: serde_json::from_str(&ids_json).unwrap_or_default(),
                 judge_thread_id: row.get(5)?,
                 status: row.get(6)?,
+                winner_thread_id: None,
                 created_at: row.get(7)?,
                 deleted_at: row.get(8)?,
             })
@@ -2966,7 +2967,7 @@ impl Store {
         let pool = self.pool.clone();
         tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<Vec<FusionBatchRecord>> {
             let mut stmt = conn.prepare(
-                "SELECT id, workspace_id, slug, need, contestant_thread_ids_json, judge_thread_id, status, created_at, deleted_at \
+                "SELECT id, workspace_id, slug, need, contestant_thread_ids_json, judge_thread_id, status, created_at, deleted_at, winner_thread_id \
                  FROM fusion_batches WHERE workspace_id = ?1 AND deleted_at IS NULL \
                  ORDER BY created_at DESC",
             )?;
@@ -2980,6 +2981,7 @@ impl Store {
                     contestant_thread_ids: serde_json::from_str(&ids_json).unwrap_or_default(),
                     judge_thread_id: row.get(5)?,
                     status: row.get(6)?,
+                    winner_thread_id: row.get(9)?,
                     created_at: row.get(7)?,
                     deleted_at: row.get(8)?,
                 })
@@ -3018,6 +3020,25 @@ impl Store {
         }))
         .await
         .context("spawn_blocking set_fusion_status")?
+    }
+
+    /// Record the winning contestant + flip status to 'done' atomically. Returns
+    /// the number of rows updated (0 if the batch is gone/deleted). The handler
+    /// is responsible for validating that `winner_thread_id` is actually one of
+    /// the batch's contestants before calling this — SQLite can't constrain a
+    /// value against a JSON array column.
+    pub async fn set_fusion_winner(&self, id: String, winner_thread_id: String) -> Result<usize> {
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<usize> {
+            let n = conn.execute(
+                "UPDATE fusion_batches SET winner_thread_id = ?2, status = 'done' \
+                 WHERE id = ?1 AND deleted_at IS NULL",
+                params![id, winner_thread_id],
+            )?;
+            Ok(n)
+        }))
+        .await
+        .context("spawn_blocking set_fusion_winner")?
     }
 
     // ── workspace roots (attached source trees) ─────────────────────────

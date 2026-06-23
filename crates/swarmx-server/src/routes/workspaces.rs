@@ -1018,6 +1018,161 @@ pub async fn judge_fusion_handler(
     }))
 }
 
+/// `POST /api/workspaces/:id/fusion/:bid/decide` — the verdict / terminal stage.
+/// The caller picks ONE winning contestant; we validate it's actually one of the
+/// batch's contestants, record it + flip the batch to 'done', then (unless the
+/// request says otherwise) merge the winner's branch back into the base line —
+/// reusing the exact same merge machinery as the per-direction merge endpoint
+/// (uncommitted work is captured first, conflicts spawn an AI resolver agent).
+pub async fn decide_fusion_handler(
+    State(state): State<AppState>,
+    Path((workspace_id, batch_id)): Path<(String, String)>,
+    Json(req): Json<swarmx_protocol::rest::FusionDecideRequest>,
+) -> Result<Json<swarmx_protocol::rest::FusionDecideResponse>, (StatusCode, Json<serde_json::Value>)> {
+    let ws = require_workspace(&state, &workspace_id).await?;
+    let batches = state
+        .store
+        .list_fusion_batches(workspace_id.clone())
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+    let batch = batches
+        .into_iter()
+        .find(|b| b.id == batch_id)
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": format!("unknown fusion batch: {batch_id}")})),
+            )
+        })?;
+
+    // The winner MUST be one of this batch's contestants — never the judge, never
+    // an unrelated thread. SQLite can't constrain a value against a JSON array,
+    // so enforce it here.
+    if !batch.contestant_thread_ids.contains(&req.winner_thread_id) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "winner_thread_id is not a contestant of this batch"})),
+        ));
+    }
+
+    // Record the verdict (winner + status='done') first, so even if the merge
+    // hits a conflict and goes async (resolver agent), the batch is already
+    // decided and auditable.
+    let updated = state
+        .store
+        .set_fusion_winner(batch.id.clone(), req.winner_thread_id.clone())
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+    if updated == 0 {
+        return Err((
+            StatusCode::CONFLICT,
+            Json(json!({"error": "fusion batch vanished before it could be decided"})),
+        ));
+    }
+
+    // Re-read so the returned batch reflects winner + 'done'.
+    let decided = state
+        .store
+        .list_fusion_batches(workspace_id.clone())
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?
+        .into_iter()
+        .find(|b| b.id == batch.id)
+        .map(fusion_record_to_wire)
+        .ok_or_else(|| {
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": "batch vanished after decide"})))
+        })?;
+
+    // If the caller didn't want a merge, we're done: verdict recorded, no base
+    // mutation.
+    if !req.merge {
+        return Ok(Json(swarmx_protocol::rest::FusionDecideResponse {
+            batch: decided,
+            winner_thread_id: req.winner_thread_id,
+            merge_status: None,
+            base: None,
+            files: Vec::new(),
+            resolver_agent_id: None,
+        }));
+    }
+
+    // Merge the winner's branch into base, reusing the per-direction merge logic.
+    let winner = require_thread(&state, &req.winner_thread_id).await?;
+    let branch = match winner.branch.clone().filter(|b| !b.is_empty()) {
+        Some(b) if winner.isolation == "worktree" => b,
+        _ => {
+            // Winner never got an isolated branch (degraded) — verdict still
+            // stands, but there's nothing to merge. Be honest rather than lying
+            // "merged".
+            return Ok(Json(swarmx_protocol::rest::FusionDecideResponse {
+                batch: decided,
+                winner_thread_id: req.winner_thread_id,
+                merge_status: Some("nothing_to_merge".to_string()),
+                base: None,
+                files: Vec::new(),
+                resolver_agent_id: None,
+            }));
+        }
+    };
+    let cwd = std::path::PathBuf::from(&ws.cwd);
+    let dir_cwd = std::path::PathBuf::from(&winner.cwd);
+    let branch_for_git = branch.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        if dir_cwd != cwd {
+            if let Err(e) = crate::worktree::commit_worktree_work(
+                &dir_cwd,
+                "swarmx: capture winning direction work before fusion merge",
+            ) {
+                return Err(format!("提交方向改动失败：{e}"));
+            }
+        }
+        if crate::worktree::working_dirty(&cwd) {
+            return Err("主线有未提交改动，请先提交或暂存后再合并".to_string());
+        }
+        let base = crate::worktree::current_branch(&cwd)
+            .ok_or_else(|| "主线处于游离 HEAD，无法合并".to_string())?;
+        let outcome = crate::worktree::merge_into_base(&cwd, &base, &branch_for_git);
+        Ok((base, outcome))
+    })
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+    let (base, outcome) = match result {
+        Ok(v) => v,
+        Err(msg) => return Err((StatusCode::CONFLICT, Json(json!({"error": msg})))),
+    };
+
+    match outcome {
+        crate::worktree::MergeOutcome::Clean { files } => {
+            let _ = files; // count of files merged; the wire shape carries names, not a count
+            Ok(Json(swarmx_protocol::rest::FusionDecideResponse {
+                batch: decided,
+                winner_thread_id: req.winner_thread_id,
+                merge_status: Some("merged".to_string()),
+                base: Some(base),
+                files: Vec::new(),
+                resolver_agent_id: None,
+            }))
+        }
+        crate::worktree::MergeOutcome::Conflict { files } => {
+            let agent_id = spawn_merge_resolver(&state, &ws, &base, &branch, &files)
+                .await
+                .map_err(|(s, m)| (s, Json(json!({"error": m}))))?;
+            Ok(Json(swarmx_protocol::rest::FusionDecideResponse {
+                batch: decided,
+                winner_thread_id: req.winner_thread_id,
+                merge_status: Some("resolving".to_string()),
+                base: Some(base),
+                files,
+                resolver_agent_id: Some(agent_id),
+            }))
+        }
+        crate::worktree::MergeOutcome::Error { msg } => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": format!("合并失败：{msg}")})),
+        )),
+    }
+}
+
 /// Map a storage FusionBatchRecord onto the wire DTO.
 fn fusion_record_to_wire(r: swarmx_storage::FusionBatchRecord) -> swarmx_protocol::rest::FusionBatch {
     swarmx_protocol::rest::FusionBatch {
@@ -1028,6 +1183,7 @@ fn fusion_record_to_wire(r: swarmx_storage::FusionBatchRecord) -> swarmx_protoco
         contestant_thread_ids: r.contestant_thread_ids,
         judge_thread_id: r.judge_thread_id,
         status: r.status,
+        winner_thread_id: r.winner_thread_id,
         created_at: r.created_at,
     }
 }

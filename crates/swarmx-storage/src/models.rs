@@ -565,6 +565,10 @@ pub struct FusionBatchRecord {
     pub judge_thread_id: Option<String>,
     /// "running" | "judging" | "done" | "failed".
     pub status: String,
+    /// The winning contestant direction (one of `contestant_thread_ids`), set
+    /// when the batch reaches a verdict (status → 'done'). NULL until decided.
+    #[serde(default)]
+    pub winner_thread_id: Option<String>,
     pub created_at: i64,
     #[serde(default)]
     pub deleted_at: Option<i64>,

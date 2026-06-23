@@ -40,6 +40,7 @@ const MIGRATION_0024: &str = include_str!("../migrations/0024_cron_tz_offset.sql
 const MIGRATION_0025: &str =
     include_str!("../migrations/0025_message_perf_indexes.sql");
 const MIGRATION_0026: &str = include_str!("../migrations/0026_fusion_batches.sql");
+const MIGRATION_0027: &str = include_str!("../migrations/0027_fusion_winner.sql");
 
 /// Every migration in apply order. Append new entries here — nothing else needs
 /// to change; `latest_migration()` and the upper-bound guard derive from this.
@@ -70,6 +71,7 @@ const MIGRATIONS: &[(i64, &str)] = &[
     (24, MIGRATION_0024),
     (25, MIGRATION_0025),
     (26, MIGRATION_0026),
+    (27, MIGRATION_0027),
 ];
 
 /// Highest migration version this binary can apply.

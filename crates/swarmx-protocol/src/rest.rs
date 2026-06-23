@@ -705,6 +705,10 @@ pub struct FusionBatch {
     pub judge_thread_id: Option<String>,
     /// "running" | "judging" | "done" | "failed".
     pub status: String,
+    /// The winning contestant direction once the batch is decided (status →
+    /// 'done'); None until a verdict is reached.
+    #[serde(default)]
+    pub winner_thread_id: Option<String>,
     pub created_at: i64,
 }
 
@@ -733,4 +737,43 @@ pub struct FusionJudgeResponse {
     pub judge_thread_id: String,
     pub base: Option<String>,
     pub contestants: Vec<FusionContestantDiff>,
+}
+
+/// `POST /api/workspaces/:id/fusion/:bid/decide` — the verdict. The caller picks
+/// ONE winning contestant; the batch records it, flips to 'done', and (unless
+/// `merge` is false) merges the winner's branch back into the base line.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FusionDecideRequest {
+    /// thread.id of the winning contestant. MUST be one of the batch's
+    /// contestants (validated server-side, 400 otherwise).
+    pub winner_thread_id: String,
+    /// Whether to merge the winner's branch into base as part of deciding.
+    /// Defaults to true; set false to record the verdict without merging (e.g.
+    /// the user wants to review the merge separately).
+    #[serde(default = "default_true")]
+    pub merge: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// `POST /api/workspaces/:id/fusion/:bid/decide` response: the decided batch and
+/// the outcome of the winner's merge (absent if `merge` was false).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FusionDecideResponse {
+    pub batch: FusionBatch,
+    pub winner_thread_id: String,
+    /// The merge result of folding the winner into base. None when the request
+    /// asked not to merge. "merged" → clean; "resolving" → conflicts, an AI
+    /// resolver agent was spawned (see `resolver_agent_id`).
+    pub merge_status: Option<String>,
+    /// Base branch the winner was merged into (when merged).
+    pub base: Option<String>,
+    /// Files the winner changed / that conflicted (depending on merge_status).
+    #[serde(default)]
+    pub files: Vec<String>,
+    /// Set when merge_status == "resolving": the spawned resolver agent's id.
+    #[serde(default)]
+    pub resolver_agent_id: Option<String>,
 }
