@@ -15,9 +15,11 @@ mod schema;
 mod store;
 
 pub use models::{
-    AgentActivityRow, AgentRecord, BlackboardOpRecord, CronJobRecord, GoalEvidenceRecord,
+    AgentActivityRow, AgentRecord, BlackboardOpRecord, CronJobRecord, FusionBatchRecord,
+    GoalEvidenceRecord,
     GoalRecord,
-    ListMessagesOpts, MessageRecord, NewAgent, NewBlackboardOp, NewGoal, NewGoalEvidence,
+    ListMessagesOpts, MessageRecord, NewAgent, NewBlackboardOp, NewFusionBatch, NewGoal,
+    NewGoalEvidence,
     NewMessage, NewRecording, NewSpellRun, NewThoughtTrace, NewThoughtTraceEvent, NewThread,
     NewWorker, NewWorkspace, NewWorkspaceRoot, RecordingRecord, SpellRunRecord, TaskRecord,
     ThoughtTraceRecord, ThoughtTraceStep, ThreadRecord, UsageByAgent, UsageByDay, UsageByModel,

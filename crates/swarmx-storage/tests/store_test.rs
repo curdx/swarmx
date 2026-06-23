@@ -2,7 +2,8 @@
 //! `TempDir` so they parallelise safely.
 
 use swarmx_storage::{
-    ListMessagesOpts, MessageRecord, NewAgent, NewBlackboardOp, NewGoal, NewGoalEvidence,
+    ListMessagesOpts, MessageRecord, NewAgent, NewBlackboardOp, NewFusionBatch, NewGoal,
+    NewGoalEvidence,
     NewMessage, NewRecording, NewThoughtTrace, NewThoughtTraceEvent, NewThread, NewWorker,
     NewWorkspace, Store, ThoughtTraceStep,
 };
@@ -1213,6 +1214,65 @@ async fn list_blackboard_ops_scoped_isolates_by_prefix() {
         .await
         .unwrap();
     assert!(near.is_empty(), "partial-segment prefix must not match alpha");
+}
+
+/// fusion batch CRUD: create binds N contestant directions, list returns it,
+/// set_fusion_judge attaches the judge + flips to 'judging', set_fusion_status
+/// advances to 'done'. Confirms migration 0026 applied and the JSON id array
+/// round-trips.
+#[tokio::test]
+async fn fusion_batch_crud_roundtrip() {
+    let (_dir, store) = fresh_store().await;
+    let ws = store
+        .create_workspace(
+            NewWorkspace {
+                name: "fusion-ws".into(),
+                cwd: "/tmp/fws".into(),
+                accent: None,
+            },
+            ts(1),
+        )
+        .await
+        .unwrap();
+
+    let batch = store
+        .create_fusion_batch(
+            NewFusionBatch {
+                workspace_id: ws.id.clone(),
+                slug: "login-api".into(),
+                need: "implement JWT login".into(),
+                contestant_thread_ids: vec!["t-alpha".into(), "t-beta".into(), "t-gamma".into()],
+            },
+            ts(1),
+        )
+        .await
+        .unwrap();
+    assert_eq!(batch.status, "running");
+    assert_eq!(batch.contestant_thread_ids.len(), 3);
+    assert!(batch.judge_thread_id.is_none());
+
+    // list returns the alive batch with its contestants intact.
+    let listed = store.list_fusion_batches(ws.id.clone()).await.unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].contestant_thread_ids, batch.contestant_thread_ids);
+    assert_eq!(listed[0].need, "implement JWT login");
+
+    // attach judge → status flips to 'judging'.
+    store
+        .set_fusion_judge(batch.id.clone(), "t-judge".into())
+        .await
+        .unwrap();
+    let listed = store.list_fusion_batches(ws.id.clone()).await.unwrap();
+    assert_eq!(listed[0].judge_thread_id.as_deref(), Some("t-judge"));
+    assert_eq!(listed[0].status, "judging");
+
+    // advance to done.
+    store
+        .set_fusion_status(batch.id.clone(), "done".into())
+        .await
+        .unwrap();
+    let listed = store.list_fusion_batches(ws.id.clone()).await.unwrap();
+    assert_eq!(listed[0].status, "done");
 }
 
 #[tokio::test]

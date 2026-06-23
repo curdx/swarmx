@@ -4,9 +4,11 @@
 
 use crate::connection::Customizer;
 use crate::models::{
-    AgentActivityRow, AgentRecord, BlackboardOpRecord, GoalEvidenceRecord, GoalRecord,
+    AgentActivityRow, AgentRecord, BlackboardOpRecord, FusionBatchRecord, GoalEvidenceRecord,
+    GoalRecord,
     ListMessagesOpts,
-    MessageRecord, NewAgent, NewBlackboardOp, NewGoal, NewGoalEvidence, NewMessage, NewRecording,
+    MessageRecord, NewAgent, NewBlackboardOp, NewFusionBatch, NewGoal, NewGoalEvidence, NewMessage,
+    NewRecording,
     NewSpellRun, NewThoughtTrace, NewThoughtTraceEvent, NewThread, NewWorker, NewWorkspace,
     NewWorkspaceRoot, RecordingRecord, SpellRunRecord, ThoughtTraceRecord, ThreadRecord,
     WorkerRecord, WorkspaceRecord, WorkspaceRootRecord,
@@ -2917,6 +2919,105 @@ impl Store {
         })
         .await
         .context("spawn_blocking soft_delete_thread")?
+    }
+
+    // ── fusion batches (multi-model competitions) ───────────────────────
+
+    /// Create a fusion batch binding N already-created contestant directions
+    /// into one competition. `id` is minted server-side. Returns the row.
+    pub async fn create_fusion_batch(
+        &self,
+        rec: NewFusionBatch,
+        created_at: i64,
+    ) -> Result<FusionBatchRecord> {
+        let pool = self.pool.clone();
+        let contestant_json = serde_json::to_string(&rec.contestant_thread_ids)
+            .unwrap_or_else(|_| "[]".to_string());
+        tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<FusionBatchRecord> {
+            let mut stmt = conn.prepare(
+                "INSERT INTO fusion_batches \
+                   (id, workspace_id, slug, need, contestant_thread_ids_json, judge_thread_id, status, created_at) \
+                 VALUES (lower(hex(randomblob(16))), ?1, ?2, ?3, ?4, NULL, 'running', ?5) \
+                 RETURNING id, workspace_id, slug, need, contestant_thread_ids_json, judge_thread_id, status, created_at, deleted_at",
+            )?;
+            let mut rows = stmt.query(params![
+                rec.workspace_id, rec.slug, rec.need, contestant_json, created_at,
+            ])?;
+            let row = rows.next()?.ok_or(rusqlite::Error::QueryReturnedNoRows)?;
+            let ids_json: String = row.get(4)?;
+            Ok(FusionBatchRecord {
+                id: row.get(0)?,
+                workspace_id: row.get(1)?,
+                slug: row.get(2)?,
+                need: row.get(3)?,
+                contestant_thread_ids: serde_json::from_str(&ids_json).unwrap_or_default(),
+                judge_thread_id: row.get(5)?,
+                status: row.get(6)?,
+                created_at: row.get(7)?,
+                deleted_at: row.get(8)?,
+            })
+        }))
+        .await
+        .context("spawn_blocking create_fusion_batch")?
+    }
+
+    /// List alive fusion batches for a workspace, newest first.
+    pub async fn list_fusion_batches(&self, workspace_id: String) -> Result<Vec<FusionBatchRecord>> {
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<Vec<FusionBatchRecord>> {
+            let mut stmt = conn.prepare(
+                "SELECT id, workspace_id, slug, need, contestant_thread_ids_json, judge_thread_id, status, created_at, deleted_at \
+                 FROM fusion_batches WHERE workspace_id = ?1 AND deleted_at IS NULL \
+                 ORDER BY created_at DESC",
+            )?;
+            let rows = stmt.query_map(params![workspace_id], |row| {
+                let ids_json: String = row.get(4)?;
+                Ok(FusionBatchRecord {
+                    id: row.get(0)?,
+                    workspace_id: row.get(1)?,
+                    slug: row.get(2)?,
+                    need: row.get(3)?,
+                    contestant_thread_ids: serde_json::from_str(&ids_json).unwrap_or_default(),
+                    judge_thread_id: row.get(5)?,
+                    status: row.get(6)?,
+                    created_at: row.get(7)?,
+                    deleted_at: row.get(8)?,
+                })
+            })?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()
+        }))
+        .await
+        .context("spawn_blocking list_fusion_batches")?
+    }
+
+    /// Set a batch's judge direction + flip status to 'judging'. Called once the
+    /// contestants have produced their solutions and the judge stage begins.
+    pub async fn set_fusion_judge(&self, id: String, judge_thread_id: String) -> Result<()> {
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<()> {
+            conn.execute(
+                "UPDATE fusion_batches SET judge_thread_id = ?2, status = 'judging' \
+                 WHERE id = ?1 AND deleted_at IS NULL",
+                params![id, judge_thread_id],
+            )?;
+            Ok(())
+        }))
+        .await
+        .context("spawn_blocking set_fusion_judge")?
+    }
+
+    /// Update a batch's status ('running' | 'judging' | 'done' | 'failed').
+    pub async fn set_fusion_status(&self, id: String, status: String) -> Result<()> {
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<()> {
+            conn.execute(
+                "UPDATE fusion_batches SET status = ?2 WHERE id = ?1 AND deleted_at IS NULL",
+                params![id, status],
+            )?;
+            Ok(())
+        }))
+        .await
+        .context("spawn_blocking set_fusion_status")?
     }
 
     // ── workspace roots (attached source trees) ─────────────────────────

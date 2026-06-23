@@ -548,3 +548,36 @@ pub struct TaskRecord {
     /// True if `<handoff_signal>.error` exists (producer-died fallback fired).
     pub error_present: bool,
 }
+
+/// A fusion competition: one need implemented independently by N contestant
+/// directions, then reviewed/merged by a judge direction. See migration 0026.
+/// The contestants are ordinary isolated directions (own worktree + blackboard
+/// prefix); this row only BINDS them into one competition for the UI + judge.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FusionBatchRecord {
+    pub id: String,
+    pub workspace_id: String,
+    pub slug: String,
+    pub need: String,
+    /// thread.id of each contestant direction, in spawn order.
+    pub contestant_thread_ids: Vec<String>,
+    /// The privileged judge direction (NULL until the judge stage).
+    pub judge_thread_id: Option<String>,
+    /// "running" | "judging" | "done" | "failed".
+    pub status: String,
+    pub created_at: i64,
+    #[serde(default)]
+    pub deleted_at: Option<i64>,
+}
+
+/// Insert payload for [`crate::Store::create_fusion_batch`]. `id` is generated
+/// by the store; the caller supplies the workspace, slug, need and the already-
+/// created contestant thread ids.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NewFusionBatch {
+    pub workspace_id: String,
+    pub slug: String,
+    pub need: String,
+    pub contestant_thread_ids: Vec<String>,
+}
+
