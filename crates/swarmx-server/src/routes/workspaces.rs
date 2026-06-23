@@ -758,6 +758,179 @@ pub async fn create_thread_handler(
     Ok(Json(info))
 }
 
+// ── fusion: multi-model competition fan-out ──────────────────────────────
+
+/// `POST /api/workspaces/:id/fusion` — start a fusion competition. Creates ONE
+/// isolated contestant direction per requested label (each named → auto git
+/// worktree, so contestants can't clobber each other's files), records a
+/// fusion_batches row binding them, and returns it. The same `need` is the
+/// directions' display intent; the caller (UI / chat) then sends that need
+/// verbatim to each contestant so the comparison is fair.
+///
+/// Contestants reuse the exact create_thread machinery (slug, preparing→ready
+/// worktree takeover) — a fusion contestant is just a named direction that
+/// happens to be grouped into a batch. Blackboard isolation between them is
+/// already enforced by the per-direction scope (list_blackboard_ops_scoped).
+pub async fn create_fusion_handler(
+    State(state): State<AppState>,
+    Path(workspace_id): Path<String>,
+    Json(req): Json<swarmx_protocol::rest::CreateFusionRequest>,
+) -> Result<Json<swarmx_protocol::rest::FusionBatch>, (StatusCode, Json<serde_json::Value>)> {
+    let need = req.need.trim();
+    if need.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "need must not be empty"})),
+        ));
+    }
+    // Cost guard: a fusion runs N real CLIs at once. Cap N so a typo can't
+    // fan out 50 contestants and exhaust the user's plan/rate limits.
+    let labels: Vec<String> = req
+        .labels
+        .iter()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect();
+    if labels.len() < 2 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "a fusion needs at least 2 contestants"})),
+        ));
+    }
+    if labels.len() > 4 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "at most 4 contestants (cost guard — each runs a real CLI)"})),
+        ));
+    }
+    let ws = state
+        .store
+        .get_workspace_by_id(workspace_id.clone())
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": format!("unknown workspace_id: {workspace_id}")})),
+            )
+        })?;
+
+    // Short batch slug from the need (fs-friendly), e.g. "implement JWT login"
+    // → "implement-jwt-login". Contestant slugs are "<batch>-<label>".
+    let base_batch_slug = crate::worktree::sanitize_suffix(need);
+    let base_batch_slug = if base_batch_slug.is_empty() {
+        "fusion".to_string()
+    } else {
+        base_batch_slug.chars().take(40).collect::<String>()
+    };
+
+    // Create one isolated contestant direction per label.
+    let mut contestant_ids: Vec<String> = Vec::with_capacity(labels.len());
+    for label in &labels {
+        let label_slug = crate::worktree::sanitize_suffix(label);
+        let base_slug = format!("{base_batch_slug}-{label_slug}");
+        let slug = unique_thread_slug(&state, &workspace_id, &base_slug).await;
+        let name = format!("{need} · {label}");
+        let rec = state
+            .store
+            .create_thread(
+                NewThread {
+                    workspace_id: workspace_id.clone(),
+                    slug: slug.clone(),
+                    name: Some(name),
+                    isolation: "shared".to_string(),
+                    branch: None,
+                    cwd: ws.cwd.clone(),
+                    state: "preparing".to_string(),
+                },
+                now_ms(),
+            )
+            .await
+            .map_err(|e| {
+                (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()})))
+            })?;
+        // Kick the background worktree takeover (same as a named direction).
+        spawn_thread_worktree(
+            state.clone(),
+            rec.id.clone(),
+            workspace_id.clone(),
+            ws.cwd.clone(),
+            slug.clone(),
+        );
+        publish_thread_changed(&state, &workspace_id, &rec.id, "created");
+        contestant_ids.push(rec.id);
+    }
+
+    // Record the batch binding the contestants.
+    let batch_slug = unique_fusion_slug(&state, &workspace_id, &base_batch_slug).await;
+    let batch = state
+        .store
+        .create_fusion_batch(
+            swarmx_storage::NewFusionBatch {
+                workspace_id: workspace_id.clone(),
+                slug: batch_slug,
+                need: need.to_string(),
+                contestant_thread_ids: contestant_ids,
+            },
+            now_ms(),
+        )
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+
+    Ok(Json(fusion_record_to_wire(batch)))
+}
+
+/// `GET /api/workspaces/:id/fusion` — list alive fusion batches (newest first).
+pub async fn list_fusion_handler(
+    State(state): State<AppState>,
+    Path(workspace_id): Path<String>,
+) -> Result<Json<Vec<swarmx_protocol::rest::FusionBatch>>, (StatusCode, Json<serde_json::Value>)> {
+    let batches = state
+        .store
+        .list_fusion_batches(workspace_id)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+    Ok(Json(batches.into_iter().map(fusion_record_to_wire).collect()))
+}
+
+/// Map a storage FusionBatchRecord onto the wire DTO.
+fn fusion_record_to_wire(r: swarmx_storage::FusionBatchRecord) -> swarmx_protocol::rest::FusionBatch {
+    swarmx_protocol::rest::FusionBatch {
+        id: r.id,
+        workspace_id: r.workspace_id,
+        slug: r.slug,
+        need: r.need,
+        contestant_thread_ids: r.contestant_thread_ids,
+        judge_thread_id: r.judge_thread_id,
+        status: r.status,
+        created_at: r.created_at,
+    }
+}
+
+/// Unique batch slug among a workspace's alive fusion batches (mirrors
+/// `unique_thread_slug`). Best-effort: on a list error returns `base`.
+async fn unique_fusion_slug(state: &AppState, workspace_id: &str, base: &str) -> String {
+    let existing: std::collections::HashSet<String> = state
+        .store
+        .list_fusion_batches(workspace_id.to_string())
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|b| b.slug)
+        .collect();
+    if !existing.contains(base) {
+        return base.to_string();
+    }
+    let mut n = 2;
+    loop {
+        let cand = format!("{base}-{n}");
+        if !existing.contains(&cand) {
+            return cand;
+        }
+        n += 1;
+    }
+}
+
 /// Broadcast that a workspace's direction (thread) list changed so subscribers
 /// (the sidebar) refetch `/api/workspaces`. The REST snapshot stays the source
 /// of truth; this is just the "now" signal for a change the snapshot can't push
@@ -1332,8 +1505,7 @@ fn spawn_thread_worktree(
         let branch_for_git = branch.clone();
         let git_result = tokio::task::spawn_blocking(move || {
             let p = std::path::Path::new(&cwd_for_git);
-            crate::worktree::git_init_with_commit(p)?;
-            crate::worktree::worktree_add(p, &branch_for_git)
+            crate::worktree::isolate_into_worktree(p, &branch_for_git)
         })
         .await;
         match git_result {

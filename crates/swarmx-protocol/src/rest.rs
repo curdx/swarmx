@@ -682,3 +682,28 @@ pub struct BranchInfo {
 pub struct UpdateThreadRequest {
     pub name: String,
 }
+
+/// `POST /api/workspaces/:id/fusion` — start a multi-model competition. One
+/// isolated contestant direction is created per label; the same `need` is sent
+/// verbatim to each so the comparison is fair. `labels` are 2..=4 contestant
+/// names (typically CLI/model names like "claude", "codex", "deepseek").
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateFusionRequest {
+    pub need: String,
+    pub labels: Vec<String>,
+}
+
+/// A fusion competition binding N isolated contestant directions (and later a
+/// judge direction). Wire mirror of the storage FusionBatchRecord.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FusionBatch {
+    pub id: String,
+    pub workspace_id: String,
+    pub slug: String,
+    pub need: String,
+    pub contestant_thread_ids: Vec<String>,
+    pub judge_thread_id: Option<String>,
+    /// "running" | "judging" | "done" | "failed".
+    pub status: String,
+    pub created_at: i64,
+}

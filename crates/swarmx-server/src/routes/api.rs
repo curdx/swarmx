@@ -132,6 +132,11 @@ pub fn router() -> Router<AppState> {
             "/api/workspaces/:id/threads/:tid/merge",
             post(super::workspaces::merge_thread_handler),
         )
+        .route(
+            "/api/workspaces/:id/fusion",
+            get(super::workspaces::list_fusion_handler)
+                .post(super::workspaces::create_fusion_handler),
+        )
         .route("/api/spells", get(super::rest::list_spells))
         .route("/api/spell/run", post(super::rest::run_spell))
         .route(

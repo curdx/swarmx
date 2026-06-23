@@ -17,7 +17,29 @@
 use anyhow::{anyhow, Context, Result};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Mutex;
 use std::time::Duration;
+
+/// Process-wide lock serializing the full git-isolation sequence (init + first
+/// commit + worktree add) against ONE repo. Concurrent isolation of several
+/// directions in the same project (notably a fusion fan-out: N contestants
+/// isolating at once) race on the repo's `.git/config` / index / HEAD locks —
+/// the first wins and the rest fail with "could not lock config file", silently
+/// degrading to shared/unisolated. The git calls are fast and already
+/// 30s-timeboxed inside `git()`, so a global serialization point is cheap
+/// insurance. NOT keyed per-repo: the simplest correct thing, contention is
+/// negligible at human scale.
+static GIT_ISOLATION_LOCK: Mutex<()> = Mutex::new(());
+
+/// Run the full isolation sequence (ensure repo + first commit, then add a
+/// worktree on `branch`) under the process-wide isolation lock, so concurrent
+/// callers against the same repo don't race on git's on-disk locks. This is the
+/// entry point background isolation should use (see `spawn_thread_worktree`).
+pub fn isolate_into_worktree(repo_cwd: &Path, branch: &str) -> Result<PathBuf> {
+    let _guard = GIT_ISOLATION_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    git_init_with_commit(repo_cwd)?;
+    worktree_add(repo_cwd, branch)
+}
 
 /// Hard ceiling for any single git invocation. `worktree add` on a large repo
 /// can take a couple seconds; init/commit are fast. 30s is generous headroom
