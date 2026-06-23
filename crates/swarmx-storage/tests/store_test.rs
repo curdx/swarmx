@@ -1166,6 +1166,55 @@ async fn paths_present_excludes_deleted_tombstones() {
     assert!(!present.contains("ws/main/never.done"));
 }
 
+/// fusion isolation guard: `list_blackboard_ops_scoped(Some(prefix))` must
+/// return ONLY keys at `<prefix>` or under `<prefix>/…`, never a sibling
+/// direction's keys. This is the single mechanism that lets a fusion
+/// competition hide each contestant's blackboard from the others while a
+/// collaborative direction (whose workers share one prefix) stays mutually
+/// visible. `None` keeps the historical global listing. Mirrors the live
+/// spike that confirmed the un-scoped global GET leaks across directions.
+#[tokio::test]
+async fn list_blackboard_ops_scoped_isolates_by_prefix() {
+    let (_dir, store) = fresh_store().await;
+    // Two contestant directions under one workspace, plus an unrelated ws.
+    store.insert_blackboard_op(bb("ws1/alpha/secret.md", "A", ts(1))).await.unwrap();
+    store.insert_blackboard_op(bb("ws1/alpha/sub/deep.md", "A2", ts(2))).await.unwrap();
+    store.insert_blackboard_op(bb("ws1/beta/secret.md", "B", ts(3))).await.unwrap();
+    store.insert_blackboard_op(bb("ws2/main/other.md", "C", ts(4))).await.unwrap();
+
+    // Scoped to alpha: sees alpha's own key + nested key, NOT beta or ws2.
+    let alpha = store
+        .list_blackboard_ops_scoped(Some("ws1/alpha".into()))
+        .await
+        .unwrap();
+    let paths: Vec<&str> = alpha.iter().map(|r| r.path.as_str()).collect();
+    assert!(paths.contains(&"ws1/alpha/secret.md"), "own key visible");
+    assert!(paths.contains(&"ws1/alpha/sub/deep.md"), "nested own key visible");
+    assert!(!paths.contains(&"ws1/beta/secret.md"), "sibling direction key LEAKED");
+    assert!(!paths.contains(&"ws2/main/other.md"), "other workspace key LEAKED");
+    assert_eq!(alpha.len(), 2, "scoped list must be exactly alpha's two keys");
+
+    // Scoped to beta: only beta's single key.
+    let beta = store
+        .list_blackboard_ops_scoped(Some("ws1/beta".into()))
+        .await
+        .unwrap();
+    assert_eq!(beta.len(), 1);
+    assert_eq!(beta[0].path, "ws1/beta/secret.md");
+
+    // None = global: every key across both workspaces (historical behaviour).
+    let all = store.list_blackboard_ops_scoped(None).await.unwrap();
+    assert_eq!(all.len(), 4, "global list returns all four keys");
+
+    // A prefix must not match a longer sibling by string-prefix alone:
+    // `ws1/alph` must NOT pick up `ws1/alpha/...` (GLOB boundary is `/`).
+    let near = store
+        .list_blackboard_ops_scoped(Some("ws1/alph".into()))
+        .await
+        .unwrap();
+    assert!(near.is_empty(), "partial-segment prefix must not match alpha");
+}
+
 #[tokio::test]
 async fn blackboard_insert_and_history() {
     let (_dir, store) = fresh_store().await;

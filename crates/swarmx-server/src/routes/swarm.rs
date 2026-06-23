@@ -325,12 +325,24 @@ pub async fn blackboard_history(
     ))
 }
 
+/// Query for `GET /api/blackboard`. `scope` optionally restricts the listing
+/// to one direction's `<workspace_id>/<thread_slug>` key prefix. Omitted = the
+/// historical global listing (every path), which is correct for the
+/// collaborative model where a direction's workers share a prefix and are meant
+/// to see each other's keys. A fusion competition passes its contestant
+/// direction's prefix so the contestants can't see each other's blackboard.
+#[derive(Debug, Default, serde::Deserialize)]
+pub struct ListBlackboardQuery {
+    pub scope: Option<String>,
+}
+
 pub async fn list_blackboard_paths(
     State(state): State<AppState>,
+    Query(q): Query<ListBlackboardQuery>,
 ) -> Result<Json<Vec<BlackboardEntry>>, (StatusCode, Json<serde_json::Value>)> {
     let latest = state
         .store
-        .list_blackboard_ops(None)
+        .list_blackboard_ops_scoped(q.scope)
         .await
         .map_err(internal_err)?;
     Ok(Json(

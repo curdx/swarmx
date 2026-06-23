@@ -2125,6 +2125,70 @@ impl Store {
         .context("spawn_blocking list_blackboard_ops")?
     }
 
+    /// Latest op per path, optionally SCOPED to a key prefix (`<prefix>` itself
+    /// or anything under `<prefix>/…`). `scope=None` is the historical global
+    /// listing (every path in the store); `scope=Some(p)` restricts to one
+    /// direction's `<workspace_id>/<thread_slug>` namespace.
+    ///
+    /// Why this exists: the blackboard is a single global table with no
+    /// workspace/thread column — isolation is by KEY PREFIX only. The default
+    /// global list is correct for the collaborative model (workers on one
+    /// direction SHARE a prefix and are meant to see each other's keys), but a
+    /// fusion competition runs each contestant in its OWN direction and they
+    /// must NOT see each other's blackboard. Scoping by the caller's direction
+    /// prefix is the single mechanism that serves both: collaborators share a
+    /// prefix (still mutually visible), competitors get distinct prefixes
+    /// (mutually hidden). GLOB (not LIKE) so a `_` in a slug isn't a wildcard —
+    /// mirrors `delete_blackboard_prefix`.
+    pub async fn list_blackboard_ops_scoped(
+        &self,
+        scope: Option<String>,
+    ) -> Result<Vec<BlackboardOpRecord>> {
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || {
+            with_busy_retry(&pool, |conn| -> rusqlite::Result<Vec<BlackboardOpRecord>> {
+                let (sql, bound): (&str, Vec<rusqlite::types::Value>) = match &scope {
+                    Some(prefix) => (
+                        // latest per path, restricted to `<prefix>` or `<prefix>/…`
+                        "SELECT b.id, b.agent_id, b.op, b.path, b.content, b.sha256, b.at \
+                     FROM blackboard_ops b \
+                     JOIN ( \
+                         SELECT path, MAX(id) AS max_id FROM blackboard_ops \
+                         WHERE path = ?1 OR path GLOB ?2 GROUP BY path \
+                     ) latest ON latest.max_id = b.id \
+                     ORDER BY b.at DESC LIMIT 200",
+                        vec![prefix.clone().into(), format!("{prefix}/*").into()],
+                    ),
+                    None => (
+                        // latest per path, global (historical behaviour)
+                        "SELECT b.id, b.agent_id, b.op, b.path, b.content, b.sha256, b.at \
+                     FROM blackboard_ops b \
+                     JOIN ( \
+                         SELECT path, MAX(id) AS max_id FROM blackboard_ops GROUP BY path \
+                     ) latest ON latest.max_id = b.id \
+                     ORDER BY b.at DESC LIMIT 200",
+                        Vec::new(),
+                    ),
+                };
+                let mut stmt = conn.prepare(sql)?;
+                let rows = stmt.query_map(rusqlite::params_from_iter(bound.iter()), |row| {
+                    Ok(BlackboardOpRecord {
+                        id: row.get(0)?,
+                        agent_id: row.get(1)?,
+                        op: row.get(2)?,
+                        path: row.get(3)?,
+                        content: row.get(4)?,
+                        sha256: row.get(5)?,
+                        at: row.get(6)?,
+                    })
+                })?;
+                rows.collect::<rusqlite::Result<Vec<_>>>()
+            })
+        })
+        .await
+        .context("spawn_blocking list_blackboard_ops_scoped")?
+    }
+
     /// Delete every blackboard op whose path is `prefix` or sits under
     /// `prefix/…`. Used when a direction is deleted to drop its
     /// `<workspace_id>/<thread_slug>/…` ledgers — otherwise the rows orphan
