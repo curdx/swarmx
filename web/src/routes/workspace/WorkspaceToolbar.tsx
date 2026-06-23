@@ -17,6 +17,7 @@ import {
   MessageSquare,
   PanelLeft,
   Play,
+  Swords,
 } from "lucide-react";
 import type { WorkspaceSummary } from "./types";
 import { directionBase } from "@/lib/thread";
@@ -49,7 +50,8 @@ export function buildTabs(wsId: string, threadSlug?: string): TabDef[] {
     { to: `${base}`, labelKey: "chat.tabs.chat", icon: MessageSquare, shortcut: 1 },
     { to: `${base}/dag`, labelKey: "chat.tabs.dag", icon: GitBranch, shortcut: 2 },
     { to: `${base}/ledger`, labelKey: "chat.tabs.ledger", icon: ClipboardList, shortcut: 3 },
-    { to: `${base}/replays`, labelKey: "chat.tabs.replays", icon: Play, shortcut: 4 },
+    { to: `${base}/fusion`, labelKey: "chat.tabs.fusion", icon: Swords, shortcut: 4 },
+    { to: `${base}/replays`, labelKey: "chat.tabs.replays", icon: Play, shortcut: 5 },
   ];
 }
 

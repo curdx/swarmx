@@ -29,6 +29,11 @@ import type {
   ThreadDiff,
   ThreadInfo,
   CronListResp,
+  CreateFusionRequest,
+  FusionBatch,
+  FusionDecideRequest,
+  FusionDecideResponse,
+  FusionJudgeResponse,
   FileListResp,
   FileReadResp,
   TasksResponse,
@@ -371,6 +376,27 @@ export const api = {
   mergeThread: (id: string, threadId: string) =>
     requestEndpoint<MergeResult>(
       apiRoutes.workspaces.mergeThread(id, threadId),
+    ),
+  // ── Fusion: multi-model competition ──────────────────────────────────
+  // List alive fusion batches (newest first) for a workspace.
+  listFusion: (id: string) =>
+    requestEndpoint<FusionBatch[]>(apiRoutes.workspaces.fusion(id)),
+  // Start a competition: fan one `need` out to 2..4 isolated contestant
+  // directions (one per label). Returns the freshly-created batch.
+  createFusion: (id: string, req: CreateFusionRequest) =>
+    requestEndpoint<FusionBatch>(apiRoutes.workspaces.createFusion(id), req),
+  // Enter the judge stage: spawn a judge direction + return each contestant's
+  // diff bundle for review.
+  judgeFusion: (id: string, bid: string) =>
+    requestEndpoint<FusionJudgeResponse>(
+      apiRoutes.workspaces.judgeFusion(id, bid),
+    ),
+  // Record the verdict: pick ONE winning contestant; the batch flips to 'done'
+  // and (unless merge=false) the winner's branch is merged back into base.
+  decideFusion: (id: string, bid: string, req: FusionDecideRequest) =>
+    requestEndpoint<FusionDecideResponse>(
+      apiRoutes.workspaces.decideFusion(id, bid),
+      req,
     ),
   // attached dependency-source roots (post-create management)
   addWorkspaceRoot: (id: string, root: WorkspaceRoot) =>

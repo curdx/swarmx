@@ -156,6 +156,14 @@ export const apiRoutes = {
       endpoint("workspaces.threadDiff", "GET", `/api/workspaces/${encodeURIComponent(id)}/threads/${encodeURIComponent(threadId)}/diff`),
     mergeThread: (id: string, threadId: string) =>
       endpoint("workspaces.mergeThread", "POST", `/api/workspaces/${encodeURIComponent(id)}/threads/${encodeURIComponent(threadId)}/merge`),
+    fusion: (id: string) =>
+      endpoint("workspaces.fusion", "GET", `/api/workspaces/${encodeURIComponent(id)}/fusion`),
+    createFusion: (id: string) =>
+      endpoint("workspaces.createFusion", "POST", `/api/workspaces/${encodeURIComponent(id)}/fusion`),
+    judgeFusion: (id: string, bid: string) =>
+      endpoint("workspaces.judgeFusion", "POST", `/api/workspaces/${encodeURIComponent(id)}/fusion/${encodeURIComponent(bid)}/judge`),
+    decideFusion: (id: string, bid: string) =>
+      endpoint("workspaces.decideFusion", "POST", `/api/workspaces/${encodeURIComponent(id)}/fusion/${encodeURIComponent(bid)}/decide`),
   },
   prompt: {
     optimize: () => endpoint("prompt.optimize", "POST", "/api/prompt/optimize"),

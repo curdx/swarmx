@@ -40,6 +40,7 @@ import { DEBUG_ENABLED } from "@/lib/debug";
 // default export, which React.lazy requires.
 const DagView = lazy(() => import("./routes/workspace/views/Dag"));
 const LedgerView = lazy(() => import("./routes/workspace/views/Ledger"));
+const FusionView = lazy(() => import("./routes/workspace/views/Fusion"));
 const ReplaysView = lazy(() => import("./routes/workspace/views/Replays"));
 const ReplayPlayer = lazy(() => import("./routes/replays/player"));
 const SettingsRoute = lazy(() => import("./routes/settings"));
@@ -81,6 +82,7 @@ function workspaceViewRoutes() {
       <Route index element={<ChatView />} />
       <Route path="dag" element={lazyView(<DagView />)} />
       <Route path="ledger" element={lazyView(<LedgerView />)} />
+      <Route path="fusion" element={lazyView(<FusionView />)} />
       <Route path="replays" element={lazyView(<ReplaysView />)} />
       {/* `context` 路径保留(老书签) — redirect 到新 ledger 视图。 */}
       <Route path="context" element={<Navigate to="../ledger" replace />} />

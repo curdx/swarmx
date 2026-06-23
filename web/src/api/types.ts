@@ -802,3 +802,67 @@ export interface CronJob {
 export interface CronListResp {
   jobs: CronJob[];
 }
+
+// ── Fusion: multi-model competition DTOs ─────────────────────────────────
+// Wire mirror of crates/swarmx-protocol/src/rest.rs Fusion* structs. A fusion
+// batch fans one `need` out to N isolated contestant directions, then a judge
+// stage compares their diffs and the user decides a winner (optionally merged).
+
+/** `POST /api/workspaces/:id/fusion` body. `labels` is 2..4 contestant names
+ *  (typically CLI/model names like "claude", "codex", "deepseek"). */
+export interface CreateFusionRequest {
+  need: string;
+  labels: string[];
+}
+
+/** A fusion competition binding N contestant directions (+ later a judge).
+ *  `status`: "running" | "judging" | "done" | "failed". */
+export interface FusionBatch {
+  id: string;
+  workspace_id: string;
+  slug: string;
+  need: string;
+  contestant_thread_ids: string[];
+  judge_thread_id: string | null;
+  status: string;
+  winner_thread_id?: string | null;
+  created_at: number;
+}
+
+/** One contestant's changeset, gathered for the judge: which direction, its
+ *  branch, and the repo-relative files it changed vs the base. */
+export interface FusionContestantDiff {
+  thread_id: string;
+  slug: string;
+  name: string | null;
+  branch: string | null;
+  files: string[];
+  /** True if the contestant never got an isolated worktree (degraded to
+   *  shared) — its work isn't separable. */
+  degraded: boolean;
+}
+
+/** `POST /api/workspaces/:id/fusion/:bid/judge` response. */
+export interface FusionJudgeResponse {
+  batch: FusionBatch;
+  judge_thread_id: string;
+  base: string | null;
+  contestants: FusionContestantDiff[];
+}
+
+/** `POST /api/workspaces/:id/fusion/:bid/decide` body. `merge` defaults true. */
+export interface FusionDecideRequest {
+  winner_thread_id: string;
+  merge?: boolean;
+}
+
+/** `POST /api/workspaces/:id/fusion/:bid/decide` response. `merge_status`:
+ *  "merged" | "resolving" | "nothing_to_merge" | null (when merge was false). */
+export interface FusionDecideResponse {
+  batch: FusionBatch;
+  winner_thread_id: string;
+  merge_status: string | null;
+  base: string | null;
+  files: string[];
+  resolver_agent_id: string | null;
+}
