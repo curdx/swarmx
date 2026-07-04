@@ -1421,6 +1421,7 @@ async fn spawn_auto_judge(
         batch_id,
     );
 
+    let analysis_key = format!("{}.judge-analysis", batch_id);
     let system_prompt = format!(
         "你是本次 fusion 多模型竞赛的『裁判』。一个需求被 {n} 个互相隔离的选手各自独立实现，\
          现在轮到你评出唯一的赢家并把结果落地。\n\n\
@@ -1431,15 +1432,20 @@ async fn spawn_auto_judge(
          1. 你当前的工作目录就是裁判专用的 git worktree，所有选手的分支都在同一个 git 仓库里可见。\n\
          2. 逐个检查每位选手的改动：对每个选手分支跑 `git diff {base_branch}...<选手分支名>`，\
          逐行读懂它实现了什么、质量如何（正确性、完整性、可读性、是否真正满足需求、有无明显 bug）。\n\
-         3. 基于客观质量，评出**唯一一个**赢家。不要含糊、不要并列。\n\
-         4. 评出赢家后，**通过 curl 调用 decide 端点把结果落地**，使用赢家的 thread_id：\n\
+         3. **先产出结构化对比分析（不是投票、不是简单挑一个）**：把各家方案对比成四类——\
+         `consensus`（多数方案的共识/相同正确做法）、`contradictions`（各家关键分歧与取舍）、\
+         `unique_insights`（只有某一家想到的亮点）、`blind_spots`（所有人都漏掉的点）。\
+         用 swarm_write_blackboard 把它写成 JSON 存到 key `{analysis_key}`，形如 \
+         `{{\"consensus\":[…],\"contradictions\":[…],\"unique_insights\":[…],\"blind_spots\":[…]}}`。\n\
+         4. 基于上面的分析与客观质量，评出**唯一一个**赢家。不要含糊、不要并列。\n\
+         5. 评出赢家后，**通过 curl 调用 decide 端点把结果落地**，使用赢家的 thread_id：\n\
          ```\n\
          curl -X POST {decide_url} -H 'content-type: application/json' -d '{{\"winner_thread_id\":\"<选中的thread_id>\"}}'\n\
          ```\n\
          把 `<选中的thread_id>` 换成你选中的那位选手上面列出的 thread_id（形如 `th-xxxx`）。\n\
-         5. curl 返回成功（HTTP 200 + 含 winner_thread_id 的 JSON）后，用 swarm_send_message 给 `user` \
+         6. curl 返回成功（HTTP 200 + 含 winner_thread_id 的 JSON）后，用 swarm_send_message 给 `user` \
          发一句话，说明你选了谁、为什么选它、其它选手输在哪。然后停止。\n\n\
-         注意：只读 diff、只调用一次 decide，不要去改任何选手的代码，也不要自己动手合并——合并由 decide 端点负责。{check_rule}"
+         注意：只读 diff、先写分析再调用一次 decide，不要去改任何选手的代码，也不要自己动手合并——合并由 decide 端点负责。{check_rule}"
     );
 
     let layout = WorkspaceLayout::Shared {
