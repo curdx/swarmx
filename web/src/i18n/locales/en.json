@@ -299,7 +299,10 @@
       "judging": "Judging",
       "done": "Done",
       "failed": "Failed"
-    }
+    },
+    "synthesize": "Synthesize",
+    "synthHint": "Dispatch an agent to combine the best of all approaches into one merged implementation (not pick a winner)",
+    "synthStarted": "Synthesizer dispatched — it'll combine the best and merge"
   },
   "error": {
     "title": "This view hit an error",

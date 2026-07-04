@@ -299,7 +299,10 @@
       "judging": "评判中",
       "done": "已完成",
       "failed": "失败"
-    }
+    },
+    "synthesize": "综合最优",
+    "synthHint": "派一个 agent 博采众长、综合出一版最优实现并合并（不是挑一个赢家）",
+    "synthStarted": "已派出综合者，博采众长合成一版并合并"
   },
   "error": {
     "title": "这个视图出错了",

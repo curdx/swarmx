@@ -169,8 +169,8 @@ export const apiRoutes = {
       endpoint("workspaces.fusion", "GET", `/api/workspaces/${encodeURIComponent(id)}/fusion`),
     createFusion: (id: string) =>
       endpoint("workspaces.createFusion", "POST", `/api/workspaces/${encodeURIComponent(id)}/fusion`),
-    judgeFusion: (id: string, bid: string, auto?: boolean) =>
-      endpoint("workspaces.judgeFusion", "POST", `/api/workspaces/${encodeURIComponent(id)}/fusion/${encodeURIComponent(bid)}/judge${auto ? "?auto=true" : ""}`),
+    judgeFusion: (id: string, bid: string, auto?: boolean, synthesize?: boolean) =>
+      endpoint("workspaces.judgeFusion", "POST", `/api/workspaces/${encodeURIComponent(id)}/fusion/${encodeURIComponent(bid)}/judge${auto ? `?auto=true${synthesize ? "&synthesize=true" : ""}` : ""}`),
     decideFusion: (id: string, bid: string) =>
       endpoint("workspaces.decideFusion", "POST", `/api/workspaces/${encodeURIComponent(id)}/fusion/${encodeURIComponent(bid)}/decide`),
     fusionConsult: (id: string) =>

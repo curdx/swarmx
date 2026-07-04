@@ -978,6 +978,13 @@ pub async fn judge_fusion_handler(
         .get("auto")
         .map(|v| matches!(v.as_str(), "1" | "true" | "yes"))
         .unwrap_or(false);
+    // `?synthesize=true` (auto only): instead of picking one winner, the judge
+    // agent writes a combined-best implementation into its own worktree and
+    // merges THAT (P3.3). Decide accepts the judge thread as the "winner".
+    let synthesize = params
+        .get("synthesize")
+        .map(|v| matches!(v.as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false);
     let ws = require_workspace(&state, &workspace_id).await?;
     let batches = state
         .store
@@ -1181,6 +1188,7 @@ pub async fn judge_fusion_handler(
             &batch.need,
             base.as_deref(),
             &contestants,
+            synthesize,
         )
         .await
         {
@@ -1361,6 +1369,7 @@ async fn spawn_auto_judge(
     need: &str,
     base: Option<&str>,
     contestants: &[swarmx_protocol::rest::FusionContestantDiff],
+    synthesize: bool,
 ) -> Result<String, (StatusCode, String)> {
     let cli = resolver_cli(state, workspace_id).await;
     let n = contestants.len();
@@ -1422,7 +1431,24 @@ async fn spawn_auto_judge(
     );
 
     let analysis_key = format!("{}.judge-analysis", batch_id);
-    let system_prompt = format!(
+    let system_prompt = if synthesize {
+        format!(
+        "你是本次 fusion 竞赛的『综合者』。同一个需求被 {n} 个互相隔离的选手各自独立实现，\
+         你的任务不是挑一个赢家，而是**博采众长、亲手综合出一份最优实现**。\n\n\
+         ## 本次需求\n{need}\n\n## 主线（base）分支\n`{base_branch}`\n\n## 参赛选手\n{roster}\n\
+         ## 你的任务（务必逐步执行）\n\
+         1. 你当前的工作目录是一个独立的 git worktree（从主线拉出的分支）。所有选手分支在同一仓库可见。\n\
+         2. 逐个读每位选手的改动（`git diff {base_branch}...<选手分支名>`），看清各家优点、取舍、独特亮点、共同盲区。\n\
+         3. **在你当前的工作目录里，动手写出一份综合各家最优的实现**：正确性优先，吸收每家最好的部分，补上大家都漏的点。写完 `git add -A && git commit`。\n\
+         4. 提交后，通过 curl 调用 decide 端点，用**你自己的 thread_id `{judge_thread_id}`** 作为 winner，把这份综合版合并进主线：\n\
+         ```\n\
+         curl -X POST {decide_url} -H 'content-type: application/json' -d '{{\"winner_thread_id\":\"{judge_thread_id}\"}}'\n\
+         ```\n\
+         5. curl 成功后用 swarm_send_message 给 `user` 说明你综合了各家哪些优点、补了什么。然后停止。\n\n\
+         注意：这是综合模式——你要亲手写出并提交综合实现，然后用你自己的 thread_id 落地合并。{check_rule}"
+        )
+    } else {
+        format!(
         "你是本次 fusion 多模型竞赛的『裁判』。一个需求被 {n} 个互相隔离的选手各自独立实现，\
          现在轮到你评出唯一的赢家并把结果落地。\n\n\
          ## 本次需求\n{need}\n\n\
@@ -1446,7 +1472,8 @@ async fn spawn_auto_judge(
          6. curl 返回成功（HTTP 200 + 含 winner_thread_id 的 JSON）后，用 swarm_send_message 给 `user` \
          发一句话，说明你选了谁、为什么选它、其它选手输在哪。然后停止。\n\n\
          注意：只读 diff、先写分析再调用一次 decide，不要去改任何选手的代码，也不要自己动手合并——合并由 decide 端点负责。{check_rule}"
-    );
+        )
+    };
 
     let layout = WorkspaceLayout::Shared {
         dir: std::path::PathBuf::from(judge_cwd),
@@ -1509,13 +1536,15 @@ pub async fn decide_fusion_handler(
             )
         })?;
 
-    // The winner MUST be one of this batch's contestants — never the judge, never
-    // an unrelated thread. SQLite can't constrain a value against a JSON array,
-    // so enforce it here.
-    if !batch.contestant_thread_ids.contains(&req.winner_thread_id) {
+    // The winner MUST be one of this batch's contestants — OR the batch's judge
+    // thread when the judge synthesized a combined-best implementation into its
+    // own worktree (P3.3 synthesis-merge). Never an unrelated thread. SQLite
+    // can't constrain a value against a JSON array, so enforce it here.
+    let is_synthesis = batch.judge_thread_id.as_deref() == Some(req.winner_thread_id.as_str());
+    if !batch.contestant_thread_ids.contains(&req.winner_thread_id) && !is_synthesis {
         return Err((
             StatusCode::BAD_REQUEST,
-            Json(json!({"error": "winner_thread_id is not a contestant of this batch"})),
+            Json(json!({"error": "winner_thread_id is not a contestant (or the judge) of this batch"})),
         ));
     }
 

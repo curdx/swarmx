@@ -27,6 +27,7 @@ import {
   Check,
   FileText,
   Gavel,
+  Sparkles,
   Plus,
   RefreshCw,
   Swords,
@@ -275,15 +276,17 @@ function BatchCard({
   const [deciding, setDeciding] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const runJudge = async (auto?: boolean) => {
+  const runJudge = async (auto?: boolean, synthesize?: boolean) => {
     setJudging(true);
     setError(null);
     try {
-      const resp = await api.judgeFusion(workspaceId, batch.id, auto);
+      const resp = await api.judgeFusion(workspaceId, batch.id, auto, synthesize);
       setJudge(resp);
       if (auto && resp.judge_agent_id) {
         toast.success(
-          t("fusion.autoJudgeStarted", { defaultValue: "已派出评审 agent，由它自动评出赢家" }),
+          synthesize
+            ? t("fusion.synthStarted", { defaultValue: "已派出综合者，博采众长合成一版并合并" })
+            : t("fusion.autoJudgeStarted", { defaultValue: "已派出评审 agent，由它自动评出赢家" }),
         );
       }
       onChanged();
@@ -374,6 +377,11 @@ function BatchCard({
               title={t("fusion.autoJudgeHint", { defaultValue: "派一个 CLI agent 自动读 diff 并评出赢家" })}>
               <Gavel className="size-3.5" />
               {t("fusion.autoJudge", { defaultValue: "自动评判" })}
+            </Button>
+            <Button size="sm" variant="secondary" onClick={() => runJudge(true, true)} disabled={judging}
+              title={t("fusion.synthHint", { defaultValue: "派一个 agent 博采众长、综合出一版最优实现并合并（不是挑一个赢家）" })}>
+              <Sparkles className="size-3.5" />
+              {t("fusion.synthesize", { defaultValue: "综合最优" })}
             </Button>
           </div>
         )}
