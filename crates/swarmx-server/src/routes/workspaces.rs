@@ -1043,7 +1043,6 @@ fn spawn_fusion_autochain(
 ) {
     tokio::spawn(async move {
         const POLL: std::time::Duration = std::time::Duration::from_secs(5);
-        const IDLE_GRACE_MS: i64 = 90_000;
         let max = autochain_impl_timeout();
         let start = std::time::Instant::now();
         // Base branch (what contestants forked from) — computed once.
@@ -1066,7 +1065,6 @@ fn spawn_fusion_autochain(
                     &contestant_thread_ids,
                     base_branch.as_deref(),
                     &base_cwd,
-                    IDLE_GRACE_MS,
                 )
                 .await
             {
@@ -1106,26 +1104,23 @@ async fn contestants_settled(
     thread_ids: &[String],
     base_branch: Option<&str>,
     base_cwd: &str,
-    idle_grace_ms: i64,
 ) -> bool {
     if thread_ids.is_empty() {
         return true;
     }
     let agents = state.store.list_agents().await.unwrap_or_default();
     for tid in thread_ids {
-        // Terminal / idle by the contestant's agent row.
+        // Terminal by the contestant's agent row (idle-time is NOT trusted — it
+        // can't tell "done" from "mid-implementation"; a working contestant would
+        // be prematurely judged out).
         let agent = agents
             .iter()
             .find(|a| a.thread_id.as_deref() == Some(tid) && a.role == "fusion-contestant");
-        let terminal_or_idle = match agent {
+        let terminal = match agent {
             None => true,
-            Some(a) => {
-                a.killed_at.is_some()
-                    || a.shim_exit_at.is_some()
-                    || matches!(a.last_activity_at, Some(last) if now_ms() - last > idle_grace_ms)
-            }
+            Some(a) => a.killed_at.is_some() || a.shim_exit_at.is_some(),
         };
-        if terminal_or_idle {
+        if terminal {
             continue;
         }
         // Still-live agent: has it COMMITTED work yet? That's the done signal.
@@ -1799,7 +1794,16 @@ fn spawn_judge_watchdog(
             }
             let timed_out = start.elapsed() >= max;
             if !timed_out
-                && !judge_settled(&state, &judge_thread_id, judge_agent_id.as_deref(), IDLE_GRACE_MS).await
+                && !judge_settled(
+                    &state,
+                    &judge_thread_id,
+                    judge_agent_id.as_deref(),
+                    IDLE_GRACE_MS,
+                    synthesize,
+                    base_branch.as_deref(),
+                    &base_cwd,
+                )
+                .await
             {
                 continue;
             }
@@ -1833,31 +1837,77 @@ async fn current_batch_status(state: &AppState, workspace_id: &str, batch_id: &s
         .map(|b| b.status)
 }
 
-/// True when the judge agent is terminal (killed/exited) or idle past
-/// `idle_grace_ms` — claude/codex/zulu stay PTY-alive when idle and never emit
-/// an exit, so idle-after-activity is their finish signal. A missing agent row
-/// (spawn failed / reaped) counts as settled.
+/// Whether the judge watchdog may fire its fallback yet. The signal differs by
+/// mode because the CONSEQUENCE differs — `idle-time` is a GUESS that can't tell
+/// "finished, waiting" from "still thinking on a long step", so it's only used
+/// where an early fire is harmless:
+///   - terminal (killed/exited) or a missing row → always yes (the judge is dead;
+///     whatever it produced is final).
+///   - synth mode (its output gets MERGED): yes only if the judge has COMMITTED
+///     its synthesis. NEVER on idle-time — that could commit+merge a half-written
+///     file and lose the judge's real output to the CAS.
+///   - pick mode: idle past the grace is enough — the fallback re-runs the
+///     DETERMINISTIC objective gate (not the judge's opinion) and the CAS blocks
+///     any double, so an early fire only wastes a gate re-run.
 async fn judge_settled(
     state: &AppState,
     judge_thread_id: &str,
     judge_agent_id: Option<&str>,
     idle_grace_ms: i64,
+    synthesize: bool,
+    base_branch: Option<&str>,
+    base_cwd: &str,
 ) -> bool {
     let agents = state.store.list_agents().await.unwrap_or_default();
     let judge = match judge_agent_id {
-        Some(aid) => agents.into_iter().find(|a| a.id == aid),
+        Some(aid) => agents.iter().find(|a| a.id == aid),
         None => agents
-            .into_iter()
+            .iter()
             .find(|a| a.thread_id.as_deref() == Some(judge_thread_id) && a.role == "fusion-judge"),
     };
-    match judge {
-        None => true,
-        Some(a) => {
-            a.killed_at.is_some()
-                || a.shim_exit_at.is_some()
-                || matches!(a.last_activity_at, Some(last) if now_ms() - last > idle_grace_ms)
-        }
+    let Some(a) = judge else {
+        return true; // no row → spawn failed / reaped → truly gone
+    };
+    if a.killed_at.is_some() || a.shim_exit_at.is_some() {
+        return true; // terminal — whatever it wrote is final
     }
+    if synthesize {
+        // Merge-producing: only a COMMITTED synthesis is safe to act on.
+        judge_committed(state, judge_thread_id, base_branch, base_cwd).await
+    } else {
+        // Pick: idle is safe (the fallback uses the gate, not the judge's output).
+        matches!(a.last_activity_at, Some(last) if now_ms() - last > idle_grace_ms)
+    }
+}
+
+/// Has the judge committed work to its branch vs base? The "done writing" signal
+/// for a synth judge — engine-independent and unambiguous (unlike idle-time).
+async fn judge_committed(
+    state: &AppState,
+    judge_thread_id: &str,
+    base_branch: Option<&str>,
+    base_cwd: &str,
+) -> bool {
+    let (Some(base), Ok(Some(th))) = (
+        base_branch,
+        state.store.get_thread(judge_thread_id.to_string()).await,
+    ) else {
+        return false;
+    };
+    if th.isolation != "worktree" {
+        return false;
+    }
+    let Some(branch) = th.branch.clone().filter(|b| !b.is_empty()) else {
+        return false;
+    };
+    let repo = base_cwd.to_string();
+    let base = base.to_string();
+    tokio::task::spawn_blocking(move || {
+        crate::worktree::diff_summary(std::path::Path::new(&repo), &base, &branch)
+    })
+    .await
+    .map(|f| !f.is_empty())
+    .unwrap_or(false)
 }
 
 /// Deterministic decide when the judge agent didn't. Never leaves the batch in

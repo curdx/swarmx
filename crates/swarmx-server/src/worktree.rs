@@ -390,7 +390,17 @@ pub fn delete_branch(repo_cwd: &Path, branch: &str) -> Result<()> {
 pub fn ignore_managed_artifacts(repo_cwd: &Path) {
     ignore_paths_locally(
         repo_cwd,
-        &[".claude/settings.local.json", ".codex/hooks.json"],
+        &[
+            ".claude/settings.local.json",
+            ".codex/hooks.json",
+            // The swarm MCP config we write per-agent: reasonix's root `.mcp.json`
+            // and zulu's `.comate/` (kernel dir). These are scaffolding, NOT the
+            // agent's work — if they leak into git they get committed by
+            // contestants/the judge and merged into base, and they falsely read as
+            // "the agent produced work" in the fusion completion checks.
+            ".mcp.json",
+            ".comate/",
+        ],
     );
 }
 
@@ -745,6 +755,10 @@ mod tests {
             "claude pattern added"
         );
         assert!(body.contains(".codex/hooks.json"), "codex pattern added");
+        // The swarm MCP configs must be excluded so they don't leak into git /
+        // read as "the agent produced work".
+        assert!(body.contains(".mcp.json"), "reasonix root .mcp.json excluded");
+        assert!(body.contains(".comate/"), "zulu .comate/ excluded");
 
         // Idempotent: a second call must not duplicate the entries.
         ignore_managed_artifacts(&repo);
