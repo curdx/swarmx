@@ -558,7 +558,8 @@
       "dag": "Flow",
       "ledger": "Ledger",
       "fusion": "Fusion",
-      "replays": "Replays"
+      "replays": "Replays",
+      "consult": "Consult"
     },
     "backToChat": "← Back to {{name}}",
     "globalScopeHint": "Showing data from every workspace · pick one in chat to scope this view",

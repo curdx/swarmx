@@ -1,0 +1,194 @@
+/**
+ * Consult (研究委员会) — the answer/research fusion view. Ask a question, pick a
+ * panel of zulu models; the server runs panel → judge → synthesis and returns
+ * the structured analysis + final answer. Distinct from the code-competition
+ * 竞赛 (Fusion) view.
+ */
+import { useEffect, useState } from "react";
+import { Loader2, Users, Sparkles } from "lucide-react";
+import { api } from "@/api/http";
+import type { FusionConsultResponse } from "@/api/types";
+import { useWorkspaceContext } from "../Shell";
+
+export default function ConsultView() {
+  const { workspace } = useWorkspaceContext();
+  const workspaceId = workspace.workspaceId;
+  const [models, setModels] = useState<{ displayName: string }[] | null>(null);
+  const [picked, setPicked] = useState<string[]>([]);
+  const [question, setQuestion] = useState("");
+  const [running, setRunning] = useState(false);
+  const [result, setResult] = useState<FusionConsultResponse | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    api
+      .getZuluModels()
+      .then((m) => {
+        setModels(m);
+        // default panel: a cross-vendor trio if present, else first 3.
+        const prefer = ["Deepseek V4 Pro", "GLM-5.2", "Kimi-K2.6"];
+        const names = m.map((x) => x.displayName);
+        const def = prefer.filter((p) => names.includes(p));
+        setPicked(def.length >= 2 ? def : names.slice(0, 3));
+      })
+      .catch((e) => setError((e as Error).message));
+  }, []);
+
+  const toggle = (name: string) =>
+    setPicked((cur) =>
+      cur.includes(name) ? cur.filter((n) => n !== name) : cur.length < 8 ? [...cur, name] : cur,
+    );
+
+  const run = async () => {
+    if (!workspaceId || !question.trim() || picked.length < 2) return;
+    setRunning(true);
+    setError(null);
+    setResult(null);
+    try {
+      const r = await api.fusionConsult(workspaceId, { question: question.trim(), panel: picked });
+      setResult(r);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  return (
+    <div className="mx-auto flex max-w-3xl flex-col gap-4 overflow-y-auto p-6">
+      <div className="flex items-center gap-2">
+        <Users className="size-5 text-accent-primary" />
+        <h1 className="text-lg font-semibold">研究委员会</h1>
+        <span className="font-caption text-xs text-foreground-tertiary">
+          多模型并行答题 → judge 结构化对比 → 综合定稿（zulu 一把 license 驱动）
+        </span>
+      </div>
+
+      {models === null && !error && (
+        <p className="font-caption text-xs text-foreground-tertiary">正在加载模型列表…</p>
+      )}
+      {models && models.length === 0 && (
+        <p className="font-caption text-xs text-state-warning">
+          没有可用模型 —— 先在「设置 → 插件」配置 Comate License。
+        </p>
+      )}
+
+      {models && models.length > 0 && (
+        <>
+          <textarea
+            value={question}
+            onChange={(e) => setQuestion(e.target.value)}
+            placeholder="提一个值得多模型会诊的问题（技术选型、竞品分析、方案评审、高风险决策的反方检查…）"
+            className="min-h-20 w-full resize-y rounded-md border border-border-subtle bg-surface-elevated px-3 py-2 text-sm text-foreground focus:border-accent-primary focus:outline-none"
+          />
+          <div className="flex flex-col gap-1">
+            <span className="font-caption text-[11px] text-foreground-tertiary">
+              Panel（选 2–8 个模型 · 已选 {picked.length}）
+            </span>
+            <div className="flex flex-wrap gap-1.5">
+              {models.map((m) => {
+                const on = picked.includes(m.displayName);
+                return (
+                  <button
+                    key={m.displayName}
+                    type="button"
+                    onClick={() => toggle(m.displayName)}
+                    className={`rounded-md border px-2 py-1 font-mono text-[11px] transition-colors ${
+                      on
+                        ? "border-accent-primary bg-accent-primary-soft text-accent-primary"
+                        : "border-border-subtle bg-surface-elevated text-foreground-secondary hover:bg-surface-tertiary"
+                    }`}
+                  >
+                    {m.displayName}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={run}
+              disabled={running || !question.trim() || picked.length < 2}
+              className="inline-flex items-center gap-1.5 rounded-md bg-accent-primary px-3 py-1.5 text-sm font-medium text-white transition-colors hover:opacity-90 disabled:opacity-50"
+            >
+              {running ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
+              {running ? "会诊中…（约 1–2 分钟）" : "开始会诊"}
+            </button>
+            <span className="font-caption text-[11px] text-foreground-tertiary">
+              成本 ≈ (panel + 2)× 单次调用；这是高价值任务按钮，不是默认路径。
+            </span>
+          </div>
+        </>
+      )}
+
+      {error && (
+        <div className="rounded-md border border-state-danger/40 bg-status-danger-soft px-3 py-2 text-xs text-state-danger">
+          {error}
+        </div>
+      )}
+
+      {result && <ConsultResult result={result} />}
+    </div>
+  );
+}
+
+function ConsultResult({ result }: { result: FusionConsultResponse }) {
+  const a = result.analysis;
+  const sections: [string, string[]][] = [
+    ["共识", a.consensus],
+    ["矛盾", a.contradictions],
+    ["独特洞察", a.unique_insights],
+    ["盲区", a.blind_spots],
+  ];
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="rounded-md border border-accent-primary/40 bg-accent-primary-soft/30 p-4">
+        <div className="mb-1 flex items-center gap-1.5 text-sm font-semibold text-accent-primary">
+          <Sparkles className="size-4" /> 综合定稿
+        </div>
+        <div className="whitespace-pre-wrap text-sm text-foreground">{result.synthesis}</div>
+      </div>
+
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        {sections.map(([title, items]) => (
+          <div key={title} className="rounded-md border border-border-subtle bg-surface-secondary p-3">
+            <div className="mb-1 font-caption text-xs font-medium text-foreground-secondary">
+              {title}（{items.length}）
+            </div>
+            {items.length === 0 ? (
+              <div className="font-caption text-[11px] text-foreground-tertiary">—</div>
+            ) : (
+              <ul className="list-disc space-y-1 pl-4 text-xs text-foreground-secondary">
+                {items.map((it, i) => (
+                  <li key={i}>{it}</li>
+                ))}
+              </ul>
+            )}
+          </div>
+        ))}
+      </div>
+      {a.note && (
+        <div className="rounded-md border border-state-warning/40 bg-surface-secondary px-3 py-2 text-[11px] text-state-warning">
+          judge 未产出结构化结果：{a.note}
+        </div>
+      )}
+
+      <details className="rounded-md border border-border-subtle bg-surface-secondary p-3">
+        <summary className="cursor-pointer font-caption text-xs text-foreground-secondary">
+          Panel 原始答案（{result.panel.length}） · {result.cost_note}
+        </summary>
+        <div className="mt-2 flex flex-col gap-2">
+          {result.panel.map((p) => (
+            <div key={p.model} className="border-t border-border-subtle pt-2 first:border-t-0">
+              <div className="font-mono text-[11px] text-foreground-tertiary">
+                {p.model} · {p.ok ? `${p.elapsed_ms}ms` : "失败"}
+              </div>
+              <div className="whitespace-pre-wrap text-xs text-foreground-secondary">{p.answer}</div>
+            </div>
+          ))}
+        </div>
+      </details>
+    </div>
+  );
+}

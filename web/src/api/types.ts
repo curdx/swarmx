@@ -869,3 +869,31 @@ export interface FusionDecideResponse {
   files: string[];
   resolver_agent_id: string | null;
 }
+
+// ── Answer/research fusion (panel → judge → synthesis) ──────────────────────
+export interface FusionConsultRequest {
+  question: string;
+  panel?: string[];
+  judge_model?: string;
+  synthesis_model?: string;
+}
+export interface FusionPanelAnswer {
+  model: string;
+  answer: string;
+  ok: boolean;
+  elapsed_ms: number;
+}
+export interface FusionJudgeAnalysis {
+  consensus: string[];
+  contradictions: string[];
+  unique_insights: string[];
+  blind_spots: string[];
+  note?: string | null;
+}
+export interface FusionConsultResponse {
+  question: string;
+  panel: FusionPanelAnswer[];
+  analysis: FusionJudgeAnalysis;
+  synthesis: string;
+  cost_note: string;
+}

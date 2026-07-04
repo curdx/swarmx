@@ -33,6 +33,8 @@ import type {
   FusionBatch,
   FusionDecideRequest,
   FusionDecideResponse,
+  FusionConsultRequest,
+  FusionConsultResponse,
   FusionJudgeResponse,
   FileListResp,
   FileReadResp,
@@ -413,6 +415,9 @@ export const api = {
       apiRoutes.workspaces.decideFusion(id, bid),
       req,
     ),
+  /** Answer/research fusion: panel → judge → synthesis (zulu-backed). */
+  fusionConsult: (id: string, req: FusionConsultRequest) =>
+    requestEndpoint<FusionConsultResponse>(apiRoutes.workspaces.fusionConsult(id), req),
   // attached dependency-source roots (post-create management)
   addWorkspaceRoot: (id: string, root: WorkspaceRoot) =>
     requestEndpoint<WorkspaceRoot>(apiRoutes.workspaces.roots(id), root),

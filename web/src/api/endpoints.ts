@@ -173,6 +173,8 @@ export const apiRoutes = {
       endpoint("workspaces.judgeFusion", "POST", `/api/workspaces/${encodeURIComponent(id)}/fusion/${encodeURIComponent(bid)}/judge${auto ? "?auto=true" : ""}`),
     decideFusion: (id: string, bid: string) =>
       endpoint("workspaces.decideFusion", "POST", `/api/workspaces/${encodeURIComponent(id)}/fusion/${encodeURIComponent(bid)}/decide`),
+    fusionConsult: (id: string) =>
+      endpoint("workspaces.fusionConsult", "POST", `/api/workspaces/${encodeURIComponent(id)}/fusion-consult`),
   },
   prompt: {
     optimize: () => endpoint("prompt.optimize", "POST", "/api/prompt/optimize"),

@@ -558,7 +558,8 @@
       "dag": "协作图",
       "ledger": "工作台账",
       "fusion": "竞赛",
-      "replays": "录像"
+      "replays": "录像",
+      "consult": "研究委员会"
     },
     "backToChat": "← 返回 {{name}}",
     "globalScopeHint": "当前显示所有工作空间的数据 · 在聊天中选择某个工作空间可仅查看该工作空间",
