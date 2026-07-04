@@ -702,8 +702,10 @@ pub struct CreateFusionRequest {
     /// Optional auto-implement panel: per-label CLI to spawn so each contestant
     /// implements `need` autonomously (OpenRouter-fusion-style full-auto panel).
     /// Key = label (must match an entry in `labels`), value = CLI name
-    /// ("claude" | "codex" | "opencode" | "reasonix"). Labels absent from this
-    /// map get an empty worktree the user drives by hand (the original model).
+    /// ("claude" | "codex" | "opencode" | "reasonix" | "zulu"), optionally with a
+    /// model as `"cli:model"` — e.g. `"zulu:Deepseek V4 Pro"` and
+    /// `"zulu:GLM-5.2"` to race different models under one zulu license. Labels
+    /// absent from this map get an empty worktree the user drives by hand.
     /// Empty/None = no auto-implement (every contestant is user-driven).
     #[serde(default)]
     pub panel: Option<std::collections::HashMap<String, String>>,

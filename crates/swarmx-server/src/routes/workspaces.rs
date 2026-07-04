@@ -828,7 +828,7 @@ pub async fn create_fusion_handler(
     // real CLI agent spawned in their worktree to implement `need` autonomously
     // (OpenRouter-fusion-style full-auto panel). Labels absent stay user-driven.
     let panel = req.panel.clone().unwrap_or_default();
-    let valid_clis = ["claude", "codex", "opencode", "reasonix"];
+    let valid_clis = ["claude", "codex", "opencode", "reasonix", "zulu"];
 
     // Create one isolated contestant direction per label.
     let mut contestant_ids: Vec<String> = Vec::with_capacity(labels.len());
@@ -856,12 +856,23 @@ pub async fn create_fusion_handler(
                 (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()})))
             })?;
 
-        // Does this label want an auto-implement agent? Only if it maps to a
-        // known CLI in the panel; otherwise it's the original user-driven model.
-        let panel_cli = panel
-            .get(label)
-            .map(|c| c.trim().to_lowercase())
-            .filter(|c| valid_clis.contains(&c.as_str()));
+        // Does this label want an auto-implement agent? Parse "cli" or
+        // "cli:model" (e.g. "zulu:Deepseek V4 Pro" to race different zulu models
+        // — one license, N models). Only the cli part is case-normalized.
+        let (panel_cli, panel_model) = match panel.get(label).map(|s| s.trim()) {
+            Some(v) if !v.is_empty() => {
+                let (c, m) = match v.split_once(':') {
+                    Some((c, m)) => (c.trim().to_lowercase(), Some(m.trim().to_string())),
+                    None => (v.to_lowercase(), None),
+                };
+                if valid_clis.contains(&c.as_str()) {
+                    (Some(c), m)
+                } else {
+                    (None, None)
+                }
+            }
+            _ => (None, None),
+        };
 
         if let Some(cli) = panel_cli {
             // Auto-implement: synchronously isolate THIS contestant's worktree
@@ -878,6 +889,7 @@ pub async fn create_fusion_handler(
                 &slug,
                 &ws.cwd,
                 &cli,
+                panel_model.as_deref(),
                 need,
             )
             .await
@@ -1205,6 +1217,7 @@ async fn spawn_panel_contestant(
     slug: &str,
     ws_cwd: &str,
     cli: &str,
+    model: Option<&str>,
     need: &str,
 ) -> Result<(), (StatusCode, String)> {
     // Synchronous isolation: we need the worktree dir on hand before spawning.
@@ -1261,7 +1274,7 @@ async fn spawn_panel_contestant(
         state,
         cli,
         Some("fusion-contestant".to_string()),
-        None,
+        model.map(str::to_string),
         None,
         layout,
         workspace_id.to_string(),
