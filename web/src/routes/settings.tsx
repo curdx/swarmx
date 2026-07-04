@@ -1056,6 +1056,13 @@ function PluginsPanel() {
   const [items, setItems] = useState<CliPluginInfo[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
+  // One-click install: which engine is installing, its streamed log, and the
+  // terminal result (null = not run / cleared).
+  const [installingId, setInstallingId] = useState<string | null>(null);
+  const [installLog, setInstallLog] = useState<string[]>([]);
+  const [installResult, setInstallResult] = useState<{ ok: boolean; error?: string } | null>(null);
+  // Which engine the current log/result belongs to (persists after install ends).
+  const [logFor, setLogFor] = useState<string | null>(null);
   // Real-usability verdicts (actually start each CLI) layered over the install
   // info. Probing is opt-in via the button — it cold-starts every engine.
   const readiness = useEngineReadiness();
@@ -1067,6 +1074,35 @@ function PluginsPanel() {
       setCopied(key);
       window.setTimeout(() => setCopied((current) => (current === key ? null : current)), 1800);
     });
+  };
+
+  const loadPlugins = () =>
+    api
+      .listPlugins()
+      .then((rows) => setItems(rows))
+      .catch((e) => setError((e as Error).message));
+
+  const runInstall = async (id: string) => {
+    setInstallingId(id);
+    setLogFor(id);
+    setInstallLog([]);
+    setInstallResult(null);
+    try {
+      await api.installPlugin(id, (ev) => {
+        if (ev.type === "line") {
+          setInstallLog((prev) => [...prev, ev.text]);
+        } else {
+          setInstallResult({ ok: ev.ok, error: ev.error });
+        }
+      });
+    } catch (e) {
+      setInstallResult({ ok: false, error: (e as Error).message });
+    } finally {
+      setInstallingId(null);
+      // Refresh installed/version + re-run the usability probe so the card flips.
+      await loadPlugins();
+      readiness.probe();
+    }
   };
 
   useEffect(() => {
@@ -1229,6 +1265,50 @@ function PluginsPanel() {
                       <span className="font-caption text-[11px] text-foreground-secondary">
                         {p.install.summary}
                       </span>
+                    </div>
+                    {/* one-click install (runs the whitelisted command server-side) */}
+                    <Button
+                      type="button"
+                      size="sm"
+                      onClick={() => runInstall(p.id)}
+                      disabled={installingId != null}
+                      className="self-start"
+                    >
+                      {installingId === p.id ? (
+                        <Loader2 className="size-3.5 animate-spin" />
+                      ) : (
+                        <DownloadCloud className="size-3.5" />
+                      )}
+                      {installingId === p.id
+                        ? t("settings.plugins.installing", "安装中…")
+                        : t("settings.plugins.oneClickInstall", "一键安装")}
+                    </Button>
+                    {logFor === p.id && (installingId === p.id || installResult) && (
+                      <div className="flex flex-col gap-1">
+                        {installLog.length > 0 && (
+                          <pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded-md border border-border-subtle bg-surface-base p-2 font-mono text-[10px] leading-4 text-foreground-secondary">
+                            {installLog.join("\n")}
+                          </pre>
+                        )}
+                        {installResult && (
+                          <span
+                            className={cn(
+                              "font-caption text-[11px]",
+                              installResult.ok ? "text-status-success" : "text-state-danger",
+                            )}
+                          >
+                            {installResult.ok
+                              ? t("settings.plugins.installOk", "安装完成 ✓")
+                              : t("settings.plugins.installFail", {
+                                  defaultValue: "安装失败：{{err}}",
+                                  err: installResult.error ?? "",
+                                })}
+                          </span>
+                        )}
+                      </div>
+                    )}
+                    <div className="font-caption text-[11px] text-foreground-tertiary">
+                      {t("settings.plugins.orCopy", "或手动复制命令执行：")}
                     </div>
                     <div className="flex flex-col gap-1.5">
                       {p.install.commands.map((command, index) => {

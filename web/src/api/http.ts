@@ -191,6 +191,43 @@ export const api = {
    *  polls this while a sweep runs. */
   getEngineProbe: () =>
     requestEndpoint<EngineProbeResponse>(apiRoutes.plugins.probeStatus()),
+  /** One-click install: POST the install route and stream its SSE output line by
+   *  line via `onEvent`, resolving when the stream closes. The command itself is
+   *  server-owned (the engine's whitelisted install command); we only send the id. */
+  installPlugin: async (
+    id: string,
+    onEvent: (
+      ev:
+        | { type: "line"; text: string }
+        | { type: "done"; ok: boolean; installed: boolean; version?: string | null; error?: string },
+    ) => void,
+  ): Promise<void> => {
+    const res = await fetch(HTTP_BASE + apiRoutes.plugins.install(id).path, { method: "POST" });
+    if (!res.ok || !res.body) {
+      onEvent({ type: "done", ok: false, installed: false, error: `HTTP ${res.status}` });
+      return;
+    }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let sep;
+      while ((sep = buf.indexOf("\n\n")) >= 0) {
+        const frame = buf.slice(0, sep);
+        buf = buf.slice(sep + 2);
+        const data = frame.split("\n").find((l) => l.startsWith("data:"));
+        if (!data) continue;
+        try {
+          onEvent(JSON.parse(data.slice(5).trim()));
+        } catch {
+          /* ignore malformed frame */
+        }
+      }
+    }
+  },
   /** Comate Zulu license: read the masked status / write a new value. */
   getComate: () =>
     requestEndpoint<{ configured: boolean; source: string; hint: string }>(

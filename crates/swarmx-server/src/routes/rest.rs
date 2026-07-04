@@ -357,8 +357,120 @@ fn install_hint_for(p: &CliPlugin) -> Option<CliInstallHint> {
             verify_command: Some("reasonix version".to_string()),
             login_command: Some("reasonix setup".to_string()),
         }),
+        "zulu" => Some(CliInstallHint {
+            title: "Install Comate Zulu".to_string(),
+            summary: "多模型编码 CLI —— 一把 Comate license 跑十余个模型（研究委员会 / \
+                      融合竞赛的多模型来源）。npm 全局安装后，在下方填入 Comate license 即可。"
+                .to_string(),
+            docs_url: "https://www.npmjs.com/package/@comate/zulu".to_string(),
+            commands: vec!["npm install -g @comate/zulu".to_string()],
+            verify_command: Some("zulu --version".to_string()),
+            login_command: None,
+        }),
         _ => None,
     }
+}
+
+/// Build an SSE event from a JSON value (empty event on the impossible serialize
+/// failure, so a bad line never aborts the install stream).
+fn sse_event(v: serde_json::Value) -> axum::response::sse::Event {
+    axum::response::sse::Event::default()
+        .json_data(v)
+        .unwrap_or_default()
+}
+
+/// `POST /api/plugins/:id/install` — run this engine's ONE-CLICK install command
+/// and stream its output as SSE. The command is `install_hint_for(plugin)
+/// .commands[0]` — a fixed, server-owned string; the ONLY client input is the
+/// (validated) plugin id, never a command. Runs with the augmented PATH (so a
+/// packaged GUI build finds node/npm) and `current_dir($HOME)` (so a CWD=`/`
+/// build never writes a lockfile at `/`). On the child's exit it re-resolves the
+/// binary + version and emits a terminal `done` event. Loopback + the Origin
+/// guard are the trust boundary (same as `/ws/terminal`).
+pub async fn install_plugin(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let plugin = state.plugins.get(&id).cloned();
+    let resolved = plugin.as_ref().and_then(install_hint_for);
+    let (cmd, binary) = match (resolved, plugin) {
+        (Some(h), Some(p)) if !h.commands.is_empty() => (h.commands[0].clone(), p.binary.clone()),
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": format!("no one-click install for engine: {id}")})),
+            )
+                .into_response();
+        }
+    };
+
+    let (tx, rx) = futures::channel::mpsc::unbounded::<axum::response::sse::Event>();
+    tokio::spawn(async move {
+        use tokio::io::AsyncBufReadExt;
+        let _ = tx.unbounded_send(sse_event(json!({"type": "line", "text": format!("$ {cmd}")})));
+
+        let home = std::env::var_os("HOME")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::PathBuf::from("."));
+        let spawned = tokio::process::Command::new("sh")
+            .arg("-c")
+            .arg(&cmd)
+            .env("PATH", crate::runtime_path::augmented_path())
+            .current_dir(&home)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn();
+        let mut child = match spawned {
+            Ok(c) => c,
+            Err(e) => {
+                let _ = tx.unbounded_send(sse_event(
+                    json!({"type": "done", "ok": false, "installed": false, "error": e.to_string()}),
+                ));
+                return;
+            }
+        };
+
+        // Stream stdout + stderr line-by-line as they arrive.
+        let mut readers = Vec::new();
+        for pipe in [
+            child.stdout.take().map(|s| Box::new(s) as Box<dyn tokio::io::AsyncRead + Unpin + Send>),
+            child.stderr.take().map(|s| Box::new(s) as Box<dyn tokio::io::AsyncRead + Unpin + Send>),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            let tx = tx.clone();
+            readers.push(tokio::spawn(async move {
+                let mut lines = tokio::io::BufReader::new(pipe).lines();
+                while let Ok(Some(l)) = lines.next_line().await {
+                    let _ = tx.unbounded_send(sse_event(json!({"type": "line", "text": l})));
+                }
+            }));
+        }
+        let status = child.wait().await;
+        for r in readers {
+            let _ = r.await;
+        }
+
+        let ok = status.map(|s| s.success()).unwrap_or(false);
+        let resolved = crate::runtime_path::resolve_executable(&binary);
+        let version = match &resolved {
+            Some(p) => probe_cli_version(p).await,
+            None => None,
+        };
+        let _ = tx.unbounded_send(sse_event(json!({
+            "type": "done",
+            "ok": ok,
+            "installed": resolved.is_some(),
+            "version": version,
+        })));
+    });
+
+    use futures::StreamExt;
+    axum::response::sse::Sse::new(rx.map(Ok::<_, std::convert::Infallible>))
+        .keep_alive(axum::response::sse::KeepAlive::default())
+        .into_response()
 }
 
 fn missing_cli_install_message(plugin: &CliPlugin) -> String {

@@ -44,6 +44,9 @@ export const apiRoutes = {
     probe: () => endpoint("plugins.probe", "POST", "/api/plugins/probe"),
     /** Cached probe verdicts + whether a sweep is in flight. */
     probeStatus: () => endpoint("plugins.probeStatus", "GET", "/api/plugins/probe"),
+    /** One-click install: streams the whitelisted install command's output (SSE). */
+    install: (id: string) =>
+      endpoint("plugins.install", "POST", `/api/plugins/${encodeURIComponent(id)}/install`),
   },
   /** Comate Zulu SaaS license (zulu engine credential). */
   comate: {

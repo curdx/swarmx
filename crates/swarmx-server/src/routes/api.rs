@@ -17,6 +17,10 @@ pub fn router() -> Router<AppState> {
             "/api/plugins/probe",
             post(super::rest::probe_engines).get(super::rest::probe_status),
         )
+        .route(
+            "/api/plugins/:id/install",
+            post(super::rest::install_plugin),
+        )
         .route("/api/usage", get(super::usage::usage_summary))
         .route(
             "/api/usage/pricing",
