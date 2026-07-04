@@ -1,7 +1,7 @@
 <h1 align="center">swarmx</h1>
 
 <p align="center">
-  <strong>把你真实的 <code>claude</code> / <code>codex</code> / <code>opencode</code> / <code>reasonix</code> / <code>zulu</code> CLI 组成一个协作蜂群，再叠上「多模型研究委员会 + 融合竞赛」—— 全在一个浏览器标签页里。</strong>
+  在一个浏览器标签页里，把你本机真实的 <code>claude</code> / <code>codex</code> / <code>opencode</code> / <code>reasonix</code> / <code>zulu</code> 命令行，组成一支会协作的 AI 团队。
 </p>
 
 <p align="center">
@@ -13,109 +13,76 @@
 </p>
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/curdx/swarmx/main/docs/assets/hero-terminals.png" alt="swarmx 仪表盘 —— 多个真实 CLI agent 并排运行" width="100%">
+  <img src="https://raw.githubusercontent.com/curdx/swarmx/main/docs/assets/hero-terminals.png" alt="swarmx 仪表盘：多个真实 CLI agent 并排运行" width="100%">
 </p>
 
-**swarmx** 拉起你磁盘上*真实*的订阅模式编码 CLI —— 就是那个 `claude`、`codex`、
-`opencode`、`reasonix`、`zulu` 二进制本身 —— 每个跑在自己独立的、PTY 支撑的终端面板里，
-并把它们组织成一个能协作的团队。你只用自然语言跟一个 **队长（orchestrator）** 说话，
-它按任务规模伸缩团队。
+swarmx 是一个跑在本地的浏览器仪表盘。它在 PTY 下拉起你已经装好、登录好的编码
+CLI——每个 agent 就是那个二进制本身——再给它们接上一套协作层：共享收件箱、共享黑板、
+一个统一入口的队长。你用自然语言跟队长说要做什么，它自己拆解、派人、把结果汇总回来。
 
-它**不是**又一个 LLM 套壳。你的 OAuth、你的限流、你的套餐限制 —— 一切行为都跟你在
-自己终端里敲 `claude` 完全一致，因为跑的就是它本身。swarmx 从不读取、也从不持久化
-你的 token。
+跑的是 CLI 本身，不是套壳。所以 OAuth、限流、套餐额度这些，都跟你在终端里敲
+`claude` 时一模一样。swarmx 不读、也不存你的任何 token。
 
-[快速开始](#快速开始) · [三种玩法](#三种玩法) · [工作原理](#工作原理) · [配置](docs/configuration.md) · [English](README.en.md)
+## 三件事
 
----
-
-## 三种玩法
-
-同一个仪表盘，同一批真实 CLI，三种协作范式按需切换：
-
-### 🐝 蜂群协作（默认）
-
-跟一个常驻的**队长**说人话。它自己判断：要么直接干，要么用 `swarm_spawn_worker`
-即时派出 worker（Magentic-One 模型，不预声明拓扑）。成员之间靠**共享收件箱**
-（`swarm_send_message`，在对方下一个回合边界投递，零轮询）和**共享黑板**
-（带全文检索、版本历史、写入即推送）协作；黑板某个 key 被写时，所有等它的 agent
-在同一 tick 被唤醒 —— 连已经停下的也当场复活。
+**蜂群协作。** 跟队长说需求，它自己决定是直接做，还是拆开派几个 worker（Magentic-One
+那套：不预先画流程图，按任务临时派）。成员之间靠收件箱互相寻址——消息在对方下一个
+回合边界投递，不轮询；靠黑板共享状态——黑板某个 key 一被写，所有在等它的 agent 当场
+被唤醒，包括已经停下发呆的那些。
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/curdx/swarmx/main/docs/assets/screenshot-orchestrator-chat.png" alt="用自然语言跟队长对话" width="49%">
   <img src="https://raw.githubusercontent.com/curdx/swarmx/main/docs/assets/screenshot-dag.png" alt="蜂群的实时依赖协作图" width="49%">
 </p>
 
-### 🧠 研究委员会（多模型会诊）
-
-高价值决策不该只听一个模型。**研究委员会**让 N 个模型并行答同一个问题 →
-一个 judge 做**结构化对比**（共识 / 矛盾 / 独特洞察 / 盲区，是「比较」不是「投票」）→
-外层模型据此**综合出定稿**。技术选型、竞品分析、方案评审、高风险决策的反方检查 ——
-一次会诊，胜过反复追问单个模型。
+**研究委员会。** 重要决策别只问一个模型。让若干模型并行回答同一个问题，一个 judge
+把它们的答案拆成共识、分歧、独特点、盲区来对比（是对比，不是投票），再由外层模型
+综合出一份定稿。技术选型、方案评审、给一个高风险决定找反方意见——都比反复追问单个
+模型强。
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/curdx/swarmx/main/docs/assets/screenshot-consult.png" alt="研究委员会 —— 多模型并行答题、结构化对比、综合定稿" width="80%">
+  <img src="https://raw.githubusercontent.com/curdx/swarmx/main/docs/assets/screenshot-consult.png" alt="研究委员会：多模型并行答题、结构化对比、综合定稿" width="80%">
 </p>
 
-### ⚔️ 融合竞赛（多模型写代码，一键全自动）
+**融合竞赛。** 同一个需求，丢给几个模型各写一版，每版在自己隔离的 git worktree 里独立
+实现；可以挂一条客观检查命令（比如 `pytest`、`cargo test`）当硬门禁，judge 再综合各家
+最优、合并回主线。新手只要填一句需求、勾上「全自动」、点一下，后面选模型、并行实现、
+跑检查、综合、合并全自动，人不用管。裁决由服务端兜底，不会因为某个模型没收好尾就卡死。
 
-把**同一个需求**丢给 N 个模型，各自在隔离的 git worktree 里独立实现，
-一个可选的**客观检查命令**（如 `pytest`、`cargo test`）当硬门禁，judge 再
-**综合各家最优**合并回主线。新手只需填一句需求、点一下「一键开赛」——
-选模型、并行实现、跑门禁、综合、合并，全程零手动。裁决由**服务端看门狗**兜底：
-无论模型是否规规矩矩收尾，结果都不会静默卡死。
-
-> 🔑 **研究委员会 / 融合竞赛的多模型来源 = [Comate Zulu](https://www.npmjs.com/package/@comate/zulu)**：
-> 一把 Comate license 即可驱动十余个模型（DeepSeek / GLM / Kimi / MiniMax…）。
-> 在「设置 → 插件」页**一键安装 zulu** 并填入 license 即可，见[下方](#快速开始)。
-
-## 为什么做这个
-
-大多数「agent 编排」工具，要么**重写一个 LLM 客户端**（丢掉你付费买到的订阅鉴权），
-要么**在错误的层去包 CLI**（ACP、HTTP shim，没法复用你的会话）。swarmx 是能加协调、
-但什么都不替换的最薄一层：
-
-- 🖥️ **真实 CLI，原样不动。** 每个 agent 都是 `portable-pty` 下的真二进制。同样的
-  OAuth、同样的限流、同样的行为。
-- 📬 **共享收件箱。** agent 之间用 id 互相寻址，投递发生在对方下一个回合边界 —— 零轮询。
-- 📋 **共享黑板。** 带全文检索、版本历史、写入即推送的 markdown KV 存储。
-- 🧠 **一个队长，按任务伸缩。** 你只跟一个常驻 agent 对话；它自己判断该答、该干、还是该派人。
-- ⏰ **推式唤醒。** 写一个黑板 key，等它的每个 agent 同 tick 复活 —— 连停下发呆的也算。
-- 🧠 **多模型会诊 & 竞赛。** 研究委员会 + 融合竞赛，把「换个模型问一遍」升级成结构化的综合。
-- 🎬 **全程录像。** 每个会话都是一段可在浏览器里重放的 asciicast。
+研究委员会和融合竞赛的多模型，来自 [Comate Zulu](https://www.npmjs.com/package/@comate/zulu)——
+一把 license 就能调十几个模型。在「设置 → 插件」页把 zulu 一键装上、填进 license 即可。
 
 ## 快速开始
 
-> **前置：** Rust 1.83+、Node 22+，以及至少一个已登录的 CLI（`claude`；
-> `codex` 需 **0.132+** 才有自动唤醒回合）。`opencode` / `reasonix` 可选。
+前置：Rust 1.83+、Node 22+，以及至少一个登录好的 CLI（`claude`；想要自动唤醒回合的话
+`codex` 需 0.132+）。opencode / reasonix 可选。
 
 ```bash
 git clone https://github.com/curdx/swarmx.git
 cd swarmx
 
-# 全量构建（server 需要 shim 二进制在场）
+# 全量构建（server 需要 shim 二进制在场，先跑这个）
 cargo build --workspace
 cd web && npm install && cd ..
 
-# 终端 1 —— 后端（必须从仓库根目录起）
+# 终端 1：后端（从仓库根目录起）
 cargo run -p swarmx-server          # → 127.0.0.1:7777
 
-# 终端 2 —— 前端
+# 终端 2：前端
 cd web && npm run dev               # → http://localhost:5173
 ```
 
-打开 **http://localhost:5173**，把工作空间指到一个真实项目目录，开始跟它的队长对话。就这样。
+打开 http://localhost:5173，把工作空间指向一个真实项目目录，直接跟队长说话就行。
 
-**想用多模型会诊 / 融合竞赛？** 打开「设置 → 插件」，在 Comate Zulu 那一栏点
-**「一键安装」**（后端跑 `npm install -g @comate/zulu` 并实时回传日志），装完在同一页
-填入你的 **Comate license** 即可 —— 一把 license 十余个模型。
+想用研究委员会或融合竞赛，去「设置 → 插件」把 Comate Zulu 一键装上、填进 license——
+一把 license，十几个模型。
 
-想要桌面 App？swarmx 打成 Tauri 包（server / shim / MCP 三个二进制作为 sidecar 内嵌）——
-**下载 → 安装 → 打开 → 能用，全程零命令行**。见 [桌面端](#桌面端)。
+打成桌面包（Tauri）后，server / shim / mcp 三个二进制作为 sidecar 内嵌，下载装好打开
+就能用，全程不碰命令行。
 
-## 工作原理
+## 原理
 
-三层，仅此而已：
+三层，没别的：
 
 ```
   MCP   ─►  swarm_send_message / swarm_write_blackboard / swarm_spawn_worker …
@@ -124,53 +91,37 @@ cd web && npm run dev               # → http://localhost:5173
   PTY   ─►  未经修改的 claude / codex / opencode / reasonix / zulu 二进制
 ```
 
-浏览器（或 Tauri webview）为每个 agent 开一条 WebSocket 跑实时终端，外加一条
-`/ws/swarm` 事件流。Rust 服务端（axum，仅 loopback）负责拉起进程、收件箱、黑板、录像，
-以及把黑板写入变成 agent 唤醒的 `WakeCoordinator`。各引擎的怪癖（opencode 的 TUI、
-reasonix / zulu 的 HTTP/SSE）都被各自的 per-CLI 适配器吸收，仪表盘看到的是统一的 agent。
+浏览器给每个 agent 开一条 WebSocket 跑实时终端，另有一条 `/ws/swarm` 事件流。Rust
+服务端（axum，只绑 loopback）管进程、收件箱、黑板、录像，以及把黑板写入变成唤醒的
+调度器。各引擎的差异——opencode 的 TUI、reasonix / zulu 的 HTTP/SSE——都收在各自的
+适配器里，仪表盘看到的是统一的 agent。
 
 ## 文档
 
-- 📦 **[配置参考](docs/configuration.md)** —— 每个 `SWARMX_*` 变量、插件/角色/spell 格式、REST + WebSocket API。
-- 🤝 **[交接协议](docs/handoff-protocol.md)** —— 显式生产者/消费者契约的黑板 key 约定。
-- 🧭 **[CLAUDE.md](CLAUDE.md)** —— 仓库工作约定 + 打包不变量 + 发版清单。
-- 📝 **[CHANGELOG.md](CHANGELOG.md)** —— 每个版本的显著变更。
+- [配置参考](docs/configuration.md)：每个 `SWARMX_*` 变量、插件 / 角色 / spell 格式、REST + WebSocket API。
+- [交接协议](docs/handoff-protocol.md)：显式生产者 / 消费者契约的黑板 key 约定。
+- [CLAUDE.md](CLAUDE.md)：仓库工作约定、打包不变量、发版清单。
+- [CHANGELOG.md](CHANGELOG.md)：每个版本的显著变更。
 
-### 随包发的运行时资源
+运行时资源（`spells/init.md`、`roles/*.md`、`cli-plugins/*.toml`）用 `include_str!` 编译进
+server 二进制，所以打包版在 `CWD=/`、无环境变量的情况下也能跑。
 
-通过 `include_str!` 编译**进** server 二进制，所以打包版 `CWD=/`、无环境变量也能跑：
+## 安全
 
-- `spells/init.md` —— 唯一随包发的 spell（建空间时拉起队长）。
-- `roles/*.md` —— 8 个角色模板：队长、前端、后端、评审、测试、文档、研究、修复。
-- `cli-plugins/*.toml` —— 引擎清单（claude / codex / opencode / reasonix / zulu）。
+跟 `tmux`、`ttyd` 以及 CLI 本身一样的纯 PTY 凭据模型：不读 `~/.claude/`、`~/.codex/`
+这些目录，不存 OAuth token / API key，只把 `HOME` / `PATH` 透传给子 CLI，让它读自己的
+配置。Comate license 只存本机 `~/.swarmx/comate.json`。
 
-<h3 id="桌面端">桌面端</h3>
-
-```bash
-cd web
-npm run sidecar:release   # 编译 release 后端 + 拷成 Tauri sidecar
-npm run tauri:build       # 出真实安装包（.app / .dmg / …）
-```
-
-## 安全与凭据
-
-swarmx 用**纯 PTY 凭据模型** —— 跟 `tmux`、`ttyd` 以及 CLI 本身一样：
-
-- ❌ 从不读 `~/.claude/`、`~/.codex/` 等。
-- ❌ 从不持久化 OAuth token、refresh token、API key。
-- ✅ 把 `HOME` / `PATH` 透传给子 CLI，让它读*它自己*的配置，就像你的 shell 一样。
-- 🔑 Comate license 只存本机 `~/.swarmx/comate.json`，用于驱动 zulu 的多模型。
-
-服务端**只**绑 `127.0.0.1:7777` —— 无远程访问、无鉴权，跟 `cargo run` 同样的姿态。
-文件浏览器有 DNS-rebind 防护和凭据路径黑名单（`~/.ssh`、`*.pem`、`~/.claude.json`…）。
+服务端只绑 `127.0.0.1:7777`，无远程访问、无鉴权，跟 `cargo run` 一个姿态。文件浏览器有
+DNS-rebind 防护和凭据路径黑名单（`~/.ssh`、`*.pem`、`~/.claude.json` 等）。
 
 ## 贡献
 
-欢迎 PR 和 issue。CI 硬门禁：`node scripts/harness-check.mjs`（跨文件不变量）、
-`cargo build/test --workspace --locked`、`web` 的 `npm run build`（tsc），以及隔离后端的
-`directions-smoke.mjs`。需要真实登录 CLI 的 swarm 烟测是手动的（`scripts/golden-cli-test.sh`）。
+CI 硬门禁：`node scripts/harness-check.mjs`、`cargo build/test --workspace --locked`、
+`web` 的 `npm run build`，以及隔离后端的 `directions-smoke.mjs`。需要真实登录 CLI 的 swarm
+烟测是手动的（`scripts/golden-cli-test.sh`）。
 
-起一个隔离的全栈来验证 UI 改动，不碰你的开发会话：
+想验 UI 改动又不想碰你的开发会话，起一个隔离全栈：
 
 ```bash
 bash scripts/test-stack.sh        # build + 起在 7788/5188，数据在 /tmp
@@ -186,14 +137,6 @@ bash scripts/test-stack.sh stop   # 拆掉
     <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=curdx/swarmx&type=Date" />
   </picture>
 </a>
-
-## 致谢
-
-基于 [portable-pty](https://docs.rs/portable-pty)、
-[asciinema-player](https://github.com/asciinema/asciinema-player)、
-[axum](https://github.com/tokio-rs/axum)、[Tauri](https://tauri.app/)、
-[xterm.js](https://xtermjs.org/) 构建。队长设计遵循 **Magentic-One** 的
-「按任务伸缩团队」模型。
 
 ## 许可
 
