@@ -145,7 +145,7 @@
   "welcome": {
     "eyebrow": "AI 团队协作工作台",
     "title": "派一支 AI 团队，在你的项目里分工干完一件事",
-    "subtitle": "复用你已装好、已登录的 AI 编码 CLI（Claude、Codex、OpenCode、Reasonix…），把它们编成一支团队：你提需求，队长拆解派工，成员各自动手、互相协作，最后交付——全程在本地运行，沿用你现有的订阅。",
+    "subtitle": "复用你已装好、已登录的 AI 编码 CLI（Claude、Codex、OpenCode、Reasonix、Zulu…），把它们编成一支团队：你提需求，队长拆解派工，成员各自动手、互相协作，最后交付——全程在本地运行，沿用你现有的订阅。",
     "panelTitle": "首次进入通常这样开始",
     "stepsBadge": "3 步",
     "primary": "新建工作空间",
@@ -308,6 +308,25 @@
     "synthesize": "综合最优",
     "synthHint": "派一个 agent 博采众长、综合出一版最优实现并合并（不是挑一个赢家）",
     "synthStarted": "已派出综合者，博采众长合成一版并合并"
+  },
+  "consult": {
+    "title": "研究委员会",
+    "subtitle": "多模型并行答题 → judge 结构化对比 → 综合定稿（zulu 一把 license 驱动）",
+    "loading": "正在加载模型列表…",
+    "noModels": "没有可用模型 —— 先在「设置 → 插件」配置 Comate License。",
+    "placeholder": "提一个值得多模型会诊的问题（技术选型、竞品分析、方案评审、高风险决策的反方检查…）",
+    "panelLabel": "Panel（选 2–8 个模型 · 已选 {{count}}）",
+    "running": "会诊中…（约 1–2 分钟）",
+    "start": "开始会诊",
+    "cost": "成本 ≈ (panel + 2)× 单次调用；这是高价值任务按钮，不是默认路径。",
+    "synthesis": "综合定稿",
+    "consensus": "共识",
+    "contradictions": "矛盾",
+    "insights": "独特洞察",
+    "blindspots": "盲区",
+    "noAnalysis": "本次结构化对比未能解析，综合定稿已给出结论；可展开下方原始答案自行比对。",
+    "rawPanel": "Panel 原始答案（{{count}}）",
+    "failed": "失败"
   },
   "error": {
     "title": "这个视图出错了",

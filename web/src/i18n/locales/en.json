@@ -145,7 +145,7 @@
   "welcome": {
     "eyebrow": "AI team workspace",
     "title": "Send an AI team to get something done in your project",
-    "subtitle": "Reuse the AI coding CLIs you've already installed and signed in to (Claude, Codex, OpenCode, Reasonix…) as one team: you give the goal, a captain breaks it down and assigns the work, members do it and coordinate, then ship — all running locally on your existing subscriptions.",
+    "subtitle": "Reuse the AI coding CLIs you've already installed and signed in to (Claude, Codex, OpenCode, Reasonix, Zulu…) as one team: you give the goal, a captain breaks it down and assigns the work, members do it and coordinate, then ship — all running locally on your existing subscriptions.",
     "panelTitle": "A typical first run",
     "stepsBadge": "3 steps",
     "primary": "Create workspace",
@@ -308,6 +308,25 @@
     "synthesize": "Synthesize",
     "synthHint": "Dispatch an agent to combine the best of all approaches into one merged implementation (not pick a winner)",
     "synthStarted": "Synthesizer dispatched — it'll combine the best and merge"
+  },
+  "consult": {
+    "title": "Research Committee",
+    "subtitle": "N models answer in parallel → judge compares → synthesized verdict (driven by one zulu license)",
+    "loading": "Loading models…",
+    "noModels": "No models available — configure a Comate License in Settings → Plugins first.",
+    "placeholder": "Ask something worth a multi-model consult (tech selection, competitive analysis, design review, red-teaming a risky call…)",
+    "panelLabel": "Panel (pick 2–8 models · {{count}} selected)",
+    "running": "Consulting… (~1–2 min)",
+    "start": "Start consult",
+    "cost": "Cost ≈ (panel + 2)× a single call; a high-value button, not the default path.",
+    "synthesis": "Synthesized verdict",
+    "consensus": "Consensus",
+    "contradictions": "Contradictions",
+    "insights": "Unique insights",
+    "blindspots": "Blind spots",
+    "noAnalysis": "The structured comparison didn't parse this run; the synthesis has the verdict — expand the raw answers below to compare.",
+    "rawPanel": "Raw panel answers ({{count}})",
+    "failed": "failed"
   },
   "error": {
     "title": "This view hit an error",
