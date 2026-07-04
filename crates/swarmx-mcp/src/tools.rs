@@ -207,6 +207,26 @@ pub fn tool_descriptors() -> Vec<Value> {
                 "additionalProperties": false
             }
         }),
+        json!({
+            "name": "swarm_fusion_consult",
+            "description": "Consult a RESEARCH COMMITTEE of multiple AI models on ONE hard question. A panel of models answers in parallel, a judge compares them (consensus / contradictions / unique insights / blind spots — not a vote), and a synthesizer writes the final grounded answer. EXPENSIVE (~N+2× a single call) and slow (~1-2 min) — call ONLY when a task genuinely benefits from multiple perspectives and being wrong is costly: technology/library selection, competitive analysis, design or plan review, adversarial 'what am I missing here' checks, multi-source fact-checking, high-stakes decisions. Do NOT use it for simple, tactical, or low-value questions — those don't justify the cost. Returns the synthesized answer plus the structured analysis.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "question": {
+                        "type": "string",
+                        "description": "The question / decision to deliberate on. Be specific and self-contained (the panel has no other context)."
+                    },
+                    "panel": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Optional 2-8 zulu model display names for the panel (e.g. 'Deepseek V4 Pro', 'GLM-5.2', 'Gemini 3 Pro'). Omit for a sensible cross-vendor default trio. More models = more cost."
+                    }
+                },
+                "required": ["question"],
+                "additionalProperties": false
+            }
+        }),
     ]
 }
 
@@ -222,6 +242,7 @@ pub async fn call_tool(ctx: &ToolContext, name: &str, args: &Value) -> Value {
         "swarm_read_blackboard" => read_blackboard(ctx, args).await,
         "swarm_write_blackboard" => write_blackboard(ctx, args).await,
         "swarm_spawn_worker" => spawn_worker(ctx, args).await,
+        "swarm_fusion_consult" => fusion_consult(ctx, args).await,
         "swarm_list_roles" => list_roles(ctx).await,
         "swarm_name_thread" => name_thread(ctx, args).await,
         other => Err(format!("unknown tool '{other}'")),
@@ -526,6 +547,99 @@ async fn list_agents(ctx: &ToolContext) -> Result<String, String> {
         out.push_str(&format!("  {marker} {id}  cli={cli}  role={role}{me}\n"));
     }
     Ok(out)
+}
+
+/// Reverse-resolve THIS agent's workspace_id via /api/agent (same trick as
+/// spawn_worker) so the model never has to plumb workspace_id.
+async fn my_workspace_id(ctx: &ToolContext) -> Result<String, String> {
+    let url = format!("{}/api/agent", ctx.server_url);
+    let resp = ctx
+        .http
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("swarmx-server unreachable at {url}: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(http_err_text(resp).await);
+    }
+    let rows: Vec<Value> = resp
+        .json()
+        .await
+        .map_err(|e| format!("malformed response from {url}: {e}"))?;
+    rows.iter()
+        .find(|a| a.get("agent_id").and_then(|v| v.as_str()) == Some(ctx.agent_id.as_str()))
+        .and_then(|a| a.get("workspace_id").and_then(|v| v.as_str()).map(str::to_string))
+        .ok_or_else(|| "could not resolve your workspace_id".to_string())
+}
+
+/// swarm_fusion_consult: run a zulu-backed research committee on a hard question.
+async fn fusion_consult(ctx: &ToolContext, args: &Value) -> Result<String, String> {
+    let question = arg_str(args, "question")?;
+    let panel: Vec<String> = args
+        .get("panel")
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect())
+        .unwrap_or_default();
+    let ws = my_workspace_id(ctx).await?;
+    let url = format!("{}/api/workspaces/{}/fusion-consult", ctx.server_url, ws);
+    let mut body = json!({ "question": question });
+    if !panel.is_empty() {
+        body["panel"] = json!(panel);
+    }
+    // Fusion runs N panel + judge + synthesis calls (~1-2 min) — far beyond the
+    // 5s HTTP_TIMEOUT the other snappy tools use. Dedicated long-timeout client.
+    let long = Client::builder()
+        .timeout(Duration::from_secs(300))
+        .build()
+        .map_err(|e| format!("http client build failed: {e}"))?;
+    let resp = long
+        .post(&url)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("swarmx-server unreachable at {url}: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(http_err_text(resp).await);
+    }
+    let r: Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("malformed response from {url}: {e}"))?;
+    let synth = r.get("synthesis").and_then(|v| v.as_str()).unwrap_or("");
+    let cost = r.get("cost_note").and_then(|v| v.as_str()).unwrap_or("");
+    let an = r.get("analysis").cloned().unwrap_or_else(|| json!({}));
+    let section = |k: &str| -> String {
+        an.get(k)
+            .and_then(|v| v.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|x| x.as_str())
+                    .map(|s| format!("  - {s}"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .unwrap_or_default()
+    };
+    let models: Vec<String> = r
+        .get("panel")
+        .and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|p| p.get("model").and_then(|m| m.as_str()).map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(format!(
+        "Fusion consult complete (panel: {}; {cost}).\n\n\
+         === SYNTHESIS ===\n{synth}\n\n\
+         === CONSENSUS ===\n{}\n\n=== CONTRADICTIONS ===\n{}\n\n\
+         === UNIQUE INSIGHTS ===\n{}\n\n=== BLIND SPOTS ===\n{}",
+        models.join(", "),
+        section("consensus"),
+        section("contradictions"),
+        section("unique_insights"),
+        section("blind_spots"),
+    ))
 }
 
 async fn list_blackboard(ctx: &ToolContext) -> Result<String, String> {
@@ -1179,9 +1293,10 @@ mod tests {
     fn tool_descriptors_have_required_fields() {
         let tools = tool_descriptors();
         // 7 swarm primitives + swarm_spawn_worker (派活入口) + swarm_list_roles
-        // (P0 角色目录) + swarm_name_thread (multi-direction naming/isolation) = 10.
+        // (P0 角色目录) + swarm_name_thread (multi-direction naming/isolation) +
+        // swarm_fusion_consult (研究委员会) = 11.
         // Bump this when adding tools.
-        assert_eq!(tools.len(), 10);
+        assert_eq!(tools.len(), 11);
         for t in &tools {
             assert!(t["name"].is_string());
             assert!(t["description"].is_string());
