@@ -52,6 +52,12 @@ pub enum McpFormat {
     /// flag needed: reasonix auto-discovers `.mcp.json` in the session cwd (the
     /// per-agent workspace). Written by `cli::reasonix`.
     ReasonixMcpJson,
+    /// zulu (Comate): `<ws>/.comate/mcp.json` carrying `mcpServers.swarmx-swarm`
+    /// (standard schema). zulu does NOT read a root `.mcp.json`; its kernel reads
+    /// `.comate/mcp.json` (`MCP_SETTINGS_DIR=".comate"` — verified via
+    /// `zulu inspect`). Per-agent identity in `args`/`env`. Written by
+    /// `cli::zulu`.
+    ZuluMcpJson,
 }
 
 /// Where/how the wake Stop-hook is materialized (the timeout-unit divergence —
@@ -659,20 +665,18 @@ mod tests {
             "reasonix must NOT block DEEPSEEK_ (it needs the key)"
         );
 
-        // zulu (Comate, HTTP/SSE): driven over `zulu serve`. MCP is NOT
-        // injectable (Comate-kernel-managed, not a project .mcp.json), so no MCP
-        // write; no trust gate, NO Stop hook, license billing. Model is
-        // per-request so model_args is EMPTY (one serve process → any of 14
-        // models).
+        // zulu (Comate, HTTP/SSE): driven over `zulu serve`. MCP written to
+        // `.comate/mcp.json` (zulu's kernel reads that); no trust gate, NO Stop
+        // hook, license billing. Model is per-request so model_args is EMPTY.
         let zulu = reg.get("zulu").expect("zulu plugin present");
         assert_eq!(zulu.trust_format, TrustFormat::None);
-        assert_eq!(zulu.mcp_format, McpFormat::None);
+        assert_eq!(zulu.mcp_format, McpFormat::ZuluMcpJson);
         assert_eq!(zulu.stop_hook_format, StopHookFormat::None);
         assert_eq!(zulu.input_delivery, InputDelivery::ZuluServeHttp);
         assert_eq!(zulu.billing_surface, BillingSurface::License);
         assert!(
-            !zulu.auto_inject_mcp,
-            "zulu MCP is Comate-kernel-managed, not locally injectable"
+            zulu.auto_inject_mcp,
+            "zulu injects swarm MCP via .comate/mcp.json"
         );
         assert!(
             !zulu.auto_inject_stop_hook,

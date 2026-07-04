@@ -35,10 +35,8 @@
 #      (+ network to comate.baidu.com). Injected at serve spawn by spawn.rs from
 #      user-entered config (P1.4). billing_surface = "license".
 #
-# MCP: NOT injectable. zulu fetches MCP servers from the Comate kernel over RPC
-# (not a project .mcp.json — verified), so swarmx can't add the swarm bridge. A
-# zulu worker therefore can't call swarm_* tools; the fusion panel (HTTP-driven)
-# doesn't need them. See the mcp_format block below.
+# MCP: written to `<ws>/.comate/mcp.json` (zulu's kernel reads that, not a root
+# .mcp.json — verified via `zulu inspect`). A zulu worker CAN use swarm_* tools.
 
 id = "zulu"
 display_name = "Comate Zulu"
@@ -60,16 +58,13 @@ blocked_env_prefixes = []
 auto_trust_workspace = false
 trust_format = "none"
 
-# MCP: zulu does NOT read a project-root .mcp.json (verified: `zulu inspect`
-# ignored one). Its MCP servers are fetched from the Comate kernel over RPC
-# (`getMCPServersForZulu` → `mcpServerConfigs`, persisted in ~/.comate-engine),
-# configured Comate-side — swarmx cannot inject a local stdio server, so the
-# swarmx-swarm bridge is NOT available to a zulu agent. Consequence: a zulu
-# WORKER can't call swarm_* tools (no MCP collaboration); but the fusion PANEL
-# (Phase 2/3) drives zulu over HTTP and collects answers directly, so it needs
-# no MCP. mcp_format=none ⇒ GenericAdapter writes nothing.
-auto_inject_mcp = false
-mcp_format = "none"
+# MCP: zulu reads its MCP servers from `<ws>/.comate/mcp.json` (the Comate
+# kernel's MCP_SETTINGS_DIR=".comate"/mcp.json — verified: `zulu inspect` picks
+# up swarmx-swarm from there). NOT a root .mcp.json. Standard mcpServers schema,
+# per-agent identity in args/env; written by cli::zulu. So a zulu worker CAN
+# call swarm_* tools (send messages, blackboard) — it's a full swarm member.
+auto_inject_mcp = true
+mcp_format = "zulu-mcp-json"
 
 # No Stop hook: wake/continue is driven by the SSE Completed status + POST
 # /session|/messages (crate::zulu_serve), not a hook.
