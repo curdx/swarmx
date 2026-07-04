@@ -99,6 +99,14 @@ pub enum InputDelivery {
     /// bootstrap/wake paths POST to `/submit` and the agent's turns/activity are
     /// followed on the `/events` SSE stream. See `crate::reasonix_serve`.
     ReasonixServeHttp,
+    /// zulu (Comate): driven over its `zulu serve` HTTP+SSE control API. spawn
+    /// allocates a per-agent port and passes `--host 127.0.0.1 --port <port>`;
+    /// the bootstrap/wake paths POST to `/session` (or
+    /// `/api/v1/conversations/:id/messages`) and turns/activity/usage are
+    /// followed on the SSE response stream (`conversation-status` Completed =
+    /// turn-end). Model rides in the POST body, not a spawn arg. See
+    /// `crate::zulu_serve`.
+    ZuluServeHttp,
 }
 
 /// Which account / quota surface a CLI plugin consumes by default. This is a
@@ -121,6 +129,10 @@ pub enum BillingSurface {
     AgentSdkCredits,
     /// Direct provider API key billing.
     ApiKey,
+    /// SaaS license billing, e.g. Comate Zulu's `-l <license>` against
+    /// comate.baidu.com. Like ApiKey it's an explicit credential (not a reused
+    /// interactive subscription), but a distinct surface for clarity.
+    License,
 }
 
 /// Kind of a [`ReadyStep`]. `ready_plan` is a **sequential** golutra-style DSL:
@@ -440,6 +452,7 @@ impl PluginRegistry {
                 "reasonix.toml",
                 include_str!("../../../cli-plugins/reasonix.toml"),
             ),
+            ("zulu.toml", include_str!("../../../cli-plugins/zulu.toml")),
         ];
         let mut plugins: HashMap<String, CliPlugin> = HashMap::new();
         for (name, content) in BUILTIN {
@@ -646,6 +659,35 @@ mod tests {
             "reasonix must NOT block DEEPSEEK_ (it needs the key)"
         );
 
+        // zulu (Comate, HTTP/SSE): driven over `zulu serve`. MCP reuses the
+        // reasonix .mcp.json writer (same Claude Code schema), no trust gate, NO
+        // Stop hook, license billing. Model is per-request so model_args is EMPTY
+        // (one serve process → any of 14 models).
+        let zulu = reg.get("zulu").expect("zulu plugin present");
+        assert_eq!(zulu.trust_format, TrustFormat::None);
+        assert_eq!(zulu.mcp_format, McpFormat::ReasonixMcpJson);
+        assert_eq!(zulu.stop_hook_format, StopHookFormat::None);
+        assert_eq!(zulu.input_delivery, InputDelivery::ZuluServeHttp);
+        assert_eq!(zulu.billing_surface, BillingSurface::License);
+        assert!(zulu.auto_inject_mcp, "zulu injects swarm MCP");
+        assert!(
+            !zulu.auto_inject_stop_hook,
+            "zulu uses serve SSE Completed status, not a Stop hook"
+        );
+        assert!(
+            !zulu.native_tiers,
+            "zulu's 14 models aren't opus/sonnet/haiku tiers"
+        );
+        assert!(
+            zulu.model_args.is_empty(),
+            "zulu model is per-request (POST body), not a spawn arg"
+        );
+        assert_eq!(zulu.default_args, vec!["serve"]);
+        assert!(
+            zulu.blocked_env_prefixes.is_empty(),
+            "zulu passes the license explicitly; nothing ambient to block"
+        );
+
         // The codex "Hooks need review" auto-answer migrated from the old
         // auto_answer_hooks_dialog bool into a data-driven ready_plan step.
         assert!(
@@ -831,10 +873,11 @@ binary="x"
         // builtin floor (load_layered seeds builtins first), so it's present too.
         assert!(reg.get("opencode").is_some(), "opencode from builtin floor");
         assert!(reg.get("reasonix").is_some(), "reasonix from builtin floor");
+        assert!(reg.get("zulu").is_some(), "zulu from builtin floor");
         assert_eq!(
             reg.list().len(),
-            5,
-            "claude + codex + gemini + opencode(builtin) + reasonix(builtin)"
+            6,
+            "claude + codex + gemini + opencode(builtin) + reasonix(builtin) + zulu(builtin)"
         );
     }
 
@@ -864,10 +907,11 @@ binary="x"
         assert!(reg.get("codex").is_some(), "codex stays from builtins");
         assert!(reg.get("opencode").is_some(), "opencode stays from builtins");
         assert!(reg.get("reasonix").is_some(), "reasonix stays from builtins");
+        assert!(reg.get("zulu").is_some(), "zulu stays from builtins");
         assert_eq!(
             reg.list().len(),
-            4,
-            "claude(dir) + codex(builtin) + opencode(builtin) + reasonix(builtin)"
+            5,
+            "claude(dir) + codex(builtin) + opencode(builtin) + reasonix(builtin) + zulu(builtin)"
         );
 
         // All-absent layers → fall back to the builtin catalog, not empty.
@@ -876,6 +920,7 @@ binary="x"
         assert!(only_builtins.get("codex").is_some());
         assert!(only_builtins.get("opencode").is_some());
         assert!(only_builtins.get("reasonix").is_some());
-        assert_eq!(only_builtins.list().len(), 4, "builtins are the floor");
+        assert!(only_builtins.get("zulu").is_some());
+        assert_eq!(only_builtins.list().len(), 5, "builtins are the floor");
     }
 }

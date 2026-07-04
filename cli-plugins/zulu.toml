@@ -1,0 +1,96 @@
+# Comate Zulu CLI plugin (Baidu Comate multi-model coding agent) — HTTP/SSE transport.
+#
+# Like reasonix (NOT claude/codex keystroke), zulu is driven via its own
+# `zulu serve` mode: a headless HTTP+SSE server. swarmx spawns
+#   swarmx-shim zulu serve --host 127.0.0.1 --port <port> -l <license>
+# under the PTY (lifecycle/kill/is_alive reuse the existing machinery — the PTY
+# just carries serve's one-line `{success,host,port,pid}` banner), then drives
+# EVERYTHING over HTTP (see crate::zulu_serve; reverse-engineered + live-verified):
+#   - bootstrap + each wake: POST /session {license,query,model,mode,cwd,
+#     display:"event-stream"[,conversationId]}  (multi-turn: POST
+#     /api/v1/conversations/:id/messages)
+#   - turn-end / activity / usage: the SSE response stream. Event `type`s:
+#       conversation-status  -> conversationInfo.status "Running"->"Completed"
+#                               is the TURN-END signal (reasonix turn_done twin)
+#       partial-message-elements -> messageData.elements[].children[].type in
+#                               {REASON,TEXT,TOOL}; TEXT = answer (accumulate),
+#                               TOOL = tool activity, REASON = thinking
+#       performanceMetrics / tokenUsage -> usage
+#   - final state: GET /task/:conversationId reads the session store JSON.
+# No keystroke injection, no Stop hook — the SSE Completed status is the turn-end
+# signal and POST /session|/messages delivers the next turn.
+#
+# Because serve has no TUI, this agent has NO terminal view; the UI defaults to
+# the structured Activity view (fed from the SSE TOOL/usage events via
+# POST /api/agent/:id/activity).
+#
+# TWO differences from reasonix worth calling out:
+#   1. MODEL IS PER-REQUEST, not a serve arg. `reasonix serve --model X` fixes
+#      the model at spawn; `zulu serve` fixes nothing — each POST /session carries
+#      its own `model`. So ONE zulu serve process can serve any of the 14 models
+#      (`zulu list-model`) — ideal for a fusion panel. model_args is therefore
+#      EMPTY here; the agent's selected model is stored on the AgentSlot and
+#      passed by crate::zulu_serve in every submit body (see cli::zulu / P1.5).
+#   2. AUTH IS A LICENSE, not a subscription/OAuth. Comate SaaS `-l <license>`
+#      (+ network to comate.baidu.com). Injected at serve spawn by spawn.rs from
+#      user-entered config (P1.4). billing_surface = "license".
+#
+# MCP: zulu reads the Claude Code `mcpServers` schema from a project-root
+# `.mcp.json` (verified: `zulu inspect` lists mcp servers). Reuses reasonix's
+# per-agent `.mcp.json` writer (same schema) until a zulu-specific need appears.
+
+id = "zulu"
+display_name = "Comate Zulu"
+binary = "zulu"
+# `serve` launches the HTTP+SSE server. spawn.rs appends
+# `--host 127.0.0.1 --port <port>` (allocated per agent) + the license (P1.4)
+# when input_delivery = zulu-serve-http.
+default_args = ["serve"]
+home_env = "HOME"
+
+# Comate SaaS license billing (not a subscription, not an ambient API key). No
+# env prefix to block: the license is passed explicitly, nothing ambient leaks a
+# different account.
+billing_surface = "license"
+requires_explicit_billing_opt_in = false
+blocked_env_prefixes = []
+
+# No "do you trust this folder?" gate in zulu.
+auto_trust_workspace = false
+trust_format = "none"
+
+# MCP: write the per-agent workspace .mcp.json (Claude Code mcpServers schema);
+# reuse reasonix's writer — zulu reads the same schema.
+auto_inject_mcp = true
+mcp_format = "reasonix-mcp-json"
+
+# No Stop hook: wake/continue is driven by the SSE Completed status + POST
+# /session|/messages (crate::zulu_serve), not a hook.
+auto_inject_stop_hook = false
+auto_dismiss_update = false
+
+# Drive prompts over zulu serve's HTTP control API (POST /session) + SSE.
+input_delivery = "zulu-serve-http"
+input_settle_ms = 0
+
+# Model is chosen PER-REQUEST (see header note 1), NOT via a serve arg — so no
+# model overlay on the spawn argv. crate::zulu_serve puts the agent's model in
+# each POST body. default_model is a display name (`zulu list-model` accepts id
+# or display name; display recommended). native_tiers = false: zulu's 14 models
+# aren't claude's opus/sonnet/haiku vocabulary.
+model_args = []
+default_model = "Deepseek V4 Pro"
+native_tiers = false
+
+# zulu exposes no discrete reasoning-effort flag on serve; leave empty.
+effort_args = []
+
+# Health needles — "alive but can't work" signatures. None shipped yet: zulu's
+# missing/invalid-license and quota-exceeded text hasn't been captured from a
+# verified run, and we don't ship guessed substrings (a wrong needle stays
+# silent). Until confirmed, auth/quota failures surface via the first-response
+# watchdog. Add verified entries here to upgrade to instant fail:
+# [[health_needles]]
+# needle = "<verified substring>"
+# reason = "Zulu 未配置有效的 Comate License 或额度不足"
+# kind = "auth"
