@@ -65,25 +65,50 @@ fn truthy(o: &Option<String>) -> bool {
     matches!(o.as_deref(), Some("1") | Some("true"))
 }
 
-/// A request is "from the app UI" iff it carries an `Origin` header pointing at
-/// a local host (vite dev `localhost:5173`, the bundle on `:7777`, the Tauri
-/// webview `tauri.localhost`). Headless local clients — `curl`, the MCP
-/// subprocess (reqwest), a sandboxed/landed exploit that can only speak HTTP to
-/// loopback — send no Origin. The middleware lets those through as "native
-/// clients", which is fine for jailed reads but must NOT grant *unscoped*
-/// full-disk access: that turned `/api/files/read` into an arbitrary-file-read
-/// oracle for any local process. So bare (no `workspace_id`) and `all=1`
-/// (jail-escape) reads now require a UI request; everyone else is confined to a
-/// workspace's roots. NOTE: a process that forges an `Origin` header, or a
-/// same-origin XSS inside the webview, still slips past this — those are the
-/// irreducible limit of a token-less loopback tool; `is_sensitive` is the
-/// remaining backstop for them.
+/// A request is "from the app UI" if it is a browser request from a local page,
+/// as opposed to a headless local client (`curl`, the MCP subprocess via
+/// reqwest, a sandboxed/landed exploit that can only speak HTTP to loopback).
+/// Only the UI may do *unscoped* full-disk reads; a native client is confined to
+/// a workspace's roots — otherwise `/api/files/read` becomes an arbitrary-file
+/// oracle for any local process. Two browser shapes qualify:
+///
+/// 1. A **local `Origin`** — a *cross-origin* fetch, e.g. the Tauri webview
+///    (`tauri://localhost`) calling the sidecar on `127.0.0.1:7777`, or the Vite
+///    page hitting the API on a different port. The original signal.
+/// 2. **`Sec-Fetch-Site: same-origin`** — a *same-origin* fetch sends NO Origin
+///    (browsers omit it on same-origin GET), so (1) misses the in-app file
+///    browser and the create-workspace path-probe whenever page and API share an
+///    origin (Vite dev, or the bundle on `:7777`). This Fetch-Metadata header is
+///    attached by the browser and is a forbidden header name (page JS can't
+///    forge it); curl/reqwest send neither Origin nor `Sec-Fetch-*`, so the
+///    anti-native-client bar holds. Paired with a loopback `Host` so a no-Origin
+///    DNS-rebind navigation (`Host: attacker.com`, already rejected upstream by
+///    `require_local_origin`) can't reach a full-disk read even if that
+///    middleware is reordered.
+///
+/// NOTE: a process that forges these headers, or a same-origin XSS inside the
+/// webview, still slips past — the irreducible limit of a token-less loopback
+/// tool; `is_sensitive` is the remaining backstop.
 fn is_ui_request(headers: &HeaderMap) -> bool {
-    headers
+    if headers
         .get(header::ORIGIN)
         .and_then(|v| v.to_str().ok())
         .map(origin_host_is_local)
         .unwrap_or(false)
+    {
+        return true;
+    }
+    let same_origin_fetch = headers
+        .get("sec-fetch-site")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.eq_ignore_ascii_case("same-origin"))
+        .unwrap_or(false);
+    let host_loopback = headers
+        .get(header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .map(crate::host_is_loopback)
+        .unwrap_or(false);
+    same_origin_fetch && host_loopback
 }
 
 /// True if an `Origin` value (`http://localhost:5173`, `tauri://localhost`,
@@ -452,6 +477,63 @@ mod tests {
         assert!(!origin_host_is_local("http://evil.com"));
         assert!(!origin_host_is_local("https://attacker.example:443"));
         assert!(!origin_host_is_local("http://localhost.evil.com"));
+    }
+
+    /// Build a `HeaderMap` from `(name, value)` pairs for the guard tests.
+    fn hdrs(pairs: &[(&str, &str)]) -> HeaderMap {
+        use axum::http::{HeaderName, HeaderValue};
+        let mut h = HeaderMap::new();
+        for (k, v) in pairs {
+            h.insert(
+                HeaderName::from_bytes(k.as_bytes()).unwrap(),
+                HeaderValue::from_str(v).unwrap(),
+            );
+        }
+        h
+    }
+
+    #[test]
+    fn is_ui_request_accepts_browser_rejects_native_client() {
+        // (1) Cross-origin fetch with a local Origin — Vite page / Tauri webview.
+        assert!(is_ui_request(&hdrs(&[("origin", "http://localhost:5173")])));
+        assert!(is_ui_request(&hdrs(&[("origin", "tauri://localhost")])));
+
+        // (2) Same-origin browser fetch: no Origin, but Fetch-Metadata says
+        // same-origin and Host is loopback (the create-workspace path-probe and
+        // the in-app file browser — the case this fix restores).
+        assert!(is_ui_request(&hdrs(&[
+            ("sec-fetch-site", "same-origin"),
+            ("host", "127.0.0.1:7777"),
+        ])));
+        assert!(is_ui_request(&hdrs(&[
+            ("sec-fetch-site", "same-origin"),
+            ("host", "localhost:5173"),
+        ])));
+
+        // A bare native client (curl / reqwest) sends neither Origin nor
+        // Sec-Fetch-* — it must stay confined and NOT get full-disk reads.
+        assert!(!is_ui_request(&hdrs(&[("host", "127.0.0.1:7777")])));
+        assert!(!is_ui_request(&HeaderMap::new()));
+
+        // Non-same-origin fetch metadata is not the in-app UI.
+        assert!(!is_ui_request(&hdrs(&[
+            ("sec-fetch-site", "cross-site"),
+            ("host", "127.0.0.1:7777"),
+        ])));
+        assert!(!is_ui_request(&hdrs(&[
+            ("sec-fetch-site", "same-site"),
+            ("host", "127.0.0.1:7777"),
+        ])));
+
+        // Defense-in-depth: same-origin metadata with a NON-loopback Host (a
+        // no-Origin DNS-rebind shape) must never unlock full-disk reads.
+        assert!(!is_ui_request(&hdrs(&[
+            ("sec-fetch-site", "same-origin"),
+            ("host", "attacker.com"),
+        ])));
+
+        // A non-local Origin is never the UI (require_local_origin 403s it too).
+        assert!(!is_ui_request(&hdrs(&[("origin", "http://evil.com")])));
     }
 
     #[test]
