@@ -138,7 +138,11 @@ impl ModelConfig {
 
 /// `~/.swarmx/models.json`.
 pub fn models_config_path() -> PathBuf {
-    if let Ok(home) = std::env::var("HOME") {
+    // HOME is unset on Windows — fall back to USERPROFILE so the installed app
+    // writes/reads `~/.swarmx/models.json` instead of a CWD-relative path (with
+    // CWD=`/` under the Tauri sidecar, that would silently never persist).
+    // Mirrors pricing_config_path's P1-39 fix.
+    if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
         return PathBuf::from(home).join(".swarmx").join("models.json");
     }
     PathBuf::from(".swarmx/models.json")
@@ -169,6 +173,21 @@ pub fn load_or_default() -> ModelConfig {
     cfg
 }
 
+/// A process- and call-unique temp extension (`json.<pid>.<seq>.swarmx-tmp`) for
+/// atomic config writes. A *fixed* temp name lets two concurrent saves race:
+/// writer B `File::create`s the same tmp A just filled, truncating it, then A
+/// renames the now-empty tmp over the real config. A unique name per call keeps
+/// each writer's temp private, so the rename is always atomic and complete.
+pub(crate) fn unique_tmp_ext() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    format!(
+        "json.{}.{}.swarmx-tmp",
+        std::process::id(),
+        SEQ.fetch_add(1, Ordering::Relaxed)
+    )
+}
+
 /// Atomically persist to `~/.swarmx/models.json` (temp → fsync → rename),
 /// creating the parent dir if needed. Mirrors the pre_spawn/mcp_admin pattern.
 pub fn save(cfg: &ModelConfig) -> anyhow::Result<()> {
@@ -178,7 +197,7 @@ pub fn save(cfg: &ModelConfig) -> anyhow::Result<()> {
         std::fs::create_dir_all(parent)?;
     }
     let json = serde_json::to_string_pretty(cfg)?;
-    let tmp = path.with_extension("json.swarmx-tmp");
+    let tmp = path.with_extension(unique_tmp_ext());
     {
         let mut f = std::fs::File::create(&tmp)?;
         f.write_all(json.as_bytes())?;
@@ -207,6 +226,16 @@ mod tests {
             },
         );
         cfg
+    }
+
+    #[test]
+    fn unique_tmp_ext_is_distinct_per_call() {
+        // A fixed temp name lets concurrent saves clobber each other; each call
+        // must yield a different extension so the tmp→rename stays atomic.
+        let a = unique_tmp_ext();
+        let b = unique_tmp_ext();
+        assert_ne!(a, b);
+        assert!(a.ends_with(".swarmx-tmp") && b.ends_with(".swarmx-tmp"));
     }
 
     #[test]

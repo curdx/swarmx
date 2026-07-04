@@ -204,9 +204,9 @@ fn validate_pricing_rules(rules: &[PricingRule]) -> Result<(), String> {
         if rule.id.trim().is_empty() {
             return Err("pricing rule id must not be empty".into());
         }
-        if rule.matchers.iter().all(|m| m.trim().is_empty()) {
+        if rule.matchers.is_empty() || rule.matchers.iter().any(|m| m.trim().is_empty()) {
             return Err(format!(
-                "pricing rule {} needs at least one matcher",
+                "pricing rule {} has an empty matcher (an empty matcher would match every model)",
                 rule.id
             ));
         }
@@ -252,7 +252,7 @@ fn save_pricing_rules(rules: &[PricingRule]) -> anyhow::Result<()> {
     let json = serde_json::to_string_pretty(&PricingUpdate {
         rules: rules.to_vec(),
     })?;
-    let tmp = path.with_extension("json.swarmx-tmp");
+    let tmp = path.with_extension(crate::models_config::unique_tmp_ext());
     {
         let mut f = std::fs::File::create(&tmp)?;
         f.write_all(json.as_bytes())?;
@@ -271,7 +271,7 @@ fn rate_for(model: &str, rules: &[PricingRule]) -> Option<Rate> {
     if let Some(rule) = rules.iter().find(|rule| {
         rule.matchers
             .iter()
-            .any(|needle| m.contains(&needle.to_ascii_lowercase()))
+            .any(|needle| !needle.is_empty() && m.contains(&needle.to_ascii_lowercase()))
     }) {
         return Some(rule.rates_usd_per_mtok);
     }
@@ -509,6 +509,35 @@ mod tests {
         // A provider without cache-creation pricing must come through as 0, not absent.
         let codex = litellm_lookup("gpt-5-codex").expect("gpt-5-codex in snapshot");
         assert_eq!(codex.cache_write, 0.0);
+    }
+
+    #[test]
+    fn validate_rejects_empty_matcher() {
+        assert!(validate_pricing_rules(&default_pricing_rules()).is_ok());
+        // An individually-empty matcher makes `contains("")` match every model —
+        // reject it even beside a real matcher (regression: "one empty matcher
+        // prices all models").
+        let mut rules = default_pricing_rules();
+        rules[0].matchers = vec!["".into(), "opus".into()];
+        assert!(validate_pricing_rules(&rules).is_err());
+        rules[0].matchers = vec!["   ".into()]; // whitespace-only is empty too
+        assert!(validate_pricing_rules(&rules).is_err());
+        rules[0].matchers = vec![]; // no matchers at all still rejected
+        assert!(validate_pricing_rules(&rules).is_err());
+    }
+
+    #[test]
+    fn rate_for_ignores_empty_needle() {
+        // Defense-in-depth: even if an empty needle slipped past validation it
+        // must not become a catch-all. One opus rule whose only matcher is "" —
+        // an unknown model must stay unpriced, not silently inherit opus rates.
+        let mut rules = default_pricing_rules();
+        rules.truncate(1);
+        rules[0].matchers = vec!["".into()];
+        assert!(
+            rate_for("zzz-nonexistent-model", &rules).is_none(),
+            "empty needle must not catch-all an unknown model"
+        );
     }
 
     #[test]

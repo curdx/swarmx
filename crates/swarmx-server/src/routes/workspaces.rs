@@ -1542,7 +1542,7 @@ pub async fn decide_fusion_handler(
     }
 
     // Merge the winner's branch into base, reusing the per-direction merge logic.
-    let winner = require_thread(&state, &req.winner_thread_id).await?;
+    let winner = require_thread(&state, &workspace_id, &req.winner_thread_id).await?;
     let branch = match winner.branch.clone().filter(|b| !b.is_empty()) {
         Some(b) if winner.isolation == "worktree" => b,
         _ => {
@@ -1693,7 +1693,7 @@ pub async fn thread_diff_handler(
     Path((workspace_id, thread_id)): Path<(String, String)>,
 ) -> Result<Json<ThreadDiffResponse>, (StatusCode, Json<serde_json::Value>)> {
     let ws = require_workspace(&state, &workspace_id).await?;
-    let th = require_thread(&state, &thread_id).await?;
+    let th = require_thread(&state, &workspace_id, &thread_id).await?;
     let branch = th.branch.clone().filter(|b| !b.is_empty());
     let cwd = std::path::PathBuf::from(&ws.cwd);
     let branch_for_diff = branch.clone();
@@ -1741,7 +1741,7 @@ pub async fn merge_thread_handler(
     Path((workspace_id, thread_id)): Path<(String, String)>,
 ) -> Result<Json<MergeResponse>, (StatusCode, Json<serde_json::Value>)> {
     let ws = require_workspace(&state, &workspace_id).await?;
-    let th = require_thread(&state, &thread_id).await?;
+    let th = require_thread(&state, &workspace_id, &thread_id).await?;
     let branch = match th.branch.clone().filter(|b| !b.is_empty()) {
         Some(b) if th.isolation == "worktree" => b,
         _ => {
@@ -1836,6 +1836,7 @@ async fn require_workspace(
 
 async fn require_thread(
     state: &AppState,
+    workspace_id: &str,
     thread_id: &str,
 ) -> Result<swarmx_storage::ThreadRecord, (StatusCode, Json<serde_json::Value>)> {
     state
@@ -1848,6 +1849,10 @@ async fn require_thread(
                 Json(json!({"error": e.to_string()})),
             )
         })?
+        // Reject a thread that belongs to a *different* workspace than the one in
+        // the path — the sibling handlers (update/delete/set-model) already
+        // filter this way; merge/diff/decide must not operate cross-workspace.
+        .filter(|t| t.workspace_id == workspace_id)
         .ok_or_else(|| {
             (
                 StatusCode::NOT_FOUND,

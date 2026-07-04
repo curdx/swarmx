@@ -53,6 +53,7 @@ running). Use macOS or Linux for a supported setup.
 | `SWARMX_RETENTION_DAYS` | `30` | At boot, prune rows older than N days. `0` (or negative) = keep everything, never prune. |
 | `SWARMX_MAX_LIVE_AGENTS` | built-in cap | Max concurrently live agents (back-pressure on spawn). |
 | `SWARMX_MAX_SPAWN_DEPTH` | built-in cap | Max depth of agent-spawns-agent chains (runaway-spawn guard). |
+| `SWARMX_MAX_ONESHOT_QUERIES` | `4` | Max concurrent throwaway one-shot CLI queries (prompt-optimize / ledger-compact). These spawn a real CLI outside the live-agent cap; this bounds them so a loop can't fork-bomb. |
 
 ## Behaviour switches
 

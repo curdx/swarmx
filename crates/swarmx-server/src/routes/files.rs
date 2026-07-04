@@ -390,19 +390,38 @@ pub async fn read_file(
         )
             .into_response();
     }
-    let bytes = match std::fs::read(&path) {
-        Ok(b) => b,
-        Err(e) => {
-            return (
-                StatusCode::FORBIDDEN,
-                Json(json!({ "error": format!("read {}: {e}", path.display()) })),
-            )
-                .into_response()
+    // Bound the read to MAX_READ_BYTES *before* allocating: a multi-GB regular
+    // file legitimately living in a workspace root (a log, DB dump, model
+    // weight, video) would otherwise be slurped whole by `fs::read` and OOM the
+    // server — killing every agent + the sidecar — before the truncation below
+    // ever ran. Report the file's true size; only ship a capped preview.
+    let real_size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+    let bytes = {
+        use std::io::Read;
+        match std::fs::File::open(&path) {
+            Ok(f) => {
+                let mut buf = Vec::new();
+                if let Err(e) = f.take(MAX_READ_BYTES as u64).read_to_end(&mut buf) {
+                    return (
+                        StatusCode::FORBIDDEN,
+                        Json(json!({ "error": format!("read {}: {e}", path.display()) })),
+                    )
+                        .into_response();
+                }
+                buf
+            }
+            Err(e) => {
+                return (
+                    StatusCode::FORBIDDEN,
+                    Json(json!({ "error": format!("read {}: {e}", path.display()) })),
+                )
+                    .into_response()
+            }
         }
     };
-    let total = bytes.len();
+    let total = (real_size as usize).max(bytes.len());
     let truncated = total > MAX_READ_BYTES;
-    let slice = &bytes[..total.min(MAX_READ_BYTES)];
+    let slice = &bytes[..bytes.len().min(MAX_READ_BYTES)];
     let binary = looks_binary(slice);
     if binary {
         return Json(json!({

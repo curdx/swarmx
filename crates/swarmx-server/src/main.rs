@@ -112,6 +112,12 @@ pub struct AppState {
     /// `<key>.error` write so downstream dependents can branch into
     /// their upstream-failed path instead of waiting forever.
     pub exit_keys: wake::ExitKeys,
+    /// Bounds concurrent throwaway one-shot CLI queries (`/api/prompt/optimize`,
+    /// `/api/blackboard/compact`). Each spawns a real `claude` over PTY *outside*
+    /// the `max_live_agents` bookkeeping, so without a cap a local caller looping
+    /// either endpoint could fork unbounded CLIs (PTY/RAM/FD exhaustion + quota
+    /// burn). A small independent budget bounds them without starving real agents.
+    pub oneshot_limiter: Arc<tokio::sync::Semaphore>,
 }
 
 #[tokio::main]
@@ -317,6 +323,15 @@ async fn main() -> Result<()> {
         _watcher: watcher,
         wake_subs: wake_subs.clone(),
         exit_keys: exit_keys.clone(),
+        // Small fixed budget: these are best-effort helper calls, not the
+        // workhorse agents; SWARMX_MAX_ONESHOT_QUERIES overrides for testing.
+        oneshot_limiter: Arc::new(tokio::sync::Semaphore::new(
+            std::env::var("SWARMX_MAX_ONESHOT_QUERIES")
+                .ok()
+                .and_then(|v| v.parse::<usize>().ok())
+                .filter(|n| *n > 0)
+                .unwrap_or(4),
+        )),
     };
 
     // M6b: launch the wake coordinator. Lives for the whole process; the

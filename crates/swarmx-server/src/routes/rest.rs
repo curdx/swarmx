@@ -3065,6 +3065,18 @@ pub async fn optimize_prompt(
 
     // Drive a throwaway interactive claude over PTY (subscription billing). A
     // cold TUI start + one short turn fits comfortably in 60s.
+    // Bound concurrency (F4 sibling): this spawn bypasses the max_live_agents
+    // cap, so gate it on the one-shot budget and reject rather than queue.
+    let _permit = match state.oneshot_limiter.clone().try_acquire_owned() {
+        Ok(p) => p,
+        Err(_) => {
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                Json(json!({ "error": "优化服务繁忙（并发上限），请稍后重试" })),
+            )
+                .into_response();
+        }
+    };
     let outcome = crate::pty_query::claude_one_shot(
         &plugin,
         &state.shim_path,
@@ -3192,6 +3204,17 @@ pub async fn compact_blackboard(
     // Same migration as optimize_prompt: drive a real interactive claude over PTY
     // (subscription billing) instead of `claude -p`, so no opt-in gate is needed.
     // A ledger summary is bigger than a composer rewrite, hence a longer budget.
+    // Bound concurrency (F4 sibling): bypasses max_live_agents, so gate it.
+    let _permit = match state.oneshot_limiter.clone().try_acquire_owned() {
+        Ok(p) => p,
+        Err(_) => {
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                Json(json!({ "error": "压缩服务繁忙（并发上限），请稍后重试" })),
+            )
+                .into_response();
+        }
+    };
     let outcome = crate::pty_query::claude_one_shot(
         &plugin,
         &state.shim_path,
