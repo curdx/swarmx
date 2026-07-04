@@ -1630,6 +1630,23 @@ pub(crate) fn spawn_bootstrap_inject(
         // cold TUI accepts a too-early submit with 200 but silently drops it (the
         // race that parked captains forever). `workspace_dir` scopes the
         // confirmation to this agent.
+        // zulu (Comate) is driven over `zulu serve` HTTP+SSE, but via its OWN
+        // per-turn-SSE driver (each turn is a fresh POST /session stream). Route
+        // zulu agents here BEFORE the reasonix serve_port check — zulu also sets
+        // serve_http_port. The driver owns the conversation for the agent's whole
+        // life. See crate::zulu_serve.
+        let zulu_conv = { slot_lock.lock().zulu() };
+        if let Some(conv) = zulu_conv {
+            crate::zulu_serve::run_driver_spawn(crate::zulu_serve::DriverCfg {
+                conv,
+                agent_id: agent_id.clone(),
+                bootstrap_prompt: prompt,
+                registry: registry.clone(),
+            });
+            tracing::info!(agent = %agent_id, "bootstrap: zulu serve driver started");
+            return;
+        }
+
         // reasonix is driven over its `reasonix serve` HTTP+SSE API. Instead of
         // pasting/POSTing the bootstrap inline, hand off to the long-lived driver
         // task: it waits for serve to bind, sets yolo, submits this bootstrap,

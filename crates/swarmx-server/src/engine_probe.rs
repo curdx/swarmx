@@ -368,6 +368,8 @@ pub async fn probe_one(
     let verdict = if verdict.state == ProbeState::Usable {
         if let Some(port) = slot.tui_http_port() {
             opencode_one_turn_check(port, &slot.workspace).await
+        } else if let Some(conv) = slot.zulu() {
+            zulu_one_turn_check(conv).await
         } else if let Some(port) = slot.serve_http_port() {
             reasonix_one_turn_check(port).await
         } else {
@@ -692,6 +694,44 @@ async fn reasonix_one_turn_check(port: u16) -> Verdict {
         crate::reasonix_serve::TurnProbe::NoOutput => Verdict {
             state: ProbeState::NotUsable,
             reason: Some("serve 启动正常但在超时内没产出一次模型回合（key 无效 / 额度耗尽 / 配置不全）".into()),
+            kind: Some("turn-timeout".into()),
+            method: "turn-timeout",
+        },
+    }
+}
+
+/// Verified one-turn check for zulu (Comate). Like reasonix, drives the serve
+/// HTTP+SSE control API the live driver uses (`POST /session` + SSE), catching
+/// an INVALID/expired license (serve binds fine; only the model call fails).
+async fn zulu_one_turn_check(conv: std::sync::Arc<crate::zulu_serve::ZuluConv>) -> Verdict {
+    let prompt = "What is 318 plus 921? Reply with only the number, nothing else.";
+    match crate::zulu_serve::verify_one_turn(
+        conv.serve_port,
+        &conv.model,
+        &conv.license,
+        &conv.cwd,
+        prompt,
+        REASONIX_TURN_TIMEOUT,
+    )
+    .await
+    {
+        crate::zulu_serve::TurnProbe::Ok => Verdict {
+            state: ProbeState::Usable,
+            reason: None,
+            kind: None,
+            method: "turn-ok",
+        },
+        crate::zulu_serve::TurnProbe::Auth(detail) => Verdict {
+            state: ProbeState::NeedsLogin,
+            reason: Some(format!("zulu 凭据无效/未授权：{detail}")),
+            kind: Some("auth".into()),
+            method: "turn-auth",
+        },
+        crate::zulu_serve::TurnProbe::NoOutput => Verdict {
+            state: ProbeState::NotUsable,
+            reason: Some(
+                "serve 启动正常但在超时内没产出一次模型回合（license 无效 / 额度耗尽 / 配置不全）".into(),
+            ),
             kind: Some("turn-timeout".into()),
             method: "turn-timeout",
         },

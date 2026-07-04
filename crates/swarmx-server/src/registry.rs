@@ -71,6 +71,11 @@ pub struct AgentSlot {
     /// `crate::reasonix_serve` (POST /submit + /events SSE) instead of keystrokes
     /// or the opencode `/tui` path. `None` for every other CLI.
     pub serve_http_port: Option<u16>,
+    /// For zulu (Comate): the per-agent conversation handle. `Some(_)` routes
+    /// this agent's bootstrap/wakes through `crate::zulu_serve` (POST /session
+    /// SSE per turn); it carries the serve port, resolved model, license, cwd,
+    /// and the conversation_id + busy state the driver owns. `None` otherwise.
+    pub zulu: Option<Arc<crate::zulu_serve::ZuluConv>>,
 }
 
 /// An agent's PTY I/O. Every CLI (claude/codex/opencode) runs as an interactive
@@ -140,6 +145,12 @@ impl AgentSlot {
     /// `crate::reasonix_serve`). `None` for every non-reasonix CLI.
     pub fn serve_http_port(&self) -> Option<u16> {
         self.serve_http_port
+    }
+
+    /// The per-agent zulu conversation handle (see `zulu` field and
+    /// `crate::zulu_serve`). `None` for every non-zulu CLI.
+    pub fn zulu(&self) -> Option<Arc<crate::zulu_serve::ZuluConv>> {
+        self.zulu.clone()
     }
 }
 

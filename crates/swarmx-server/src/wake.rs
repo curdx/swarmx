@@ -324,6 +324,16 @@ pub async fn inject_with_kick_text(
         tracing::debug!(agent = %agent_id, key = %key_for_log, port, "wake delivered over opencode TUI HTTP");
         return Ok(());
     }
+    // zulu (Comate): route the kick through its serve driver — wake_if_idle
+    // consumes the mailbox wake the caller wrote and runs a turn if idle. Its
+    // per-turn-SSE model owns turns, so a direct submit here would race the
+    // driver. Checked before reasonix (zulu also sets serve_http_port).
+    let zulu = slot.lock().zulu();
+    if let Some(conv) = zulu {
+        let submitted = crate::zulu_serve::wake_if_idle(conv, agent_id, registry).await?;
+        tracing::debug!(agent = %agent_id, key = %key_for_log, submitted, "wake delivered over zulu serve HTTP");
+        return Ok(());
+    }
     // reasonix has no PTY/TUI to type into — deliver the kick as a fresh turn
     // over its `reasonix serve` HTTP API. Used by the manual-wake path and any
     // other direct kick caller; the BlackboardChanged auto-wake path handles
@@ -941,6 +951,21 @@ impl WakeCoordinator {
         // kick. If the agent is idle, atomically consume the wake we just wrote
         // and submit the reason as a fresh turn; if it's mid-turn we leave the
         // mailbox entry for the SSE driver's `turn_done` path (which consumes the
+        // zulu (Comate): its own per-turn-SSE driver owns turns. Route here
+        // BEFORE the reasonix serve_port check (zulu also sets serve_http_port).
+        // wake_if_idle atomically consumes + runs a turn only when idle; a
+        // mid-turn wake is picked up by the driver's post-turn drain.
+        let zulu = self.registry.get(target).and_then(|s| s.lock().zulu());
+        if let Some(conv) = zulu {
+            match crate::zulu_serve::wake_if_idle(conv, target, &self.registry).await {
+                Ok(submitted) => {
+                    tracing::info!(target, key, submitted, "zulu wake routed via serve HTTP")
+                }
+                Err(err) => tracing::warn!(?err, target, key, "zulu serve wake delivery failed"),
+            }
+            return;
+        }
+
         // SAME atomic mailbox, so the wake is delivered exactly once). See
         // `crate::reasonix_serve`.
         let serve_port = self

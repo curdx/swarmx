@@ -144,6 +144,7 @@ mod tests {
             mcp_ready: tokio::sync::watch::channel(false).0,
             tui_http_port: None,
             serve_http_port: None,
+            zulu: None,
         };
         Arc::new(Mutex::new(slot))
     }

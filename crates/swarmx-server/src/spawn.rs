@@ -138,6 +138,15 @@ pub fn spawn_agent(
     argv.push(plugin.binary.clone());
     argv.extend(plugin.default_args.iter().cloned());
 
+    // zulu resolves its model PER-REQUEST (not an argv — see cli-plugins/
+    // zulu.toml), so capture the resolved value here for the ZuluConv the
+    // serve driver reads. No-op for every other CLI.
+    let zulu_model = if plugin.input_delivery == crate::plugins::InputDelivery::ZuluServeHttp {
+        model.clone().or_else(|| plugin.default_model.clone())
+    } else {
+        None
+    };
+
     // L5c model overlay: a model passed at spawn time (REST/MCP) wins over the
     // plugin's default_model. The flag itself (claude & codex both use
     // `--model <v>`) lives in the manifest's `model_args` template, not here —
@@ -146,6 +155,12 @@ pub fn spawn_agent(
         Some(m) if !plugin.model_args.is_empty() => {
             argv.extend(model_overlay_args(&m, &plugin.model_args));
             tracing::info!(agent = %agent_id, model = %m, "model overlay applied");
+        }
+        Some(m) if plugin.input_delivery == crate::plugins::InputDelivery::ZuluServeHttp => {
+            // zulu resolves its model per-request (captured into ZuluConv above),
+            // so an empty model_args is BY DESIGN — not the misconfiguration the
+            // warn below flags. Nothing to add to argv.
+            tracing::debug!(agent = %agent_id, model = %m, "zulu model rides on the serve request, not argv");
         }
         Some(m) => tracing::warn!(
             agent = %agent_id, model = %m,
@@ -228,7 +243,44 @@ pub fn spawn_agent(
         }
     }
 
-    // Env: swarmx-pty starts the child from an EMPTY environment
+    // zulu (Comate) is driven over `zulu serve` HTTP+SSE. Alloc a port passed
+    // as `--host 127.0.0.1 --port <port>` (not reasonix's `--addr`). The model
+    // is per-request, so it rides on the ZuluConv (with the license + cwd) the
+    // bootstrap/wake driver reads, NOT the argv. License via `-l` from
+    // COMATE_LICENSE for now (P1.4 wires the settings-page source). See
+    // `crate::zulu_serve`.
+    let mut zulu_conv: Option<std::sync::Arc<crate::zulu_serve::ZuluConv>> = None;
+    if plugin.input_delivery == crate::plugins::InputDelivery::ZuluServeHttp {
+        match alloc_ephemeral_port() {
+            Some(port) => {
+                argv.push("--host".into());
+                argv.push("127.0.0.1".into());
+                argv.push("--port".into());
+                argv.push(port.to_string());
+                let license = std::env::var("COMATE_LICENSE").unwrap_or_default();
+                if !license.is_empty() {
+                    argv.push("-l".into());
+                    argv.push(license.clone());
+                }
+                serve_http_port = Some(port);
+                zulu_conv = Some(std::sync::Arc::new(crate::zulu_serve::ZuluConv::new(
+                    port,
+                    zulu_model.clone().unwrap_or_default(),
+                    license,
+                    workspace.to_string_lossy().into_owned(),
+                    server_url.to_string(),
+                )));
+                tracing::info!(agent = %agent_id, port, "zulu serve HTTP control port allocated");
+            }
+            None => tracing::warn!(
+                agent = %agent_id,
+                "could not allocate a serve HTTP control port for zulu; \
+                 bootstrap/wake delivery will fail"
+            ),
+        }
+    }
+
+
     // (`CommandBuilder::env_clear`), so the worker sees ONLY what we insert
     // here. We forward what a CLI legitimately needs (HOME for OAuth creds,
     // PATH, locale, proxy/TLS, and the provider's own config/keys) but NOT
@@ -422,6 +474,10 @@ pub fn spawn_agent(
         // Set for reasonix (drives `reasonix serve` over HTTP+SSE); None
         // otherwise. Allocated above when input_delivery is reasonix-serve-http.
         serve_http_port,
+        // Set for zulu (Comate): per-agent conversation handle carrying the
+        // serve port + resolved model + license + cwd. `Some(_)` routes
+        // bootstrap/wakes through `crate::zulu_serve`. None otherwise.
+        zulu: zulu_conv,
     };
 
     Ok(AgentSpawn {
