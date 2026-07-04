@@ -23,6 +23,7 @@ mod models_config;
 mod opencode_tui;
 mod reasonix_serve;
 mod zulu_serve;
+mod comate;
 mod plugins;
 mod pty_query;
 mod pty_stream;

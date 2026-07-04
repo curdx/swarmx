@@ -390,7 +390,14 @@
       "copied": "Copied",
       "verifyLabel": "Verify:",
       "loginLabel": "Login:",
-      "docsLink": "Official docs"
+      "docsLink": "Official docs",
+      "comateLicense": "Comate License (zulu engine)",
+      "comateEnv": " · set by env var",
+      "comateUnset": "Not set · zulu can't run",
+      "comateHint": "zulu uses your Comate SaaS license to reach models (Claude/Gemini/DeepSeek/GLM… one key). Stored only on this machine at ~/.swarmx/comate.json.",
+      "comatePlaceholder": "Paste license…",
+      "comateSave": "Save",
+      "comateSaving": "Saving…"
     },
     "privacy": {
       "title": "Privacy & Security",
@@ -685,7 +692,12 @@
       "nodeDefault": "Press Enter or Space to select a node, arrow keys to move, Esc to cancel.",
       "nodeDisabled": "Node is not movable.",
       "nodeMoved": "Node moved {{dir}} to {{x}}, {{y}}",
-      "dir": { "up": "up", "down": "down", "left": "left", "right": "right" },
+      "dir": {
+        "up": "up",
+        "down": "down",
+        "left": "left",
+        "right": "right"
+      },
       "edgeDefault": "Handoff dependency edge between agents.",
       "controls": "Canvas zoom controls",
       "zoomIn": "Zoom in",

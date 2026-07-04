@@ -257,7 +257,7 @@ pub fn spawn_agent(
                 argv.push("127.0.0.1".into());
                 argv.push("--port".into());
                 argv.push(port.to_string());
-                let license = std::env::var("COMATE_LICENSE").unwrap_or_default();
+                let license = crate::comate::load_license();
                 if !license.is_empty() {
                     argv.push("-l".into());
                     argv.push(license.clone());

@@ -390,7 +390,14 @@
       "copied": "已复制",
       "verifyLabel": "验证：",
       "loginLabel": "登录：",
-      "docsLink": "官方文档"
+      "docsLink": "官方文档",
+      "comateLicense": "Comate License（zulu 引擎）",
+      "comateEnv": " · 由环境变量控制",
+      "comateUnset": "未配置 · zulu 无法运行",
+      "comateHint": "zulu 用你的 Comate SaaS license 访问模型（Claude/Gemini/DeepSeek/GLM… 一把钥匙）。仅存本机 ~/.swarmx/comate.json。",
+      "comatePlaceholder": "粘贴 license…",
+      "comateSave": "保存",
+      "comateSaving": "保存中…"
     },
     "privacy": {
       "title": "隐私 & 安全",
@@ -685,7 +692,12 @@
       "nodeDefault": "按 Enter 或空格选中节点，方向键移动，Esc 取消。",
       "nodeDisabled": "节点不可移动。",
       "nodeMoved": "节点已{{dir}}至 {{x}}, {{y}}",
-      "dir": { "up": "上移", "down": "下移", "left": "左移", "right": "右移" },
+      "dir": {
+        "up": "上移",
+        "down": "下移",
+        "left": "左移",
+        "right": "右移"
+      },
       "edgeDefault": "agent 间的 handoff 依赖连线。",
       "controls": "画布缩放控制",
       "zoomIn": "放大",

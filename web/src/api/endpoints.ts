@@ -45,6 +45,11 @@ export const apiRoutes = {
     /** Cached probe verdicts + whether a sweep is in flight. */
     probeStatus: () => endpoint("plugins.probeStatus", "GET", "/api/plugins/probe"),
   },
+  /** Comate Zulu SaaS license (zulu engine credential). */
+  comate: {
+    get: () => endpoint("comate.get", "GET", "/api/comate"),
+    put: () => endpoint("comate.put", "PUT", "/api/comate"),
+  },
   mcp: {
     env: () => endpoint("mcp.env", "GET", "/api/mcp/env"),
     status: () => endpoint("mcp.status", "GET", "/api/mcp/status"),

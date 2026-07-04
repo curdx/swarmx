@@ -1,4 +1,5 @@
 pub mod api;
+pub mod comate;
 pub mod cron;
 pub mod files;
 pub mod goals;

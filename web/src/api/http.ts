@@ -189,6 +189,13 @@ export const api = {
    *  polls this while a sweep runs. */
   getEngineProbe: () =>
     requestEndpoint<EngineProbeResponse>(apiRoutes.plugins.probeStatus()),
+  /** Comate Zulu license: read the masked status / write a new value. */
+  getComate: () =>
+    requestEndpoint<{ configured: boolean; source: string; hint: string }>(
+      apiRoutes.comate.get(),
+    ),
+  putComate: (license: string) =>
+    requestEndpoint<{ ok: boolean }>(apiRoutes.comate.put(), { license }),
   // MCP admin (「快捷装 MCP」页面)
   mcpEnv: () => requestEndpoint<McpEnv>(apiRoutes.mcp.env()),
   mcpStatus: () => requestEndpoint<McpStatus>(apiRoutes.mcp.status()),

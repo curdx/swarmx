@@ -938,6 +938,89 @@ function EvidencePill({ verdict }: { verdict?: EngineReadiness }) {
   );
 }
 
+function ComateLicenseCard() {
+  const { t } = useTranslation();
+  const [status, setStatus] = useState<{
+    configured: boolean;
+    source: string;
+    hint: string;
+  } | null>(null);
+  const [value, setValue] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const refresh = () => {
+    api
+      .getComate()
+      .then(setStatus)
+      .catch((e) => setErr((e as Error).message));
+  };
+  useEffect(refresh, []);
+
+  const save = async () => {
+    setSaving(true);
+    setErr(null);
+    try {
+      await api.putComate(value.trim());
+      setValue("");
+      refresh();
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const envLocked = status?.source === "env";
+  return (
+    <div className="flex flex-col gap-2 rounded-md border border-border-subtle bg-surface-secondary px-3 py-3">
+      <div className="flex items-center justify-between gap-2">
+        <span className="font-caption text-xs font-medium text-foreground-secondary">
+          {t("settings.plugins.comateLicense", "Comate License（zulu 引擎）")}
+        </span>
+        {status?.configured ? (
+          <span className="font-mono text-[11px] text-foreground-tertiary">
+            {status.hint}
+            {envLocked ? t("settings.plugins.comateEnv", " · 由环境变量控制") : ""}
+          </span>
+        ) : (
+          <span className="font-caption text-[11px] text-state-warning">
+            {t("settings.plugins.comateUnset", "未配置 · zulu 无法运行")}
+          </span>
+        )}
+      </div>
+      <p className="font-caption text-[11px] text-foreground-tertiary">
+        {t(
+          "settings.plugins.comateHint",
+          "zulu 用你的 Comate SaaS license 访问模型（Claude/Gemini/DeepSeek/GLM… 一把钥匙）。仅存本机 ~/.swarmx/comate.json。",
+        )}
+      </p>
+      {!envLocked && (
+        <div className="flex items-center gap-2">
+          <input
+            type="password"
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            placeholder={t("settings.plugins.comatePlaceholder", "粘贴 license…")}
+            className="min-w-0 flex-1 rounded-md border border-border-subtle bg-surface-elevated px-2.5 py-1 font-mono text-xs text-foreground focus:border-accent-primary focus:outline-none"
+          />
+          <button
+            type="button"
+            onClick={save}
+            disabled={saving || value.trim().length === 0}
+            className="shrink-0 rounded-md border border-border-subtle bg-surface-elevated px-2.5 py-1 font-caption text-[11px] text-foreground-secondary transition-colors hover:bg-surface-tertiary disabled:opacity-60"
+          >
+            {saving
+              ? t("settings.plugins.comateSaving", "保存中…")
+              : t("settings.plugins.comateSave", "保存")}
+          </button>
+        </div>
+      )}
+      {err && <span className="font-caption text-[11px] text-state-danger">{err}</span>}
+    </div>
+  );
+}
+
 function PluginsPanel() {
   const { t } = useTranslation();
   const [items, setItems] = useState<CliPluginInfo[] | null>(null);
@@ -977,6 +1060,7 @@ function PluginsPanel() {
         title={t("settings.plugins.title")}
         hint={t("settings.plugins.hint")}
       />
+      <ComateLicenseCard />
       {/* Real-usability check: "installed" only means the binary resolves —
           this actually starts each engine to prove it can run (catches a
           logged-out CLI or a key-less reasonix). Slow (cold-starts every
