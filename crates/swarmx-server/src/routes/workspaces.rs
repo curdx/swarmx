@@ -2099,6 +2099,12 @@ async fn decide_fusion_inner(
         return Ok(DecideOutcome::AlreadyDecided);
     }
 
+    // Nudge the Fusion view to refetch: the batch just flipped to 'done', but the
+    // view only refetches on swarm activity — and the decider (the judge's own
+    // curl OR the watchdog) may emit nothing else, leaving the card stuck on
+    // 'judging' until a manual refresh. Emit a thread_changed the view listens to.
+    publish_thread_changed(state, &workspace_id, winner_thread_id, "decided");
+
     // Re-read so the returned batch reflects winner + 'done'.
     let decided = state
         .store

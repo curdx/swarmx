@@ -636,9 +636,15 @@ export default function FusionView() {
   }, [refresh]);
 
   // Refetch on swarm activity so a running competition's status updates live.
+  // `thread_changed` covers the decide/merge moment (the judge's curl or the
+  // watchdog) — without it the card sticks on 'judging' until a manual refresh.
   useSwarmFeed({
     onEvent: (ev: SwarmEvent) => {
-      if (ev.type === "agent_state" || ev.type === "blackboard_changed") {
+      if (
+        ev.type === "agent_state" ||
+        ev.type === "blackboard_changed" ||
+        ev.type === "thread_changed"
+      ) {
         refresh();
       }
     },
