@@ -659,17 +659,21 @@ mod tests {
             "reasonix must NOT block DEEPSEEK_ (it needs the key)"
         );
 
-        // zulu (Comate, HTTP/SSE): driven over `zulu serve`. MCP reuses the
-        // reasonix .mcp.json writer (same Claude Code schema), no trust gate, NO
-        // Stop hook, license billing. Model is per-request so model_args is EMPTY
-        // (one serve process → any of 14 models).
+        // zulu (Comate, HTTP/SSE): driven over `zulu serve`. MCP is NOT
+        // injectable (Comate-kernel-managed, not a project .mcp.json), so no MCP
+        // write; no trust gate, NO Stop hook, license billing. Model is
+        // per-request so model_args is EMPTY (one serve process → any of 14
+        // models).
         let zulu = reg.get("zulu").expect("zulu plugin present");
         assert_eq!(zulu.trust_format, TrustFormat::None);
-        assert_eq!(zulu.mcp_format, McpFormat::ReasonixMcpJson);
+        assert_eq!(zulu.mcp_format, McpFormat::None);
         assert_eq!(zulu.stop_hook_format, StopHookFormat::None);
         assert_eq!(zulu.input_delivery, InputDelivery::ZuluServeHttp);
         assert_eq!(zulu.billing_surface, BillingSurface::License);
-        assert!(zulu.auto_inject_mcp, "zulu injects swarm MCP");
+        assert!(
+            !zulu.auto_inject_mcp,
+            "zulu MCP is Comate-kernel-managed, not locally injectable"
+        );
         assert!(
             !zulu.auto_inject_stop_hook,
             "zulu uses serve SSE Completed status, not a Stop hook"
