@@ -141,6 +141,7 @@ function ConsultResult({ result }: { result: FusionConsultResponse }) {
     ["独特洞察", a.unique_insights],
     ["盲区", a.blind_spots],
   ];
+  const hasAnalysis = sections.some(([, items]) => items.length > 0);
   return (
     <div className="flex flex-col gap-4">
       <div className="rounded-md border border-accent-primary/40 bg-accent-primary-soft/30 p-4">
@@ -150,27 +151,30 @@ function ConsultResult({ result }: { result: FusionConsultResponse }) {
         <div className="whitespace-pre-wrap text-sm text-foreground">{result.synthesis}</div>
       </div>
 
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        {sections.map(([title, items]) => (
-          <div key={title} className="rounded-md border border-border-subtle bg-surface-secondary p-3">
-            <div className="mb-1 font-caption text-xs font-medium text-foreground-secondary">
-              {title}（{items.length}）
+      {hasAnalysis ? (
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          {sections.map(([title, items]) => (
+            <div key={title} className="rounded-md border border-border-subtle bg-surface-secondary p-3">
+              <div className="mb-1 font-caption text-xs font-medium text-foreground-secondary">
+                {title}（{items.length}）
+              </div>
+              {items.length === 0 ? (
+                <div className="font-caption text-[11px] text-foreground-tertiary">—</div>
+              ) : (
+                <ul className="list-disc space-y-1 pl-4 text-xs text-foreground-secondary">
+                  {items.map((it, i) => (
+                    <li key={i}>{it}</li>
+                  ))}
+                </ul>
+              )}
             </div>
-            {items.length === 0 ? (
-              <div className="font-caption text-[11px] text-foreground-tertiary">—</div>
-            ) : (
-              <ul className="list-disc space-y-1 pl-4 text-xs text-foreground-secondary">
-                {items.map((it, i) => (
-                  <li key={i}>{it}</li>
-                ))}
-              </ul>
-            )}
-          </div>
-        ))}
-      </div>
-      {a.note && (
-        <div className="rounded-md border border-state-warning/40 bg-surface-secondary px-3 py-2 text-[11px] text-state-warning">
-          judge 未产出结构化结果：{a.note}
+          ))}
+        </div>
+      ) : (
+        // Structured comparison didn't parse this run — the synthesis (which reads
+        // the raw judge text) is still authoritative; don't show four empty boxes.
+        <div className="rounded-md border border-border-subtle bg-surface-secondary px-3 py-2 text-[11px] text-foreground-tertiary">
+          本次结构化对比未能解析，综合定稿已给出结论；可展开下方原始答案自行比对。
         </div>
       )}
 

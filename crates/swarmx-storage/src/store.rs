@@ -3025,17 +3025,44 @@ impl Store {
         .context("spawn_blocking set_fusion_status")?
     }
 
-    /// Record the winning contestant + flip status to 'done' atomically. Returns
-    /// the number of rows updated (0 if the batch is gone/deleted). The handler
-    /// is responsible for validating that `winner_thread_id` is actually one of
-    /// the batch's contestants before calling this — SQLite can't constrain a
-    /// value against a JSON array column.
+    /// Race-safe status transition: flip to `to` ONLY if the batch is currently
+    /// in `from`. Returns rows updated (0 if it already left `from` — e.g. the
+    /// judge's own decide flipped it to 'done' between the watchdog's read and
+    /// this write, so a stale watchdog can never clobber a real verdict).
+    pub async fn transition_fusion_status(
+        &self,
+        id: String,
+        from: String,
+        to: String,
+    ) -> Result<usize> {
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<usize> {
+            let n = conn.execute(
+                "UPDATE fusion_batches SET status = ?3 \
+                 WHERE id = ?1 AND deleted_at IS NULL AND status = ?2",
+                params![id, from, to],
+            )?;
+            Ok(n)
+        }))
+        .await
+        .context("spawn_blocking transition_fusion_status")?
+    }
+
+    /// Claim the winning contestant + flip status to 'done' — a COMPARE-AND-SWAP
+    /// on `winner_thread_id IS NULL`, so the FIRST caller to reach it wins and
+    /// every later one gets `0`. This is the atomic race gate shared by the two
+    /// independent callers of decide: the judge agent's own `curl` and the
+    /// server-side judge watchdog (and a double-clicking human). Returns rows
+    /// updated: `1` = this caller claimed it, `0` = already decided (or gone).
+    /// The handler still validates `winner_thread_id` is one of the batch's
+    /// contestants (or the judge thread) before calling — SQLite can't constrain
+    /// a value against a JSON array column.
     pub async fn set_fusion_winner(&self, id: String, winner_thread_id: String) -> Result<usize> {
         let pool = self.pool.clone();
         tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<usize> {
             let n = conn.execute(
                 "UPDATE fusion_batches SET winner_thread_id = ?2, status = 'done' \
-                 WHERE id = ?1 AND deleted_at IS NULL",
+                 WHERE id = ?1 AND deleted_at IS NULL AND winner_thread_id IS NULL",
                 params![id, winner_thread_id],
             )?;
             Ok(n)
@@ -3552,6 +3579,44 @@ mod tests {
             .query_row("PRAGMA quick_check", [], |r| r.get(0))
             .unwrap();
         assert_eq!(check, "ok");
+    }
+
+    #[tokio::test]
+    async fn set_fusion_winner_is_compare_and_swap() {
+        // The judge agent's curl and the server-side watchdog race to decide the
+        // same batch. The CAS guarantees exactly one wins: the first claim flips
+        // the batch to done; every later claim is a no-op (0 rows), never an
+        // overwrite. This is the race gate the judge watchdog relies on.
+        let dir = TempDir::new().unwrap();
+        let store = Store::open(&dir.path().join("swarmx.db")).await.unwrap();
+        let ws = store
+            .create_workspace(
+                NewWorkspace { name: "w".into(), cwd: "/tmp".into(), accent: None },
+                1,
+            )
+            .await
+            .unwrap();
+        let batch = store
+            .create_fusion_batch(
+                NewFusionBatch {
+                    workspace_id: ws.id,
+                    slug: "b".into(),
+                    need: "n".into(),
+                    contestant_thread_ids: vec!["t-a".into(), "t-b".into()],
+                    check_cmd: None,
+                },
+                1,
+            )
+            .await
+            .unwrap();
+
+        // First claim wins; every later claim is a no-op (winner never overwritten).
+        assert_eq!(store.set_fusion_winner(batch.id.clone(), "t-a".into()).await.unwrap(), 1);
+        assert_eq!(store.set_fusion_winner(batch.id.clone(), "t-b".into()).await.unwrap(), 0);
+        let after = store.list_fusion_batches(batch.workspace_id.clone()).await.unwrap();
+        let b = after.iter().find(|b| b.id == batch.id).unwrap();
+        assert_eq!(b.status, "done");
+        assert_eq!(b.winner_thread_id.as_deref(), Some("t-a"));
     }
 
     #[test]

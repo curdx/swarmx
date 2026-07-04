@@ -54,6 +54,8 @@ running). Use macOS or Linux for a supported setup.
 | `SWARMX_MAX_LIVE_AGENTS` | built-in cap | Max concurrently live agents (back-pressure on spawn). |
 | `SWARMX_MAX_SPAWN_DEPTH` | built-in cap | Max depth of agent-spawns-agent chains (runaway-spawn guard). |
 | `SWARMX_MAX_ONESHOT_QUERIES` | `4` | Max concurrent throwaway one-shot CLI queries (prompt-optimize / ledger-compact). These spawn a real CLI outside the live-agent cap; this bounds them so a loop can't fork-bomb. |
+| `SWARMX_FUSION_JUDGE_TIMEOUT_MS` | `900000` (15 min) | How long the fusion judge watchdog waits for the auto-judge agent to decide before forcing a deterministic fallback (synth → merge the judge's captured work; pick+check → the objective-gate winner; otherwise → `needs_decision`). Guarantees a batch never stalls in `judging`. |
+| `SWARMX_FUSION_IMPL_TIMEOUT_MS` | `1200000` (20 min) | Autopilot only: how long the autochain waits for the auto-implement contestants to settle before entering the judge stage anyway. |
 
 ## Behaviour switches
 

@@ -297,9 +297,14 @@
     "status": {
       "running": "Running",
       "judging": "Judging",
+      "needs_decision": "Needs decision",
       "done": "Done",
       "failed": "Failed"
     },
+    "needsDecision": "Auto-judge couldn't finish on its own — pick a winner manually below.",
+    "autopilot": "Full-auto (pick models · implement · judge & synthesize · merge)",
+    "autopilotHint": "Just describe the need. The server picks usable models, implements in parallel, runs the objective check, synthesizes the best version, and merges to the main line — zero manual steps.",
+    "checkCmdLabel": "Objective check command (optional, e.g. python3 check.py / cargo test)",
     "synthesize": "Synthesize",
     "synthHint": "Dispatch an agent to combine the best of all approaches into one merged implementation (not pick a winner)",
     "synthStarted": "Synthesizer dispatched — it'll combine the best and merge"

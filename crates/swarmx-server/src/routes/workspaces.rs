@@ -785,12 +785,31 @@ pub async fn create_fusion_handler(
     }
     // Cost guard: a fusion runs N real CLIs at once. Cap N so a typo can't
     // fan out 50 contestants and exhaust the user's plan/rate limits.
-    let labels: Vec<String> = req
+    let mut labels: Vec<String> = req
         .labels
         .iter()
         .map(|l| l.trim().to_string())
         .filter(|l| !l.is_empty())
         .collect();
+
+    // Auto-implement panel: label → "cli[:model]". In autopilot the server picks
+    // the panel (and derives the labels) when the caller gave none — the one-click
+    // novice path. Otherwise it's exactly what the caller sent.
+    let mut panel = req.panel.clone().unwrap_or_default();
+    if req.autopilot && panel.is_empty() {
+        panel = autopilot_panel(&state);
+        if panel.is_empty() {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": "autopilot 需要至少一个可用引擎：请在设置里配置 Comate License，或安装并登录一个 CLI"})),
+            ));
+        }
+        if labels.is_empty() {
+            labels = panel.keys().cloned().collect();
+            labels.sort(); // deterministic contestant order
+        }
+    }
+
     if labels.len() < 2 {
         return Err((
             StatusCode::BAD_REQUEST,
@@ -824,14 +843,14 @@ pub async fn create_fusion_handler(
         base_batch_slug.chars().take(40).collect::<String>()
     };
 
-    // Optional auto-implement panel: label → CLI. Labels present here get a
-    // real CLI agent spawned in their worktree to implement `need` autonomously
-    // (OpenRouter-fusion-style full-auto panel). Labels absent stay user-driven.
-    let panel = req.panel.clone().unwrap_or_default();
+    // Auto-implement panel resolved above (autopilot fills it; else the caller's).
     let valid_clis = ["claude", "codex", "opencode", "reasonix", "zulu"];
 
     // Create one isolated contestant direction per label.
     let mut contestant_ids: Vec<String> = Vec::with_capacity(labels.len());
+    // Agent ids of the auto-implement contestants — the autopilot autochain
+    // watches these to know when to enter the judge stage.
+    let mut panel_agent_ids: Vec<String> = Vec::new();
     for label in &labels {
         let label_slug = crate::worktree::sanitize_suffix(label);
         let base_slug = format!("{base_batch_slug}-{label_slug}");
@@ -894,7 +913,7 @@ pub async fn create_fusion_handler(
             )
             .await
             {
-                Ok(()) => {}
+                Ok(agent_id) => panel_agent_ids.push(agent_id),
                 Err((_, msg)) => {
                     tracing::warn!(label = %label, cli = %cli, msg = %msg, "fusion panel: auto-implement spawn failed; contestant left user-driven");
                     // Fall back to the normal background isolation so the user
@@ -940,7 +959,199 @@ pub async fn create_fusion_handler(
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
 
+    // Autopilot: chain straight through to the judge stage once the contestants
+    // settle — no human clicks. The autochain watches the contestants (committed
+    // work is the engine-independent "done" signal) and then enters the
+    // synthesize judge stage (whose watchdog lands the merge).
+    if req.autopilot && !panel_agent_ids.is_empty() {
+        spawn_fusion_autochain(
+            state.clone(),
+            workspace_id.clone(),
+            batch.id.clone(),
+            batch.contestant_thread_ids.clone(),
+            ws.cwd.clone(),
+        );
+    }
+
     Ok(Json(fusion_record_to_wire(batch)))
+}
+
+/// Auto-select a fusion panel for autopilot when the caller gave none. Prefers
+/// ≥2 distinct ready real CLIs (a genuine cross-engine race); else races three
+/// zulu models under one license; else empty (the caller surfaces a clear error).
+/// Returns label → "cli[:model]".
+fn autopilot_panel(state: &AppState) -> std::collections::HashMap<String, String> {
+    use std::collections::HashSet;
+    let usable: HashSet<String> = crate::engine_probe::cached_results()
+        .into_iter()
+        .filter(|r| matches!(r.state, crate::engine_probe::ProbeState::Usable))
+        .map(|r| r.engine)
+        .collect();
+    // Ready = probed usable, or (no probe yet) the binary is at least installed.
+    let ready = |id: &str| -> bool {
+        usable.contains(id)
+            || state
+                .plugins
+                .get(id)
+                .map(|p| crate::runtime_path::resolve_executable(&p.binary).is_some())
+                .unwrap_or(false)
+    };
+    let clis: Vec<String> = ["claude", "codex", "opencode", "reasonix"]
+        .into_iter()
+        .filter(|c| ready(c))
+        .take(3)
+        .map(String::from)
+        .collect();
+    if clis.len() >= 2 {
+        return clis.into_iter().map(|c| (c.clone(), c)).collect();
+    }
+    // One license → three models. Needs a configured license to actually run.
+    if ready("zulu") && !crate::comate::load_license().is_empty() {
+        return ["Deepseek V4 Pro", "GLM-5.2", "Kimi-K2.6"]
+            .into_iter()
+            .map(|m| {
+                let label: String = crate::worktree::sanitize_suffix(m).chars().take(20).collect();
+                (label, format!("zulu:{m}"))
+            })
+            .collect();
+    }
+    std::collections::HashMap::new()
+}
+
+/// Env-tunable ceiling for autopilot to wait for contestants to implement.
+fn autochain_impl_timeout() -> std::time::Duration {
+    std::env::var("SWARMX_FUSION_IMPL_TIMEOUT_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .map(std::time::Duration::from_millis)
+        .unwrap_or_else(|| std::time::Duration::from_secs(20 * 60))
+}
+
+/// Autopilot orchestration: watch the auto-implement contestants and, once
+/// they've all settled, enter the synthesize judge stage — whose watchdog lands
+/// the merge. Zero human clicks. "Settled" is COMMITTED work (the
+/// engine-independent done signal — `last_activity_at` is unreliable: zulu isn't
+/// transcript-tailed, codex intermittently), OR the agent is terminal, OR idle
+/// past the grace. If contestants never settle by the timeout, chain anyway
+/// (weak/empty ones lose under the judge). No-op if the batch left 'running'.
+fn spawn_fusion_autochain(
+    state: AppState,
+    workspace_id: String,
+    batch_id: String,
+    contestant_thread_ids: Vec<String>,
+    base_cwd: String,
+) {
+    tokio::spawn(async move {
+        const POLL: std::time::Duration = std::time::Duration::from_secs(5);
+        const IDLE_GRACE_MS: i64 = 90_000;
+        let max = autochain_impl_timeout();
+        let start = std::time::Instant::now();
+        // Base branch (what contestants forked from) — computed once.
+        let base_branch = {
+            let c = base_cwd.clone();
+            tokio::task::spawn_blocking(move || crate::worktree::current_branch(std::path::Path::new(&c)))
+                .await
+                .ok()
+                .flatten()
+        };
+        loop {
+            tokio::time::sleep(POLL).await;
+            if current_batch_status(&state, &workspace_id, &batch_id).await.as_deref() != Some("running") {
+                return;
+            }
+            let timed_out = start.elapsed() >= max;
+            if !timed_out
+                && !contestants_settled(
+                    &state,
+                    &contestant_thread_ids,
+                    base_branch.as_deref(),
+                    &base_cwd,
+                    IDLE_GRACE_MS,
+                )
+                .await
+            {
+                continue;
+            }
+            let Ok(ws) = require_workspace(&state, &workspace_id).await else {
+                return;
+            };
+            let Some(batch) = state
+                .store
+                .list_fusion_batches(workspace_id.clone())
+                .await
+                .ok()
+                .and_then(|bs| bs.into_iter().find(|b| b.id == batch_id))
+            else {
+                return;
+            };
+            if batch.status != "running" {
+                return;
+            }
+            tracing::info!(batch = %batch_id, timed_out, "fusion autopilot: contestants settled → entering synthesize judge stage");
+            if let Err((_, e)) = enter_judge_stage(state.clone(), ws, batch, true, true).await {
+                tracing::warn!(batch = %batch_id, err = ?e, "fusion autopilot: enter_judge_stage failed");
+            }
+            return;
+        }
+    });
+}
+
+/// True when EVERY contestant has settled. Per contestant, settled = its branch
+/// has committed work (`diff_summary` non-empty — the reliable, engine-agnostic
+/// "done" signal), OR its agent is terminal (killed/exited), OR idle past the
+/// grace, OR its agent row / thread is gone. Any contestant that is none of these
+/// is still working → not settled.
+async fn contestants_settled(
+    state: &AppState,
+    thread_ids: &[String],
+    base_branch: Option<&str>,
+    base_cwd: &str,
+    idle_grace_ms: i64,
+) -> bool {
+    if thread_ids.is_empty() {
+        return true;
+    }
+    let agents = state.store.list_agents().await.unwrap_or_default();
+    for tid in thread_ids {
+        // Terminal / idle by the contestant's agent row.
+        let agent = agents
+            .iter()
+            .find(|a| a.thread_id.as_deref() == Some(tid) && a.role == "fusion-contestant");
+        let terminal_or_idle = match agent {
+            None => true,
+            Some(a) => {
+                a.killed_at.is_some()
+                    || a.shim_exit_at.is_some()
+                    || matches!(a.last_activity_at, Some(last) if now_ms() - last > idle_grace_ms)
+            }
+        };
+        if terminal_or_idle {
+            continue;
+        }
+        // Still-live agent: has it COMMITTED work yet? That's the done signal.
+        let committed = match (base_branch, state.store.get_thread(tid.clone()).await) {
+            (Some(base), Ok(Some(th))) if th.isolation == "worktree" => {
+                match th.branch.clone().filter(|b| !b.is_empty()) {
+                    Some(branch) => {
+                        let repo = base_cwd.to_string();
+                        let base = base.to_string();
+                        tokio::task::spawn_blocking(move || {
+                            crate::worktree::diff_summary(std::path::Path::new(&repo), &base, &branch)
+                        })
+                        .await
+                        .map(|f| !f.is_empty())
+                        .unwrap_or(false)
+                    }
+                    None => false,
+                }
+            }
+            _ => false,
+        };
+        if !committed {
+            return false; // this contestant is still working
+        }
+    }
+    true
 }
 
 /// `GET /api/workspaces/:id/fusion` — list alive fusion batches (newest first).
@@ -968,30 +1179,24 @@ pub async fn judge_fusion_handler(
     Path((workspace_id, batch_id)): Path<(String, String)>,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Json<swarmx_protocol::rest::FusionJudgeResponse>, (StatusCode, Json<serde_json::Value>)> {
-    // `?auto=true` (default false) flips on the auto-judge: instead of just
-    // creating the judge direction + handing the human its diffs, we ALSO spawn
-    // a real CLI agent inside the judge worktree that reads every contestant's
-    // diff, picks a winner, and calls the decide endpoint itself — closing the
-    // loop with zero human input. The manual flow (judge → human decide) is the
-    // default and entirely unchanged.
+    // `?auto=true` spawns the judge agent that reads diffs, picks/synthesizes, and
+    // decides itself; `?synthesize=true` (auto only) makes it hand-write a
+    // combined-best implementation and merge THAT. Both default false (manual
+    // flow: judge direction + human decide, unchanged).
     let auto = params
         .get("auto")
         .map(|v| matches!(v.as_str(), "1" | "true" | "yes"))
         .unwrap_or(false);
-    // `?synthesize=true` (auto only): instead of picking one winner, the judge
-    // agent writes a combined-best implementation into its own worktree and
-    // merges THAT (P3.3). Decide accepts the judge thread as the "winner".
     let synthesize = params
         .get("synthesize")
         .map(|v| matches!(v.as_str(), "1" | "true" | "yes"))
         .unwrap_or(false);
     let ws = require_workspace(&state, &workspace_id).await?;
-    let batches = state
+    let batch = state
         .store
         .list_fusion_batches(workspace_id.clone())
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
-    let batch = batches
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?
         .into_iter()
         .find(|b| b.id == batch_id)
         .ok_or_else(|| {
@@ -1000,6 +1205,24 @@ pub async fn judge_fusion_handler(
                 Json(json!({"error": format!("unknown fusion batch: {batch_id}")})),
             )
         })?;
+    enter_judge_stage(state, ws, batch, auto, synthesize).await.map(Json)
+}
+
+/// The judge-stage core, callable by the HTTP handler AND the autopilot autochain
+/// (in-process, no self-HTTP). Creates the privileged judge direction, gathers
+/// every contestant's diff bundle (+ runs the objective gate in auto mode), flips
+/// the batch to `judging`, and in auto mode spawns the judge agent plus its
+/// watchdog. Takes an owned `AppState` so the body's `&state`/`state.clone()`
+/// usages are untouched.
+async fn enter_judge_stage(
+    state: AppState,
+    ws: swarmx_storage::WorkspaceRecord,
+    batch: swarmx_storage::FusionBatchRecord,
+    auto: bool,
+    synthesize: bool,
+) -> Result<swarmx_protocol::rest::FusionJudgeResponse, (StatusCode, Json<serde_json::Value>)> {
+    let workspace_id = ws.id.clone();
+    let batch_id = batch.id.clone();
 
     // Base = the branch checked out at the workspace cwd (what contestants
     // forked from). Computed once; contestant diffs are taken vs this.
@@ -1202,13 +1425,37 @@ pub async fn judge_fusion_handler(
         None
     };
 
-    Ok(Json(swarmx_protocol::rest::FusionJudgeResponse {
+    // Guarantee the batch NEVER stalls in 'judging'. The auto-judge's only path to
+    // decide is the judge LLM agent's own curl; if it stops early (crash / turn
+    // limit / forgot the curl / CLI died) the batch would be stuck forever. This
+    // watchdog observes the judge agent's lifecycle and, when it's gone/idle with
+    // the batch still 'judging', runs a DETERMINISTIC fallback decide (synth →
+    // merge the judge's captured work; pick+check → the gate winner; otherwise →
+    // 'needs_decision' so the UI offers manual pick). Spawned even when the judge
+    // agent failed to spawn (that also leaves the batch stuck). Idempotent with
+    // the judge's own successful decide via the storage CAS. Auto mode only.
+    if auto {
+        spawn_judge_watchdog(
+            state.clone(),
+            workspace_id.clone(),
+            batch_id.clone(),
+            judge_rec.id.clone(),
+            judge_agent_id.clone(),
+            synthesize,
+            check_cmd.clone(),
+            base.clone(),
+            ws.cwd.clone(),
+            contestants.clone(),
+        );
+    }
+
+    Ok(swarmx_protocol::rest::FusionJudgeResponse {
         batch: updated,
         judge_thread_id: judge_rec.id,
         base,
         contestants,
         judge_agent_id,
-    }))
+    })
 }
 
 /// Auto-implement one panel contestant: synchronously isolate its worktree,
@@ -1227,7 +1474,7 @@ async fn spawn_panel_contestant(
     cli: &str,
     model: Option<&str>,
     need: &str,
-) -> Result<(), (StatusCode, String)> {
+) -> Result<String, (StatusCode, String)> {
     // Synchronous isolation: we need the worktree dir on hand before spawning.
     let cwd_for_git = ws_cwd.to_string();
     let branch_for_git = slug.to_string();
@@ -1305,7 +1552,7 @@ async fn spawn_panel_contestant(
         spawn_ms,
         state.server_url.clone(),
     );
-    Ok(())
+    Ok(out.agent_id)
 }
 
 /// Run the batch's objective check command inside one contestant's worktree
@@ -1509,6 +1756,217 @@ async fn spawn_auto_judge(
     Ok(out.agent_id)
 }
 
+/// Env-tunable ceiling for how long the judge watchdog waits before forcing a
+/// decision. Synth judges hand-write code, so default generously (15 min).
+fn judge_watchdog_timeout() -> std::time::Duration {
+    std::env::var("SWARMX_FUSION_JUDGE_TIMEOUT_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .map(std::time::Duration::from_millis)
+        .unwrap_or_else(|| std::time::Duration::from_secs(15 * 60))
+}
+
+/// Watch the auto-judge agent and GUARANTEE the batch leaves 'judging'. The
+/// only path to decide is the judge LLM's own `curl`; this closes the gap when
+/// it doesn't fire. Polls the judge agent's store row; once it's terminal
+/// (killed/exited) or idle past the grace, or the max elapses, it runs a
+/// deterministic fallback decide. Idempotent with the judge's own decide via the
+/// storage CAS. See [`judge_fallback`].
+#[allow(clippy::too_many_arguments)]
+fn spawn_judge_watchdog(
+    state: AppState,
+    workspace_id: String,
+    batch_id: String,
+    judge_thread_id: String,
+    judge_agent_id: Option<String>,
+    synthesize: bool,
+    check_cmd: Option<String>,
+    base_branch: Option<String>,
+    base_cwd: String,
+    contestants: Vec<swarmx_protocol::rest::FusionContestantDiff>,
+) {
+    tokio::spawn(async move {
+        const POLL: std::time::Duration = std::time::Duration::from_secs(5);
+        const IDLE_GRACE_MS: i64 = 90_000;
+        let max = judge_watchdog_timeout();
+        let start = std::time::Instant::now();
+        loop {
+            tokio::time::sleep(POLL).await;
+
+            // Already decided (judge's own curl, or a human)? Nothing to do.
+            if current_batch_status(&state, &workspace_id, &batch_id).await.as_deref() != Some("judging") {
+                return;
+            }
+            let timed_out = start.elapsed() >= max;
+            if !timed_out
+                && !judge_settled(&state, &judge_thread_id, judge_agent_id.as_deref(), IDLE_GRACE_MS).await
+            {
+                continue;
+            }
+            // Grace: a judge that JUST finished may be curling decide right now.
+            // Let it land (the CAS makes a lost race harmless; this just avoids a
+            // redundant fallback merge).
+            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+            if current_batch_status(&state, &workspace_id, &batch_id).await.as_deref() != Some("judging") {
+                return;
+            }
+            tracing::warn!(batch = %batch_id, timed_out, "fusion judge watchdog: judge did not decide; running deterministic fallback");
+            judge_fallback(
+                &state, &workspace_id, &batch_id, &judge_thread_id, synthesize,
+                check_cmd.as_deref(), base_branch.as_deref(), &base_cwd, &contestants,
+            )
+            .await;
+            return;
+        }
+    });
+}
+
+/// Current status of a fusion batch, or None if gone.
+async fn current_batch_status(state: &AppState, workspace_id: &str, batch_id: &str) -> Option<String> {
+    state
+        .store
+        .list_fusion_batches(workspace_id.to_string())
+        .await
+        .ok()?
+        .into_iter()
+        .find(|b| b.id == batch_id)
+        .map(|b| b.status)
+}
+
+/// True when the judge agent is terminal (killed/exited) or idle past
+/// `idle_grace_ms` — claude/codex/zulu stay PTY-alive when idle and never emit
+/// an exit, so idle-after-activity is their finish signal. A missing agent row
+/// (spawn failed / reaped) counts as settled.
+async fn judge_settled(
+    state: &AppState,
+    judge_thread_id: &str,
+    judge_agent_id: Option<&str>,
+    idle_grace_ms: i64,
+) -> bool {
+    let agents = state.store.list_agents().await.unwrap_or_default();
+    let judge = match judge_agent_id {
+        Some(aid) => agents.into_iter().find(|a| a.id == aid),
+        None => agents
+            .into_iter()
+            .find(|a| a.thread_id.as_deref() == Some(judge_thread_id) && a.role == "fusion-judge"),
+    };
+    match judge {
+        None => true,
+        Some(a) => {
+            a.killed_at.is_some()
+                || a.shim_exit_at.is_some()
+                || matches!(a.last_activity_at, Some(last) if now_ms() - last > idle_grace_ms)
+        }
+    }
+}
+
+/// Deterministic decide when the judge agent didn't. Never leaves the batch in
+/// 'judging': synth → merge the judge's captured work (empty → needs_decision);
+/// pick+check → first contestant to pass the re-run gate (none → needs_decision);
+/// no deterministic signal → needs_decision (manual pick in the UI).
+#[allow(clippy::too_many_arguments)]
+async fn judge_fallback(
+    state: &AppState,
+    workspace_id: &str,
+    batch_id: &str,
+    judge_thread_id: &str,
+    synthesize: bool,
+    check_cmd: Option<&str>,
+    base_branch: Option<&str>,
+    base_cwd: &str,
+    contestants: &[swarmx_protocol::rest::FusionContestantDiff],
+) {
+    let Ok(ws) = require_workspace(state, workspace_id).await else {
+        return;
+    };
+    let Some(batch) = state
+        .store
+        .list_fusion_batches(workspace_id.to_string())
+        .await
+        .ok()
+        .and_then(|bs| bs.into_iter().find(|b| b.id == batch_id))
+    else {
+        return;
+    };
+    if batch.status != "judging" {
+        return;
+    }
+
+    let winner: Option<String> = if synthesize {
+        // Capture the judge's uncommitted synthesis, then require it produced
+        // something — merging an empty branch would silently discard all
+        // contestant work.
+        match state.store.get_thread(judge_thread_id.to_string()).await {
+            Ok(Some(jt)) => {
+                let jcwd = jt.cwd.clone();
+                let jbranch = jt.branch.clone().unwrap_or_default();
+                let _ = tokio::task::spawn_blocking(move || {
+                    crate::worktree::commit_worktree_work(
+                        std::path::Path::new(&jcwd),
+                        "swarmx: capture judge synthesis (watchdog)",
+                    )
+                })
+                .await;
+                let has_work = match base_branch {
+                    Some(base) if !jbranch.is_empty() => {
+                        let repo = base_cwd.to_string();
+                        let base = base.to_string();
+                        tokio::task::spawn_blocking(move || {
+                            crate::worktree::diff_summary(std::path::Path::new(&repo), &base, &jbranch)
+                        })
+                        .await
+                        .map(|f| !f.is_empty())
+                        .unwrap_or(false)
+                    }
+                    _ => false,
+                };
+                has_work.then(|| judge_thread_id.to_string())
+            }
+            _ => None,
+        }
+    } else if let Some(cmd) = check_cmd {
+        // Re-run the objective gate now (contestant worktrees are stable);
+        // first passing contestant in batch order wins.
+        let mut w = None;
+        for c in contestants {
+            let Some(branch) = c.branch.as_deref().filter(|b| !b.is_empty()) else {
+                continue;
+            };
+            let dir = crate::worktree::worktree_dest(std::path::Path::new(base_cwd), branch)
+                .to_string_lossy()
+                .into_owned();
+            let (passed, _) = run_contestant_check(&dir, cmd).await;
+            if passed {
+                w = Some(c.thread_id.clone());
+                break;
+            }
+        }
+        w
+    } else {
+        None
+    };
+
+    match winner {
+        Some(wid) => match decide_fusion_inner(state, &ws, &batch, &wid, true).await {
+            Ok(_) => tracing::info!(batch = %batch_id, winner = %wid, "fusion judge watchdog: decided deterministically"),
+            Err((_, e)) => tracing::warn!(batch = %batch_id, err = ?e, "fusion judge watchdog: fallback decide failed"),
+        },
+        None => {
+            // No deterministic signal — never stay stuck; surface manual pick.
+            let _ = state
+                .store
+                .transition_fusion_status(
+                    batch_id.to_string(),
+                    "judging".to_string(),
+                    "needs_decision".to_string(),
+                )
+                .await;
+            tracing::info!(batch = %batch_id, "fusion judge watchdog: no deterministic winner → needs_decision (manual)");
+        }
+    }
+    publish_thread_changed(state, workspace_id, judge_thread_id, "updated");
+}
+
 /// `POST /api/workspaces/:id/fusion/:bid/decide` — the verdict / terminal stage.
 /// The caller picks ONE winning contestant; we validate it's actually one of the
 /// batch's contestants, record it + flip the batch to 'done', then (unless the
@@ -1536,31 +1994,59 @@ pub async fn decide_fusion_handler(
             )
         })?;
 
+    match decide_fusion_inner(&state, &ws, &batch, &req.winner_thread_id, req.merge).await? {
+        DecideOutcome::Decided(resp) => Ok(Json(resp)),
+        DecideOutcome::AlreadyDecided => Err((
+            StatusCode::CONFLICT,
+            Json(json!({"error": "fusion batch already decided"})),
+        )),
+    }
+}
+
+/// Terminal outcome of [`decide_fusion_inner`]: either this caller claimed the
+/// verdict (and we merged / recorded it), or someone else won the CAS race first.
+enum DecideOutcome {
+    Decided(swarmx_protocol::rest::FusionDecideResponse),
+    AlreadyDecided,
+}
+
+/// The decide+merge core, callable IN-PROCESS by both the HTTP handler and the
+/// judge watchdog (no self-`curl`). Validates the winner, CAS-claims the batch
+/// (returns `AlreadyDecided` if the judge's own decide — or a human — already
+/// won the race), then unless `merge` is false merges the winner's branch into
+/// base with the shared worktree machinery (captures uncommitted work first,
+/// spawns an AI resolver on conflict). Idempotency lives entirely in the storage
+/// CAS, so concurrent callers can never double-merge.
+async fn decide_fusion_inner(
+    state: &AppState,
+    ws: &swarmx_storage::WorkspaceRecord,
+    batch: &swarmx_storage::FusionBatchRecord,
+    winner_thread_id: &str,
+    merge: bool,
+) -> Result<DecideOutcome, (StatusCode, Json<serde_json::Value>)> {
+    let workspace_id = ws.id.clone();
+
     // The winner MUST be one of this batch's contestants — OR the batch's judge
     // thread when the judge synthesized a combined-best implementation into its
     // own worktree (P3.3 synthesis-merge). Never an unrelated thread. SQLite
     // can't constrain a value against a JSON array, so enforce it here.
-    let is_synthesis = batch.judge_thread_id.as_deref() == Some(req.winner_thread_id.as_str());
-    if !batch.contestant_thread_ids.contains(&req.winner_thread_id) && !is_synthesis {
+    let is_synthesis = batch.judge_thread_id.as_deref() == Some(winner_thread_id);
+    if !batch.contestant_thread_ids.iter().any(|t| t == winner_thread_id) && !is_synthesis {
         return Err((
             StatusCode::BAD_REQUEST,
             Json(json!({"error": "winner_thread_id is not a contestant (or the judge) of this batch"})),
         ));
     }
 
-    // Record the verdict (winner + status='done') first, so even if the merge
-    // hits a conflict and goes async (resolver agent), the batch is already
-    // decided and auditable.
+    // CAS-claim the verdict (winner + status='done'). 0 rows = someone already
+    // decided (the judge's curl, the watchdog, a double-click) → no-op.
     let updated = state
         .store
-        .set_fusion_winner(batch.id.clone(), req.winner_thread_id.clone())
+        .set_fusion_winner(batch.id.clone(), winner_thread_id.to_string())
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
     if updated == 0 {
-        return Err((
-            StatusCode::CONFLICT,
-            Json(json!({"error": "fusion batch vanished before it could be decided"})),
-        ));
+        return Ok(DecideOutcome::AlreadyDecided);
     }
 
     // Re-read so the returned batch reflects winner + 'done'.
@@ -1578,10 +2064,10 @@ pub async fn decide_fusion_handler(
 
     // If the caller didn't want a merge, we're done: verdict recorded, no base
     // mutation.
-    if !req.merge {
-        return Ok(Json(swarmx_protocol::rest::FusionDecideResponse {
+    if !merge {
+        return Ok(DecideOutcome::Decided(swarmx_protocol::rest::FusionDecideResponse {
             batch: decided,
-            winner_thread_id: req.winner_thread_id,
+            winner_thread_id: winner_thread_id.to_string(),
             merge_status: None,
             base: None,
             files: Vec::new(),
@@ -1590,16 +2076,16 @@ pub async fn decide_fusion_handler(
     }
 
     // Merge the winner's branch into base, reusing the per-direction merge logic.
-    let winner = require_thread(&state, &workspace_id, &req.winner_thread_id).await?;
+    let winner = require_thread(state, &workspace_id, winner_thread_id).await?;
     let branch = match winner.branch.clone().filter(|b| !b.is_empty()) {
         Some(b) if winner.isolation == "worktree" => b,
         _ => {
             // Winner never got an isolated branch (degraded) — verdict still
             // stands, but there's nothing to merge. Be honest rather than lying
             // "merged".
-            return Ok(Json(swarmx_protocol::rest::FusionDecideResponse {
+            return Ok(DecideOutcome::Decided(swarmx_protocol::rest::FusionDecideResponse {
                 batch: decided,
-                winner_thread_id: req.winner_thread_id,
+                winner_thread_id: winner_thread_id.to_string(),
                 merge_status: Some("nothing_to_merge".to_string()),
                 base: None,
                 files: Vec::new(),
@@ -1637,9 +2123,9 @@ pub async fn decide_fusion_handler(
     match outcome {
         crate::worktree::MergeOutcome::Clean { files } => {
             let _ = files; // count of files merged; the wire shape carries names, not a count
-            Ok(Json(swarmx_protocol::rest::FusionDecideResponse {
+            Ok(DecideOutcome::Decided(swarmx_protocol::rest::FusionDecideResponse {
                 batch: decided,
-                winner_thread_id: req.winner_thread_id,
+                winner_thread_id: winner_thread_id.to_string(),
                 merge_status: Some("merged".to_string()),
                 base: Some(base),
                 files: Vec::new(),
@@ -1647,12 +2133,12 @@ pub async fn decide_fusion_handler(
             }))
         }
         crate::worktree::MergeOutcome::Conflict { files } => {
-            let agent_id = spawn_merge_resolver(&state, &ws, &base, &branch, &files)
+            let agent_id = spawn_merge_resolver(state, ws, &base, &branch, &files)
                 .await
                 .map_err(|(s, m)| (s, Json(json!({"error": m}))))?;
-            Ok(Json(swarmx_protocol::rest::FusionDecideResponse {
+            Ok(DecideOutcome::Decided(swarmx_protocol::rest::FusionDecideResponse {
                 batch: decided,
-                winner_thread_id: req.winner_thread_id,
+                winner_thread_id: winner_thread_id.to_string(),
                 merge_status: Some("resolving".to_string()),
                 base: Some(base),
                 files,

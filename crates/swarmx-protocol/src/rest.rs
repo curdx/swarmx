@@ -709,6 +709,14 @@ pub struct CreateFusionRequest {
     /// Empty/None = no auto-implement (every contestant is user-driven).
     #[serde(default)]
     pub panel: Option<std::collections::HashMap<String, String>>,
+    /// Full-auto "novice" mode. When true the server: picks a model panel itself
+    /// if `panel` is empty (usable engines, else N zulu models on one license),
+    /// auto-implements every contestant, then — once the contestants settle —
+    /// auto-enters the synthesize judge stage, whose watchdog lands the merge.
+    /// Zero clicks after submit. `labels` may be empty (the server derives them
+    /// from the chosen panel). Ignored by the manual flow.
+    #[serde(default)]
+    pub autopilot: bool,
 }
 
 /// A fusion competition binding N isolated contestant directions (and later a

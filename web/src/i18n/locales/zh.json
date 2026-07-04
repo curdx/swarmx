@@ -297,9 +297,14 @@
     "status": {
       "running": "进行中",
       "judging": "评判中",
+      "needs_decision": "待裁决",
       "done": "已完成",
       "failed": "失败"
     },
+    "needsDecision": "自动裁决未能自动完成,请在下方手动选择赢家。",
+    "autopilot": "全自动（自动选模型 · 并行实现 · 评审综合 · 合并）",
+    "autopilotHint": "只填需求即可。系统会自动挑选可用模型并行实现、跑客观检查、综合出最优版并合并到主线，全程零手动。",
+    "checkCmdLabel": "客观检查命令（可选，如 python3 check.py / cargo test）",
     "synthesize": "综合最优",
     "synthHint": "派一个 agent 博采众长、综合出一版最优实现并合并（不是挑一个赢家）",
     "synthStarted": "已派出综合者，博采众长合成一版并合并"

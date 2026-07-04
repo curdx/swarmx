@@ -813,10 +813,16 @@ export interface CronListResp {
 export interface CreateFusionRequest {
   need: string;
   labels: string[];
+  /** Optional objective gate run in each contestant's worktree by the judge. */
+  check_cmd?: string;
+  /** Optional label → "cli[:model]" auto-implement panel. */
+  panel?: Record<string, string>;
+  /** Full-auto: server picks the panel + labels, implements, judges, merges. */
+  autopilot?: boolean;
 }
 
 /** A fusion competition binding N contestant directions (+ later a judge).
- *  `status`: "running" | "judging" | "done" | "failed". */
+ *  `status`: "running" | "judging" | "needs_decision" | "done" | "failed". */
 export interface FusionBatch {
   id: string;
   workspace_id: string;

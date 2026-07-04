@@ -61,6 +61,8 @@ function statusTone(status: string): string {
       return "bg-status-running-soft text-status-running";
     case "judging":
       return "bg-state-warning/15 text-state-warning";
+    case "needs_decision":
+      return "bg-state-danger/15 text-state-danger";
     case "done":
       return "bg-status-success-soft text-status-success";
     case "failed":
@@ -101,6 +103,10 @@ function CreateFusionForm({
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const [need, setNeed] = useState("");
+  // Full-auto by default: the novice path. Server picks the panel, implements,
+  // judges (synthesize), and merges with zero further clicks.
+  const [autopilot, setAutopilot] = useState(true);
+  const [checkCmd, setCheckCmd] = useState("");
   // Start with two contestant labels (the minimum the backend allows).
   const [labels, setLabels] = useState<string[]>(["claude", "codex"]);
   const [submitting, setSubmitting] = useState(false);
@@ -108,6 +114,8 @@ function CreateFusionForm({
 
   const reset = () => {
     setNeed("");
+    setAutopilot(true);
+    setCheckCmd("");
     setLabels(["claude", "codex"]);
     setError(null);
   };
@@ -122,8 +130,7 @@ function CreateFusionForm({
   const cleanLabels = labels.map((l) => l.trim()).filter(Boolean);
   const canSubmit =
     need.trim().length > 0 &&
-    cleanLabels.length >= 2 &&
-    cleanLabels.length <= 4 &&
+    (autopilot || (cleanLabels.length >= 2 && cleanLabels.length <= 4)) &&
     !submitting;
 
   const submit = async () => {
@@ -131,9 +138,12 @@ function CreateFusionForm({
     setSubmitting(true);
     setError(null);
     try {
+      const check = checkCmd.trim();
       await api.createFusion(workspaceId, {
         need: need.trim(),
-        labels: cleanLabels,
+        labels: autopilot ? [] : cleanLabels,
+        autopilot,
+        ...(check ? { check_cmd: check } : {}),
       });
       reset();
       setOpen(false);
@@ -189,43 +199,79 @@ function CreateFusionForm({
         />
       </div>
 
+      {/* full-auto toggle — the novice one-click path */}
+      <label className="flex cursor-pointer items-center gap-2 rounded-md border border-border-subtle bg-surface-secondary px-2.5 py-2">
+        <input
+          type="checkbox"
+          checked={autopilot}
+          onChange={(e) => setAutopilot(e.target.checked)}
+          className="size-3.5 accent-accent-primary"
+        />
+        <Sparkles className="size-3.5 text-accent-primary" />
+        <span className="font-body text-[13px] text-foreground-primary">
+          {t("fusion.autopilot", { defaultValue: "全自动（自动选模型 · 并行实现 · 评审综合 · 合并）" })}
+        </span>
+      </label>
+
+      {autopilot ? (
+        <p className="rounded-md bg-surface-secondary px-2.5 py-2 font-body text-[12px] text-foreground-secondary">
+          {t("fusion.autopilotHint", {
+            defaultValue:
+              "只填需求即可。系统会自动挑选可用模型并行实现、跑客观检查、综合出最优版并合并到主线，全程零手动。",
+          })}
+        </p>
+      ) : (
+        <div className="space-y-1.5">
+          <label className="font-caption text-[11px] uppercase tracking-wide text-foreground-tertiary">
+            {t("fusion.labelsLabel", { defaultValue: "选手（2–4 个，通常是模型/CLI 名）" })}
+          </label>
+          <div className="space-y-2">
+            {labels.map((l, i) => (
+              <div key={i} className="flex items-center gap-2">
+                <input
+                  value={l}
+                  onChange={(e) => setLabel(i, e.target.value)}
+                  placeholder={t("fusion.labelPlaceholder", {
+                    defaultValue: "选手名，如 claude / codex / deepseek",
+                  })}
+                  className="flex-1 rounded-md border border-border-subtle bg-surface-secondary px-2.5 py-1.5 font-mono text-[13px] text-foreground-primary outline-none focus:border-accent-primary"
+                />
+                <button
+                  type="button"
+                  onClick={() => removeLabel(i)}
+                  disabled={labels.length <= 2}
+                  className="text-foreground-tertiary hover:text-state-danger disabled:opacity-30"
+                  aria-label={t("fusion.removeLabel", { defaultValue: "删除选手" })}
+                >
+                  <X className="size-4" />
+                </button>
+              </div>
+            ))}
+          </div>
+          {labels.length < 4 && (
+            <button
+              type="button"
+              onClick={addLabel}
+              className="flex items-center gap-1 font-caption text-[11px] text-accent-primary hover:underline"
+            >
+              <Plus className="size-3" />
+              {t("fusion.addLabel", { defaultValue: "加一位选手" })}
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* optional objective check (both modes) */}
       <div className="space-y-1.5">
         <label className="font-caption text-[11px] uppercase tracking-wide text-foreground-tertiary">
-          {t("fusion.labelsLabel", { defaultValue: "选手（2–4 个，通常是模型/CLI 名）" })}
+          {t("fusion.checkCmdLabel", { defaultValue: "客观检查命令（可选，如 python3 check.py / cargo test）" })}
         </label>
-        <div className="space-y-2">
-          {labels.map((l, i) => (
-            <div key={i} className="flex items-center gap-2">
-              <input
-                value={l}
-                onChange={(e) => setLabel(i, e.target.value)}
-                placeholder={t("fusion.labelPlaceholder", {
-                  defaultValue: "选手名，如 claude / codex / deepseek",
-                })}
-                className="flex-1 rounded-md border border-border-subtle bg-surface-secondary px-2.5 py-1.5 font-mono text-[13px] text-foreground-primary outline-none focus:border-accent-primary"
-              />
-              <button
-                type="button"
-                onClick={() => removeLabel(i)}
-                disabled={labels.length <= 2}
-                className="text-foreground-tertiary hover:text-state-danger disabled:opacity-30"
-                aria-label={t("fusion.removeLabel", { defaultValue: "删除选手" })}
-              >
-                <X className="size-4" />
-              </button>
-            </div>
-          ))}
-        </div>
-        {labels.length < 4 && (
-          <button
-            type="button"
-            onClick={addLabel}
-            className="flex items-center gap-1 font-caption text-[11px] text-accent-primary hover:underline"
-          >
-            <Plus className="size-3" />
-            {t("fusion.addLabel", { defaultValue: "加一位选手" })}
-          </button>
-        )}
+        <input
+          value={checkCmd}
+          onChange={(e) => setCheckCmd(e.target.value)}
+          placeholder="python3 check.py"
+          className="w-full rounded-md border border-border-subtle bg-surface-secondary px-2.5 py-1.5 font-mono text-[13px] text-foreground-primary outline-none focus:border-accent-primary"
+        />
       </div>
 
       {error && (
@@ -339,8 +385,14 @@ function BatchCard({
   const winnerId = decision?.winner_thread_id ?? batch.winner_thread_id ?? null;
   const hasDiffs = !!judge;
   const isDone = batch.status === "done" || !!decision;
-  const canJudge = !isDone && !hasDiffs;
-  const canDecide = hasDiffs && !isDone;
+  const needsDecision = batch.status === "needs_decision";
+  // Only offer the judge buttons on a fresh batch. A `judging` batch already has
+  // a judge (+ its watchdog) running — re-showing them on reload would spawn a
+  // SECOND judge.
+  const canJudge = batch.status === "running";
+  // Decide is available with judge diffs, OR when the watchdog fell back to
+  // needs_decision (server-side auto-judge couldn't pick — the human picks now).
+  const canDecide = (hasDiffs || needsDecision) && !isDone;
 
   return (
     <div className="space-y-3 rounded-lg border border-border-subtle bg-surface-elevated p-4">
@@ -386,6 +438,24 @@ function BatchCard({
           </div>
         )}
       </div>
+
+      {/* batch-level status banner (survives reload; judge diffs are session-only) */}
+      {batch.status === "judging" && !hasDiffs && (
+        <p className="flex items-center gap-1.5 rounded-md bg-state-warning/10 px-2.5 py-1.5 font-body text-[12px] text-state-warning">
+          <Gavel className="size-3.5 shrink-0" />
+          {t("fusion.autoJudgeRunning", {
+            defaultValue: "评审 agent 正在自动读 diff 并评出赢家,完成后会自动落判决。",
+          })}
+        </p>
+      )}
+      {needsDecision && (
+        <p className="flex items-center gap-1.5 rounded-md bg-state-danger/10 px-2.5 py-1.5 font-body text-[12px] text-state-danger">
+          <Gavel className="size-3.5 shrink-0" />
+          {t("fusion.needsDecision", {
+            defaultValue: "自动裁决未能自动完成,请在下方手动选择赢家。",
+          })}
+        </p>
+      )}
 
       {/* contestants */}
       <div className="grid gap-3 sm:grid-cols-2">

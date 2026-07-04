@@ -253,7 +253,7 @@ async fn judge(
     for (i, a) in answers.iter().filter(|a| a.ok).enumerate() {
         body.push_str(&format!("\n### Answer {} (model: {})\n{}\n", i + 1, a.model, a.answer));
     }
-    let prompt = format!(
+    let base_prompt = format!(
         "You are an impartial JUDGE comparing multiple AI answers to one question. \
          Do NOT vote for a winner and do NOT merge the text. COMPARE them and return \
          ONLY a JSON object (no prose, no code fences) with these string arrays:\n\
@@ -263,15 +263,23 @@ async fn judge(
          \"blind_spots\":[…important aspects none addressed…]}}\n\n\
          QUESTION:\n{question}\n\nANSWERS:{body}"
     );
+    // A strict re-ask for retries: some models wrap the object in a fence or add
+    // prose on the first try; this leaves no room for either.
+    let strict_prompt = format!(
+        "{base_prompt}\n\n\
+         IMPORTANT: output MUST be a single line of MINIFIED JSON. No markdown, no \
+         code fences, no commentary, no trailing commas. Start with {{ and end with }}."
+    );
     // The judge model INTERMITTENTLY emits unparseable JSON (an unclosed fence, a
     // trailing comma, a stray truncation). extract_json already repairs the common
-    // shapes; up to two retries mop up the rest, since a re-roll parses cleanly the
-    // vast majority of the time and a retry only costs a call WHEN a parse fails.
-    // Cheap `zulu run` calls beat an empty analysis panel in the UI. Only the LAST
-    // failure's text is surfaced.
+    // shapes; up to two retries (with the STRICTER prompt) mop up the rest, since a
+    // re-roll parses cleanly the vast majority of the time and a retry only costs a
+    // call WHEN a parse fails. Cheap `zulu run` calls beat an empty analysis panel.
+    // Only the LAST failure's text is surfaced.
     let mut last_note = String::from("judge produced no output");
-    for _ in 0..3 {
-        match run_zulu_query(license, model, cwd, &prompt).await {
+    for attempt in 0..3 {
+        let prompt = if attempt == 0 { &base_prompt } else { &strict_prompt };
+        match run_zulu_query(license, model, cwd, prompt).await {
             Ok(text) => {
                 if let Some(v) = extract_json(&text) {
                     return FusionJudgeAnalysis {
