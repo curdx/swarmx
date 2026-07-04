@@ -813,3 +813,68 @@ pub struct FusionDecideResponse {
     #[serde(default)]
     pub resolver_agent_id: Option<String>,
 }
+
+// ── Answer/research fusion (OpenRouter-Fusion style, zulu-panel backed) ──────
+// A DIFFERENT feature from the code-competition fusion above: given a question,
+// run a PANEL of models in parallel, have a JUDGE produce a structured analysis
+// (consensus/contradictions/…, NOT a vote), then SYNTHESIZE a final answer.
+
+/// `POST /api/workspaces/:id/fusion-consult` body.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FusionConsultRequest {
+    /// The question / task to deliberate on.
+    pub question: String,
+    /// 1..8 zulu model ids (or display names) for the panel. Empty → server
+    /// picks a sensible default trio.
+    #[serde(default)]
+    pub panel: Vec<String>,
+    /// Model that writes the structured judge analysis. Default: a strong model.
+    #[serde(default)]
+    pub judge_model: Option<String>,
+    /// Model that writes the final synthesis. Default: same as judge.
+    #[serde(default)]
+    pub synthesis_model: Option<String>,
+}
+
+/// One panel member's answer.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FusionPanelAnswer {
+    pub model: String,
+    /// The model's answer text, or an error note when `ok == false`.
+    pub answer: String,
+    pub ok: bool,
+    pub elapsed_ms: u64,
+}
+
+/// The judge's structured comparison — consensus/contradictions/coverage/unique
+/// insights/blind spots. A COMPARISON, not a merge or a vote.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct FusionJudgeAnalysis {
+    /// Points all/most panel members agree on (higher-confidence).
+    #[serde(default)]
+    pub consensus: Vec<String>,
+    /// Where members disagree.
+    #[serde(default)]
+    pub contradictions: Vec<String>,
+    /// Insights only one member surfaced.
+    #[serde(default)]
+    pub unique_insights: Vec<String>,
+    /// Gaps none of the members addressed.
+    #[serde(default)]
+    pub blind_spots: Vec<String>,
+    /// Free-text note when the judge couldn't produce clean structure.
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
+/// `POST /api/workspaces/:id/fusion-consult` response.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FusionConsultResponse {
+    pub question: String,
+    pub panel: Vec<FusionPanelAnswer>,
+    pub analysis: FusionJudgeAnalysis,
+    /// The outer model's final answer, synthesized from the analysis + panel.
+    pub synthesis: String,
+    /// Rough token-cost note (panel is N× a single call — governance signal).
+    pub cost_note: String,
+}

@@ -24,6 +24,7 @@ mod opencode_tui;
 mod reasonix_serve;
 mod zulu_serve;
 mod comate;
+mod fusion;
 mod plugins;
 mod pty_query;
 mod pty_stream;

@@ -1812,6 +1812,34 @@ pub async fn merge_thread_handler(
     }
 }
 
+/// `POST /api/workspaces/:id/fusion-consult` — the answer/research fusion
+/// (panel → judge → synthesis), backed by the zulu model panel. Distinct from
+/// the code-competition fusion above. Requires a configured Comate license.
+pub async fn fusion_consult_handler(
+    State(state): State<AppState>,
+    Path(workspace_id): Path<String>,
+    Json(req): Json<swarmx_protocol::rest::FusionConsultRequest>,
+) -> Result<Json<swarmx_protocol::rest::FusionConsultResponse>, (StatusCode, Json<serde_json::Value>)>
+{
+    let ws = require_workspace(&state, &workspace_id).await?;
+    let license = crate::comate::load_license();
+    if license.trim().is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "未配置 Comate License（设置 → 插件）"})),
+        ));
+    }
+    crate::fusion::consult(&req, &license, &ws.cwd)
+        .await
+        .map(Json)
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": e.to_string()})),
+            )
+        })
+}
+
 async fn require_workspace(
     state: &AppState,
     workspace_id: &str,

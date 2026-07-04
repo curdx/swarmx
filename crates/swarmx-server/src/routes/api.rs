@@ -150,6 +150,10 @@ pub fn router() -> Router<AppState> {
             "/api/workspaces/:id/fusion/:bid/decide",
             post(super::workspaces::decide_fusion_handler),
         )
+        .route(
+            "/api/workspaces/:id/fusion-consult",
+            post(super::workspaces::fusion_consult_handler),
+        )
         .route("/api/spells", get(super::rest::list_spells))
         .route("/api/spell/run", post(super::rest::run_spell))
         .route(
