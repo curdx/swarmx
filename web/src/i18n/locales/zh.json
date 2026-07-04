@@ -397,7 +397,8 @@
       "comateHint": "zulu 用你的 Comate SaaS license 访问模型（Claude/Gemini/DeepSeek/GLM… 一把钥匙）。仅存本机 ~/.swarmx/comate.json。",
       "comatePlaceholder": "粘贴 license…",
       "comateSave": "保存",
-      "comateSaving": "保存中…"
+      "comateSaving": "保存中…",
+      "comateModels": "可用模型（一把 license，{{n}} 个）"
     },
     "privacy": {
       "title": "隐私 & 安全",

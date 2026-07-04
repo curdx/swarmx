@@ -50,6 +50,10 @@ export const apiRoutes = {
     get: () => endpoint("comate.get", "GET", "/api/comate"),
     put: () => endpoint("comate.put", "PUT", "/api/comate"),
   },
+  /** zulu's model roster under the configured license (one key → N models). */
+  zulu: {
+    models: () => endpoint("zulu.models", "GET", "/api/zulu/models"),
+  },
   mcp: {
     env: () => endpoint("mcp.env", "GET", "/api/mcp/env"),
     status: () => endpoint("mcp.status", "GET", "/api/mcp/status"),

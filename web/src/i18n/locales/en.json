@@ -397,7 +397,8 @@
       "comateHint": "zulu uses your Comate SaaS license to reach models (Claude/Gemini/DeepSeek/GLM… one key). Stored only on this machine at ~/.swarmx/comate.json.",
       "comatePlaceholder": "Paste license…",
       "comateSave": "Save",
-      "comateSaving": "Saving…"
+      "comateSaving": "Saving…",
+      "comateModels": "Available models ({{n}}, one license)"
     },
     "privacy": {
       "title": "Privacy & Security",

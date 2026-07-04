@@ -51,6 +51,7 @@ pub fn router() -> Router<AppState> {
             "/api/comate",
             get(super::comate::get_license).put(super::comate::put_license),
         )
+        .route("/api/zulu/models", get(super::comate::zulu_models))
         .route("/api/mcp/install", post(super::mcp_admin::mcp_install))
         .route("/api/mcp/uninstall", post(super::mcp_admin::mcp_uninstall))
         .route(

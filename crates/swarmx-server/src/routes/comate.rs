@@ -41,3 +41,42 @@ pub async fn put_license(Json(body): Json<LicenseBody>) -> impl IntoResponse {
             .into_response(),
     }
 }
+
+/// `GET /api/zulu/models` → the models zulu can run under the configured license
+/// (`zulu list-model`), as `[{modelId, displayName, thinking, image}]`. Powers
+/// the model picker for zulu agents and the fusion panel (one license, N
+/// models). Runs the CLI directly (not the shim) — a fast, read-only query.
+pub async fn zulu_models() -> impl IntoResponse {
+    let license = crate::comate::load_license();
+    if license.trim().is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "未配置 Comate License（设置 → 插件）" })),
+        )
+            .into_response();
+    }
+    let out = tokio::process::Command::new("zulu")
+        .args(["list-model", "-l", license.trim()])
+        .output()
+        .await;
+    match out {
+        Ok(o) if o.status.success() => match serde_json::from_slice::<serde_json::Value>(&o.stdout) {
+            Ok(v) => Json(v).into_response(),
+            Err(_) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "无法解析 zulu list-model 输出" })),
+            )
+                .into_response(),
+        },
+        Ok(o) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": String::from_utf8_lossy(&o.stderr).trim().to_string() })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "error": format!("zulu 不可运行：{e}（是否已 npm i -g @comate/zulu？）") })),
+        )
+            .into_response(),
+    }
+}

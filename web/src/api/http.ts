@@ -196,6 +196,11 @@ export const api = {
     ),
   putComate: (license: string) =>
     requestEndpoint<{ ok: boolean }>(apiRoutes.comate.put(), { license }),
+  /** zulu's available models under the configured license. */
+  getZuluModels: () =>
+    requestEndpoint<
+      { modelId: string; displayName: string; thinking: boolean; image: boolean }[]
+    >(apiRoutes.zulu.models()),
   // MCP admin (「快捷装 MCP」页面)
   mcpEnv: () => requestEndpoint<McpEnv>(apiRoutes.mcp.env()),
   mcpStatus: () => requestEndpoint<McpStatus>(apiRoutes.mcp.status()),

@@ -948,11 +948,22 @@ function ComateLicenseCard() {
   const [value, setValue] = useState("");
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [models, setModels] = useState<{ displayName: string }[] | null>(null);
 
   const refresh = () => {
     api
       .getComate()
-      .then(setStatus)
+      .then((s) => {
+        setStatus(s);
+        if (s.configured) {
+          api
+            .getZuluModels()
+            .then(setModels)
+            .catch(() => setModels(null));
+        } else {
+          setModels(null);
+        }
+      })
       .catch((e) => setErr((e as Error).message));
   };
   useEffect(refresh, []);
@@ -1017,6 +1028,25 @@ function ComateLicenseCard() {
         </div>
       )}
       {err && <span className="font-caption text-[11px] text-state-danger">{err}</span>}
+      {models && models.length > 0 && (
+        <div className="flex flex-col gap-1 border-t border-border-subtle pt-2">
+          <span className="font-caption text-[11px] text-foreground-tertiary">
+            {t("settings.plugins.comateModels", "可用模型（一把 license，{{n}} 个）", {
+              n: models.length,
+            })}
+          </span>
+          <div className="flex flex-wrap gap-1">
+            {models.map((m) => (
+              <span
+                key={m.displayName}
+                className="rounded border border-border-subtle bg-surface-elevated px-1.5 py-0.5 font-mono text-[10px] text-foreground-secondary"
+              >
+                {m.displayName}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
