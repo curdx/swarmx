@@ -170,7 +170,7 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: Build desktop bundle
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Sign the updater artifacts (.sig) so the app can verify auto-updates.
