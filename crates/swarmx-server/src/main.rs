@@ -243,6 +243,30 @@ async fn main() -> Result<()> {
         Ok(_) => {}
         Err(err) => tracing::warn!(?err, "mark_orphan_recordings_finalized failed"),
     }
+    // Fusion recovery. A batch's progress guarantee (running→judging→done) lives
+    // entirely in in-memory tokio tasks (the autochain + judge watchdog) — they
+    // die with the process. A batch caught mid-flight by a restart (upgrade,
+    // crash, sidecar relaunch) would otherwise spin forever: the orphan sweep
+    // above just settled its contestant/judge agents, so nothing will ever land
+    // it. Surface each stalled batch as 'needs_decision' — the UI's manual-pick
+    // entry over the persisted contestant diffs. Honest and quota-safe: no silent
+    // LLM re-run, no half-state.
+    match store.list_active_fusion_batches().await {
+        Ok(batches) => {
+            for b in &batches {
+                if let Err(err) = store
+                    .set_fusion_status(b.id.clone(), "needs_decision".to_string())
+                    .await
+                {
+                    tracing::warn!(?err, batch = %b.id, "fusion recovery: set needs_decision failed");
+                }
+            }
+            if !batches.is_empty() {
+                info!(recovered = batches.len(), "fusion recovery: stalled batches → needs_decision");
+            }
+        }
+        Err(err) => tracing::warn!(?err, "list_active_fusion_batches failed"),
+    }
 
     let blackboard_root = blackboard_root_default();
     std::fs::create_dir_all(&blackboard_root)?;
@@ -630,8 +654,8 @@ fn workspaces_root_default() -> PathBuf {
     if let Ok(p) = std::env::var("SWARMX_WORKSPACES_DIR") {
         return PathBuf::from(p);
     }
-    if let Ok(home) = std::env::var("HOME") {
-        return PathBuf::from(home).join(".swarmx").join("workspaces");
+    if let Some(home) = crate::runtime_path::swarmx_home() {
+        return home.join(".swarmx").join("workspaces");
     }
     PathBuf::from(".swarmx/workspaces")
 }
@@ -774,8 +798,8 @@ fn retention_window_ms() -> Option<i64> {
 }
 
 fn log_dir_default() -> PathBuf {
-    if let Ok(home) = std::env::var("HOME") {
-        return PathBuf::from(home).join(".swarmx").join("logs");
+    if let Some(home) = crate::runtime_path::swarmx_home() {
+        return home.join(".swarmx").join("logs");
     }
     PathBuf::from(".swarmx/logs")
 }
@@ -784,8 +808,8 @@ fn db_path_default() -> PathBuf {
     if let Ok(p) = std::env::var("SWARMX_DB_PATH") {
         return PathBuf::from(p);
     }
-    if let Ok(home) = std::env::var("HOME") {
-        return PathBuf::from(home).join(".swarmx").join("swarmx.db");
+    if let Some(home) = crate::runtime_path::swarmx_home() {
+        return home.join(".swarmx").join("swarmx.db");
     }
     PathBuf::from(".swarmx/swarmx.db")
 }
@@ -794,8 +818,8 @@ fn blackboard_root_default() -> PathBuf {
     if let Ok(p) = std::env::var("SWARMX_BLACKBOARD_DIR") {
         return PathBuf::from(p);
     }
-    if let Ok(home) = std::env::var("HOME") {
-        return PathBuf::from(home).join(".swarmx").join("blackboard");
+    if let Some(home) = crate::runtime_path::swarmx_home() {
+        return home.join(".swarmx").join("blackboard");
     }
     PathBuf::from(".swarmx/blackboard")
 }
@@ -804,8 +828,8 @@ fn recordings_root_default() -> PathBuf {
     if let Ok(p) = std::env::var("SWARMX_RECORDINGS_DIR") {
         return PathBuf::from(p);
     }
-    if let Ok(home) = std::env::var("HOME") {
-        return PathBuf::from(home).join(".swarmx").join("recordings");
+    if let Some(home) = crate::runtime_path::swarmx_home() {
+        return home.join(".swarmx").join("recordings");
     }
     PathBuf::from(".swarmx/recordings")
 }

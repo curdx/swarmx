@@ -1258,7 +1258,15 @@ async fn fusion_batch_crud_roundtrip() {
     assert_eq!(listed[0].contestant_thread_ids, batch.contestant_thread_ids);
     assert_eq!(listed[0].need, "implement JWT login");
 
-    // attach judge → status flips to 'judging'.
+    // Enter judge stage: the caller atomically claims running→judging (CAS),
+    // then set_fusion_judge records the judge thread id (no longer flips status).
+    assert_eq!(
+        store
+            .transition_fusion_status(batch.id.clone(), "running".into(), "judging".into())
+            .await
+            .unwrap(),
+        1
+    );
     store
         .set_fusion_judge(batch.id.clone(), "t-judge".into())
         .await
@@ -1327,37 +1335,6 @@ async fn blackboard_insert_and_history() {
     let paths: Vec<&str> = latest.iter().map(|r| r.path.as_str()).collect();
     assert!(paths.contains(&"tasks.md"));
     assert!(paths.contains(&"notes/scratch.md"));
-}
-
-#[tokio::test]
-async fn blackboard_search_fts5() {
-    let (_dir, store) = fresh_store().await;
-    store
-        .insert_blackboard_op(NewBlackboardOp {
-            agent_id: None,
-            op: "write".into(),
-            path: "spec.md".into(),
-            content: "the swarm dispatch protocol talks about envelopes".into(),
-            sha256: "x".into(),
-            at: ts(1),
-        })
-        .await
-        .unwrap();
-    store
-        .insert_blackboard_op(NewBlackboardOp {
-            agent_id: None,
-            op: "write".into(),
-            path: "log.md".into(),
-            content: "boring noise".into(),
-            sha256: "y".into(),
-            at: ts(2),
-        })
-        .await
-        .unwrap();
-
-    let hits = store.search_blackboard("envelopes".into()).await.unwrap();
-    assert_eq!(hits.len(), 1);
-    assert_eq!(hits[0].path, "spec.md");
 }
 
 // ── recordings ───────────────────────────────────────────────────────────

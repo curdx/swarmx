@@ -944,14 +944,24 @@ impl Store {
                     error_present: row.get::<_, i64>(13)? != 0,
                 })
             }
+            // A handoff key "exists" only when its LATEST op is not a delete
+            // tombstone: blackboard_ops is append-only, so a put-then-deleted
+            // key keeps its write row forever. A bare EXISTS would report a
+            // deleted deliverable as still done/blocked. Take MAX(id) per path
+            // and require op != 'delete' — same "does this key exist"
+            // definition as `blackboard_paths_present` and the readiness gate.
             let cols = "SELECT w.agent_id, w.parent_agent_id, w.role_label, w.role_slug, \
                         w.handoff_signal, w.task_status, w.spawned_at, \
                         a.killed_at, a.shim_exit_code, a.last_activity_at, \
                         a.workspace_id, a.thread_id, \
                         (w.handoff_signal IS NOT NULL AND w.handoff_signal <> '' \
-                         AND EXISTS (SELECT 1 FROM blackboard_ops b WHERE b.path = w.handoff_signal)) AS handoff_done, \
+                         AND EXISTS (SELECT 1 FROM blackboard_ops b \
+                                     WHERE b.path = w.handoff_signal AND b.op != 'delete' \
+                                     AND b.id = (SELECT MAX(id) FROM blackboard_ops c WHERE c.path = b.path))) AS handoff_done, \
                         (w.handoff_signal IS NOT NULL AND w.handoff_signal <> '' \
-                         AND EXISTS (SELECT 1 FROM blackboard_ops b WHERE b.path = w.handoff_signal || '.error')) AS error_present \
+                         AND EXISTS (SELECT 1 FROM blackboard_ops b \
+                                     WHERE b.path = w.handoff_signal || '.error' AND b.op != 'delete' \
+                                     AND b.id = (SELECT MAX(id) FROM blackboard_ops c WHERE c.path = b.path))) AS error_present \
                  FROM workers w JOIN agents a ON a.id = w.agent_id";
             let rows = if let Some(ws) = &workspace_id {
                 let sql = format!("{cols} WHERE a.workspace_id = ?1 ORDER BY w.spawned_at DESC");
@@ -2995,13 +3005,15 @@ impl Store {
         .context("spawn_blocking list_fusion_batches")?
     }
 
-    /// Set a batch's judge direction + flip status to 'judging'. Called once the
-    /// contestants have produced their solutions and the judge stage begins.
+    /// Bind the judge direction to a batch. Does NOT change status — the caller
+    /// atomically claims `judging` via `transition_fusion_status('running',
+    /// 'judging')` first, so this is a pure judge-thread-id write that can never
+    /// resurrect an already-decided batch back into `judging`.
     pub async fn set_fusion_judge(&self, id: String, judge_thread_id: String) -> Result<()> {
         let pool = self.pool.clone();
         tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<()> {
             conn.execute(
-                "UPDATE fusion_batches SET judge_thread_id = ?2, status = 'judging' \
+                "UPDATE fusion_batches SET judge_thread_id = ?2 \
                  WHERE id = ?1 AND deleted_at IS NULL",
                 params![id, judge_thread_id],
             )?;
@@ -3009,6 +3021,40 @@ impl Store {
         }))
         .await
         .context("spawn_blocking set_fusion_judge")?
+    }
+
+    /// Every alive batch still in an intermediate stage (`running` | `judging`),
+    /// across all workspaces. Used once at startup to recover batches whose
+    /// in-memory autochain / judge-watchdog task died with the previous process
+    /// (a restart would otherwise leave them spinning forever).
+    pub async fn list_active_fusion_batches(&self) -> Result<Vec<FusionBatchRecord>> {
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || with_busy_retry(&pool, |conn| -> rusqlite::Result<Vec<FusionBatchRecord>> {
+            let mut stmt = conn.prepare(
+                "SELECT id, workspace_id, slug, need, contestant_thread_ids_json, judge_thread_id, status, created_at, deleted_at, winner_thread_id, check_cmd \
+                 FROM fusion_batches WHERE deleted_at IS NULL AND status IN ('running','judging') \
+                 ORDER BY created_at ASC",
+            )?;
+            let rows = stmt.query_map([], |row| {
+                let ids_json: String = row.get(4)?;
+                Ok(FusionBatchRecord {
+                    id: row.get(0)?,
+                    workspace_id: row.get(1)?,
+                    slug: row.get(2)?,
+                    need: row.get(3)?,
+                    contestant_thread_ids: serde_json::from_str(&ids_json).unwrap_or_default(),
+                    judge_thread_id: row.get(5)?,
+                    status: row.get(6)?,
+                    winner_thread_id: row.get(9)?,
+                    check_cmd: row.get(10)?,
+                    created_at: row.get(7)?,
+                    deleted_at: row.get(8)?,
+                })
+            })?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()
+        }))
+        .await
+        .context("spawn_blocking list_active_fusion_batches")?
     }
 
     /// Update a batch's status ('running' | 'judging' | 'done' | 'failed').
@@ -3488,36 +3534,6 @@ impl Store {
         .await
         .context("spawn_blocking list_spell_runs_by_ids")?
     }
-
-    pub async fn search_blackboard(&self, query: String) -> Result<Vec<BlackboardOpRecord>> {
-        let pool = self.pool.clone();
-        tokio::task::spawn_blocking(move || {
-            with_busy_retry(&pool, |conn| -> rusqlite::Result<Vec<BlackboardOpRecord>> {
-                let mut stmt = conn.prepare(
-                    "SELECT b.id, b.agent_id, b.op, b.path, b.content, b.sha256, b.at \
-                 FROM blackboard_fts \
-                 JOIN blackboard_ops b ON b.id = blackboard_fts.rowid \
-                 WHERE blackboard_fts MATCH ?1 \
-                 ORDER BY rank \
-                 LIMIT 200",
-                )?;
-                let rows = stmt.query_map(params![query], |row| {
-                    Ok(BlackboardOpRecord {
-                        id: row.get(0)?,
-                        agent_id: row.get(1)?,
-                        op: row.get(2)?,
-                        path: row.get(3)?,
-                        content: row.get(4)?,
-                        sha256: row.get(5)?,
-                        at: row.get(6)?,
-                    })
-                })?;
-                rows.collect::<rusqlite::Result<Vec<_>>>()
-            })
-        })
-        .await
-        .context("spawn_blocking search_blackboard")?
-    }
 }
 
 #[cfg(test)]
@@ -3617,6 +3633,62 @@ mod tests {
         let b = after.iter().find(|b| b.id == batch.id).unwrap();
         assert_eq!(b.status, "done");
         assert_eq!(b.winner_thread_id.as_deref(), Some("t-a"));
+    }
+
+    #[tokio::test]
+    async fn enter_judge_is_a_cas_and_active_batches_are_recoverable() {
+        // Entering the judge stage must be an atomic claim: the first
+        // running→judging wins, a concurrent second gets 0 (no duplicate judge
+        // agent/watchdog), and a decided batch can never be flipped back to
+        // judging. set_fusion_judge only records the thread id (no status flip).
+        let dir = TempDir::new().unwrap();
+        let store = Store::open(&dir.path().join("swarmx.db")).await.unwrap();
+        let ws = store
+            .create_workspace(NewWorkspace { name: "w".into(), cwd: "/tmp".into(), accent: None }, 1)
+            .await
+            .unwrap();
+        let mk = |slug: &str| NewFusionBatch {
+            workspace_id: ws.id.clone(),
+            slug: slug.into(),
+            need: "n".into(),
+            contestant_thread_ids: vec!["t-a".into()],
+            check_cmd: None,
+        };
+        let running = store.create_fusion_batch(mk("run"), 1).await.unwrap();
+        let judging = store.create_fusion_batch(mk("judge"), 2).await.unwrap();
+        let done = store.create_fusion_batch(mk("done"), 3).await.unwrap();
+
+        // CAS claim: first wins, second is a no-op.
+        assert_eq!(
+            store.transition_fusion_status(judging.id.clone(), "running".into(), "judging".into()).await.unwrap(),
+            1
+        );
+        assert_eq!(
+            store.transition_fusion_status(judging.id.clone(), "running".into(), "judging".into()).await.unwrap(),
+            0,
+            "second claim must not re-flip"
+        );
+        // set_fusion_judge records the thread id WITHOUT touching status.
+        store.set_fusion_judge(judging.id.clone(), "t-judge".into()).await.unwrap();
+
+        // A decided batch cannot be dragged back into judging.
+        assert_eq!(store.set_fusion_winner(done.id.clone(), "t-a".into()).await.unwrap(), 1);
+        assert_eq!(
+            store.transition_fusion_status(done.id.clone(), "running".into(), "judging".into()).await.unwrap(),
+            0,
+            "done batch must not re-enter judging"
+        );
+
+        // Recovery sweep sees exactly the intermediate batches (running + judging),
+        // never the decided one.
+        let active = store.list_active_fusion_batches().await.unwrap();
+        let ids: std::collections::HashSet<_> = active.iter().map(|b| b.id.clone()).collect();
+        assert!(ids.contains(&running.id));
+        assert!(ids.contains(&judging.id));
+        assert!(!ids.contains(&done.id));
+        let judged = active.iter().find(|b| b.id == judging.id).unwrap();
+        assert_eq!(judged.status, "judging");
+        assert_eq!(judged.judge_thread_id.as_deref(), Some("t-judge"));
     }
 
     #[test]

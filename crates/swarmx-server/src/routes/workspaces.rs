@@ -960,10 +960,13 @@ pub async fn create_fusion_handler(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
 
     // Autopilot: chain straight through to the judge stage once the contestants
-    // settle — no human clicks. The autochain watches the contestants (committed
-    // work is the engine-independent "done" signal) and then enters the
-    // synthesize judge stage (whose watchdog lands the merge).
-    if req.autopilot && !panel_agent_ids.is_empty() {
+    // settle — no human clicks. Gate on "are there contestants to judge", NOT
+    // "did at least one agent spawn": when every panelist's agent fails to spawn
+    // (all engines rate-limited/logged-out) each still leaves a user-driven
+    // contestant direction, and the autochain treats agent-less contestants as
+    // settled → judge. Gating on panel_agent_ids left those batches stuck in
+    // 'running' with no task ever advancing them.
+    if req.autopilot && !batch.contestant_thread_ids.is_empty() {
         spawn_fusion_autochain(
             state.clone(),
             workspace_id.clone(),
@@ -1219,6 +1222,23 @@ async fn enter_judge_stage(
     let workspace_id = ws.id.clone();
     let batch_id = batch.id.clone();
 
+    // Idempotency (cheap pre-check): only a 'running' batch may enter the judge
+    // stage. A batch already judging/decided — a double-click, autopilot racing a
+    // manual click, or a replay of a done batch — is rejected here before any
+    // judge worktree/diff work, so we don't build an orphan judge direction. The
+    // atomic guard is the CAS at the flip point below.
+    if batch.status != "running" {
+        return Err((
+            StatusCode::CONFLICT,
+            Json(json!({
+                "error": format!(
+                    "fusion batch is '{}', not 'running'; judge stage already entered",
+                    batch.status
+                )
+            })),
+        ));
+    }
+
     // Base = the branch checked out at the workspace cwd (what contestants
     // forked from). Computed once; contestant diffs are taken vs this.
     let cwd = std::path::PathBuf::from(&ws.cwd);
@@ -1371,7 +1391,24 @@ async fn enter_judge_stage(
         publish_thread_changed(&state, &workspace_id, &judge_rec.id, "created");
     }
 
-    // Bind the judge to the batch + flip to 'judging'.
+    // Atomically CLAIM the judge stage: running→judging only if still running.
+    // This is the single race gate. A concurrent entrant (double-click, or the
+    // autopilot autochain racing a manual judge click) gets 0 rows and aborts
+    // here — so we never spawn a duplicate judge agent + watchdog, and a batch
+    // that a peer already decided can never be flipped back into 'judging'
+    // (the exact defect that could strand a done batch in judging forever).
+    let claimed = state
+        .store
+        .transition_fusion_status(batch.id.clone(), "running".to_string(), "judging".to_string())
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+    if claimed == 0 {
+        return Err((
+            StatusCode::CONFLICT,
+            Json(json!({ "error": "another judge already entered this batch's judge stage" })),
+        ));
+    }
+    // Bind the judge direction (status is already 'judging' from the CAS above).
     state
         .store
         .set_fusion_judge(batch.id.clone(), judge_rec.id.clone())
@@ -1561,8 +1598,7 @@ async fn run_contestant_check(worktree_dir: &str, check_cmd: &str) -> (bool, Str
     let dir = worktree_dir.to_string();
     let cmd = check_cmd.to_string();
     let result = tokio::task::spawn_blocking(move || {
-        use std::process::Command;
-        Command::new("sh")
+        crate::runtime_path::tool_command("sh")
             .arg("-c")
             .arg(&cmd)
             .current_dir(&dir)
