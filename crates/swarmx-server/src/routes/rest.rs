@@ -105,6 +105,27 @@ fn first_unsatisfied_dep(
         .cloned()
 }
 
+/// The by-role `consumes` model assumes ≤1 live producer per role in a
+/// direction. Return the handoff key an already-live sibling of `role_slug`
+/// produces (the collision), if any — spawning a second same-role worker would
+/// mint the identical key (see `mint_handoff_key`) and overwrite it. Pure, so
+/// the invariant is unit-tested without an HTTP server.
+fn conflicting_producer<'a>(
+    workers: impl IntoIterator<Item = &'a swarmx_storage::WorkerRecord>,
+    role_slug: &str,
+) -> Option<String> {
+    workers
+        .into_iter()
+        .find(|w| w.role_slug == role_slug)
+        .map(|w| {
+            if w.handoff_signal.is_empty() {
+                format!("{role_slug} (no handoff key)")
+            } else {
+                w.handoff_signal.clone()
+            }
+        })
+}
+
 /// Spawn-time dependency-graph validation + key minting (P0-A), pure so it can
 /// be unit-tested without an HTTP server. Resolves each typed `consumes` ref to
 /// the producer's minted blackboard key, after verifying the producer role
@@ -2175,6 +2196,25 @@ pub async fn spawn_worker(
         let mut role_depends: HashMap<String, Vec<String>> = HashMap::new();
         if !sibling_ids.is_empty() {
             if let Ok(workers) = state.store.list_workers_by_ids(sibling_ids).await {
+                // Producer uniqueness — the invariant the by-role `consumes`
+                // model assumes but nothing enforced. A second LIVE worker of the
+                // same role in this direction would mint the IDENTICAL handoff key
+                // (mint_handoff_key has no per-worker component) and silently
+                // overwrite the first's product; a `consumes:{from_role}`
+                // dependent could then be satisfied by the wrong one. Reject —
+                // true parallel same-role work needs per-instance keys (a larger
+                // model change), not two producers racing one key.
+                if let Some(existing) = conflicting_producer(workers.values(), &role_slug) {
+                    return Err((
+                        StatusCode::BAD_REQUEST,
+                        Json(json!({ "error": format!(
+                            "spawn rejected: a '{role_slug}' worker is already live in this \
+                             direction producing '{existing}'. Two same-role workers mint the \
+                             same handoff key and would overwrite each other — use a different \
+                             role, or a separate direction, for parallel work."
+                        ) })),
+                    ));
+                }
                 for w in workers.values() {
                     if w.role_slug.is_empty() {
                         continue;
@@ -3700,6 +3740,33 @@ mod p0_tests {
                 "ws1/dark-mode/frontend.done".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn conflicting_producer_rejects_duplicate_live_role() {
+        let mk = |role: &str, key: &str| swarmx_storage::NewWorker {
+            agent_id: format!("a-{role}"),
+            parent_agent_id: "orch".into(),
+            role_label: role.into(),
+            system_prompt: String::new(),
+            handoff_signal: key.into(),
+            depends_on_json: "[]".into(),
+            spawned_at: 0,
+            role_slug: role.into(),
+            produces_json: String::new(),
+            consumes_json: String::new(),
+        };
+        let workers = vec![
+            mk("backend", "ws1/main/backend.done"),
+            mk("frontend", "ws1/main/frontend.done"),
+        ];
+        // A second 'backend' would mint the same key the live one already produces.
+        assert_eq!(
+            conflicting_producer(workers.iter(), "backend"),
+            Some("ws1/main/backend.done".to_string())
+        );
+        // A distinct role in the same direction is fine.
+        assert_eq!(conflicting_producer(workers.iter(), "tester"), None);
     }
 
     #[test]
