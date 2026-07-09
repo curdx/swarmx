@@ -279,7 +279,7 @@ async fn consume_wakes(c: &reqwest::Client, swarmx_url: &str, agent_id: &str) ->
 /// `swarmx-mcp::wake_check::emit_block` and `cli-plugins/opencode/
 /// swarmx-wake.js::wakeReason` so a woken reasonix agent follows the exact
 /// same recovery recipe as claude/codex/opencode. Keep these three in sync.
-fn wake_reason(count: i64) -> String {
+pub(crate) fn wake_reason(count: i64) -> String {
     format!(
         "You were woken up: {count} new wake event(s) just arrived. \
          A blackboard key you depend_on was likely written. Steps:\n\
