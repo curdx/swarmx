@@ -588,9 +588,7 @@ pub fn user_plugins_dir() -> Option<PathBuf> {
     if let Ok(p) = std::env::var("SWARMX_USER_CLI_PLUGINS_DIR") {
         return Some(PathBuf::from(p));
     }
-    std::env::var("HOME")
-        .ok()
-        .map(|h| PathBuf::from(h).join(".swarmx").join("cli-plugins"))
+    crate::runtime_path::swarmx_home().map(|h| h.join(".swarmx").join("cli-plugins"))
 }
 
 #[cfg(test)]

@@ -16,7 +16,6 @@
 
 use anyhow::{anyhow, Context, Result};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -65,7 +64,7 @@ fn git(cwd: &Path, args: &[&str]) -> Result<GitOut> {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         // output() drains stdout+stderr (so git can't deadlock on a full pipe).
-        let out = Command::new("git")
+        let out = crate::runtime_path::tool_command("git")
             .arg("-C")
             .arg(&cwd)
             .args(&owned)
@@ -541,6 +540,7 @@ pub fn merge_into_base(repo_cwd: &Path, base: &str, from: &str) -> MergeOutcome 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::process::Command;
 
     #[test]
     fn sanitize_suffix_makes_fs_friendly_names() {

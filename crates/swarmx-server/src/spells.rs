@@ -434,7 +434,10 @@ fn parse_spell(content: &str, source_path: &Path) -> Result<Spell> {
 /// A diff line has content after `+++`, so requiring a standalone fence line
 /// fixes it. The one remaining constraint: don't put a BARE `+++` line on its
 /// own inside a TOML value.
-fn split_front_matter(content: &str) -> Option<(&str, &str)> {
+///
+/// Shared with `roles.rs`, which uses the same `+++` fence convention — one
+/// implementation so the F21 fix can't silently regress in a copy.
+pub(crate) fn split_front_matter(content: &str) -> Option<(&str, &str)> {
     let trimmed_start = content.trim_start_matches(['\u{FEFF}', '\n', '\r', ' ', '\t']);
     if !trimmed_start.starts_with("+++") {
         return None;

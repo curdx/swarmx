@@ -193,9 +193,16 @@ fn exec_timeboxed(argv: &[String], cwd: &Path) -> ExecResult {
     let mut c = Command::new(&argv[0]);
     c.args(&argv[1..]).current_dir(cwd);
     // Minimal env: clear, re-add only what toolchains genuinely need to be
-    // found/run — never AWS_*/GITHUB_TOKEN/raw API keys.
+    // found/run — never AWS_*/GITHUB_TOKEN/raw API keys. PATH is the
+    // desktop-augmented PATH (not the sidecar's stripped launchd PATH) and HOME
+    // the resolved user home, so `npm test`/`cargo test`/`pytest` still resolve
+    // in a packaged .app instead of failing every contestant with "not found".
     c.env_clear();
-    for k in ["PATH", "HOME", "LANG", "LC_ALL", "TERM", "USER", "TMPDIR"] {
+    c.env("PATH", crate::runtime_path::augmented_path());
+    if let Some(home) = crate::runtime_path::swarmx_home() {
+        c.env("HOME", home);
+    }
+    for k in ["LANG", "LC_ALL", "TERM", "USER", "TMPDIR"] {
         if let Ok(v) = std::env::var(k) {
             c.env(k, v);
         }
@@ -262,7 +269,7 @@ fn exec_timeboxed(argv: &[String], cwd: &Path) -> ExecResult {
 fn exec_timeboxed(argv: &[String], cwd: &Path) -> ExecResult {
     // Non-unix: no process-group killpg; a plain timeboxed run. (swarmx's
     // agent runtime is unix-focused; this keeps the crate compiling elsewhere.)
-    let mut c = Command::new(&argv[0]);
+    let mut c = crate::runtime_path::tool_command(&argv[0]);
     c.args(&argv[1..])
         .current_dir(cwd)
         .stdin(std::process::Stdio::null());

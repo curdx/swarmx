@@ -357,9 +357,14 @@ async fn recipient_is_known(ctx: &ToolContext, to: &str) -> Result<bool, String>
         .json()
         .await
         .map_err(|e| format!("roster parse failed: {e}"))?;
-    Ok(rows
-        .iter()
-        .any(|a| a.get("agent_id").and_then(|v| v.as_str()) == Some(to)))
+    // Match a LIVE agent only: a killed worker still appears in the roster
+    // (historical row, killed_at != null) but can never read the message, so
+    // treating it as "known" would suppress the black-hole warning in the most
+    // common case. `killed_at` present & non-null ⇒ dead ⇒ not a valid target.
+    Ok(rows.iter().any(|a| {
+        a.get("agent_id").and_then(|v| v.as_str()) == Some(to)
+            && a.get("killed_at").map(|v| v.is_null()).unwrap_or(true)
+    }))
 }
 
 async fn list_messages(ctx: &ToolContext, args: &Value) -> Result<String, String> {
@@ -549,9 +554,12 @@ async fn list_agents(ctx: &ToolContext) -> Result<String, String> {
     Ok(out)
 }
 
-/// Reverse-resolve THIS agent's workspace_id via /api/agent (same trick as
-/// spawn_worker) so the model never has to plumb workspace_id.
-async fn my_workspace_id(ctx: &ToolContext) -> Result<String, String> {
+/// Fetch THIS agent's own `AgentInfo` row from `/api/agent`. The server
+/// attaches `workspace_id` (and `thread_id`) to every row, so this is how the
+/// tools reverse-resolve their own context without the LLM ever plumbing ids.
+/// Shared by `my_workspace_id` / `spawn_worker` / `name_thread` — one place to
+/// change if the `/api/agent` contract moves.
+async fn resolve_self(ctx: &ToolContext) -> Result<Value, String> {
     let url = format!("{}/api/agent", ctx.server_url);
     let resp = ctx
         .http
@@ -566,9 +574,18 @@ async fn my_workspace_id(ctx: &ToolContext) -> Result<String, String> {
         .json()
         .await
         .map_err(|e| format!("malformed response from {url}: {e}"))?;
-    rows.iter()
+    rows.into_iter()
         .find(|a| a.get("agent_id").and_then(|v| v.as_str()) == Some(ctx.agent_id.as_str()))
-        .and_then(|a| a.get("workspace_id").and_then(|v| v.as_str()).map(str::to_string))
+        .ok_or_else(|| format!("could not find caller agent `{}` in /api/agent", ctx.agent_id))
+}
+
+/// Reverse-resolve THIS agent's workspace_id (see `resolve_self`).
+async fn my_workspace_id(ctx: &ToolContext) -> Result<String, String> {
+    resolve_self(ctx)
+        .await?
+        .get("workspace_id")
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
         .ok_or_else(|| "could not resolve your workspace_id".to_string())
 }
 
@@ -674,12 +691,30 @@ async fn list_blackboard(ctx: &ToolContext) -> Result<String, String> {
     Ok(out)
 }
 
+/// Build `<server>/api/blackboard/<path>` with each `path` segment percent-
+/// encoded, so a key containing `?`/`#`/`%` (which `format!` would let reqwest
+/// mis-parse as query/fragment) reaches the server intact.
+fn blackboard_url(server_url: &str, path: &str) -> Result<reqwest::Url, String> {
+    let mut url = reqwest::Url::parse(server_url)
+        .map_err(|e| format!("bad server_url {server_url}: {e}"))?;
+    {
+        let mut segs = url
+            .path_segments_mut()
+            .map_err(|_| format!("server_url cannot be a base: {server_url}"))?;
+        segs.push("api").push("blackboard");
+        for part in path.split('/').filter(|s| !s.is_empty()) {
+            segs.push(part);
+        }
+    }
+    Ok(url)
+}
+
 async fn read_blackboard(ctx: &ToolContext, args: &Value) -> Result<String, String> {
     let path = arg_str(args, "path")?;
-    let url = format!("{}/api/blackboard/{}", ctx.server_url, path);
+    let url = blackboard_url(&ctx.server_url, path)?;
     let resp = ctx
         .http
-        .get(&url)
+        .get(url.clone())
         .send()
         .await
         .map_err(|e| format!("swarmx-server unreachable at {url}: {e}"))?;
@@ -709,10 +744,10 @@ async fn write_blackboard(ctx: &ToolContext, args: &Value) -> Result<String, Str
         "agent_id": ctx.agent_id,
         "content": content,
     });
-    let url = format!("{}/api/blackboard/{}", ctx.server_url, path);
+    let url = blackboard_url(&ctx.server_url, path)?;
     let resp = ctx
         .http
-        .put(&url)
+        .put(url.clone())
         .json(&payload)
         .send()
         .await
@@ -762,33 +797,17 @@ async fn spawn_worker(ctx: &ToolContext, args: &Value) -> Result<String, String>
         .cloned()
         .unwrap_or_default();
 
-    // Reverse-resolve our own workspace_id via /api/agent (server attaches
-    // workspace_id to every AgentInfo). caller_agent_id is the orchestrator
-    // that just called this tool (or an upstream worker that's delegating
-    // further). Avoid making the LLM care about workspace_id plumbing.
-    let agents_url = format!("{}/api/agent", ctx.server_url);
-    let agents_resp = ctx
-        .http
-        .get(&agents_url)
-        .send()
-        .await
-        .map_err(|e| format!("swarmx-server unreachable at {agents_url}: {e}"))?;
-    if !agents_resp.status().is_success() {
-        return Err(http_err_text(agents_resp).await);
-    }
-    let agents_body: Vec<Value> = agents_resp
-        .json()
-        .await
-        .map_err(|e| format!("malformed response from {agents_url}: {e}"))?;
-    let workspace_id = agents_body
-        .iter()
-        .find(|a| a.get("agent_id").and_then(|v| v.as_str()) == Some(ctx.agent_id.as_str()))
-        .and_then(|a| a.get("workspace_id").and_then(|v| v.as_str()))
+    // Reverse-resolve our own workspace_id (see `resolve_self`). caller_agent_id
+    // is the orchestrator that just called this tool (or an upstream worker
+    // delegating further); the LLM never plumbs workspace_id itself.
+    let workspace_id = resolve_self(ctx)
+        .await?
+        .get("workspace_id")
+        .and_then(|v| v.as_str())
         .map(|s| s.to_string())
         .ok_or_else(|| {
             format!(
-                "could not resolve workspace_id for caller agent `{}` — \
-                 agent missing from /api/agent or has no workspace_id (pre-Step3 spawn?)",
+                "caller agent `{}` has no workspace_id (pre-Step3 spawn?)",
                 ctx.agent_id
             )
         })?;
@@ -887,26 +906,8 @@ async fn list_roles(ctx: &ToolContext) -> Result<String, String> {
 async fn name_thread(ctx: &ToolContext, args: &Value) -> Result<String, String> {
     let name = arg_str(args, "name")?;
 
-    // Reverse-resolve our own workspace_id + thread_id via /api/agent (server
-    // attaches both to every AgentInfo).
-    let agents_url = format!("{}/api/agent", ctx.server_url);
-    let agents_resp = ctx
-        .http
-        .get(&agents_url)
-        .send()
-        .await
-        .map_err(|e| format!("swarmx-server unreachable at {agents_url}: {e}"))?;
-    if !agents_resp.status().is_success() {
-        return Err(http_err_text(agents_resp).await);
-    }
-    let agents_body: Vec<Value> = agents_resp
-        .json()
-        .await
-        .map_err(|e| format!("malformed response from {agents_url}: {e}"))?;
-    let me = agents_body
-        .iter()
-        .find(|a| a.get("agent_id").and_then(|v| v.as_str()) == Some(ctx.agent_id.as_str()))
-        .ok_or_else(|| format!("could not find caller agent `{}` in /api/agent", ctx.agent_id))?;
+    // Reverse-resolve our own workspace_id + thread_id (see `resolve_self`).
+    let me = resolve_self(ctx).await?;
     let workspace_id = me
         .get("workspace_id")
         .and_then(|v| v.as_str())
@@ -1517,18 +1518,35 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn send_to_known_recipient_has_no_warning() {
+    async fn send_to_live_recipient_has_no_warning() {
+        let (addr, _state) = start_stub().await;
+        let ctx = ctx_for(addr, "codex-bbb");
+        // claude-aaa is live (killed_at == null) — a live known id never gets
+        // the blackhole warning.
+        let out = call_tool(&ctx, "swarm_send_message", &json!({
+            "to": "claude-aaa",
+            "kind": "note",
+            "body": "hi"
+        })).await;
+        let text = out["content"][0]["text"].as_str().unwrap();
+        assert!(!text.contains("not a known agent"), "false-positive warning: {text}");
+    }
+
+    #[tokio::test]
+    async fn send_to_killed_recipient_warns() {
         let (addr, _state) = start_stub().await;
         let ctx = ctx_for(addr, "claude-aaa");
-        // codex-bbb IS in the roster (even though killed) — a known id never
-        // gets the blackhole warning.
+        // codex-bbb is in the roster but killed (killed_at != null) — it can
+        // never read the message, so the sender must be warned rather than
+        // waiting forever on a reply that can't come.
         let out = call_tool(&ctx, "swarm_send_message", &json!({
             "to": "codex-bbb",
             "kind": "note",
             "body": "hi"
         })).await;
         let text = out["content"][0]["text"].as_str().unwrap();
-        assert!(!text.contains("not a known agent"), "false-positive warning: {text}");
+        assert!(text.contains("Sent message"), "message still persisted: {text}");
+        assert!(text.contains("not a known agent"), "missing blackhole warning for killed agent: {text}");
     }
 
     #[tokio::test]

@@ -17,7 +17,6 @@ use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::path::PathBuf;
-use tokio::process::Command;
 
 // ── 运行时探测 ──────────────────────────────────────────────────────
 
@@ -39,9 +38,8 @@ fn resolved_program(bin: &str) -> (PathBuf, Option<String>) {
 
 async fn probe_version(bin: &str, arg: &str) -> Option<VersionProbe> {
     let (program, path) = resolved_program(bin);
-    let out = Command::new(&program)
+    let out = crate::runtime_path::tool_command_async(&program)
         .arg(arg)
-        .env("PATH", crate::runtime_path::augmented_path())
         .output()
         .await
         .ok()?;
@@ -130,10 +128,12 @@ struct Known {
     /// 需要 API key 时，key 以这个**环境变量名**传给子进程(如
     /// "CONTEXT7_API_KEY")；None = 无需 key。
     ///
-    /// 安全:用 env 传 key,**不**把 key 拼进命令行 argv —— 否则
-    /// `ps -ef` / `/proc/<pid>/cmdline` 任何同机进程都能读到明文 key。
-    /// `claude mcp add -e KEY=val …` / `codex mcp add --env KEY=val …`
-    /// 都原生支持,落盘后存在 `mcpServers.<name>.env` / `[mcp_servers.<name>.env]`。
+    /// 安全:key 通过 `claude mcp add -e KEY=val …` / `codex mcp add --env
+    /// KEY=val …` 传入,**持久落盘时**存在 `mcpServers.<name>.env` /
+    /// `[mcp_servers.<name>.env]`,不写进 `args`。注意 `-e/--env` 的值在
+    /// `mcp add` 子进程存活的亚秒窗口内仍出现在其 argv,同机同 UID 进程
+    /// `ps -ef` 可窥;但能 ps 到它的进程同样能直接读已落盘的同一把 key,
+    /// 且本服务是 loopback 单用户桌面场景,故窗口暴露不额外提权。
     api_key_env: Option<&'static str>,
 }
 
@@ -378,9 +378,8 @@ async fn run<S: AsRef<std::ffi::OsStr>>(
     args: &[S],
 ) -> Result<String, (StatusCode, String)> {
     let (program, resolved_path) = resolved_program(bin);
-    let out = Command::new(&program)
+    let out = crate::runtime_path::tool_command_async(&program)
         .args(args)
-        .env("PATH", crate::runtime_path::augmented_path())
         .output()
         .await
         .map_err(|e| {

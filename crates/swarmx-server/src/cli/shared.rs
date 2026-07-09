@@ -16,7 +16,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, PoisonError};
 
 pub(super) fn home_path() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(PathBuf::from)
+    // HOME → USERPROFILE (Windows) via the single home resolver, so a packaged
+    // Windows sidecar still writes each opencode/codex agent's per-agent MCP
+    // config instead of silently dropping swarm tools when HOME is unset.
+    crate::runtime_path::swarmx_home()
 }
 
 /// Serializes read-modify-write of the *shared* CLI config files
@@ -89,15 +92,24 @@ pub(super) fn write_json_atomic(target: &Path, root: &Value) -> Result<()> {
 // live here (not in a single adapter) precisely because both claude and codex
 // emit the same hook shape into different files.
 
+/// POSIX single-quote a token so it survives `sh -c` word-splitting intact.
+/// Wraps in `'…'` and rewrites each embedded `'` as `'\''`. Needed because the
+/// wake hook string is executed through a shell, and the resolved `swarmx-mcp`
+/// path is chosen by the user's install location — a `.app` dropped in
+/// `~/Desktop/New Folder/` or an iCloud path contains spaces/metachars that
+/// would otherwise word-split and silently break auto-wake for every agent.
+fn posix_squote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
 pub(super) fn render_wake_command(mcp_bin: &Path, server_url: &str) -> String {
+    // Shell-quote the binary path (it flows through the CLI's `sh -c` hook
+    // path). server_url is a controlled http/https URL with no metachars, but
+    // quoting it too costs nothing and closes the seam.
     format!(
         "{} wake-check --server {}",
-        // Note: we don't shell-quote because spawn pipelines invoke the
-        // string via the CLI's shell-out path (claude/codex both use
-        // sh -c). server_url is an http/https URL — no shell metachars
-        // in practice.
-        mcp_bin.to_string_lossy(),
-        server_url,
+        posix_squote(&mcp_bin.to_string_lossy()),
+        posix_squote(server_url),
     )
 }
 
@@ -148,4 +160,32 @@ pub(super) fn merge_stop_hook(root: &mut Value, command: &str, timeout: i64) {
             "timeout": timeout,
         }]
     }));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn wake_command_quotes_spaced_install_path() {
+        // #15: a .app dropped in "~/Desktop/New Folder/" yields a spaced mcp
+        // path; an unquoted hook string word-splits it and silently kills
+        // auto-wake for every claude/codex agent.
+        let bin = Path::new("/Users/x/New Folder/swarmx-mcp");
+        let cmd = render_wake_command(bin, "http://127.0.0.1:7777");
+        assert!(
+            cmd.starts_with("'/Users/x/New Folder/swarmx-mcp' wake-check"),
+            "spaced path must be a single quoted token: {cmd}"
+        );
+        assert!(
+            !cmd.contains("Folder/swarmx-mcp wake-check"),
+            "no bare word a shell would split: {cmd}"
+        );
+    }
+
+    #[test]
+    fn posix_squote_escapes_embedded_single_quote() {
+        assert_eq!(posix_squote("a'b"), "'a'\\''b'");
+    }
 }

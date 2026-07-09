@@ -55,7 +55,7 @@ pub async fn zulu_models() -> impl IntoResponse {
         )
             .into_response();
     }
-    let out = tokio::process::Command::new("zulu")
+    let out = crate::runtime_path::tool_command_async("zulu")
         .args(["list-model", "-l", license.trim()])
         .output()
         .await;

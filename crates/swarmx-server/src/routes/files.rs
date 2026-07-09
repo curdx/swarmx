@@ -47,10 +47,14 @@ struct Entry {
     size: u64,
 }
 
-fn home() -> PathBuf {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/"))
+/// Resolve the user's home dir. `None` when neither `HOME` (unix) nor
+/// `USERPROFILE` (Windows — `HOME` is often unset there) is set; callers must
+/// treat `None` as "can't anchor $HOME-relative credential checks" and fall
+/// back to name-based matching rather than trusting a bogus `/` prefix.
+/// Delegates to the single home resolver so this and the data-dir defaults
+/// can't drift apart.
+fn home() -> Option<PathBuf> {
+    crate::runtime_path::swarmx_home()
 }
 
 /// Canonicalise a requested path. Returns an error string on a missing path so
@@ -179,6 +183,27 @@ fn jail_denied() -> axum::response::Response {
         .into_response()
 }
 
+/// A scoped request whose workspace resolved to zero browsable roots — its
+/// `cwd` was deleted/moved (canonicalize failed) and no attached root resolves.
+/// This is a *missing directory*, NOT a jail escape: report it plainly (naming
+/// the vanished path) so a user who moved their project folder isn't told to
+/// "enable browse whole filesystem", which would not help. Keeps the two failure
+/// modes — "your folder is gone" vs "that path is out of bounds" — distinct.
+async fn missing_workspace_dir(state: &AppState, ws_id: &str) -> axum::response::Response {
+    let cwd = state
+        .store
+        .get_workspace_by_id(ws_id.to_string())
+        .await
+        .ok()
+        .flatten()
+        .map(|w| w.cwd);
+    let error = match cwd {
+        Some(c) => format!("workspace directory no longer exists on disk: {c}"),
+        None => "workspace directory is unavailable".to_string(),
+    };
+    (StatusCode::NOT_FOUND, Json(json!({ "error": error }))).into_response()
+}
+
 /// Hard denylist enforced on EVERY request — regardless of `workspace_id` or
 /// the `all=1` "browse whole filesystem" toggle. The file browser is a dev
 /// convenience, not a credential-exfiltration oracle: a local process (a rogue
@@ -187,25 +212,6 @@ fn jail_denied() -> axum::response::Response {
 /// token in `~/.claude.json`. Matched on the CANONICAL path (callers canon
 /// first), so `..` / symlink tricks can't dodge it.
 pub(crate) fn is_sensitive(path: &Path) -> bool {
-    let home = home();
-    // Credential directories — no legitimate "browse my code" reason to enter.
-    const DIRS: &[&str] = &[
-        ".ssh",
-        ".aws",
-        ".gnupg",
-        ".kube",
-        ".azure",
-        ".docker",          // config.json holds registry auth tokens
-        ".config/gcloud",
-        ".config/gh",       // GitHub CLI OAuth token
-        ".config/git",      // may hold credential stores
-        "Library/Keychains", // macOS keychains
-    ];
-    for rel in DIRS {
-        if path.starts_with(home.join(rel)) {
-            return true;
-        }
-    }
     // Specific high-value files under $HOME: creds, tokens, and shell/REPL
     // histories (which routinely leak secrets typed on a command line).
     const FILES: &[&str] = &[
@@ -223,8 +229,39 @@ pub(crate) fn is_sensitive(path: &Path) -> bool {
         ".mysql_history",
         ".psql_history",
     ];
-    for rel in FILES {
-        if path == home.join(rel) {
+    // Credential directories — no legitimate "browse my code" reason to enter.
+    const DIRS: &[&str] = &[
+        ".ssh",
+        ".aws",
+        ".gnupg",
+        ".kube",
+        ".azure",
+        ".docker",          // config.json holds registry auth tokens
+        ".config/gcloud",
+        ".config/gh",       // GitHub CLI OAuth token
+        ".config/git",      // may hold credential stores
+        "Library/Keychains", // macOS keychains
+    ];
+    if let Some(home) = home() {
+        for rel in DIRS {
+            if path.starts_with(home.join(rel)) {
+                return true;
+            }
+        }
+        for rel in FILES {
+            if path == home.join(rel) {
+                return true;
+            }
+        }
+    }
+    // Fail-closed backstop: when $HOME can't be resolved (packaged Windows
+    // sidecar with neither HOME nor USERPROFILE, etc.) the anchored checks
+    // above can't run, so match the $HOME FILES by bare basename anywhere —
+    // `.claude.json` and friends are never a legitimate "browse my code"
+    // target regardless of directory. This closes the credential-read hole
+    // that would otherwise open when the process has no home.
+    if let Some(fname) = path.file_name().and_then(|s| s.to_str()) {
+        if FILES.contains(&fname) {
             return true;
         }
     }
@@ -278,10 +315,22 @@ pub async fn list_dir(
         Some(id) => allowed_roots(&state, id).await,
         None => Vec::new(),
     };
+    // Scoped but no browsable root on disk ⇒ the workspace folder is gone. Report
+    // that distinctly instead of falling through to the misleading jail error.
+    if let Some(id) = ws_id {
+        if !truthy(&q.all) && roots.is_empty() {
+            return missing_workspace_dir(&state, id).await;
+        }
+    }
     let raw = match q.dir {
         Some(ref d) if !d.trim().is_empty() => PathBuf::from(d),
-        // No dir: default to the workspace cwd (first root) when scoped, else $HOME.
-        _ => roots.first().cloned().unwrap_or_else(home),
+        // No dir: default to the workspace cwd (first root) when scoped, else
+        // $HOME (falling back to `/` when home can't be resolved).
+        _ => roots
+            .first()
+            .cloned()
+            .or_else(home)
+            .unwrap_or_else(|| PathBuf::from("/")),
     };
     let dir = match canon(&raw) {
         Ok(p) => p,
@@ -377,10 +426,15 @@ pub async fn read_file(
     if is_sensitive(&path) {
         return sensitive_denied();
     }
-    if ws_id.is_some() && !truthy(&q.all) {
-        let roots = allowed_roots(&state, ws_id.unwrap()).await;
-        if !is_within_any(&path, &roots) {
-            return jail_denied();
+    if let Some(id) = ws_id {
+        if !truthy(&q.all) {
+            let roots = allowed_roots(&state, id).await;
+            if roots.is_empty() {
+                return missing_workspace_dir(&state, id).await;
+            }
+            if !is_within_any(&path, &roots) {
+                return jail_denied();
+            }
         }
     }
     if !path.is_file() {
@@ -575,12 +629,16 @@ mod tests {
 
     #[test]
     fn is_sensitive_blocks_credentials_not_source() {
-        let home = home();
+        let home = home().unwrap_or_else(|| PathBuf::from("/home/tester"));
         // Credential dirs / files denied wherever they resolve under $HOME.
         assert!(is_sensitive(&home.join(".ssh/id_rsa")));
         assert!(is_sensitive(&home.join(".aws/credentials")));
         assert!(is_sensitive(&home.join(".claude.json")));
         assert!(is_sensitive(&home.join(".git-credentials")));
+        // Fail-closed backstop: $HOME creds caught by basename anywhere, so a
+        // missing/bogus HOME can't turn them into a readable oracle.
+        assert!(is_sensitive(Path::new("/.claude.json")));
+        assert!(is_sensitive(Path::new("/tmp/whatever/.claude.json")));
         // Name-based: private keys / env / credential stores anywhere on disk.
         assert!(is_sensitive(Path::new("/anywhere/server.pem")));
         assert!(is_sensitive(Path::new("/x/private.key")));

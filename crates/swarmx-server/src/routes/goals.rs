@@ -173,7 +173,22 @@ pub async fn create_goal(
     let thread_id = req.thread_id.filter(|s| !s.trim().is_empty());
     if let Some(tid) = thread_id.as_deref() {
         match state.store.get_thread(tid.to_string()).await {
-            Ok(Some(_)) => {}
+            Ok(Some(t)) => {
+                // The thread must belong to the SAME workspace: both FKs pass
+                // independently, so without this a goal could be created
+                // "owned by A but pointing at a thread in B", making the
+                // thread-scoped list filter inconsistent.
+                if t.workspace_id != workspace_id {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(json!({ "error": format!(
+                            "thread_id {tid} belongs to workspace {}, not {workspace_id}",
+                            t.workspace_id
+                        ) })),
+                    )
+                        .into_response();
+                }
+            }
             Ok(None) => {
                 return (
                     StatusCode::NOT_FOUND,

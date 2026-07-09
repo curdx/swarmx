@@ -302,11 +302,10 @@ pub fn default_roles_dir() -> PathBuf {
 }
 
 fn parse_role(content: &str, source_path: &Path) -> Result<Role> {
-    // Reuse the same front-matter convention as spells (same `+++`
-    // fences). Inlining the split here instead of importing from
-    // spells.rs keeps the two modules decoupled — they could diverge
-    // later (e.g. roles want YAML support) without rippling.
-    let (front_matter, body) = split_front_matter(content)
+    // Same `+++` front-matter convention as spells — reuse its parser so the
+    // F21 fix (standalone-fence detection; a `+++ b/path` diff line inside a
+    // TOML value must not be mistaken for the closing fence) can't diverge.
+    let (front_matter, body) = crate::spells::split_front_matter(content)
         .ok_or_else(|| anyhow!("no `+++` front-matter delimiters found"))?;
     let manifest: RoleManifest =
         toml::from_str(front_matter).with_context(|| "parse role front-matter as TOML")?;
@@ -316,21 +315,6 @@ fn parse_role(content: &str, source_path: &Path) -> Result<Role> {
         source_path: source_path.to_path_buf(),
         markdown_body: body.to_string(),
     })
-}
-
-fn split_front_matter(content: &str) -> Option<(&str, &str)> {
-    let trimmed_start = content.trim_start_matches(['\u{FEFF}', '\n', '\r', ' ', '\t']);
-    if !trimmed_start.starts_with("+++") {
-        return None;
-    }
-    let after_open = &trimmed_start["+++".len()..];
-    let after_open = after_open.strip_prefix('\n').unwrap_or(after_open);
-    let close_idx = after_open.find("\n+++")?;
-    let fm = &after_open[..close_idx];
-    let body_start = close_idx + "\n+++".len();
-    let body = &after_open[body_start..];
-    let body = body.strip_prefix('\n').unwrap_or(body);
-    Some((fm, body))
 }
 
 fn validate_manifest(m: &RoleManifest) -> Result<()> {

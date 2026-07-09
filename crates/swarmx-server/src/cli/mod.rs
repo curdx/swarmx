@@ -183,7 +183,11 @@ pub(crate) fn binary_supports_flag(binary: &str, flag: &str) -> bool {
         // output() drains stdout+stderr (so the child can't deadlock on a full
         // pipe) and waits for exit. Result is sent back; ignore send errors
         // (receiver already gave up on timeout).
-        let _ = tx.send(std::process::Command::new(&bin).arg("--help").output());
+        let _ = tx.send(
+            crate::runtime_path::tool_command(&bin)
+                .arg("--help")
+                .output(),
+        );
     });
 
     let supported = match rx.recv_timeout(PROBE_TIMEOUT) {

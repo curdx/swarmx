@@ -647,7 +647,10 @@ mod tests {
         assert_eq!(inner["timeout"], json!(10_000), "claude timeout in ms");
         let cmd = inner["command"].as_str().unwrap();
         assert!(cmd.contains("wake-check"), "got: {cmd}");
-        assert!(cmd.contains("--server http://127.0.0.1:7777"), "got: {cmd}");
+        assert!(
+            cmd.contains("--server 'http://127.0.0.1:7777'"),
+            "server_url is POSIX-quoted for the sh -c hook: {cmd}"
+        );
         assert!(
             cmd.contains(bin.to_string_lossy().as_ref()),
             "absolute bin path: {cmd}"

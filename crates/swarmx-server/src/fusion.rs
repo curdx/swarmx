@@ -31,7 +31,7 @@ const DEFAULT_JUDGE: &str = "Deepseek V4 Pro";
 /// Run one `zulu run` Ask-mode query; return the answer text (frontmatter
 /// stripped). Errors bubble up so the caller can mark that panelist failed.
 async fn run_zulu_query(license: &str, model: &str, cwd: &str, prompt: &str) -> Result<String> {
-    let out = tokio::process::Command::new("zulu")
+    let out = crate::runtime_path::tool_command_async("zulu")
         .args([
             "run", "-l", license, "-m", model, "-q", prompt, "--mode", "Ask", "--display", "task",
             "--cwd", cwd,
