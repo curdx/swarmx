@@ -475,7 +475,10 @@ export function useWorkspaceShellData(
   }, [workspaceRows, agents]);
 
   const activeWs = useMemo(
-    () => workspaces.find((w) => w.id === wsId) ?? null,
+    // A workspace has two identifiers: the slug (`w.id`, used in URLs) and the
+    // uuid (`w.workspaceId`, used in API/FK). Resolve by either so a deep link
+    // carrying the uuid renders instead of being treated as unknown.
+    () => workspaces.find((w) => w.id === wsId || w.workspaceId === wsId) ?? null,
     [workspaces, wsId],
   );
 

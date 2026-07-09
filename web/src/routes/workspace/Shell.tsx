@@ -448,7 +448,7 @@ export default function WorkspaceShell() {
       // No workspaces at all: a stale /chat/<id>[/t/<slug>] should land on the
       // Welcome screen at /chat instead of sitting on a dead address.
       navigate("/chat", { replace: true });
-    } else if (!workspaces.some((w) => w.id === wsId)) {
+    } else if (!workspaces.some((w) => w.id === wsId || w.workspaceId === wsId)) {
       navigate(`/chat/${workspaces[0].id}`, { replace: true });
     }
   }, [activeWs, workspaces, wsId, wsLoaded, navigate]);
