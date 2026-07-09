@@ -71,15 +71,6 @@ pub type WakeSubs = Arc<RwLock<HashMap<String, Vec<String>>>>;
 /// playback shows truncation; tune down if zombie PTYs feel sluggish.
 const AUTO_KILL_GRACE_MS: u64 = 5_000;
 
-/// Local now-ms helper; mirrors `routes::rest::now_ms` so we don't have
-/// to cross-import.
-fn now_ms_local() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
-}
-
 #[derive(Debug, Clone)]
 pub struct ExitKey {
     /// Role name — used to name the synthesized failure key as
@@ -703,7 +694,7 @@ impl WakeCoordinator {
                     to_agent: "user".into(),
                     kind: "farewell".into(),
                     body,
-                    sent_at: now_ms_local(),
+                    sent_at: now_ms(),
                     in_reply_to: None,
                     // Structured completion → the UI classifies this as a
                     // "completed" notification from meta, not by regex-sniffing
@@ -716,15 +707,15 @@ impl WakeCoordinator {
                 if let Err(e) = swarm.send_message(farewell).await {
                     tracing::warn!(?e, agent = %agent_id, "auto-kill: farewell send failed");
                 }
-                {
-                    let s = slot.lock();
-                    s.kill();
-                }
+                // Offload the blocking SIGTERM→grace→SIGKILL: never inline on
+                // this worker, never under the slot lock (both stall the whole
+                // runtime when a fan-out round auto-kills N workers at once).
+                crate::registry::offload_kill(&slot).await;
                 swarm.unregister_agent(&agent_id);
                 unregister_wake_subs(&subs, &agent_id).await;
                 unregister_exit_key(&exit_keys, &agent_id).await;
                 if let Err(e) = store
-                    .record_agent_kill(agent_id.clone(), now_ms_local())
+                    .record_agent_kill(agent_id.clone(), now_ms())
                     .await
                 {
                     tracing::warn!(?e, agent = %agent_id, "auto-kill: record_agent_kill failed");
@@ -947,10 +938,6 @@ impl WakeCoordinator {
             return;
         }
 
-        // reasonix is driven over `reasonix serve` HTTP — there is no PTY to
-        // kick. If the agent is idle, atomically consume the wake we just wrote
-        // and submit the reason as a fresh turn; if it's mid-turn we leave the
-        // mailbox entry for the SSE driver's `turn_done` path (which consumes the
         // zulu (Comate): its own per-turn-SSE driver owns turns. Route here
         // BEFORE the reasonix serve_port check (zulu also sets serve_http_port).
         // wake_if_idle atomically consumes + runs a turn only when idle; a
@@ -966,6 +953,10 @@ impl WakeCoordinator {
             return;
         }
 
+        // reasonix is driven over `reasonix serve` HTTP — there is no PTY to
+        // kick. If the agent is idle, atomically consume the wake we just wrote
+        // and submit the reason as a fresh turn; if it's mid-turn we leave the
+        // mailbox entry for the SSE driver's `turn_done` path (which consumes the
         // SAME atomic mailbox, so the wake is delivered exactly once). See
         // `crate::reasonix_serve`.
         let serve_port = self

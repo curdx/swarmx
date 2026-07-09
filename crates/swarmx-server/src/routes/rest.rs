@@ -282,12 +282,10 @@ async fn cli_plugin_info(p: &CliPlugin) -> CliPluginInfo {
 }
 
 async fn probe_cli_version(binary: &FsPath) -> Option<String> {
-    use tokio::process::Command;
     use tokio::time::{Duration, timeout};
 
-    let output = Command::new(binary)
+    let output = crate::runtime_path::tool_command_async(binary)
         .arg("--version")
-        .env("PATH", crate::runtime_path::augmented_path())
         .kill_on_drop(true)
         .output();
 
@@ -410,13 +408,11 @@ pub async fn install_plugin(
         use tokio::io::AsyncBufReadExt;
         let _ = tx.unbounded_send(sse_event(json!({"type": "line", "text": format!("$ {cmd}")})));
 
-        let home = std::env::var_os("HOME")
-            .map(std::path::PathBuf::from)
+        let home = crate::runtime_path::swarmx_home()
             .unwrap_or_else(|| std::path::PathBuf::from("."));
-        let spawned = tokio::process::Command::new("sh")
+        let spawned = crate::runtime_path::tool_command_async("sh")
             .arg("-c")
             .arg(&cmd)
-            .env("PATH", crate::runtime_path::augmented_path())
             .current_dir(&home)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
@@ -1366,10 +1362,10 @@ pub(crate) async fn teardown_agent(state: &AppState, agent_id: &str) -> bool {
             // failure card. Logged so "正在…然后突然没了" reports can be traced
             // to who/when tore the captain down.
             tracing::info!(agent = %agent_id, "teardown_agent: killing agent (killed_at, neutral Exited)");
-            {
-                let slot = slot.lock();
-                slot.kill();
-            }
+            // Offload the blocking kill (drops the slot lock first, runs on the
+            // blocking pool) so a DELETE — or a direction-delete tearing down N
+            // workers serially — never freezes a tokio worker or the slot lock.
+            crate::registry::offload_kill(&slot).await;
             // Drop the in-memory inbox before persisting the kill so any
             // in-flight send_message sees "no inbox" rather than racing
             // against a half-torn-down agent.

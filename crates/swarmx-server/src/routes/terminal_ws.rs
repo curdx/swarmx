@@ -120,17 +120,34 @@ fn spawn_reaper() {
         loop {
             tick.tick().await;
             let now = Instant::now();
-            let mut reg = lock_recover(registry());
-            reg.retain(|sid, s| {
-                let stale = s.attached == 0
-                    && s.detached_at
-                        .map(|t| now.duration_since(t) >= IDLE_REAP)
-                        .unwrap_or(false);
-                if stale {
-                    debug!(%sid, "terminal: reaping idle-detached session");
-                }
-                !stale
-            });
+            // Collect + remove stale sessions UNDER the lock, but drop them
+            // (→ PtyBridge::Drop → the ~1s blocking SIGTERM-grace kill of the
+            // interactive $SHELL, which ignores SIGTERM at a prompt) OFF the
+            // lock and off this async worker. Dropping inline in `retain` would
+            // hold the process-wide registry Mutex for the full grace and freeze
+            // every concurrent terminal attach/detach, plus steal a tokio worker.
+            let stale: Vec<TermSession> = {
+                let mut reg = lock_recover(registry());
+                let keys: Vec<String> = reg
+                    .iter()
+                    .filter(|(_, s)| {
+                        s.attached == 0
+                            && s.detached_at
+                                .map(|t| now.duration_since(t) >= IDLE_REAP)
+                                .unwrap_or(false)
+                    })
+                    .map(|(sid, _)| sid.clone())
+                    .collect();
+                keys.into_iter()
+                    .filter_map(|sid| {
+                        debug!(%sid, "terminal: reaping idle-detached session");
+                        reg.remove(&sid)
+                    })
+                    .collect()
+            };
+            if !stale.is_empty() {
+                tokio::task::spawn_blocking(move || drop(stale));
+            }
         }
     });
 }

@@ -202,3 +202,24 @@ impl Registry {
             .collect()
     }
 }
+
+/// Terminate an agent's PTY **without stalling the async runtime**.
+///
+/// `PtyBridge::kill()` blocks the calling OS thread for up to ~1s in its
+/// SIGTERM→grace→SIGKILL loop. Calling it inline on a tokio worker steals that
+/// worker for the whole second (it can't poll other tasks); calling it while
+/// holding the slot `Mutex` additionally freezes every concurrent `slot.lock()`
+/// (the pty_ws writer's lifecycle snapshot, Resize, the reaper's detect_exit).
+/// Under a fan-out round where N workers auto-kill at once, that stalls the
+/// entire server. So: clone the bridge `Arc` out from under the lock, drop the
+/// guard, then offload the blocking kill to the blocking pool. Only
+/// `PtyBridge::Drop` (a sync context) may call `kill()` directly.
+pub async fn offload_kill(slot: &Arc<Mutex<AgentSlot>>) {
+    let bridge = {
+        let s = slot.lock();
+        s.pty_bridge()
+    };
+    if let Some(bridge) = bridge {
+        let _ = tokio::task::spawn_blocking(move || bridge.kill()).await;
+    }
+}
