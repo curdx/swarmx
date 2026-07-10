@@ -239,7 +239,7 @@ pub async fn run_job(state: &AppState, job: &CronJobRecord) -> Result<(), String
         })
         .await
         .map_err(|e| e.to_string())?;
-    let _ = crate::wake::deliver_manual_wake(&state.swarm, &state.registry, &orch_id).await;
+    let _ = crate::wake::deliver_manual_wake(&state.swarm, &state.registry, &state.server_url, &orch_id).await;
     let _ = state.store.touch_cron_run(job.id.clone(), now).await;
     Ok(())
 }

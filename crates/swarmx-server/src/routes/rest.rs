@@ -1441,7 +1441,7 @@ pub async fn wake_agent(
             Json(json!({"error": format!("agent {agent_id} not found")})),
         );
     }
-    match crate::wake::deliver_manual_wake(&state.swarm, &state.registry, &agent_id).await {
+    match crate::wake::deliver_manual_wake(&state.swarm, &state.registry, &state.server_url, &agent_id).await {
         Ok(_) => (StatusCode::NO_CONTENT, Json(json!({"ok": true}))),
         Err(e) => {
             tracing::warn!(?e, agent = %agent_id, "manual wake failed");
@@ -2563,7 +2563,7 @@ pub async fn resume(
     slot.lock()
         .paused
         .store(false, std::sync::atomic::Ordering::Relaxed);
-    if let Err(e) = crate::wake::deliver_manual_wake(&state.swarm, &state.registry, &agent_id).await
+    if let Err(e) = crate::wake::deliver_manual_wake(&state.swarm, &state.registry, &state.server_url, &agent_id).await
     {
         tracing::warn!(?e, agent = %agent_id, "resume: manual wake failed (paused already cleared)");
         return (

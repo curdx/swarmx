@@ -110,8 +110,9 @@ pub async fn send_message(
         if external && to != "user" && state.registry.get(&to).is_some() {
             let swarm = state.swarm.clone();
             let registry = state.registry.clone();
+            let server_url = state.server_url.clone();
             tokio::spawn(async move {
-                if let Err(e) = crate::wake::deliver_manual_wake(&swarm, &registry, &to).await {
+                if let Err(e) = crate::wake::deliver_manual_wake(&swarm, &registry, &server_url, &to).await {
                     tracing::debug!(?e, agent = %to, "auto-wake on send_message failed (best-effort)");
                 }
             });

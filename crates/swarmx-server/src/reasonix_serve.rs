@@ -218,29 +218,48 @@ async fn wait_serve_ready(port: u16, overall: Duration) -> bool {
     false
 }
 
-/// Atomically claim pending wakes for this agent and, if any, submit the wake
-/// reason as a fresh turn. Returns true iff a turn was submitted. Shared by the
-/// driver's `turn_done` path and the WakeCoordinator's idle path; the atomic
-/// `consume_wakes` guarantees only one caller ever sees count > 0.
-pub async fn consume_and_submit(serve_port: u16, swarmx_url: &str, agent_id: &str) -> Result<bool> {
+/// Atomically claim pending wakes for this agent and, if any, submit a fresh
+/// turn. `submit_text = None` submits the generic `wake_reason` recipe (the auto
+/// / turn_done path); `Some(text)` submits `text` verbatim (the manual/operator
+/// path, so the agent gets the operator's mailbox-first "read your new message
+/// and reply to the user" directive instead of a blackboard-framed recipe).
+/// Returns true iff a turn was submitted. The atomic `consume_wakes` guarantees
+/// only one caller ever sees count > 0.
+pub async fn consume_and_submit(
+    serve_port: u16,
+    swarmx_url: &str,
+    agent_id: &str,
+    submit_text: Option<&str>,
+) -> Result<bool> {
     let c = control_client()?;
     let count = consume_wakes(&c, swarmx_url, agent_id).await?;
     if count <= 0 {
         return Ok(false);
     }
-    submit(&c, serve_port, &wake_reason(count)).await?;
+    let text = submit_text
+        .map(str::to_string)
+        .unwrap_or_else(|| wake_reason(count));
+    submit(&c, serve_port, &text).await?;
     Ok(true)
 }
 
 /// Called by the WakeCoordinator for a reasonix agent: only deliver here when
 /// the agent is IDLE (a mid-turn wake is picked up by the driver's `turn_done`
 /// path instead). Avoids submitting a second turn on top of a running one.
-pub async fn wake_if_idle(serve_port: u16, swarmx_url: &str, agent_id: &str) -> Result<bool> {
+/// `submit_text` is forwarded to [`consume_and_submit`] (None ⇒ generic recipe,
+/// Some ⇒ operator body). A busy agent's wake falls to turn_done (generic
+/// recipe) — acceptable for an agent already mid-turn.
+pub async fn wake_if_idle(
+    serve_port: u16,
+    swarmx_url: &str,
+    agent_id: &str,
+    submit_text: Option<&str>,
+) -> Result<bool> {
     match is_running(serve_port).await {
         // Busy: a mid-turn wake is picked up by the driver's `turn_done` path.
         Some(true) => Ok(false),
         // Idle: claim the wake and submit it as a fresh turn.
-        Some(false) => consume_and_submit(serve_port, swarmx_url, agent_id).await,
+        Some(false) => consume_and_submit(serve_port, swarmx_url, agent_id, submit_text).await,
         // Serve unreachable (still booting, or transiently wedged): do NOT
         // consume. `consume_wakes` is atomic and would mark the mailbox wake
         // READ, but the follow-up `submit` against the unreachable port then
@@ -444,7 +463,7 @@ async fn handle_event(
     match kind {
         "turn_done" => {
             // Turn-end: deliver any wakes that landed during the turn.
-            match consume_and_submit(serve_port, swarmx_url, agent_id).await {
+            match consume_and_submit(serve_port, swarmx_url, agent_id, None).await {
                 Ok(true) => tracing::info!(agent = %agent_id, "reasonix: woke agent on turn_done (pending wakes)"),
                 Ok(false) => {}
                 Err(err) => tracing::debug!(agent = %agent_id, ?err, "reasonix: turn_done consume/submit failed"),

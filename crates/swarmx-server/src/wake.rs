@@ -326,18 +326,12 @@ pub async fn inject_with_kick_text(
         tracing::debug!(agent = %agent_id, key = %key_for_log, submitted, "wake delivered over zulu serve HTTP");
         return Ok(());
     }
-    // reasonix has no PTY/TUI to type into — deliver the kick as a fresh turn
-    // over its `reasonix serve` HTTP API. Used by the manual-wake path and any
-    // other direct kick caller; the BlackboardChanged auto-wake path handles
-    // reasonix earlier (in deliver_wake) with an atomic consume + idle gate.
-    let serve_port = slot.lock().serve_http_port();
-    if let Some(port) = serve_port {
-        crate::reasonix_serve::deliver_turn(port, kick_text)
-            .await
-            .map_err(|e| anyhow!("reasonix serve wake delivery failed: {e:#}"))?;
-        tracing::debug!(agent = %agent_id, key = %key_for_log, port, "wake delivered over reasonix serve HTTP");
-        return Ok(());
-    }
+    // NOTE: reasonix is intentionally NOT handled here. Both callers route it
+    // away first — the manual path (`deliver_manual_wake`) and the auto path
+    // (`kick_agent`) each deliver reasonix via `reasonix_serve::wake_if_idle`,
+    // which atomically couples consume with submit (no net-loss on a failed
+    // /submit). A blind `deliver_turn` here would reintroduce that net-loss, so
+    // a reasonix agent must never reach this function.
     let input_tx = {
         let guard = slot.lock();
         match guard.pty_input() {
@@ -409,7 +403,12 @@ pub async fn inject_with_kick_text(
 /// best-effort — failure usually means the agent has exited, in which
 /// case the mailbox entry is also moot but we've already returned Ok
 /// (caller wanted a fire-and-forget signal, not a delivery guarantee).
-pub async fn deliver_manual_wake(swarm: &Swarm, registry: &Registry, target: &str) -> Result<()> {
+pub async fn deliver_manual_wake(
+    swarm: &Swarm,
+    registry: &Registry,
+    server_url: &str,
+    target: &str,
+) -> Result<()> {
     let now = now_ms();
     let body =
         "操作员唤醒——请先查收邮箱里的新消息（可能是用户的新指令），再检查共享区，然后继续。\
@@ -431,16 +430,47 @@ pub async fn deliver_manual_wake(swarm: &Swarm, registry: &Registry, target: &st
         .send_message(msg)
         .await
         .map_err(|e| anyhow!("manual wake mailbox send failed: {e}"))?;
-    // opencode double-kick guard (same root cause as the auto-wake path in
-    // `deliver_wake`): an opencode agent's swarmx-wake.js plugin consumes the
-    // wake on its next `session.idle` and starts its own turn, so without
-    // pre-consuming, the TUI deliver_turn below PLUS the plugin would fire TWO
-    // turns for this one wake. Claim it now so the plugin sees count=0.
-    if registry
-        .get(target)
-        .and_then(|s| s.lock().tui_http_port())
-        .is_some()
-    {
+    // Single-flight the kick against the SHARED global lock so a manual wake and
+    // a BlackboardChanged auto-kick can't concurrently kick the same agent
+    // (opencode double `deliver_turn` / interleaved PTY inject). If a kick is
+    // already in flight, skip: the mailbox note we wrote above is covered by that
+    // kick's turn / the engine's post-turn drain / the next Stop hook.
+    let lock = kick_lock_for(target);
+    let Ok(_kick) = lock.try_lock() else {
+        tracing::debug!(target, "manual wake coalesced with an in-flight kick (mailbox delivered)");
+        return Ok(());
+    };
+    let (tui_port, serve_port, is_zulu) = match registry.get(target) {
+        Some(slot) => {
+            let g = slot.lock();
+            (g.tui_http_port(), g.serve_http_port(), g.zulu().is_some())
+        }
+        None => (None, None, false),
+    };
+    // reasonix (serve_http_port set but NOT zulu — zulu also sets it): route
+    // through the SAME atomic path the auto kick uses. wake_if_idle COUPLES the
+    // consume with the submit and its None-branch refuses to consume when serve is
+    // unreachable, so a failed /submit never net-loses the wake. This is the #6
+    // fix done right: pre-consuming then doing a blind deliver_turn would mark the
+    // wake read and then drop it on a transient submit failure (the documented
+    // reasonix net-loss). Delivers the generic wake_reason recipe, whose intent ==
+    // the operator body ("check mailbox/blackboard, reply via swarm_send_message");
+    // the operator note stays in message history regardless.
+    if !is_zulu {
+        if let Some(port) = serve_port {
+            match crate::reasonix_serve::wake_if_idle(port, server_url, target, Some(body)).await {
+                Ok(submitted) => tracing::debug!(target, submitted, "manual wake routed via reasonix serve"),
+                Err(err) => tracing::debug!(?err, target, "manual wake reasonix delivery failed (mailbox delivered)"),
+            }
+            tracing::info!(target, "manual wake delivered");
+            return Ok(());
+        }
+    }
+    // opencode: pre-consume so its swarmx-wake.js plugin (session.idle) doesn't
+    // fire a SECOND turn after the deliver_turn below. Same residual as the auto
+    // path — a failed deliver_turn after consume is a rare best-effort miss; the
+    // operator note stays in message history.
+    if tui_port.is_some() {
         match swarm.store().consume_wakes(target.to_string(), now).await {
             Ok(ids) if !ids.is_empty() => swarm.publish_event(SwarmEvent::MessageRead {
                 ids,
@@ -450,14 +480,13 @@ pub async fn deliver_manual_wake(swarm: &Swarm, registry: &Registry, target: &st
             _ => {}
         }
     }
-    // Best-effort PTY kick. Use the existing inject_with_kick_text so
-    // the M6d-6 quiet-gate protects us from polluting an in-flight
-    // turn; `key_for_log` is "manual-wake" so log/grep stays clean.
+    // opencode / zulu / PTY: deliver the operator `body` (zulu's branch uses
+    // wake_if_idle internally; claude/codex inject keystrokes).
     if let Err(err) = inject_with_kick_text(registry, target, body, "manual-wake").await {
         tracing::debug!(
             ?err,
             target,
-            "manual wake PTY inject failed (mailbox delivered, will catch on next Stop)"
+            "manual wake inject failed (mailbox delivered, will catch on next Stop)"
         );
     }
     tracing::info!(target, "manual wake delivered");
@@ -479,24 +508,39 @@ pub struct WakeCoordinator {
     server_url: String,
     /// Bounds total in-flight wake kicks so a burst can't spawn unboundedly.
     delivery_sem: Arc<Semaphore>,
-    /// Per-agent kick single-flight (see `spawn_deliver_wake`): serializes the
-    /// engine kick for ONE agent so opencode's unconditional `deliver_turn` /
-    /// two PTY injects can't run concurrently for the same agent, while different
-    /// agents deliver in parallel — removing the single-consumer head-of-line
-    /// stall without reintroducing double-turns.
-    ///
-    /// Entries are NEVER removed mid-run: the single-flight guarantee depends on
-    /// every delivery for an agent seeing the SAME `Arc<Mutex>`. Removing one
-    /// while a kick is in flight would let the next delivery mint a fresh mutex
-    /// and run concurrently (a double-kick). The map only grows by one tiny
-    /// `Arc<Mutex<()>>` per distinct agent id woken, bounded over a process
-    /// lifetime and cleared on restart — negligible.
-    kick_locks: Arc<DashMap<String, Arc<tokio::sync::Mutex<()>>>>,
 }
 
 /// Max concurrent wake kicks. Comfortably above the handful of agents a single
 /// blackboard write fans out to, low enough to bound resource use under a burst.
 const MAX_CONCURRENT_KICKS: usize = 32;
+
+/// Process-wide per-agent kick single-flight, shared by BOTH the auto
+/// (BlackboardChanged) and manual (operator ⚡ / cron / external-message) wake
+/// paths — so neither can concurrently kick the same agent (opencode's
+/// unconditional `deliver_turn` would double-submit; two PTY injects would
+/// interleave). Different agents kick concurrently.
+///
+/// Entries are NEVER removed mid-run: the single-flight guarantee depends on
+/// every kick for an agent seeing the SAME `Arc<Mutex>`. Removing one while a
+/// kick is in flight would let the next kick mint a fresh mutex and run
+/// concurrently. The map grows by one tiny `Arc<Mutex<()>>` per distinct agent
+/// woken, bounded over a process lifetime and cleared on restart — negligible.
+fn kick_locks() -> &'static DashMap<String, Arc<tokio::sync::Mutex<()>>> {
+    static LOCKS: std::sync::OnceLock<DashMap<String, Arc<tokio::sync::Mutex<()>>>> =
+        std::sync::OnceLock::new();
+    LOCKS.get_or_init(DashMap::new)
+}
+
+/// The single-flight lock for `agent_id` (get-or-create; never removed). Clone
+/// the `Arc` out from under the DashMap shard lock — never hold that across an
+/// `.await`.
+fn kick_lock_for(agent_id: &str) -> Arc<tokio::sync::Mutex<()>> {
+    kick_locks()
+        .entry(agent_id.to_string())
+        .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+        .value()
+        .clone()
+}
 
 impl WakeCoordinator {
     /// Spawns the wake task and returns its JoinHandle. The handle is
@@ -519,7 +563,6 @@ impl WakeCoordinator {
             store,
             server_url,
             delivery_sem: Arc::new(Semaphore::new(MAX_CONCURRENT_KICKS)),
-            kick_locks: Arc::new(DashMap::new()),
         };
         tokio::spawn(me.run())
     }
@@ -933,22 +976,16 @@ impl WakeCoordinator {
         let subs = self.subs.clone();
         let server_url = self.server_url.clone();
         let sem = self.delivery_sem.clone();
-        let locks = self.kick_locks.clone();
         tokio::spawn(async move {
             // Mailbox is the source of truth: always write it (unless paused or
             // the write fails), independent of the coalesced kick below.
             if !write_wake_mailbox(&swarm, &registry, &target, &key).await {
                 return;
             }
-            // Per-agent kick single-flight. Clone the Arc out from under the
-            // DashMap shard lock (never hold it across an await), then try_lock:
-            // a same-agent kick already in flight → skip (no permit taken).
-            let lock = {
-                let e = locks
-                    .entry(target.clone())
-                    .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())));
-                e.value().clone()
-            };
+            // Per-agent kick single-flight (shared global map, so a manual wake
+            // can't race this): try_lock — a same-agent kick already in flight
+            // → skip (no permit taken).
+            let lock = kick_lock_for(&target);
             let Ok(_kick) = lock.try_lock() else {
                 return;
             };
@@ -1039,7 +1076,7 @@ async fn kick_agent(
     // SAME atomic mailbox, so the wake is delivered exactly once).
     let serve_port = registry.get(target).and_then(|s| s.lock().serve_http_port());
     if let Some(port) = serve_port {
-        match crate::reasonix_serve::wake_if_idle(port, server_url, target).await {
+        match crate::reasonix_serve::wake_if_idle(port, server_url, target, None).await {
             Ok(submitted) => {
                 tracing::info!(target, key, port, submitted, "reasonix wake routed via serve HTTP")
             }
