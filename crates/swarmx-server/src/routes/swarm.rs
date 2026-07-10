@@ -73,11 +73,52 @@ pub async fn list_messages(
     ))
 }
 
+/// Short-window idempotency for `/api/message`. An MCP `swarm_send_message` that
+/// SUCCEEDED server-side but whose response the agent missed (client timeout,
+/// dropped connection) is retried by the LLM with byte-identical content — which
+/// would otherwise insert a duplicate the recipient reads and may double-reply
+/// to. We key on a content fingerprint and return the FIRST result within a
+/// window that comfortably exceeds the 30s mutating-client timeout (so a retry
+/// fired after that timeout still lands inside it). LLM retries are SERIAL (one
+/// tool call at a time), so a check-then-insert without holding a lock across
+/// the DB write suffices: a truly concurrent same-fingerprint POST would be two
+/// independent legitimate messages, not a retry.
+const MSG_DEDUP_WINDOW: std::time::Duration = std::time::Duration::from_secs(60);
+
+type MsgDedup = std::sync::Mutex<std::collections::HashMap<u64, (MessageRecord, std::time::Instant)>>;
+
+fn msg_dedup() -> &'static MsgDedup {
+    static D: std::sync::OnceLock<MsgDedup> = std::sync::OnceLock::new();
+    D.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+fn msg_fingerprint(from: &str, req: &SendMessageRequest) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    from.hash(&mut h);
+    req.to.hash(&mut h);
+    req.kind.hash(&mut h);
+    req.body.hash(&mut h);
+    req.in_reply_to.hash(&mut h);
+    h.finish()
+}
+
 pub async fn send_message(
     State(state): State<AppState>,
     Json(req): Json<SendMessageRequest>,
 ) -> Result<Json<MessageRecord>, (StatusCode, Json<serde_json::Value>)> {
-    let from = req.from.unwrap_or_else(|| "system".into());
+    let from = req.from.clone().unwrap_or_else(|| "system".into());
+    let fp = msg_fingerprint(&from, &req);
+    // Idempotency: a retried identical send within the window returns the first
+    // result instead of inserting a duplicate (and does NOT re-fire the auto-wake).
+    {
+        let mut d = msg_dedup().lock().unwrap_or_else(|e| e.into_inner());
+        d.retain(|_, (_, t)| t.elapsed() < MSG_DEDUP_WINDOW);
+        if let Some((rec, _)) = d.get(&fp) {
+            tracing::debug!(from = %from, to = %rec.to_agent, id = rec.id, "send_message idempotent hit (identical retry within window)");
+            return Ok(Json(rec.clone()));
+        }
+    }
     let record = state
         .swarm
         .send_message(NewMessage {
@@ -94,32 +135,7 @@ pub async fn send_message(
         .await
         .map_err(internal_err)?;
 
-    // W0-2: close the "external message doesn't wake the recipient" gap.
-    // `/api/message` is the entry point for the UI, scripts, and the future
-    // public API — but only the UI used to follow up with a manual wake, so a
-    // bare POST left the orchestrator asleep on a fresh instruction. Auto-wake
-    // the recipient when an EXTERNAL sender (user/system) messages a LIVE agent.
-    // Agent-to-agent traffic (from = an agent id) is deliberately excluded — it
-    // is driven by the BlackboardChanged wake path and must not double-kick.
-    // cron uses the core `swarm.send_message` (not this handler) + its own wake,
-    // so it's unaffected. Fire-and-forget so the response isn't held on the
-    // ~150ms PTY settle inside deliver_manual_wake.
-    {
-        let to = record.to_agent.clone();
-        let external = matches!(record.from_agent.as_str(), "user" | "system");
-        if external && to != "user" && state.registry.get(&to).is_some() {
-            let swarm = state.swarm.clone();
-            let registry = state.registry.clone();
-            let server_url = state.server_url.clone();
-            tokio::spawn(async move {
-                if let Err(e) = crate::wake::deliver_manual_wake(&swarm, &registry, &server_url, &to).await {
-                    tracing::debug!(?e, agent = %to, "auto-wake on send_message failed (best-effort)");
-                }
-            });
-        }
-    }
-
-    Ok(Json(MessageRecord {
+    let out = MessageRecord {
         id: record.id,
         from_agent: record.from_agent,
         to_agent: record.to_agent,
@@ -132,7 +148,40 @@ pub async fn send_message(
         thread_id: record.thread_id,
         meta: record.meta,
         thought_trace: record.thought_trace.as_ref().map(storage_trace_to_rest),
-    }))
+    };
+    // Cache BEFORE the auto-wake so a fast retry can't slip in during the ~150ms
+    // wake spawn and double-insert.
+    msg_dedup()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(fp, (out.clone(), std::time::Instant::now()));
+
+    // W0-2: close the "external message doesn't wake the recipient" gap.
+    // `/api/message` is the entry point for the UI, scripts, and the future
+    // public API — but only the UI used to follow up with a manual wake, so a
+    // bare POST left the orchestrator asleep on a fresh instruction. Auto-wake
+    // the recipient when an EXTERNAL sender (user/system) messages a LIVE agent.
+    // Agent-to-agent traffic (from = an agent id) is deliberately excluded — it
+    // is driven by the BlackboardChanged wake path and must not double-kick.
+    // cron uses the core `swarm.send_message` (not this handler) + its own wake,
+    // so it's unaffected. Fire-and-forget so the response isn't held on the
+    // ~150ms PTY settle inside deliver_manual_wake.
+    {
+        let to = out.to_agent.clone();
+        let external = matches!(out.from_agent.as_str(), "user" | "system");
+        if external && to != "user" && state.registry.get(&to).is_some() {
+            let swarm = state.swarm.clone();
+            let registry = state.registry.clone();
+            let server_url = state.server_url.clone();
+            tokio::spawn(async move {
+                if let Err(e) = crate::wake::deliver_manual_wake(&swarm, &registry, &server_url, &to).await {
+                    tracing::debug!(?e, agent = %to, "auto-wake on send_message failed (best-effort)");
+                }
+            });
+        }
+    }
+
+    Ok(Json(out))
 }
 
 /// One structured event from the web UI's debug logger (`web/src/lib/debugLog.ts`).
@@ -512,4 +561,36 @@ fn sha256_hex(bytes: &[u8]) -> String {
         let _ = write!(s, "{b:02x}");
     }
     s
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn req(to: &str, kind: &str, body: &str, reply: Option<i64>) -> SendMessageRequest {
+        SendMessageRequest {
+            from: None,
+            to: to.into(),
+            kind: kind.into(),
+            body: body.into(),
+            in_reply_to: reply,
+        }
+    }
+
+    #[test]
+    fn fingerprint_stable_for_identical_send_and_varies_on_any_field() {
+        let a = req("orch", "reply", "done", Some(3));
+        // Same sender + same content → same key: a byte-identical LLM retry dedups.
+        assert_eq!(
+            msg_fingerprint("worker-1", &a),
+            msg_fingerprint("worker-1", &req("orch", "reply", "done", Some(3)))
+        );
+        // Any change → different key: a genuinely different message is NOT deduped.
+        let base = msg_fingerprint("worker-1", &a);
+        assert_ne!(base, msg_fingerprint("worker-2", &a), "sender");
+        assert_ne!(base, msg_fingerprint("worker-1", &req("orch2", "reply", "done", Some(3))), "to");
+        assert_ne!(base, msg_fingerprint("worker-1", &req("orch", "chat", "done", Some(3))), "kind");
+        assert_ne!(base, msg_fingerprint("worker-1", &req("orch", "reply", "done2", Some(3))), "body");
+        assert_ne!(base, msg_fingerprint("worker-1", &req("orch", "reply", "done", None)), "in_reply_to");
+    }
 }

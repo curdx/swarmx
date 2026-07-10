@@ -24,6 +24,24 @@ use std::time::Duration;
 /// MCP subprocess to time out (claude's default is 60s).
 const HTTP_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// Dedicated client for MUTATING tools (`swarm_send_message`, `swarm_spawn_worker`).
+/// These have real server-side side effects — a DB write + broadcast; forking a
+/// PTY plus several queries — and can legitimately take several seconds under
+/// load, far beyond the 5s READ budget. Timing them out at 5s made the agent see
+/// a "failed" result for a spawn/send that had actually SUCCEEDED, then retry it,
+/// producing a duplicate worker/message. A longer budget removes that
+/// false-failure retry trigger; the server's idempotency window (send) and the
+/// same-role producer guard (spawn) are the backstop for a genuine retry.
+fn mutating_client() -> &'static Client {
+    static C: std::sync::OnceLock<Client> = std::sync::OnceLock::new();
+    C.get_or_init(|| {
+        Client::builder()
+            .timeout(Duration::from_secs(30))
+            .build()
+            .expect("build mutating http client")
+    })
+}
+
 /// Default `limit` for list operations when the caller doesn't pass one.
 /// Twenty messages is enough to give the agent recent context without
 /// flooding its prompt window.
@@ -298,8 +316,7 @@ async fn send_message(ctx: &ToolContext, args: &Value) -> Result<String, String>
         payload["in_reply_to"] = json!(parent);
     }
     let url = format!("{}/api/message", ctx.server_url);
-    let resp = ctx
-        .http
+    let resp = mutating_client()
         .post(&url)
         .json(&payload)
         .send()
@@ -824,8 +841,7 @@ async fn spawn_worker(ctx: &ToolContext, args: &Value) -> Result<String, String>
     });
 
     let url = format!("{}/api/worker", ctx.server_url);
-    let resp = ctx
-        .http
+    let resp = mutating_client()
         .post(&url)
         .json(&payload)
         .send()
