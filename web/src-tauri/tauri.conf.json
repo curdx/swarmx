@@ -2,7 +2,7 @@
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "swarmx",
   "mainBinaryName": "swarmx-tauri",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "identifier": "com.swarmx.desktop",
   "build": {
     "frontendDist": "../dist",
