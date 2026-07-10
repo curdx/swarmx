@@ -1492,7 +1492,13 @@ impl Store {
         let pool = self.pool.clone();
         tokio::task::spawn_blocking(move || {
             with_busy_retry(&pool, |conn| -> rusqlite::Result<ThoughtTraceRecord> {
-                conn.execute(
+                // One IMMEDIATE transaction so the INSERT + events INSERTs are
+                // atomic: a mid-unit BUSY rolls the whole thing back (no orphan
+                // 'active' trace that the UNIQUE(trigger_message_id) index would
+                // then block forever), restoring with_busy_retry's single-unit
+                // retry invariant.
+                let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+                tx.execute(
                     "INSERT INTO thought_traces \
                      (id, trigger_message_id, agent_id, workspace_id, thread_id, status, \
                       started_at, summary_json, updated_at) \
@@ -1507,13 +1513,15 @@ impl Store {
                         rec.started_at,
                     ],
                 )?;
-                let id: String = conn.query_row(
+                let id: String = tx.query_row(
                     "SELECT id FROM thought_traces WHERE rowid = last_insert_rowid()",
                     [],
                     |row| row.get(0),
                 )?;
-                insert_thought_trace_events(conn, &id, &events)?;
-                select_thought_trace(conn, &id)
+                insert_thought_trace_events(&tx, &id, &events)?;
+                let rec = select_thought_trace(&tx, &id)?;
+                tx.commit()?;
+                Ok(rec)
             })
         })
         .await
@@ -1534,7 +1542,11 @@ impl Store {
             with_busy_retry(
                 &pool,
                 |conn| -> rusqlite::Result<Option<ThoughtTraceRecord>> {
-                    let trace_id = match conn.query_row(
+                    // IMMEDIATE tx: serialises concurrent append/complete on the
+                    // same agent so the summary_json read-modify-write can't lose
+                    // a step, and rolls back atomically on a mid-unit BUSY.
+                    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+                    let trace_id = match tx.query_row(
                         "SELECT id FROM thought_traces \
                      WHERE agent_id = ?1 \
                        AND status = 'active' \
@@ -1544,7 +1556,7 @@ impl Store {
                         |row| row.get::<_, String>(0),
                     ) {
                         Ok(id) => Some(id),
-                        Err(rusqlite::Error::QueryReturnedNoRows) => match conn.query_row(
+                        Err(rusqlite::Error::QueryReturnedNoRows) => match tx.query_row(
                             "SELECT id FROM thought_traces \
                          WHERE agent_id = ?1 AND status = 'active' \
                          ORDER BY started_at DESC LIMIT 1",
@@ -1560,7 +1572,7 @@ impl Store {
                     let Some(trace_id) = trace_id else {
                         return Ok(None);
                     };
-                    let existing_summary: String = conn.query_row(
+                    let existing_summary: String = tx.query_row(
                         "SELECT summary_json FROM thought_traces WHERE id = ?1",
                         params![trace_id],
                         |row| row.get(0),
@@ -1569,15 +1581,17 @@ impl Store {
                         &existing_summary,
                         parse_thought_trace_steps(&summary_json),
                     );
-                    conn.execute(
+                    tx.execute(
                         "UPDATE thought_traces \
                      SET response_message_id = ?2, status = 'done', completed_at = ?3, \
                          summary_json = ?4, updated_at = ?3 \
                      WHERE id = ?1",
                         params![trace_id, response_message_id, completed_at, merged_summary],
                     )?;
-                    insert_thought_trace_events(conn, &trace_id, &events)?;
-                    select_thought_trace(conn, &trace_id).map(Some)
+                    insert_thought_trace_events(&tx, &trace_id, &events)?;
+                    let rec = select_thought_trace(&tx, &trace_id)?;
+                    tx.commit()?;
+                    Ok(Some(rec))
                 },
             )
         })
@@ -1598,6 +1612,7 @@ impl Store {
             with_busy_retry(
                 &pool,
                 |conn| -> rusqlite::Result<Option<ThoughtTraceRecord>> {
+                    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
                     let placeholders = std::iter::repeat("?")
                         .take(agent_ids.len())
                         .collect::<Vec<_>>()
@@ -1609,7 +1624,7 @@ impl Store {
                     );
                     let binds: Vec<rusqlite::types::Value> =
                         agent_ids.iter().map(|id| id.clone().into()).collect();
-                    let trace_id = match conn.query_row(
+                    let trace_id = match tx.query_row(
                         &sql,
                         rusqlite::params_from_iter(binds.iter()),
                         |row| row.get::<_, String>(0),
@@ -1639,7 +1654,7 @@ impl Store {
                             recent_binds.extend(
                                 agent_ids.iter().cloned().map(rusqlite::types::Value::from),
                             );
-                            match conn.query_row(
+                            match tx.query_row(
                                 &sql,
                                 rusqlite::params_from_iter(recent_binds.iter()),
                                 |row| row.get::<_, String>(0),
@@ -1654,7 +1669,7 @@ impl Store {
                     let Some(trace_id) = trace_id else {
                         return Ok(None);
                     };
-                    let existing_summary: String = conn.query_row(
+                    let existing_summary: String = tx.query_row(
                         "SELECT summary_json FROM thought_traces WHERE id = ?1",
                         params![trace_id],
                         |row| row.get(0),
@@ -1663,14 +1678,16 @@ impl Store {
                         &existing_summary,
                         [event_to_thought_trace_step(&event)],
                     );
-                    conn.execute(
+                    tx.execute(
                         "UPDATE thought_traces \
                          SET summary_json = ?2, updated_at = ?3 \
                          WHERE id = ?1",
                         params![trace_id, merged_summary, event.at],
                     )?;
-                    insert_thought_trace_events(conn, &trace_id, &[event.clone()])?;
-                    select_thought_trace(conn, &trace_id).map(Some)
+                    insert_thought_trace_events(&tx, &trace_id, &[event.clone()])?;
+                    let rec = select_thought_trace(&tx, &trace_id)?;
+                    tx.commit()?;
+                    Ok(Some(rec))
                 },
             )
         })
