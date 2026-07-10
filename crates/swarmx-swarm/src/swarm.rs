@@ -687,6 +687,19 @@ impl Swarm {
         .context("spawn_blocking fs::read")?
     }
 
+    /// The on-disk mtime of a blackboard key's file, or `None` if the key isn't
+    /// on disk. The disk is the source of truth (F6): a key present with a fresh
+    /// mtime was produced THIS run even if its op-log row failed to persist —
+    /// `write_blackboard` keeps the file and broadcasts the wake on an
+    /// `insert_blackboard_op` failure (SQLITE_BUSY / disk-full), leaving no op
+    /// row. The exit-freshness gate reads this so a worker that actually
+    /// delivered its handoff isn't handed a spurious `<signal>.error`. Cheap
+    /// `stat`, only hit on the rare op-log-says-not-fresh path.
+    pub fn blackboard_key_mtime(&self, rel_path: &str) -> Option<std::time::SystemTime> {
+        let target = path_safe::resolve_existing(&self.blackboard_root, rel_path).ok()?;
+        std::fs::metadata(&target).ok()?.modified().ok()
+    }
+
     /// Boot-time op-log reconcile (completes F6). A failed `insert_blackboard_op`
     /// leaves a file on disk with NO op-log row — `write_blackboard` keeps the
     /// content and still broadcasts the wake, but the row (and thus the

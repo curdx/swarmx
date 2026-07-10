@@ -828,7 +828,7 @@ impl WakeCoordinator {
         // crashed before producing its own; that's the case we owe an
         // `.error` for.
         let store = self.swarm.store();
-        let fresh = match store.list_blackboard_ops(Some(signal.clone())).await {
+        let fresh_by_oplog = match store.list_blackboard_ops(Some(signal.clone())).await {
             Ok(rows) => rows
                 .first()
                 .map(|r| r.at >= ek.spawned_at_ms)
@@ -838,11 +838,25 @@ impl WakeCoordinator {
                     ?err,
                     agent_id,
                     signal,
-                    "list_blackboard_ops failed; assuming agent didn't write the signal"
+                    "list_blackboard_ops failed; falling back to on-disk mtime for freshness"
                 );
                 false
             }
         };
+        // F6: the DISK is the source of truth; the op-log is best-effort. If the
+        // op-log says not-fresh, the row may simply have failed to persist while
+        // the content DID land on disk — `write_blackboard` keeps the file and
+        // broadcasts the wake on an `insert_blackboard_op` failure. Fall back to
+        // the on-disk mtime so a worker that actually delivered its handoff isn't
+        // handed a spurious `<signal>.error` (which fans out an abort to its
+        // dependents). Only stat on the rare not-fresh path.
+        let fresh = fresh_by_oplog
+            || self
+                .swarm
+                .blackboard_key_mtime(&signal)
+                .and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_millis() as i64 >= ek.spawned_at_ms)
+                .unwrap_or(false);
         if fresh {
             tracing::debug!(
                 agent_id,
