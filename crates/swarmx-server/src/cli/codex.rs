@@ -45,19 +45,22 @@ impl CliAdapter for CodexAdapter {
                 tracing::warn!(?err, cli = %plugin.id, "codex auto-dismiss-update patch failed");
             }
         }
-        // 3. MCP: preferred path is a per-agent CODEX_HOME that INHERITS the
-        //    user's ~/.codex MCP servers (context7, …) plus a per-agent
-        //    swarmx-swarm; codex's default 10s startup_timeout_sec skips any
-        //    inherited server that stalls, so the worker can't hang on a heavy
-        //    one. `contribute_env` sets CODEX_HOME when the per-agent config
-        //    exists. The global block is a fallback for a worker that (for any
-        //    reason) falls back to ~/.codex.
+        // 3. MCP: isolate the swarm server PER-AGENT via a per-agent CODEX_HOME
+        //    (it inherits the user's ~/.codex MCP servers + adds a per-agent
+        //    swarmx-swarm; codex's 10s startup_timeout skips any inherited server
+        //    that stalls). `contribute_env` sets CODEX_HOME when this config
+        //    exists. We deliberately do NOT write the swarm entry into the user's
+        //    SHARED ~/.codex/config.toml — that permanently degraded every
+        //    standalone `codex` session. Instead we SELF-HEAL: strip any such
+        //    section a prior swarmx version left behind. If the per-agent write
+        //    fails, the worker simply gets no swarm tools — a rare disk-failure
+        //    degradation, not a mutation of config we don't own.
         if plugin.auto_inject_mcp {
             if let Err(err) = write_codex_per_agent_home(&ctx.agent_id, workspace, &ctx.mcp_bin) {
-                tracing::warn!(?err, "codex: per-agent CODEX_HOME write failed");
+                tracing::warn!(?err, "codex: per-agent CODEX_HOME write failed; worker gets no swarm tools");
             }
-            if let Err(err) = ensure_codex_mcp_global(&ctx.mcp_bin) {
-                tracing::warn!(?err, "codex: mcp-inject patch failed");
+            if let Err(err) = heal_codex_mcp_global() {
+                tracing::warn!(?err, "codex: healing stale global swarm mcp section failed");
             }
         }
         // 4. Wake: workspace-local Stop hook (timeout in seconds).
@@ -209,64 +212,26 @@ fn patch_codex_dismiss_at(cfg: &Path) -> Result<()> {
     write_json_atomic(cfg, &root)
 }
 
-/// Append a global `[mcp_servers.swarmx-swarm]` section to
-/// `~/.codex/config.toml` if it's missing or its `command =` line differs.
-/// Per-spawn data (which agent) does NOT live in this section — codex's MCP
-/// config is global. Instead we whitelist the env vars and codex passes them
-/// through to the subprocess; swarmx-server already sets
-/// `SWARMX_AGENT_ID` on each spawn.
-///
-/// `default_tools_approval_mode = "auto"` skips codex's per-call approval
-/// gate (our tools are loopback-only, idempotent or undoable).
-///
-/// Rewrites the section in place if `command =` no longer points at the
-/// current binary (handles `cargo build` moving the path between runs).
-fn ensure_codex_mcp_global(mcp_bin: &Path) -> Result<()> {
+/// Self-heal: remove any `[mcp_servers.swarmx-swarm]` section a PRIOR swarmx
+/// version wrote into the user's SHARED `~/.codex/config.toml`. swarmx now
+/// isolates the swarm MCP server per-agent via `CODEX_HOME` (see
+/// `write_codex_per_agent_home`) and must NOT mutate config it doesn't own — the
+/// global entry permanently degraded every standalone `codex` session (it
+/// launched a swarm server with no `SWARMX_AGENT_ID`, and once the mcp binary
+/// path moved — a `cargo build`, a Tauri update — codex ate a 10s
+/// `startup_timeout` per session on a now-missing binary). No-op when the section
+/// is absent, so it's cheap on the common already-clean path.
+fn heal_codex_mcp_global() -> Result<()> {
     let _guard = lock_config_patch();
     let cfg = match home_path().map(|h| h.join(".codex").join("config.toml")) {
-        Some(p) => p,
-        None => return Ok(()),
+        Some(p) if p.is_file() => p,
+        _ => return Ok(()), // no config / no home → nothing to heal
     };
-    // Codex's MCP block is independent of trust — we should be able to write
-    // it even if the user has never run codex yet (the dir might not exist).
-    if let Some(parent) = cfg.parent() {
-        fs::create_dir_all(parent).ok();
-    }
-    let existing = if cfg.is_file() {
-        fs::read_to_string(&cfg).with_context(|| format!("read {}", cfg.display()))?
-    } else {
-        String::new()
+    let existing = fs::read_to_string(&cfg).with_context(|| format!("read {}", cfg.display()))?;
+    let updated = match strip_codex_mcp_section(&existing) {
+        Some(u) if u != existing => u,
+        _ => return Ok(()), // section absent, or splice is a no-op
     };
-    let desired_section = render_codex_mcp_section(mcp_bin);
-
-    let updated = match find_section_range(&existing, "[mcp_servers.swarmx-swarm]") {
-        Some((start, end)) => {
-            // Strip trailing blank line(s) on either side so we don't grow
-            // the file every time we rewrite.
-            let mut new_body = String::with_capacity(existing.len());
-            new_body.push_str(&existing[..start]);
-            new_body.push_str(&desired_section);
-            new_body.push_str(&existing[end..]);
-            if new_body == existing {
-                return Ok(());
-            }
-            new_body
-        }
-        None => {
-            let mut out = existing;
-            if !out.is_empty() {
-                if !out.ends_with('\n') {
-                    out.push('\n');
-                }
-                if !out.ends_with("\n\n") {
-                    out.push('\n');
-                }
-            }
-            out.push_str(&desired_section);
-            out
-        }
-    };
-
     let tmp = unique_tmp_path(&cfg);
     {
         let mut f = fs::File::create(&tmp).with_context(|| format!("create {}", tmp.display()))?;
@@ -275,6 +240,26 @@ fn ensure_codex_mcp_global(mcp_bin: &Path) -> Result<()> {
     }
     fs::rename(&tmp, &cfg).with_context(|| format!("rename to {}", cfg.display()))?;
     Ok(())
+}
+
+/// Splice the `[mcp_servers.swarmx-swarm]` section out of a codex config body,
+/// collapsing the seam to a single blank line so repeated heals are idempotent
+/// and other sections/comments are preserved verbatim. `None` when the section
+/// is absent. Pure, so the heal logic is unit-tested without touching `~/.codex`.
+fn strip_codex_mcp_section(existing: &str) -> Option<String> {
+    let (start, end) = find_section_range(existing, "[mcp_servers.swarmx-swarm]")?;
+    let head = existing[..start].trim_end();
+    let tail = existing[end..].trim_start();
+    let mut out = String::with_capacity(existing.len());
+    out.push_str(head);
+    if !head.is_empty() && !tail.is_empty() {
+        out.push_str("\n\n");
+    }
+    out.push_str(tail);
+    if !out.is_empty() && !out.ends_with('\n') {
+        out.push('\n');
+    }
+    Some(out)
 }
 
 fn render_codex_mcp_section(mcp_bin: &Path) -> String {
@@ -607,139 +592,41 @@ trust_level = \"trusted\"
         );
     }
 
-    // ── codex MCP global-config patch ────────────────────────────────────
+    // ── codex MCP self-heal (strip stale global section) ────────────────
 
     #[test]
-    fn codex_mcp_global_appends_when_missing() {
-        let dir = tempdir().unwrap();
-        let cfg = dir.path().join("config.toml");
-        let original = "model = \"gpt-5.5\"\n\n# user comment\n";
-        fs::write(&cfg, original).unwrap();
-        let bin = dir.path().join("swarmx-mcp");
-
-        // Re-exercise the in-place logic via the same function by overriding
-        // path through a local helper that mirrors the public one.
-        ensure_codex_mcp_at(&cfg, &bin).unwrap();
-
-        let after = fs::read_to_string(&cfg).unwrap();
-        assert!(after.contains("# user comment"), "comments preserved");
-        assert!(after.contains("[mcp_servers.swarmx-swarm]"));
-        assert!(after.contains("default_tools_approval_mode = \"auto\""));
-        assert!(after.contains("env_vars = [\"SWARMX_AGENT_ID\", \"SWARMX_SERVER_URL\"]"));
-        assert!(after.contains(bin.to_string_lossy().as_ref()));
-    }
-
-    #[test]
-    fn codex_mcp_global_noop_when_section_already_matches() {
-        let dir = tempdir().unwrap();
-        let cfg = dir.path().join("config.toml");
-        let bin = dir.path().join("swarmx-mcp");
-        ensure_codex_mcp_at(&cfg, &bin).unwrap();
-        let first = fs::read(&cfg).unwrap();
-        ensure_codex_mcp_at(&cfg, &bin).unwrap();
-        let second = fs::read(&cfg).unwrap();
-        assert_eq!(first, second, "second write must be a no-op");
-    }
-
-    #[test]
-    fn codex_mcp_global_rewrites_when_command_differs() {
-        let dir = tempdir().unwrap();
-        let cfg = dir.path().join("config.toml");
-        let bin_a = dir.path().join("swarmx-mcp-a");
-        let bin_b = dir.path().join("swarmx-mcp-b");
-
-        ensure_codex_mcp_at(&cfg, &bin_a).unwrap();
-        let after_a = fs::read_to_string(&cfg).unwrap();
-        assert!(after_a.contains(bin_a.to_string_lossy().as_ref()));
-
-        ensure_codex_mcp_at(&cfg, &bin_b).unwrap();
-        let after_b = fs::read_to_string(&cfg).unwrap();
-        assert!(
-            after_b.contains(bin_b.to_string_lossy().as_ref()),
-            "new path must appear"
-        );
-        assert!(
-            !after_b.contains(bin_a.to_string_lossy().as_ref()),
-            "old path must be gone"
-        );
-        // Section must appear exactly once.
-        let count = after_b.matches("[mcp_servers.swarmx-swarm]").count();
-        assert_eq!(count, 1, "section duplicated: {after_b}");
-    }
-
-    #[test]
-    fn codex_mcp_global_preserves_other_sections() {
-        let dir = tempdir().unwrap();
-        let cfg = dir.path().join("config.toml");
-        let bin = dir.path().join("swarmx-mcp");
+    fn strip_codex_mcp_section_removes_it_and_preserves_others() {
         let original = "\
 [mcp_servers.user-other]\n\
 command = \"/usr/bin/other\"\n\
 env_vars = [\"X\"]\n\
 \n\
+[mcp_servers.swarmx-swarm]\n\
+command = \"/old/swarmx-mcp\"\n\
+env_vars = [\"SWARMX_AGENT_ID\"]\n\
+\n\
 [projects.\"/some/ws\"]\n\
 trust_level = \"trusted\"\n";
-        fs::write(&cfg, original).unwrap();
-
-        ensure_codex_mcp_at(&cfg, &bin).unwrap();
-
-        let after = fs::read_to_string(&cfg).unwrap();
-        assert!(after.contains("[mcp_servers.user-other]"));
-        assert!(after.contains("[projects.\"/some/ws\"]"));
-        assert!(after.contains("[mcp_servers.swarmx-swarm]"));
-
-        // Run again; user-other untouched.
-        ensure_codex_mcp_at(&cfg, &bin).unwrap();
-        let after2 = fs::read_to_string(&cfg).unwrap();
-        assert!(after2.contains("[mcp_servers.user-other]"));
+        let out = strip_codex_mcp_section(original).expect("section present");
+        assert!(!out.contains("[mcp_servers.swarmx-swarm]"), "swarm section removed");
+        assert!(out.contains("[mcp_servers.user-other]"), "user section preserved");
+        assert!(out.contains("[projects.\"/some/ws\"]"), "projects preserved");
+        assert!(out.contains("command = \"/usr/bin/other\""), "user body preserved");
+        assert!(!out.contains("\n\n\n"), "seam collapsed to one blank line");
     }
 
-    /// Mirror of `ensure_codex_mcp_global` operating on an explicit path so
-    /// tests don't touch `~/.codex/config.toml`. The production function
-    /// resolves the path via `home_path()` then defers to the same logic.
-    fn ensure_codex_mcp_at(cfg: &Path, mcp_bin: &Path) -> Result<()> {
-        if let Some(parent) = cfg.parent() {
-            fs::create_dir_all(parent).ok();
-        }
-        let existing = if cfg.is_file() {
-            fs::read_to_string(cfg)?
-        } else {
-            String::new()
-        };
-        let desired_section = render_codex_mcp_section(mcp_bin);
-        let updated = match find_section_range(&existing, "[mcp_servers.swarmx-swarm]") {
-            Some((start, end)) => {
-                let mut new_body = String::with_capacity(existing.len());
-                new_body.push_str(&existing[..start]);
-                new_body.push_str(&desired_section);
-                new_body.push_str(&existing[end..]);
-                if new_body == existing {
-                    return Ok(());
-                }
-                new_body
-            }
-            None => {
-                let mut out = existing;
-                if !out.is_empty() {
-                    if !out.ends_with('\n') {
-                        out.push('\n');
-                    }
-                    if !out.ends_with("\n\n") {
-                        out.push('\n');
-                    }
-                }
-                out.push_str(&desired_section);
-                out
-            }
-        };
-        let tmp = unique_tmp_path(cfg);
-        {
-            let mut f = fs::File::create(&tmp)?;
-            f.write_all(updated.as_bytes())?;
-            f.sync_all().ok();
-        }
-        fs::rename(&tmp, cfg)?;
-        Ok(())
+    #[test]
+    fn strip_codex_mcp_section_absent_is_none() {
+        let clean = "model = \"gpt-5.5\"\n\n[mcp_servers.user-other]\ncommand = \"x\"\n";
+        assert_eq!(strip_codex_mcp_section(clean), None);
+    }
+
+    #[test]
+    fn strip_codex_mcp_section_is_idempotent() {
+        let original = "[mcp_servers.swarmx-swarm]\ncommand = \"foo\"\n";
+        let once = strip_codex_mcp_section(original).expect("present");
+        // Section gone after the first strip → a second strip finds nothing.
+        assert_eq!(strip_codex_mcp_section(&once), None);
     }
 
     #[test]
