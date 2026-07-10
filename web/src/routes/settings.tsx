@@ -1010,6 +1010,8 @@ function ComateLicenseCard() {
         <div className="flex items-center gap-2">
           <input
             type="password"
+            name="comate-license"
+            autoComplete="off"
             value={value}
             onChange={(e) => setValue(e.target.value)}
             placeholder={t("settings.plugins.comatePlaceholder", "粘贴 license…")}
