@@ -1912,23 +1912,31 @@ impl Store {
         tokio::task::spawn_blocking(move || {
             with_busy_retry(&pool, |conn| -> rusqlite::Result<Vec<i64>> {
                 // `ids` is caller-supplied and unbounded; SQLite caps a statement at
-                // SQLITE_MAX_VARIABLE_NUMBER (999 on the default build). Two fixed
-                // params (at_ms, to_agent) leave room for ~997 ids, so we chunk at
+                // SQLITE_MAX_VARIABLE_NUMBER (999 on the default build). Three fixed
+                // params (at_ms×2, to_agent) leave room for ~996 ids, so we chunk at
                 // 900/statement to keep a comfortable margin. A flat `IN` over a
                 // large batch used to blow the cap and surface as a 500.
                 const CHUNK: usize = 900;
                 let mut updated: Vec<i64> = Vec::new();
                 for chunk in ids.chunks(CHUNK) {
                     // Single UPDATE ... RETURNING per chunk instead of N round-trips.
-                    // Params bound positionally: at_ms, to_agent, then one per id.
+                    // Also stamp delivered_at when it's still NULL: an MCP read IS the
+                    // moment the message reaches the agent's context, so reading is a
+                    // valid delivery. This keeps `only_undelivered` self-consistent
+                    // (the read path advances the dimension it filters on) and lets
+                    // prune_expired reclaim read-but-never-delivered messages, which
+                    // its `delivered_at IS NOT NULL AND read_at IS NOT NULL` gate would
+                    // otherwise pin forever. COALESCE preserves an earlier send-time
+                    // delivery timestamp. Params: read_at, delivered_at, to_agent, ids.
                     let placeholders = vec!["?"; chunk.len()].join(",");
                     let sql = format!(
-                        "UPDATE messages SET read_at = ? \
+                        "UPDATE messages SET read_at = ?, delivered_at = COALESCE(delivered_at, ?) \
                      WHERE read_at IS NULL AND to_agent = ? AND id IN ({placeholders}) \
                      RETURNING id"
                     );
                     let mut binds: Vec<rusqlite::types::Value> =
-                        Vec::with_capacity(chunk.len() + 2);
+                        Vec::with_capacity(chunk.len() + 3);
+                    binds.push(at_ms.into());
                     binds.push(at_ms.into());
                     binds.push(to_agent.clone().into());
                     binds.extend(chunk.iter().map(|id| (*id).into()));

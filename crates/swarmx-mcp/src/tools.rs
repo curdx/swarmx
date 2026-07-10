@@ -76,7 +76,7 @@ pub fn tool_descriptors() -> Vec<Value> {
                 "type": "object",
                 "properties": {
                     "limit": { "type": "integer", "description": "Max rows to return (default 20).", "minimum": 1, "maximum": 200 },
-                    "only_undelivered": { "type": "boolean", "description": "If true, only return messages not yet marked delivered." }
+                    "only_undelivered": { "type": "boolean", "description": "If true, only return NEW mail you haven't seen yet (not delivered at send time and not yet read). Reading a message marks it delivered, so this advances each call." }
                 },
                 "additionalProperties": false
             }

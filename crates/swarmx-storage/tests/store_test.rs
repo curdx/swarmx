@@ -855,6 +855,22 @@ async fn mark_read_sets_timestamp_and_returns_ids() {
         .await
         .unwrap();
     assert!(rows.iter().all(|r| r.read_at == Some(ts(10))));
+    // #20: reading also stamps delivered_at (an MCP read IS delivery), so
+    // only_undelivered self-heals and prune_expired can reclaim read mail.
+    assert!(rows.iter().all(|r| r.delivered_at == Some(ts(10))));
+    let undelivered = store
+        .list_messages(ListMessagesOpts {
+            to_agent: Some("b".into()),
+            only_undelivered: true,
+            limit: 50,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert!(
+        undelivered.is_empty(),
+        "read messages are now delivered → excluded from only_undelivered"
+    );
 
     // Idempotent: second call returns empty (read_at already set).
     let again = store
