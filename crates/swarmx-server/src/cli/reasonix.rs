@@ -85,9 +85,26 @@ fn reasonix_home_path(agent_id: &str) -> Option<PathBuf> {
 }
 
 /// Write `<workspace>/.mcp.json` carrying the swarmx-swarm MCP server in the
-/// Claude Code `mcpServers` schema (which reasonix reads verbatim). The body is
-/// identical in shape to claude's per-agent MCP config: per-spawn identity in
-/// both `args` (`--agent-id <id>`) and the `env` block.
+/// Claude Code `mcpServers` schema (which reasonix reads verbatim). Per-spawn
+/// identity lives in `args` (`--agent-id <id>`) and the `env` block.
+///
+/// KNOWN GAP (M6b, tracked): this file is keyed by the WORKSPACE, not the agent.
+/// The other three adapters isolate MCP identity per-agent (claude via a
+/// per-agent `--mcp-config`, codex/opencode via a per-agent HOME); reasonix reads
+/// the project-root `.mcp.json`, so under `WorkspaceLayout::Shared` two reasonix
+/// peers in one directory race this file and the last `--agent-id` wins — the
+/// earlier peer's swarmx-mcp then reports the wrong identity. We do NOT relocate
+/// identity yet because both safe-looking fixes are unsafe here:
+///   - a per-agent config PATH needs a reasonix `--mcp-config`-style override we
+///     can't verify for the `serve` build swarmx ships (npm v1.9.1 ≠ the public
+///     Go/`reasonix.toml` build the docs describe); guessing risks breaking the
+///     swarm tools outright — worse than a dormant collision.
+///   - dropping identity from the file to inherit it from the per-agent process
+///     env (spawn.rs:365 sets SWARMX_AGENT_ID) also changes TODAY's working
+///     worktree-layout path — if this reasonix build clears child env it would
+///     regress a currently-working feature.
+/// So until a reasonix one-hand reference lands we FAIL LOUD (below) instead of
+/// silently colliding. worktree layout gives each agent its own dir → no collision.
 fn write_workspace_mcp_json(
     workspace: &Path,
     agent_id: &str,
@@ -95,6 +112,28 @@ fn write_workspace_mcp_json(
     server_url: &str,
 ) -> Result<()> {
     let path = workspace.join(".mcp.json");
+    // Shared-workspace collision guard: surface the M6b risk instead of a silent
+    // identity mixup if this file already belongs to a DIFFERENT live agent.
+    if let Ok(prior) = fs::read_to_string(&path) {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&prior) {
+            if let Some(prior_id) = v
+                .pointer("/mcpServers/swarmx-swarm/env/SWARMX_AGENT_ID")
+                .and_then(|x| x.as_str())
+            {
+                if prior_id != agent_id {
+                    tracing::warn!(
+                        prior_agent = prior_id,
+                        new_agent = agent_id,
+                        ws = %workspace.display(),
+                        "reasonix: overwriting a shared <ws>/.mcp.json owned by a DIFFERENT agent — in a \
+                         shared-workspace layout both reasonix peers would then read the LAST agent's \
+                         identity (M6b cross-agent MCP collision). Give each reasonix agent its own \
+                         workspace directory (worktree layout) until per-agent reasonix MCP config lands."
+                    );
+                }
+            }
+        }
+    }
     let body = json!({
         "mcpServers": {
             "swarmx-swarm": {
@@ -134,6 +173,22 @@ mod tests {
         assert_eq!(
             entry["env"]["SWARMX_SERVER_URL"],
             json!("http://127.0.0.1:7777")
+        );
+    }
+
+    #[test]
+    fn overwrite_by_different_agent_still_writes_new_identity() {
+        // Shared-layout collision path: the guard warns but must NOT block the
+        // write — the file ends up carrying the NEW agent's identity.
+        let dir = tempdir().unwrap();
+        let ws = dir.path();
+        let bin = dir.path().join("swarmx-mcp");
+        write_workspace_mcp_json(ws, "reasonix-aaa", &bin, "http://127.0.0.1:7777").unwrap();
+        write_workspace_mcp_json(ws, "reasonix-bbb", &bin, "http://127.0.0.1:7777").unwrap();
+        let v: Value = serde_json::from_slice(&fs::read(ws.join(".mcp.json")).unwrap()).unwrap();
+        assert_eq!(
+            v["mcpServers"]["swarmx-swarm"]["env"]["SWARMX_AGENT_ID"],
+            json!("reasonix-bbb")
         );
     }
 
