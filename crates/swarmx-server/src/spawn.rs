@@ -92,6 +92,23 @@ pub(crate) const FORWARDED_ENV_KEYS: &[&str] = &[
     "SSL_CERT_FILE",
     "SSL_CERT_DIR",
     "REQUESTS_CA_BUNDLE",
+    // Windows: a child needs these to even start — system DLLs live under
+    // SystemRoot, plus per-user dirs, temp, and the .cmd launcher (ComSpec /
+    // PATHEXT). All absent on unix, so forwarding them there is a no-op.
+    "SystemRoot",
+    "windir",
+    "ComSpec",
+    "PATHEXT",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "PROGRAMDATA",
+    "HOMEDRIVE",
+    "HOMEPATH",
+    "USERPROFILE",
+    "TEMP",
+    "TMP",
+    "NUMBER_OF_PROCESSORS",
+    "PROCESSOR_ARCHITECTURE",
 ];
 
 #[allow(clippy::too_many_arguments)]
@@ -135,7 +152,16 @@ pub fn spawn_agent(
 
     let mut argv = Vec::with_capacity(2 + plugin.default_args.len() + 1);
     argv.push(shim_path.to_string_lossy().into_owned());
-    argv.push(plugin.binary.clone());
+    // Resolve the CLI to an absolute, PATHEXT-aware path before handing it to the
+    // shim (which execs it via std Command). On Windows the npm-installed CLIs are
+    // `claude.cmd`/`zulu.cmd` etc. and std only searches for `.exe`, so a bare
+    // name never launches; resolve_executable finds the `.cmd`. On unix this is
+    // the absolute path (or the bare-name fallback) — behaviour unchanged.
+    argv.push(
+        crate::runtime_path::resolve_executable(&plugin.binary)
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|| plugin.binary.clone()),
+    );
     argv.extend(plugin.default_args.iter().cloned());
 
     // zulu resolves its model PER-REQUEST (not an argv — see cli-plugins/
@@ -288,12 +314,18 @@ pub fn spawn_agent(
     // (AWS_*, GITHUB_TOKEN, DB creds, …). This is the allowlist that realises
     // the per-agent isolation goal.
     let mut env = HashMap::new();
-    let home_var = if plugin.home_env.is_empty() {
-        "HOME"
+    // Home dir for OAuth creds. On Windows HOME is usually unset (USERPROFILE
+    // holds it), so route the default through swarmx_home() rather than a bare
+    // env read; a plugin-specified home_env still reads that exact var. Set both
+    // HOME and USERPROFILE so a CLI reading either resolves its config.
+    let home = if plugin.home_env.is_empty() {
+        crate::runtime_path::swarmx_home().map(|p| p.to_string_lossy().into_owned())
     } else {
-        &plugin.home_env
+        std::env::var(&plugin.home_env).ok()
     };
-    if let Ok(home) = std::env::var(home_var) {
+    if let Some(home) = home {
+        #[cfg(windows)]
+        env.insert("USERPROFILE".into(), home.clone());
         env.insert("HOME".into(), home);
     }
     // Useful unicode default — many CLIs probe LANG.

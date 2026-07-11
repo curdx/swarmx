@@ -431,9 +431,7 @@ pub async fn install_plugin(
 
         let home = crate::runtime_path::swarmx_home()
             .unwrap_or_else(|| std::path::PathBuf::from("."));
-        let spawned = crate::runtime_path::tool_command_async("sh")
-            .arg("-c")
-            .arg(&cmd)
+        let spawned = crate::runtime_path::shell_command_async(&cmd)
             .current_dir(&home)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())

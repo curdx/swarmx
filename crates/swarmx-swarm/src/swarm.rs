@@ -774,7 +774,13 @@ impl Swarm {
         }
 
         let rel = match canon_path.strip_prefix(&canon_root) {
-            Ok(r) => r.to_string_lossy().into_owned(),
+            // Blackboard keys are `/`-separated (the wire/API contract); rebuild
+            // from path components so a Windows `\` never leaks into a key.
+            Ok(r) => r
+                .components()
+                .filter_map(|c| c.as_os_str().to_str())
+                .collect::<Vec<_>>()
+                .join("/"),
             Err(_) => return Ok(()),
         };
 
@@ -864,7 +870,13 @@ fn collect_blackboard_files(root: &Path) -> Result<Vec<(String, String, String)>
                 continue;
             }
             let rel = match path.strip_prefix(root) {
-                Ok(r) => r.to_string_lossy().into_owned(),
+                // `/`-separated key (wire contract), rebuilt from components so a
+                // Windows `\` never leaks in.
+                Ok(r) => r
+                    .components()
+                    .filter_map(|c| c.as_os_str().to_str())
+                    .collect::<Vec<_>>()
+                    .join("/"),
                 Err(_) => continue,
             };
             match std::fs::read_to_string(&path) {

@@ -173,7 +173,7 @@ fn valid_name(name: &str) -> bool {
 // ── 读现有配置 ──────────────────────────────────────────────────────
 
 fn home() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(PathBuf::from)
+    crate::runtime_path::swarmx_home()
 }
 
 /// `~/.claude.json` 顶层(user scope)`mcpServers` 的名字。

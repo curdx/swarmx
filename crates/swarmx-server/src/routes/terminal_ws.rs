@@ -156,12 +156,28 @@ fn spawn_reaper() {
 /// rest, so the server's ambient secrets don't reach the shell). Starts in
 /// `cwd` (the picked workspace's root) when given, else $HOME.
 fn spawn_shell(cwd: Option<PathBuf>) -> anyhow::Result<PtyHandles> {
+    // Platform default interactive shell: cmd on Windows (no sh there), $SHELL
+    // else /bin/sh on unix.
+    #[cfg(windows)]
+    let shell = std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_string());
+    #[cfg(not(windows))]
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
-    let spawn_cwd = cwd.or_else(|| std::env::var_os("HOME").map(PathBuf::from));
+    let spawn_cwd = cwd.or_else(crate::runtime_path::swarmx_home);
 
     let mut env = HashMap::new();
+    // Full desktop-augmented PATH, not the stripped launchd one, so the terminal
+    // can actually find node/git/etc.
+    env.insert(
+        "PATH".to_string(),
+        crate::runtime_path::augmented_path()
+            .to_string_lossy()
+            .into_owned(),
+    );
     for k in [
-        "HOME", "PATH", "LANG", "LC_ALL", "LC_CTYPE", "TMPDIR", "USER", "LOGNAME",
+        "HOME", "LANG", "LC_ALL", "LC_CTYPE", "TMPDIR", "USER", "LOGNAME",
+        // Windows essentials (absent on unix → forwarding is a no-op there).
+        "SystemRoot", "windir", "ComSpec", "PATHEXT", "APPDATA", "LOCALAPPDATA",
+        "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "TEMP", "TMP",
     ] {
         if let Ok(v) = std::env::var(k) {
             env.insert(k.to_string(), v);

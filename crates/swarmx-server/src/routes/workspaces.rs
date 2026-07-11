@@ -1598,9 +1598,7 @@ async fn run_contestant_check(worktree_dir: &str, check_cmd: &str) -> (bool, Str
     let dir = worktree_dir.to_string();
     let cmd = check_cmd.to_string();
     let result = tokio::task::spawn_blocking(move || {
-        crate::runtime_path::tool_command("sh")
-            .arg("-c")
-            .arg(&cmd)
+        crate::runtime_path::shell_command(&cmd)
             .current_dir(&dir)
             .output()
     })
@@ -3610,7 +3608,7 @@ pub async fn suggest_workspace_roots_handler(
                 if let Some(target) = rhs.split_whitespace().next() {
                     if target.starts_with("./")
                         || target.starts_with("../")
-                        || target.starts_with('/')
+                        || std::path::Path::new(target).is_absolute()
                     {
                         candidates.push((target.to_string(), basename_of(target)));
                     }

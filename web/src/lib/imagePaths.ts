@@ -12,16 +12,21 @@ import { apiRoutes } from "@/api/endpoints";
 
 const IMG_EXT = "png|jpe?g|gif|webp|bmp|avif|svg|ico";
 
-// Two shapes, both ABSOLUTE (start with `/`): a backtick-wrapped path (allows
-// spaces, e.g. `/Users/me/My Shots/a.png`) or a bare path (no spaces). We only
-// match absolute paths — a relative one has no stable base to resolve against,
-// and `~` isn't expanded server-side. The `(?<![\w:/])` lookbehind keeps us off
-// the `//` in `http://…` and mid-token slashes.
+// Two shapes, both ABSOLUTE — a unix root `/…` or a Windows drive `C:\…` /
+// `C:/…` — as either a backtick-wrapped path (allows spaces, e.g. `/Users/me/My
+// Shots/a.png`) or a bare path (no spaces). Relative paths have no stable base to
+// resolve against and `~` isn't expanded server-side. The `(?<![\w:/])`
+// lookbehind keeps us off the `//` in `http://…` and mid-token slashes.
+const ABS_ROOT = "(?:/|[A-Za-z]:[\\\\/])";
 const IMAGE_PATH_RE = new RegExp(
-  "`(/[^`\\n]+?\\.(?:" +
+  "`(" +
+    ABS_ROOT +
+    "[^`\\n]+?\\.(?:" +
     IMG_EXT +
     "))`" +
-    "|(?<![\\w:/])(/[^\\s`'\"<>()]+\\.(?:" +
+    "|(?<![\\w:/])(" +
+    ABS_ROOT +
+    "[^\\s`'\"<>()]+\\.(?:" +
     IMG_EXT +
     "))",
   "gi",
@@ -29,7 +34,7 @@ const IMAGE_PATH_RE = new RegExp(
 
 /** Distinct absolute image paths referenced in `text`, in first-seen order. */
 export function extractImagePaths(text: string): string[] {
-  if (!text || text.indexOf("/") === -1) return [];
+  if (!text || (text.indexOf("/") === -1 && text.indexOf("\\") === -1)) return [];
   const out: string[] = [];
   const seen = new Set<string>();
   IMAGE_PATH_RE.lastIndex = 0;

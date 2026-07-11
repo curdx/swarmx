@@ -48,7 +48,14 @@ pub fn swarmx_home() -> Option<PathBuf> {
 /// This is only for utility shell-outs; real agent CLIs spawn through the PTY
 /// path (`spawn.rs`), which sets a per-agent environment of its own.
 pub fn tool_command(program: impl AsRef<OsStr>) -> std::process::Command {
-    let mut cmd = std::process::Command::new(program);
+    // Resolve to an absolute, PATHEXT-aware path first so a Windows .cmd/.bat
+    // shim (npm-installed CLIs like `zulu.cmd`) is actually found — std Command
+    // only appends `.exe` during its own PATH search, never `.cmd`. On unix this
+    // returns the absolute path, or falls back to the bare name (which unix PATH
+    // search resolves anyway), so behaviour there is unchanged.
+    let program = program.as_ref();
+    let resolved = resolve_executable(&program.to_string_lossy()).map(PathBuf::into_os_string);
+    let mut cmd = std::process::Command::new(resolved.as_deref().unwrap_or(program));
     cmd.env("PATH", augmented_path());
     if let Some(home) = swarmx_home() {
         cmd.env("HOME", home);
@@ -59,6 +66,36 @@ pub fn tool_command(program: impl AsRef<OsStr>) -> std::process::Command {
 /// `tokio::process` variant of [`tool_command`], for async shell-outs.
 pub fn tool_command_async(program: impl AsRef<OsStr>) -> tokio::process::Command {
     tokio::process::Command::from(tool_command(program))
+}
+
+/// Build a `Command` that runs `script` through the platform shell — `sh -c` on
+/// unix, `cmd /C` on Windows — with the augmented PATH and resolved HOME baked
+/// in. For utility shell-outs that genuinely need shell syntax (engine install
+/// scripts, the fusion objective gate); the caller adds cwd / extra env. Hard-
+/// coding `sh` makes every such feature dead on Windows, which ships no `sh`.
+pub fn shell_command(script: impl AsRef<OsStr>) -> std::process::Command {
+    #[cfg(windows)]
+    let mut cmd = {
+        let mut c = std::process::Command::new("cmd");
+        c.arg("/C").arg(script);
+        c
+    };
+    #[cfg(not(windows))]
+    let mut cmd = {
+        let mut c = std::process::Command::new("sh");
+        c.arg("-c").arg(script);
+        c
+    };
+    cmd.env("PATH", augmented_path());
+    if let Some(home) = swarmx_home() {
+        cmd.env("HOME", home);
+    }
+    cmd
+}
+
+/// `tokio::process` variant of [`shell_command`], for async shell-outs.
+pub fn shell_command_async(script: impl AsRef<OsStr>) -> tokio::process::Command {
+    tokio::process::Command::from(shell_command(script))
 }
 
 const UNIX_RUNTIME_DIRS: &[&str] = &[

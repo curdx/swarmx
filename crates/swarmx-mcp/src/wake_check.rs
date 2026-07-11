@@ -351,7 +351,13 @@ fn throttle_path(agent_id: &str, override_dir: Option<&Path>) -> PathBuf {
 }
 
 fn default_state_dir() -> PathBuf {
-    let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."));
+    // HOME→USERPROFILE so the throttle dir is stable on Windows too (bare HOME is
+    // usually unset there, which would scatter state under a CWD-relative ".").
+    let home = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| PathBuf::from("."));
     home.join(".swarmx").join("wake")
 }
 

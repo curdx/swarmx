@@ -247,8 +247,21 @@ impl PtyBridge {
                 }
             }
         }
-        // Reap the direct child (and on non-unix this IS the whole kill:
-        // Child::kill SIGKILLs, then wait() collects the exit status).
+        // Windows: no process groups/signals — portable-pty's Child::kill hits
+        // only the direct child (the shim), orphaning the real CLI + its node
+        // descendants. taskkill /T kills the whole tree by pid (/F forces it).
+        #[cfg(windows)]
+        {
+            if let Some(pid) = self.child.lock().process_id() {
+                let _ = std::process::Command::new("taskkill")
+                    .args(["/F", "/T", "/PID", &pid.to_string()])
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .status();
+            }
+        }
+        // Reap the direct child (on unix the group was already signalled; on
+        // Windows taskkill already felled the tree — this collects exit status).
         let mut child = self.child.lock();
         let _ = child.kill();
         let _ = child.wait();

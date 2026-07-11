@@ -728,12 +728,11 @@ async fn run_doctor() -> Result<()> {
     }
 }
 
-/// First match for `bin` on `$PATH`, if any.
+/// First match for `bin` on `$PATH`, if any — via the shared PATHEXT-aware
+/// resolver so Windows `.cmd`/`.bat` shims (npm-installed CLIs) are found and the
+/// doctor check agrees with what actually spawns.
 fn on_path(bin: &str) -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path)
-        .map(|dir| dir.join(bin))
-        .find(|full| full.is_file())
+    crate::runtime_path::resolve_executable(bin)
 }
 
 /// Resolves on SIGINT (Ctrl-C) or SIGTERM. Before letting `axum::serve` drain

@@ -125,9 +125,7 @@ fn probe_timeout(engine: &str) -> Duration {
 }
 
 pub fn probe_cache_path() -> PathBuf {
-    let base = std::env::var("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("."));
+    let base = crate::runtime_path::swarmx_home().unwrap_or_else(|| PathBuf::from("."));
     base.join(".swarmx").join("engine-probe.json")
 }
 
@@ -747,10 +745,10 @@ async fn zulu_one_turn_check(conv: std::sync::Arc<crate::zulu_serve::ZuluConv>) 
 /// same scratch teardown instead of duplicating the path list.
 pub(crate) fn cleanup(tmp: &Path, agent_id: Option<&str>) {
     let _ = std::fs::remove_dir_all(tmp);
-    let (Some(id), Ok(home)) = (agent_id, std::env::var("HOME")) else {
+    let (Some(id), Some(home)) = (agent_id, crate::runtime_path::swarmx_home()) else {
         return;
     };
-    let fm = PathBuf::from(home).join(".swarmx");
+    let fm = home.join(".swarmx");
     let _ = std::fs::remove_dir_all(fm.join("reasonix-home").join(id));
     let _ = std::fs::remove_dir_all(fm.join("codex-home").join(id));
     let _ = std::fs::remove_file(fm.join("opencode").join(format!("{id}.json")));

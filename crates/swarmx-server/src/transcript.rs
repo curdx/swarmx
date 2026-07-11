@@ -243,8 +243,8 @@ async fn locate(
 
 /// `~/.claude/projects/<encoded-cwd>/<session-uuid>.jsonl`, newest file.
 fn claude_file(cwd: &Path, session_id: Option<&str>) -> Option<PathBuf> {
-    let home = std::env::var_os("HOME")?;
-    let dir = Path::new(&home)
+    let home = crate::runtime_path::swarmx_home()?;
+    let dir = home
         .join(".claude")
         .join("projects")
         .join(encode_cwd(cwd));
