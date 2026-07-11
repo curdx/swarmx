@@ -14,11 +14,17 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ChevronDown, ChevronRight, RotateCw, TriangleAlert } from "lucide-react";
 import { useBackendHealth } from "@/hooks/useBackendHealth";
+import {
+  isTauriOverlayWindow,
+  TAURI_DRAG_REGION,
+  TAURI_TITLEBAR_LEFT_SAFE_PX,
+} from "@/lib/tauriWindowChrome";
 
 export function BackendDownBanner() {
   const { t } = useTranslation();
   const { down, restarting, restartError, restart } = useBackendHealth();
   const [showDetail, setShowDetail] = useState(false);
+  const isTauri = isTauriOverlayWindow();
 
   if (!down) return null;
 
@@ -33,6 +39,12 @@ export function BackendDownBanner() {
       role="alert"
       aria-live="assertive"
       className="flex shrink-0 items-start gap-3 border-b border-status-danger/40 bg-status-danger-soft px-4 py-2 text-status-danger"
+      {...TAURI_DRAG_REGION}
+      // This banner is the shell's topmost row, so under Tauri's overlay title
+      // bar it sits where the macOS traffic lights live. Clear them with the same
+      // left safe area + drag region <header> uses, so the ⚠ + text never tuck
+      // under the window controls.
+      style={isTauri ? { paddingLeft: TAURI_TITLEBAR_LEFT_SAFE_PX } : undefined}
     >
       <TriangleAlert className="mt-0.5 size-4 shrink-0" />
       <div className="min-w-0 flex-1">
