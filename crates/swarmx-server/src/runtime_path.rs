@@ -200,7 +200,10 @@ fn probe_login_shell_path() -> Option<OsString> {
         })
         .unwrap_or_else(|| OsString::from("/bin/zsh"));
 
-    const MARKER: &str = "__SWARMX_PATH__";
+    // Lowercase, non-`SWARMX_` sentinel: unique enough to bracket PATH, and
+    // deliberately not matching the `SWARMX_[A-Z_]+` env-var shape the harness
+    // check scans for (it is a printf marker, not an environment variable).
+    const MARKER: &str = "__swmx_path_edge__";
     // printf (no trailing newline) wrapped in markers so PATH survives even when
     // rc files print their own banners to stdout.
     let script = format!("printf '{MARKER}%s{MARKER}' \"$PATH\"");
