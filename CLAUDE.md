@@ -69,6 +69,25 @@ swarmx 是一个浏览器仪表盘:在 PTY 下拉起真实的 `claude` / `codex`
 - 改动已有功能:至少复现一次「改动前会踩的坑」,确认现在不踩了。
 - 断言「好了」之前先自问:我到底在浏览器里点过没有?没点过,就还没做完。
 
+## 第三原则:三平台(macOS / Windows / Linux)都是一等公民
+
+swarmx 要在 mac、Windows、Linux 上都能装能跑。开发机(通常是 mac)跑通 **≠** Windows/Linux 用户机上不崩。
+写任何代码前先问一句:**这段在另外两个平台上会怎样?** 常见平台差异,写代码时逐项过:
+
+- **路径**:一律 `std::path::Path`/`PathBuf` + `join`,绝不手拼 `/`;PATH 这类列表用
+  `std::env::{split_paths,join_paths}`(分隔符 `:`(unix) vs `;`(Windows)不同,`join_paths` 还会替你转义)。
+- **家目录 / 环境变量**:`HOME`(unix)在 Windows 常是 `USERPROFILE` —— 统一走
+  `runtime_path::swarmx_home()`,别裸读 `HOME`(否则 Windows 上数据目录直接落空)。
+- **可执行文件**:Windows 有 `.exe`/`.cmd` 扩展名与 `PATHEXT` —— 查找可执行走
+  `runtime_path::resolve_executable`,别假设裸名 `node` 就能 exec。
+- **平台专属机制**:`$SHELL -ilc`、`flock`、信号、unix 权限位都是 unix 概念,Windows 没有 ——
+  用 `#[cfg(unix)]`/`#[cfg(windows)]` 分支,并给非目标平台一个**合理降级**,而不是漏掉。
+  (活例:node 探测的「登录 shell 导入 PATH」是 unix 专属,Windows 分支直接返回空、靠继承的用户 PATH,
+  因为 Windows GUI 进程本就继承完整用户 PATH,不像 macOS 的 launchd 会剥离。)
+
+判据:每加一处 `#[cfg(unix)]`,必须**同时**想清 Windows 分支——要么等价实现,要么写明为何可安全降级;
+`.app` 打包清单同理要覆盖 `.exe`/`.msi`/`.AppImage` 三套产物。绝不允许「只在 mac 上想过就交付」。
+
 ## 常用命令
 
 后端 / workspace(仓库根目录):
