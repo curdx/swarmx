@@ -26,7 +26,7 @@ import { SpellsLauncher } from "../components/SpellsLauncher";
 import { useSwarmFeed } from "../hooks/useSwarmFeed";
 import { toast } from "@/lib/toast";
 import {
-  isTauriOverlayWindow,
+  isTauriWindow,
   TAURI_DRAG_REGION,
   tauriLeftSafePadding,
 } from "@/lib/tauriWindowChrome";
@@ -69,7 +69,7 @@ async function ensureDebugWorkspace(): Promise<string> {
 
 export default function DebugRoute() {
   const { t } = useTranslation();
-  const isTauri = isTauriOverlayWindow();
+  const isTauri = isTauriWindow();
   const [plugins, setPlugins] = useState<CliPluginInfo[]>([]);
   const [pluginsError, setPluginsError] = useState<string | null>(null);
   const [agents, setAgents] = useState<SpawnAgentResponse[]>([]);

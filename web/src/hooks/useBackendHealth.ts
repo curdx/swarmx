@@ -17,7 +17,7 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
-import { isTauriOverlayWindow } from "@/lib/tauriWindowChrome";
+import { isTauriWindow } from "@/lib/tauriWindowChrome";
 
 /** Mirrors the Rust `SidecarDown` payload (serde camelCase). */
 export interface BackendDownInfo {
@@ -44,7 +44,7 @@ export function useBackendHealth(): BackendHealth {
   const [restartError, setRestartError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!isTauriOverlayWindow()) return; // browser dev build — no sidecar to watch
+    if (!isTauriWindow()) return; // browser dev build — no sidecar to watch
     let cancelled = false;
     let unlisteners: Array<() => void> = [];
 

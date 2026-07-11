@@ -28,7 +28,7 @@ import type { AgentInfo, SwarmEvent } from "@/api/types";
 import { api } from "@/api/http";
 import { useSwarmFeed } from "@/hooks/useSwarmFeed";
 import { loadAppSettings } from "@/lib/appSettings";
-import { isTauriOverlayWindow } from "@/lib/tauriWindowChrome";
+import { isTauriWindow } from "@/lib/tauriWindowChrome";
 import i18n from "@/i18n";
 
 /** A REST agent row counts as "failed" if it crashed (non-zero shim_exit) or the
@@ -47,7 +47,7 @@ function isLive(a: AgentInfo): boolean {
 }
 
 async function hideWindowIfOptedOut(): Promise<void> {
-  if (!isTauriOverlayWindow()) return;
+  if (!isTauriWindow()) return;
   if (loadAppSettings().openMainOnLaunch) return;
   try {
     const { getCurrentWindow } = await import("@tauri-apps/api/window");
@@ -183,7 +183,7 @@ export function useAppSettingsBehaviors(): void {
           ev.meta?.subtype !== "completion";
         if (
           realReply &&
-          isTauriOverlayWindow() &&
+          isTauriWindow() &&
           loadAppSettings().desktopNotify &&
           document.visibilityState !== "visible" &&
           !notifiedIds.current.has(ev.id)
