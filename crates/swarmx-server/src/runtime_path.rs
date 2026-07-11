@@ -11,6 +11,10 @@ use std::path::{Path, PathBuf};
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
+#[cfg(unix)]
+use std::sync::OnceLock;
+#[cfg(unix)]
+use std::time::Duration;
 
 /// The user's home directory, resolved for a desktop app that may run with a
 /// stripped environment. `HOME` (unix) → `USERPROFILE` (Windows, where `HOME`
@@ -75,7 +79,7 @@ const UNIX_RUNTIME_DIRS: &[&str] = &[
 /// shell state or secrets.
 pub fn augmented_path() -> OsString {
     let parent_path = std::env::var_os("PATH");
-    let dirs = augmented_path_dirs(parent_path.clone(), swarmx_home());
+    let dirs = augmented_path_dirs(parent_path.clone(), swarmx_home(), login_shell_path());
     // `join_paths` fails if any dir contains the platform separator (`:` on
     // unix). Falling back to the bare parent PATH would drop every desktop
     // dir this module exists to add — the worst outcome exactly when the .app
@@ -91,11 +95,15 @@ pub fn augmented_path() -> OsString {
 /// Resolve an executable using the same augmented PATH we pass to children.
 pub fn resolve_executable(name: &str) -> Option<PathBuf> {
     let parent_path = std::env::var_os("PATH");
-    let dirs = augmented_path_dirs(parent_path, swarmx_home());
+    let dirs = augmented_path_dirs(parent_path, swarmx_home(), login_shell_path());
     resolve_in_dirs(name, &dirs)
 }
 
-fn augmented_path_dirs(parent_path: Option<OsString>, home: Option<PathBuf>) -> Vec<PathBuf> {
+fn augmented_path_dirs(
+    parent_path: Option<OsString>,
+    home: Option<PathBuf>,
+    shell_dirs: Vec<PathBuf>,
+) -> Vec<PathBuf> {
     let mut out = Vec::new();
     let mut seen = HashSet::new();
 
@@ -103,6 +111,14 @@ fn augmented_path_dirs(parent_path: Option<OsString>, home: Option<PathBuf>) -> 
         for dir in std::env::split_paths(&path) {
             push_unique(&mut out, &mut seen, dir);
         }
+    }
+
+    // The user's login-shell PATH — authoritative for wherever their node/npm
+    // toolchain actually lives, whichever version manager put it there. Ranked
+    // right after the inherited PATH and ahead of the curated guesses below,
+    // which only cover the layouts we happen to know by name.
+    for dir in shell_dirs {
+        push_unique(&mut out, &mut seen, dir);
     }
 
     if let Some(home) = home.as_deref() {
@@ -115,6 +131,9 @@ fn augmented_path_dirs(parent_path: Option<OsString>, home: Option<PathBuf>) -> 
             ".bun/bin",
             ".deno/bin",
             ".npm-global/bin",
+            ".n/bin",                // n (tj/n), default N_PREFIX=~/.n
+            ".nodenv/shims",         // nodenv
+            ".nodebrew/current/bin", // nodebrew
         ] {
             push_unique(&mut out, &mut seen, home.join(rel));
         }
@@ -125,12 +144,103 @@ fn augmented_path_dirs(parent_path: Option<OsString>, home: Option<PathBuf>) -> 
     if let Some(nvm_dir) = std::env::var_os("NVM_DIR").map(PathBuf::from) {
         push_node_bins(&mut out, &mut seen, &nvm_dir.join("versions/node"));
     }
+    // `n` honours $N_PREFIX for a non-default install root.
+    if let Some(n_prefix) = std::env::var_os("N_PREFIX").map(PathBuf::from) {
+        push_unique(&mut out, &mut seen, n_prefix.join("bin"));
+    }
 
     for dir in UNIX_RUNTIME_DIRS {
         push_unique(&mut out, &mut seen, PathBuf::from(dir));
     }
 
     out
+}
+
+/// PATH as the user's login shell assembles it — the authoritative location of
+/// their toolchain. A Finder-launched `.app` inherits only launchd's minimal
+/// PATH; the user's node/npm (via nvm, `n`, fnm, Homebrew, nodenv, or a bespoke
+/// prefix) lives on whatever PATH their shell rc builds. Rather than enumerate
+/// every version manager's on-disk layout — a losing game — run the login shell
+/// once and read the PATH it exports. Cached for the process lifetime (PATH is
+/// stable per login). Empty on Windows (GUI processes inherit the user PATH
+/// there) and whenever the shell can't be run or returns nothing, in which case
+/// the curated directory list above is the fallback.
+#[cfg(unix)]
+fn login_shell_path() -> Vec<PathBuf> {
+    static CACHE: OnceLock<Vec<PathBuf>> = OnceLock::new();
+    CACHE
+        .get_or_init(|| {
+            probe_login_shell_path()
+                .map(|p| std::env::split_paths(&p).collect())
+                .unwrap_or_default()
+        })
+        .clone()
+}
+
+#[cfg(not(unix))]
+fn login_shell_path() -> Vec<PathBuf> {
+    Vec::new()
+}
+
+/// Run `$SHELL -ilc` once and lift its `$PATH` out of the output. `-l` sources
+/// the login files, `-i` the interactive rc where nvm/`n`/fnm mutate PATH. A
+/// worker thread drains stdout so a wedged rc file times out (3s) rather than
+/// hanging startup; stderr is dropped (a tty-less interactive shell is noisy but
+/// still prints PATH on stdout).
+#[cfg(unix)]
+fn probe_login_shell_path() -> Option<OsString> {
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+    use std::sync::mpsc;
+
+    let shell = std::env::var_os("SHELL")
+        .filter(|s| {
+            let p = Path::new(s);
+            p.is_absolute() && p.file_name() != Some(OsStr::new("false"))
+        })
+        .unwrap_or_else(|| OsString::from("/bin/zsh"));
+
+    const MARKER: &str = "__SWARMX_PATH__";
+    // printf (no trailing newline) wrapped in markers so PATH survives even when
+    // rc files print their own banners to stdout.
+    let script = format!("printf '{MARKER}%s{MARKER}' \"$PATH\"");
+
+    let mut child = Command::new(&shell)
+        .arg("-ilc")
+        .arg(&script)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+
+    let mut stdout = child.stdout.take()?;
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut buf = String::new();
+        let _ = stdout.read_to_string(&mut buf);
+        let _ = tx.send(buf);
+    });
+
+    let buf = match rx.recv_timeout(Duration::from_secs(3)) {
+        Ok(buf) => buf,
+        Err(_) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return None;
+        }
+    };
+    let _ = child.wait();
+
+    extract_marked(&buf, MARKER).map(OsString::from)
+}
+
+/// Pull the payload between the first two `marker` occurrences; `None` if the
+/// markers are absent or wrap an empty string.
+#[cfg(unix)]
+fn extract_marked(buf: &str, marker: &str) -> Option<String> {
+    let inner = buf.split(marker).nth(1)?;
+    (!inner.is_empty()).then(|| inner.to_string())
 }
 
 fn push_node_bins(out: &mut Vec<PathBuf>, seen: &mut HashSet<OsString>, root: &Path) {
@@ -225,7 +335,7 @@ mod tests {
     fn augmented_path_preserves_parent_and_adds_desktop_dirs() {
         let parent = OsString::from("/custom/bin:/usr/bin");
         let home = PathBuf::from("/Users/example");
-        let dirs = augmented_path_dirs(Some(parent), Some(home));
+        let dirs = augmented_path_dirs(Some(parent), Some(home), Vec::new());
         assert_eq!(dirs.first(), Some(&PathBuf::from("/custom/bin")));
         assert!(dirs.contains(&PathBuf::from("/Users/example/.local/bin")));
         assert!(dirs.contains(&PathBuf::from("/opt/homebrew/bin")));
@@ -234,6 +344,69 @@ mod tests {
                 .filter(|p| p.as_path() == Path::new("/usr/bin"))
                 .count(),
             1
+        );
+    }
+
+    #[test]
+    fn shell_dirs_rank_after_parent_and_before_curated() {
+        let parent = OsString::from("/usr/bin");
+        let home = PathBuf::from("/Users/example");
+        let shell = vec![PathBuf::from("/Users/example/.n/bin")];
+        let dirs = augmented_path_dirs(Some(parent), Some(home), shell);
+        let pos = |p: &str| dirs.iter().position(|d| d.as_path() == Path::new(p)).unwrap();
+        // inherited PATH < login-shell PATH < curated guesses
+        assert!(pos("/usr/bin") < pos("/Users/example/.n/bin"));
+        assert!(pos("/Users/example/.n/bin") < pos("/opt/homebrew/bin"));
+        // a shell dir that also appears in the curated list is not duplicated
+        assert_eq!(
+            dirs.iter()
+                .filter(|d| d.as_path() == Path::new("/Users/example/.n/bin"))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn curated_dirs_cover_common_node_managers() {
+        let home = PathBuf::from("/Users/example");
+        let dirs = augmented_path_dirs(None, Some(home), Vec::new());
+        for expect in [
+            "/Users/example/.n/bin",      // n
+            "/Users/example/.nodenv/shims",
+            "/Users/example/.nodebrew/current/bin",
+            "/Users/example/.volta/bin",
+        ] {
+            assert!(dirs.contains(&PathBuf::from(expect)), "missing {expect}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn extract_marked_lifts_path_between_markers() {
+        assert_eq!(
+            extract_marked("banner\n__M__/a/bin:/usr/bin__M__", "__M__").as_deref(),
+            Some("/a/bin:/usr/bin")
+        );
+        assert_eq!(extract_marked("no markers here", "__M__"), None);
+        assert_eq!(extract_marked("__M____M__", "__M__"), None); // empty payload
+    }
+
+    // Real-environment check: simulate a Finder-launched .app (minimal launchd
+    // PATH, no node on it) and confirm the login-shell PATH import still locates
+    // the user's node — whatever version manager installed it. Ignored by
+    // default (touches the real shell + filesystem); run manually with:
+    //   cargo test -p swarmx-server packaged_env_finds_real_node -- --ignored --nocapture
+    #[cfg(unix)]
+    #[test]
+    #[ignore = "hits the real login shell + filesystem"]
+    fn packaged_env_finds_real_node() {
+        let minimal = OsString::from("/usr/bin:/bin:/usr/sbin:/sbin");
+        let dirs = augmented_path_dirs(Some(minimal), swarmx_home(), login_shell_path());
+        let node = resolve_in_dirs("node", &dirs);
+        println!("resolved node = {node:?}");
+        assert!(
+            node.is_some(),
+            "login-shell PATH import should find the user's node even under a stripped launchd PATH"
         );
     }
 
