@@ -39,6 +39,7 @@ import type {
 import { useSwarmFeed } from "../hooks/useSwarmFeed";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/EmptyState";
 import {
   ConfirmActionDialog,
   type ConfirmActionState,
@@ -755,10 +756,11 @@ export default function NotificationsRoute() {
             </Button>
           </div>
         ) : filtered.length === 0 ? (
-          <div className="flex h-full flex-col items-center justify-center gap-3 text-foreground-tertiary">
-            <Bell className="size-10 opacity-40" />
-            <p className="font-caption text-sm">{t("notifications.empty")}</p>
-          </div>
+          <EmptyState
+            icon={<Bell className="size-8" />}
+            title={t("notifications.empty")}
+            hint={t("notifications.emptyHint")}
+          />
         ) : (
           <ul className="flex flex-col gap-1.5">
             {filtered.map((n) => (

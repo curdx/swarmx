@@ -9,13 +9,14 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Folder, FileText, ArrowUp, Loader2, RefreshCw } from "lucide-react";
+import { Folder, FolderOpen, FileText, ArrowUp, Loader2, RefreshCw } from "lucide-react";
 import { api, ApiError } from "@/api/http";
 import type { FileListResp, FileReadResp } from "@/api/types";
 import { cn } from "@/lib/cn";
 import { useToolWorkspaces } from "@/lib/useToolWorkspaces";
 import { WorkspacePicker } from "@/components/WorkspacePicker";
 import { ChatMarkdown } from "@/components/ChatMarkdown";
+import { EmptyState } from "@/components/EmptyState";
 import { isImagePath, fileUrl } from "@/lib/imagePaths";
 
 function fmtSize(n: number): string {
@@ -232,16 +233,20 @@ export default function FilesRoute() {
           {/* No workspace chosen (and not browsing the whole filesystem): nothing
               to list yet, so guide the user to pick one instead of a blank pane. */}
           {!loading && !err && !list && (
-            <div className="flex flex-1 items-center justify-center px-6 text-center font-caption text-sm text-foreground-tertiary">
-              {t("files.noWorkspace", { defaultValue: "选择一个工作区开始浏览" })}
-            </div>
+            <EmptyState
+              icon={<FolderOpen className="size-8" />}
+              title={t("files.noWorkspace")}
+              hint={t("files.noWorkspaceHint")}
+            />
           )}
           {/* Directory loaded but has no (visible) entries — empty, or everything
               in it was filtered out by the backend. */}
           {!loading && !err && list && list.entries.length === 0 && (
-            <div className="flex flex-1 items-center justify-center px-6 text-center font-caption text-sm text-foreground-tertiary">
-              {t("files.emptyDir", { defaultValue: "此目录为空" })}
-            </div>
+            <EmptyState
+              icon={<Folder className="size-8" />}
+              title={t("files.emptyDir")}
+              hint={t("files.emptyDirHint")}
+            />
           )}
           {list?.entries.map((e) => (
             <button

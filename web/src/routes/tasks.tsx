@@ -13,7 +13,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Loader2 } from "lucide-react";
+import { ListTodo, Loader2 } from "lucide-react";
 import { api, ApiError } from "@/api/http";
 import type { TaskRow } from "@/api/types";
 import { cn } from "@/lib/cn";
@@ -22,6 +22,7 @@ import { relTime } from "@/lib/relTime";
 import { toast } from "@/lib/toast";
 import { useToolWorkspaces } from "@/lib/useToolWorkspaces";
 import { WorkspacePicker } from "@/components/WorkspacePicker";
+import { EmptyState } from "@/components/EmptyState";
 import {
   ConfirmActionDialog,
   type ConfirmActionState,
@@ -185,9 +186,12 @@ export default function TasksRoute() {
       )}
 
       {tasks && tasks.length === 0 && !err && (
-        <div className="flex flex-1 items-center justify-center px-6 text-center font-caption text-sm text-foreground-tertiary">
-          {t("tasks.empty")}
-        </div>
+        <EmptyState
+          icon={<ListTodo className="size-8" />}
+          title={t("tasks.empty")}
+          hint={t("tasks.emptyHint")}
+          primaryAction={{ label: t("tasks.emptyAction"), href: "/chat" }}
+        />
       )}
 
       {tasks && tasks.length > 0 && (

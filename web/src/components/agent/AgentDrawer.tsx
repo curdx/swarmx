@@ -37,6 +37,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import {
   Activity,
+  ChevronDown,
   ChevronRight,
   Code2,
   Download,
@@ -76,6 +77,12 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/cn";
 import { toast } from "@/lib/toast";
 import { roleColorClass as roleColor, roleDisplayName } from "@/lib/agent";
@@ -88,12 +95,18 @@ type TabId = "terminal" | "activity" | "recordings" | "messages" | "context";
 // live step-level data source. It streams the current round's tool/system
 // steps and folds finished rounds into a one-line summary.
 const TABS: { id: TabId; labelKey: string; icon: typeof TerminalIcon }[] = [
-  { id: "terminal", labelKey: "agent.tabs.terminal", icon: TerminalIcon },
   { id: "activity", labelKey: "agent.tabs.activity", icon: Activity },
-  { id: "recordings", labelKey: "agent.tabs.recordings", icon: Play },
+  { id: "terminal", labelKey: "agent.tabs.terminal", icon: TerminalIcon },
   { id: "messages", labelKey: "agent.tabs.messages", icon: MessageSquare },
+];
+// 低频深查 tab(录像/上下文)收进「更多」菜单 — 80% 的打开是为了「它现在
+// 怎么样了 / 我该回什么」(活动/消息/终端),低频项不再平权占决策成本。
+// tab 内容本身不受影响,「更多」里选中后照常全宽渲染。
+const OVERFLOW_TABS: { id: TabId; labelKey: string; icon: typeof TerminalIcon }[] = [
+  { id: "recordings", labelKey: "agent.tabs.recordings", icon: Play },
   { id: "context", labelKey: "agent.tabs.context", icon: FileText },
 ];
+const ALL_TABS = [...TABS, ...OVERFLOW_TABS];
 
 function formatDelta(ms: number): string {
   const s = Math.max(0, Math.floor(ms / 1000));
@@ -129,7 +142,7 @@ export function AgentDrawer({ agentId, activities, onClose }: Props) {
   const [searchParams, setSearchParams] = useSearchParams();
   const liveAgent =
     infoResolved && !!info && info.killed_at == null && info.shim_exit == null;
-  const explicitTab: TabId | null = TABS.some((x) => x.id === searchParams.get("tab"))
+  const explicitTab: TabId | null = ALL_TABS.some((x) => x.id === searchParams.get("tab"))
     ? (searchParams.get("tab") as TabId)
     : null;
   // F6: a killed agent's terminal is a dead PTY (the WS connect just errors), so
@@ -141,13 +154,17 @@ export function AgentDrawer({ agentId, activities, onClose }: Props) {
   // PTY only carries serve's startup banner and there's nothing useful in the
   // terminal/recordings. Default reasonix (live OR dead) to the Activity view,
   // which is fed from its SSE tool/usage events.
+  //
+  // 2026-07 UX(A4): live agents default to ACTIVITY, not terminal — 80% of
+  // drawer opens are "它现在怎么样了 / 我该回什么",and the structured tool
+  // timeline answers that faster than a raw TUI. Terminal stays one tab away.
   const defaultTab: TabId =
     !infoResolved
-      ? "terminal"
+      ? "activity"
       : info?.cli === "reasonix"
         ? "activity"
         : liveAgent
-          ? "terminal"
+          ? "activity"
           : "recordings";
   const tab: TabId = explicitTab ?? defaultTab;
   // Drop the param only for the section's natural default so the URL stays
@@ -518,6 +535,7 @@ function Header({
 
 function TabBar({ tab, onChange }: { tab: TabId; onChange: (t: TabId) => void }) {
   const { t: tr } = useTranslation();
+  const overflowActive = OVERFLOW_TABS.find((x) => x.id === tab);
   return (
     <Tabs
       value={tab}
@@ -538,6 +556,40 @@ function TabBar({ tab, onChange }: { tab: TabId; onChange: (t: TabId) => void })
             </TabsTrigger>
           );
         })}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              className={cn(
+                "relative flex items-center gap-1.5 rounded-none border-0 bg-transparent px-4 py-3 text-xs shadow-none hover:text-foreground-primary",
+                overflowActive
+                  ? "text-foreground-primary after:absolute after:inset-x-0 after:-bottom-px after:h-0.5 after:bg-accent-primary"
+                  : "text-foreground-secondary",
+              )}
+            >
+              {overflowActive ? (
+                <>
+                  <overflowActive.icon className="size-3.5" />
+                  {tr(overflowActive.labelKey)}
+                </>
+              ) : (
+                tr("agent.tabs.more")
+              )}
+              <ChevronDown className="size-3 opacity-60" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" sideOffset={4}>
+            {OVERFLOW_TABS.map((item) => {
+              const Icon = item.icon;
+              return (
+                <DropdownMenuItem key={item.id} onSelect={() => onChange(item.id)}>
+                  <Icon className="size-3.5" />
+                  {tr(item.labelKey)}
+                </DropdownMenuItem>
+              );
+            })}
+          </DropdownMenuContent>
+        </DropdownMenu>
       </TabsList>
     </Tabs>
   );

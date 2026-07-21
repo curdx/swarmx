@@ -627,6 +627,11 @@ pub async fn mcp_ready(State(state): State<AppState>, Path(agent_id): Path<Strin
     match state.registry.get(&agent_id) {
         Some(slot) => {
             slot.lock().mcp_ready.send_replace(true);
+            state.swarm.publish_event(SwarmEvent::AgentStage {
+                agent_id: agent_id.clone(),
+                stage: "mcp_ready".into(),
+                at: now_ms(),
+            });
             tracing::debug!(agent = %agent_id, "mcp-ready signalled by swarmx-mcp");
             StatusCode::NO_CONTENT
         }
@@ -933,6 +938,11 @@ pub(crate) async fn spawn_with_bookkeeping(
                         swarm.publish_event(SwarmEvent::AgentState {
                             agent_id: agent_for_task.clone(),
                             state: AgentState::Ready,
+                        });
+                        swarm.publish_event(SwarmEvent::AgentStage {
+                            agent_id: agent_for_task.clone(),
+                            stage: "shim_ready".into(),
+                            at,
                         });
                         // Real-usage write-back: this engine just came up over the
                         // production spawn path — record it Usable in the probe
@@ -1996,6 +2006,14 @@ pub(crate) fn spawn_bootstrap_inject(
             has_unsubstituted_placeholders = has_unsubst,
             "bootstrap prompt injected"
         );
+        // Stage heartbeat for the cold-start progress UI: the first prompt is
+        // now submitted; the "first turn" boundary is the first AgentActivity
+        // that follows (no extra event needed).
+        swarm.publish_event(SwarmEvent::AgentStage {
+            agent_id: agent_id.clone(),
+            stage: "bootstrap_injected".into(),
+            at: now_ms(),
+        });
     });
 }
 

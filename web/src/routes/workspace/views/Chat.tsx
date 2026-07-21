@@ -27,7 +27,6 @@ import { BootstrapChecklistCard } from "../../../components/chat/BootstrapCheckl
 import { PlanStickyCard } from "../../../components/chat/PlanStickyCard";
 import { PulseRail } from "../../../components/workspace/PulseRail";
 import { parsePlan, type ParsedPlan } from "../../../lib/parsePlan";
-import { OnboardingTour } from "../../../components/OnboardingTour";
 import {
   TaskActivity,
   type TaskActivity as TaskActivityT,
@@ -249,8 +248,12 @@ const TASK_PENDING_TIMEOUT_MS = 60_000;
 // task 进入 ready 后展示这么久再自动消失（让用户看清楚已就绪）。
 const TASK_READY_DISMISS_MS = 4_000;
 // spawning 事件归属到最近 user 消息的窗口。超过这个时长的 spawn 视为
-// 独立事件，不归到用户上一条消息。
-const TASK_ATTACH_WINDOW_MS = 15_000;
+// 独立事件，不归到用户上一条消息。注意是 LLM 节奏:队长收到消息 →
+// 唤醒 → 思考 → 调 swarm_spawn_worker —— 实测派活延迟 10s~70s+(思考摘要
+// 里明明白白写着 "思考 1m 10s")。15s 窗几乎永远挂不上,60s 窗照样被
+// 71s 的真实派活甩掉。180s 覆盖 p99 派活,同时仍小于"无关联自发 spawn"
+// 混入的现实间隔;误挂的代价只是多一张很快就绪消失的卡。
+const TASK_ATTACH_WINDOW_MS = 180_000;
 
 function WorkspaceStatusStrip({
   workspaceName,
@@ -454,6 +457,7 @@ export default function ChatView() {
     liveMessages,
     liveRead,
     agentStateById,
+    agentStageById,
     agentActivityById,
     reasoningById,
     unreadByFrom: activeWorkspaceUnread,
@@ -819,11 +823,15 @@ export default function ChatView() {
   }, [tasks]);
 
   // 已知 agent_id 集合 — 用来判定 spawning 事件是不是新 agent (老 agent
-  // 重启也会发 spawning 但不算新派活)。
-  const knownAgentIdsRef = useRef<Set<string>>(new Set());
-  useEffect(() => {
-    for (const a of allAliveAgents) knownAgentIdsRef.current.add(a.agent_id);
-  }, [allAliveAgents]);
+  // 重启也会发 spawning 但不算新派活)。惰性初始化(渲染期一次性种子):
+  // 之前是 useEffect(...,[allAliveAgents]) 每次花名册变化都先把所有现存
+  // agent 标记为 known,而发现新 agent 的 effect 声明在它后面 —— 同一次
+  // 提交里先标 known 再查新,永远查不到,task card(和冷启动阶段条)从
+  // 不显示。改成渲染期懒初始化后,新增只由下面的 effect 自己登记,竞态消除。
+  const knownAgentIdsRef = useRef<Set<string> | null>(null);
+  if (knownAgentIdsRef.current === null) {
+    knownAgentIdsRef.current = new Set(allAliveAgents.map((a) => a.agent_id));
+  }
 
   // 轻量 messages cache —— 给成员列表的语义状态推导喂数据。MessagesPanel
   // 也自己拉一份(它需要展示 200 条 + filter + 排序),这里只需要"最近一条
@@ -953,14 +961,16 @@ export default function ChatView() {
     }
   }, [liveMessages]);
 
-  // allAliveAgents 出现新 agent → 如果最近 15s 内有 user msg → 创建/更新
+  // allAliveAgents 出现新 agent → 如果最近 60s 内有 user msg → 创建/更新
   // spawning task；新 agent 进入 ready 时升 task 状态
   useEffect(() => {
+    const known = knownAgentIdsRef.current;
+    if (!known) return;
     const newAgents: AgentInfo[] = [];
     for (const a of allAliveAgents) {
-      if (!knownAgentIdsRef.current.has(a.agent_id)) {
+      if (!known.has(a.agent_id)) {
         newAgents.push(a);
-        knownAgentIdsRef.current.add(a.agent_id);
+        known.add(a.agent_id);
       }
     }
     if (newAgents.length === 0) {
@@ -1019,6 +1029,10 @@ export default function ChatView() {
                 // spawning so the dismiss window restarts when ready returns.
                 readyAt: allReady ? tsk.readyAt ?? Date.now() : undefined,
                 spawnedRoles: [...tsk.spawnedRoles, ...fresh.map((a) => a.role)],
+                spawnedAgentIds: [
+                  ...tsk.spawnedAgentIds,
+                  ...fresh.map((a) => a.agent_id),
+                ],
               }
             : tsk,
         );
@@ -1033,6 +1047,7 @@ export default function ChatView() {
           readyAt: allReady ? Date.now() : undefined,
           trigger: lastUser.body,
           spawnedRoles: fresh.map((a) => a.role),
+          spawnedAgentIds: fresh.map((a) => a.agent_id),
         },
       ];
     });
@@ -1047,11 +1062,9 @@ export default function ChatView() {
 
   return (
     <div className="flex min-h-0 flex-1">
-      {/* 4 步 onboarding tour — 第一次进 chat 时弹，跳过/走完 mark seen
-       *  存 localStorage 之后不再弹。装在 ChatView 而不是 Shell，是因为
-       *  Shell 在没 workspace 时也 render (Welcome 屏)，那里 tour 没意
-       *  义；只有真的进了某个 workspace 的 chat 才相关。 */}
-      <OnboardingTour />
+      {/* Onboarding 已由「空态即引导」接管(MessagesPanel 的 EmptyState:
+          starter 一键填充 + 引擎就绪自检),不再弹 4 步浮层 —— 浮层说完就忘
+          还挡点击,任务式引导让用户 30s 内看到 agent 真的跑起来。 */}
       <section className="flex min-w-0 flex-1 flex-col">
         <WorkspaceStatusStrip
           workspaceName={workspace.name}
@@ -1120,7 +1133,7 @@ export default function ChatView() {
             ) : undefined
           }
           taskActivityBelow={
-            <TaskActivity tasks={tasks} onDismiss={dismissTask} />
+            <TaskActivity tasks={tasks} onDismiss={dismissTask} stageById={agentStageById} />
           }
         />
       </section>

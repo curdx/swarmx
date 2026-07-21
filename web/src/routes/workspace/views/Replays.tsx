@@ -29,6 +29,7 @@ import type { AgentInfo, RecordingInfo } from "../../../api/types";
 import { useSwarmFeed } from "../../../hooks/useSwarmFeed";
 import { Button } from "@/components/ui/button";
 import { AgentChip } from "@/components/agent/AgentChip";
+import { EmptyState } from "@/components/EmptyState";
 import { resolveRole, roleDisplayName } from "@/lib/agent";
 import { cn } from "@/lib/cn";
 import { useWorkspaceContext } from "../Shell";
@@ -298,10 +299,20 @@ export default function ReplaysView() {
             </Button>
           </div>
         ) : filtered.length === 0 ? (
-          <div className="flex h-full flex-col items-center justify-center gap-2 text-foreground-tertiary">
-            <Play className="size-8 opacity-40" />
-            <p className="font-caption text-sm">{t("replays.empty")}</p>
-          </div>
+          scopedToWorkspace.length === 0 ? (
+            <EmptyState
+              icon={<Play className="size-8" />}
+              title={t("replays.noRecordings")}
+              hint={t("replays.noRecordingsHint")}
+              primaryAction={{ label: t("replays.noRecordingsAction"), href: ".." }}
+            />
+          ) : (
+            <EmptyState
+              icon={<Search className="size-8" />}
+              title={t("replays.empty")}
+              hint={t("replays.emptyHint")}
+            />
+          )
         ) : (
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
             {filtered.map((r) => {

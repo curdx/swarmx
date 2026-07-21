@@ -590,6 +590,15 @@ export type SwarmEvent =
       agent_id: string;
       steps: ThoughtTraceStep[];
       at: number;
+    }
+  | {
+      // Cold-start stage heartbeat (see the rust-side doc): shim_ready →
+      // mcp_ready → bootstrap_injected. Drives the narrative stage bar on a
+      // pending agent card instead of a silent 30s spinner.
+      type: "agent_stage";
+      agent_id: string;
+      stage: string;
+      at: number;
     };
 
 // ── F1 model settings: per-CLI tier→concrete-model mapping ──────────────────

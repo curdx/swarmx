@@ -571,6 +571,13 @@ impl TailState {
                     emit_activity(swarm, agent_id, phase, label, p.seq, Some(dur), at);
                 }
             }
+            ParsedTool::Pulse { label } => {
+                // Thinking heartbeat: fresh seq, system kind, zero duration —
+                // a liveness timestamp, not a step with a lifecycle.
+                self.seq = self.seq.wrapping_add(1);
+                let seq = self.seq;
+                emit_activity_kind(swarm, agent_id, "system", "ok", label, seq, None, at);
+            }
         }
     }
 }
@@ -593,11 +600,27 @@ pub(crate) fn emit_activity(
     duration_ms: Option<u32>,
     at: i64,
 ) {
+    emit_activity_kind(swarm, agent_id, "tool", phase, label, seq, duration_ms, at);
+}
+
+/// `emit_activity` with an explicit record kind. The thinking-step pulses
+/// (kimi `llm.request` / codex `reasoning` / claude `thinking`) report as
+/// kind="system" so the UI styles them apart from real tool calls.
+pub(crate) fn emit_activity_kind(
+    swarm: &Swarm,
+    agent_id: &str,
+    kind: &str,
+    phase: &str,
+    label: String,
+    seq: u32,
+    duration_ms: Option<u32>,
+    at: i64,
+) {
     swarm.record_activity(
         agent_id,
         AgentActivityRecord {
             agent_id: agent_id.to_string(),
-            kind: "tool".into(),
+            kind: kind.into(),
             label: label.clone(),
             phase: phase.to_string(),
             seq,
@@ -607,7 +630,7 @@ pub(crate) fn emit_activity(
     );
     swarm.publish_event(SwarmEvent::AgentActivity {
         agent_id: agent_id.to_string(),
-        kind: "tool".into(),
+        kind: kind.into(),
         label,
         phase: phase.to_string(),
         seq,
@@ -628,6 +651,12 @@ enum ParsedTool {
         /// the label on completion. `None` when the result was empty/absent.
         result: Option<String>,
     },
+    /// One-shot "the model is still thinking" heartbeat — the turn is alive
+    /// between tool calls. Emitted as a system-level `ok` row (no pending
+    /// pairing): its TIMESTAMP is what matters — it keeps `last_activity_at`
+    /// fresh through long reasoning phases so the stall detector can tell
+    /// "slow but alive" from "wedged" (the codex false-"卡住" lesson).
+    Pulse { label: String },
 }
 
 /// claude: tool_use lives in an `assistant` row's `message.content[]`; the
@@ -645,6 +674,14 @@ fn parse_claude(v: &Value) -> Vec<ParsedTool> {
     };
     for block in content {
         match block.get("type").and_then(|t| t.as_str()) {
+            Some("thinking") => {
+                // Claude's reasoning block — the turn is alive mid-think.
+                // Timestamp-only signal (the thinking text itself is noise for
+                // a one-line activity feed).
+                out.push(ParsedTool::Pulse {
+                    label: "思考中".into(),
+                });
+            }
             Some("tool_use") => {
                 if let Some(id) = block.get("id").and_then(|i| i.as_str()) {
                     let name = block.get("name").and_then(|n| n.as_str()).unwrap_or("tool");
@@ -690,6 +727,13 @@ fn parse_codex(v: &Value) -> Vec<ParsedTool> {
         None => return out,
     };
     match payload.get("type").and_then(|t| t.as_str()) {
+        Some("reasoning") => {
+            // codex's thinking step (`{"type":"reasoning", id:"rs_…"}`) — the
+            // turn is alive mid-reason. Verified against real rollout JSONL.
+            out.push(ParsedTool::Pulse {
+                label: "思考中".into(),
+            });
+        }
         Some("function_call" | "custom_tool_call" | "local_shell_call") => {
             if let Some(id) = payload.get("call_id").and_then(|i| i.as_str()) {
                 let name = payload
@@ -741,7 +785,21 @@ fn parse_codex(v: &Value) -> Vec<ParsedTool> {
 /// by `result.isError`). Shapes verified against real 0.28 wire.jsonl files.
 fn parse_kimi(v: &Value) -> Vec<ParsedTool> {
     let mut out = Vec::new();
-    if v.get("type").and_then(|t| t.as_str()) != Some("context.append_loop_event") {
+    let ty = v.get("type").and_then(|t| t.as_str());
+    // kimi's model-call row (`{"type":"llm.request","model":"k3",…}`) — the
+    // turn is alive mid-think. One per model call (a few per turn), same
+    // frequency class as tool calls. Verified against real 0.28 wire.jsonl.
+    if ty == Some("llm.request") {
+        let model = v
+            .get("model")
+            .and_then(|m| m.as_str())
+            .unwrap_or("model");
+        out.push(ParsedTool::Pulse {
+            label: format!("思考中 · {model}"),
+        });
+        return out;
+    }
+    if ty != Some("context.append_loop_event") {
         return out;
     }
     let ev = match v.get("event") {
@@ -1374,5 +1432,38 @@ mod tests {
         // The wire-less newer session is SKIPPED in favour of the older one
         // that actually has wire.jsonl; the decoy bucket (wrong hash) ignored.
         assert_eq!(found, s_old.join("agents/main/wire.jsonl"));
+    }
+
+    #[test]
+    fn kimi_llm_request_is_a_thinking_pulse() {
+        let line = r#"{"type":"llm.request","kind":"loop","provider":"kimi","model":"k3","modelAlias":"kimi-code/k3","messageCount":3,"turnStep":"0.2","time":1784555693131}"#;
+        let v: Value = serde_json::from_str(line).unwrap();
+        match one(&parse_kimi(&v)) {
+            ParsedTool::Pulse { label } => {
+                assert!(label.contains("k3"), "label was {label:?}");
+            }
+            _ => panic!("expected Pulse"),
+        }
+    }
+
+    #[test]
+    fn codex_reasoning_is_a_thinking_pulse() {
+        // Real rollout shape (content is encrypted; the event itself is the signal).
+        let line = r#"{"timestamp":"2026-07-04T15:44:48.194Z","type":"response_item","payload":{"type":"reasoning","id":"rs_0aac","summary":[],"encrypted_content":"gAAAA"}}"#;
+        let v: Value = serde_json::from_str(line).unwrap();
+        match one(&parse_codex(&v)) {
+            ParsedTool::Pulse { label } => assert!(!label.is_empty()),
+            _ => panic!("expected Pulse"),
+        }
+    }
+
+    #[test]
+    fn claude_thinking_block_is_a_thinking_pulse() {
+        let line = r#"{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"","signature":"Ev"},{"type":"tool_use","id":"toolu_1","name":"Edit","input":{"file_path":"/x"}}]}}"#;
+        let v: Value = serde_json::from_str(line).unwrap();
+        let tools = parse_claude(&v);
+        assert_eq!(tools.len(), 2, "thinking pulse + tool_use start");
+        assert!(matches!(tools[0], ParsedTool::Pulse { .. }));
+        assert!(matches!(tools[1], ParsedTool::Start { .. }));
     }
 }

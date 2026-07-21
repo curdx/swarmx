@@ -25,7 +25,10 @@ import {
   Flag,
   FolderTree,
   MessageSquare,
+  Monitor,
+  Moon,
   Settings,
+  Sun,
   Terminal,
 } from "lucide-react";
 import {
@@ -35,6 +38,8 @@ import {
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/cn";
 import { useAvailableUpdate } from "@/lib/updater";
+import { useThemePreference } from "@/lib/useThemePreference";
+import type { ThemeMode } from "@/lib/theme";
 
 const MENU_KEY = "swarmx:mcp:menuCollapsed:v1";
 
@@ -178,6 +183,10 @@ export function McpActivityBar() {
           "settings",
         )}
 
+        {/* 主题快捷切换(浅→深→跟随系统):Settings→外观 的同一份数据,
+            但切换主题不该要进设置页两步。 */}
+        <ThemeCycleButton collapsed={collapsed} withTip={withTip} itemBase={itemBase} itemIdle={itemIdle} />
+
         {/* 底部：菜单展开/收起开关 */}
         {withTip(
           collapsed ? t("mcp.menuExpand", "展开菜单") : t("mcp.menuCollapse", "收起菜单"),
@@ -200,5 +209,49 @@ export function McpActivityBar() {
         )}
       </div>
     </aside>
+  );
+}
+
+/** 主题循环按钮(浅色 → 深色 → 跟随系统):设置页「外观」的快捷版,挂在
+ *  活动栏底部常驻可见 —— 切主题不该要进设置页翻两层。 */
+function ThemeCycleButton({
+  collapsed,
+  withTip,
+  itemBase,
+  itemIdle,
+}: {
+  collapsed: boolean;
+  withTip: (label: string, node: ReactElement, key?: string) => ReactElement;
+  itemBase: string;
+  itemIdle: string;
+}) {
+  const { t } = useTranslation();
+  const [mode, setMode] = useThemePreference();
+  const ORDER: ThemeMode[] = ["light", "dark", "system"];
+  const next = ORDER[(ORDER.indexOf(mode) + 1) % ORDER.length];
+  const META: Record<ThemeMode, { icon: ComponentType<{ className?: string }>; key: string; fb: string }> = {
+    light: { icon: Sun, key: "nav.theme.light", fb: "浅色" },
+    dark: { icon: Moon, key: "nav.theme.dark", fb: "深色" },
+    system: { icon: Monitor, key: "nav.theme.system", fb: "跟随系统" },
+  };
+  const cur = META[mode];
+  const Icon = cur.icon;
+  const tip = t("nav.theme.toggleHint", {
+    current: t(cur.key, cur.fb),
+    next: t(META[next].key, META[next].fb),
+    defaultValue: `主题:${t(cur.key, cur.fb)} · 点击切换到${t(META[next].key, META[next].fb)}`,
+  });
+  return withTip(
+    tip,
+    <button
+      type="button"
+      onClick={() => setMode(next)}
+      aria-label={tip}
+      className={cn(itemBase, collapsed && "justify-center px-0", itemIdle)}
+    >
+      <Icon className="size-[18px] shrink-0" />
+      {!collapsed && <span className="font-heading">{t(cur.key, cur.fb)}</span>}
+    </button>,
+    "theme-cycle",
   );
 }

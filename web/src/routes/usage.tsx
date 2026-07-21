@@ -20,7 +20,7 @@ import {
 } from "react";
 import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { Loader2, RefreshCw, RotateCcw, Save } from "lucide-react";
+import { BarChart3, Loader2, RefreshCw, RotateCcw, Save } from "lucide-react";
 import { api, ApiError } from "@/api/http";
 import { roleDisplayName } from "@/lib/agent";
 import { fmtTokens } from "@/lib/format";
@@ -34,6 +34,7 @@ import type {
 import { cn } from "@/lib/cn";
 import { useToolWorkspaces } from "@/lib/useToolWorkspaces";
 import { WorkspacePicker } from "@/components/WorkspacePicker";
+import { EmptyState } from "@/components/EmptyState";
 import {
   ConfirmActionDialog,
   type ConfirmActionState,
@@ -317,9 +318,12 @@ export default function UsageRoute() {
         )}
 
         {data && !loading && data.totals.events === 0 && (
-          <div className="rounded-lg border border-border-subtle bg-surface-secondary px-4 py-8 text-center font-caption text-sm text-foreground-tertiary">
-            {t("usage.empty")}
-          </div>
+          <EmptyState
+            icon={<BarChart3 className="size-8" />}
+            title={t("usage.empty")}
+            hint={t("usage.emptyHint")}
+            primaryAction={{ label: t("usage.emptyAction"), href: "/chat" }}
+          />
         )}
 
         {pricing && (

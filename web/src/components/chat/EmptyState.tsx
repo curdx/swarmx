@@ -44,8 +44,10 @@ interface StarterDef {
 }
 
 const STARTERS: StarterDef[] = [
-  { key: "chat.emptyState.starter.refactor", fallback: "重构这个函数，抽出可复用逻辑" },
-  { key: "chat.emptyState.starter.test", fallback: "给这段代码补上失败用例的测试" },
+  // 第一条必须是「看得见 swarm 的」:队长派 worker、阶段条、黑板、交付
+  // 信号全部跑一遍 —— 30 秒讲清这个产品和单 agent 工具的区别。
+  { key: "chat.emptyState.starter.swarm", fallback: "派一个 worker 看看这个目录里有什么,它汇报给你后你再总结给我" },
+  { key: "chat.emptyState.starter.explore", fallback: "看一下这个项目的目录结构,用中文讲讲每部分是干什么的" },
   { key: "chat.emptyState.starter.bug", fallback: "帮我查这个 bug 的根因" },
 ];
 

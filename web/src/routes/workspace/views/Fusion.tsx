@@ -45,6 +45,7 @@ import type {
 import { useSwarmFeed } from "../../../hooks/useSwarmFeed";
 import { useWorkspaceContext } from "../Shell";
 import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/EmptyState";
 import { cn } from "@/lib/cn";
 import { toast } from "@/lib/toast";
 
@@ -685,14 +686,11 @@ export default function FusionView() {
             {t("common.loading", { defaultValue: "加载中…" })}
           </p>
         ) : batches.length === 0 ? (
-          <div className="flex flex-col items-center gap-2 rounded-lg border border-dashed border-border-subtle py-10 text-center">
-            <Swords className="size-8 text-foreground-tertiary opacity-40" />
-            <p className="font-body text-sm text-foreground-secondary">
-              {t("fusion.empty", {
-                defaultValue: "还没有竞赛。发起一场,让多个模型并行实现同一需求。",
-              })}
-            </p>
-          </div>
+          <EmptyState
+            icon={<Swords className="size-8" />}
+            title={t("fusion.empty")}
+            hint={t("fusion.emptyHint")}
+          />
         ) : (
           batches.map((b) => (
             <BatchCard

@@ -57,6 +57,7 @@ import type { ReasoningSummary } from "../../components/MessagesPanel";
 import type { WorkspaceSummary } from "./types";
 import { WorkspaceList } from "./WorkspaceSidebar";
 import { WorkspaceToolbar, ViewTransition, buildTabs } from "./WorkspaceToolbar";
+import { NeedsYouBar } from "@/components/workspace/NeedsYouBar";
 import { useWorkspaceShellData } from "./useWorkspaceShellData";
 
 const AgentDrawer = lazy(() =>
@@ -120,6 +121,9 @@ export interface ShellOutletContext {
    *  agent_id. The members list reads it for the real-time status dot +
    *  "what this worker is doing right now" line. */
   agentStateById: Record<string, AgentLiveState>;
+  /** Latest cold-start stage per agent (shim_ready → mcp_ready →
+   *  bootstrap_injected) — drives the chat's pending-card stage bar. */
+  agentStageById: Record<string, { stage: string; at: number }>;
   /** Bounded per-agent activity history from the swarm WS. Chat uses it to
    *  patch late tool events into visible thought summaries. */
   agentActivityById: Record<string, AgentActivity[]>;
@@ -206,6 +210,7 @@ export default function WorkspaceShell() {
     liveMessages,
     liveRead,
     agentStateById,
+    agentStageById,
     agentActivityById,
     reasoningById,
     activeWorkspaceUnread,
@@ -541,6 +546,7 @@ export default function WorkspaceShell() {
     liveMessages,
     liveRead,
     agentStateById,
+    agentStageById,
     agentActivityById,
     reasoningById,
     unreadByFrom: activeWorkspaceUnread,
@@ -572,6 +578,15 @@ export default function WorkspaceShell() {
             onJumpUnread={() => setJumpUnreadTick((v) => v + 1)}
             onCleanupThread={(threadId) => onDeleteThread(activeWs, threadId)}
             onOpenWorkspaceNav={() => setMobileNavOpen(true)}
+          />
+          {/* 「需要我」全局收件箱:error/stalled/handoff 三类聚合,一键直达
+              agent 抽屉。空时整条消失(不占视觉)。数据判定与成员栏同一套
+              视觉管线(deriveNeedsYou → resolveMemberVisual)。 */}
+          <NeedsYouBar
+            members={activeWs.members}
+            liveById={agentStateById}
+            messages={liveMessages}
+            onOpenAgent={openAgent}
           />
           <ViewTransition>
             {/* View-level boundary: a crash in one tab (malformed ledger

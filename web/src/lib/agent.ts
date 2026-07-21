@@ -155,8 +155,11 @@ const RESPONDING_WINDOW_MS = 60_000;
 const WORKING_WINDOW_MS = 60_000;
 
 /** Thresholds for the activity-aware honesty layer in `resolveMemberVisual`
- *  (F3). Tuned to err toward NOT crying wolf — a soft amber "可能卡住" is fine
- *  to surface late, a false alarm on a legit long build is not.
+ *  (F3). Tuned HARD toward NOT crying wolf — 现代 agent 的回合可以合法跑十几
+ *  二十分钟(长思考、大构建、API 重试),阈值再保守也是猜,所以这里只报
+ *  「远超任何合法长回合」的静默(实测误报:codex 还在出 exec 事件,5-10
+ *  分钟档把它标成「卡住」被用户当场抓包)。这些数字是"提示"而非"判决" —
+ *  对应的 UI 只是成员栏一颗软琥珀点,不放大成行动项。
  *  - STALL_RUNNING: a single tool stuck in "running" this long (no ok/error
  *    event) reads as wedged. Set above a normal build/test so a real long tool
  *    doesn't trip it.
@@ -164,18 +167,18 @@ const WORKING_WINDOW_MS = 60_000;
  *    first tool event before "no signal at all" stops reading as "booting".
  *  - NO_RESPONSE: a ready worker that has produced ZERO observable activity
  *    this long after spawn is almost certainly wedged / never started. */
-const STALL_RUNNING_MS = 300_000;
+const STALL_RUNNING_MS = 900_000;
 const STARTUP_GRACE_MS = 45_000;
-const NO_RESPONSE_MS = 300_000;
+const NO_RESPONSE_MS = 900_000;
 /** A worker that WAS active (passed the first-response watchdog) but then went
  *  silent mid-task — no tool activity, no outbound, no delivery, still alive,
  *  no error — for this long. The backend's first-response watchdog only covers
  *  the FIRST turn; once a worker speaks once, nothing server-side flags it if it
  *  later hangs forever. This is the UI-only honesty backstop for that gap: a
  *  soft amber "no recent activity" hint, NOT a kill (the user decides whether to
- *  stop/wake it). Set well above STALL_RUNNING/NO_RESPONSE so it only fires for a
- *  worker that's genuinely gone quiet, never a legitimately long single step. */
-const IDLE_AFTER_ACTIVE_MS = 600_000;
+ *  stop/wake it). 30 分钟 — 只有真静默的 worker 才会撞上,合法长回合
+ *  (codex/kimi 的深度思考) 不会。 */
+const IDLE_AFTER_ACTIVE_MS = 1_800_000;
 
 /** Pure function: given an agent and recent message history, return
  *  the best-guess semantic state. Caller is responsible for passing

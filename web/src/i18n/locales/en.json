@@ -133,7 +133,13 @@
     "cron": "Cron",
     "usage": "Usage",
     "settings": "Settings",
-    "debug": "Debug"
+    "debug": "Debug",
+    "theme": {
+      "light": "Light",
+      "dark": "Dark",
+      "system": "System",
+      "toggleHint": "Theme: {{current}} · click for {{next}}"
+    }
   },
   "shell": {
     "cmdkHint": "Press {{shortcut}} to open the command palette",
@@ -186,30 +192,13 @@
     "ready_one": "✓ {{roles}} ready",
     "ready_other": "✓ {{count}} agents ready · {{roles}}",
     "triggered": "\"{{msg}}\"",
-    "dismiss": "Dismiss"
-  },
-  "tour": {
-    "dialogTitle": "Quick tour",
-    "dialogDesc": "Get to know swarmx in 30 seconds",
-    "skip": "Skip",
-    "prev": "Back",
-    "next": "Next",
-    "done": "Got it",
-    "sidebar": {
-      "title": "Your workspaces live on the left",
-      "body": "One workspace = one project + a crew of AI agents. Run several at once and swap with the sidebar; open multiple parallel 'directions' under one workspace, isolated from each other."
-    },
-    "tabs": {
-      "title": "Four views on the same workspace",
-      "body": "Chat for messages, DAG for who's waiting on whom, Ledger for task progress + the shared blackboard, Replays for each agent's terminal. ⌘1–4 jumps between them."
-    },
-    "composer": {
-      "title": "Tell the AI what you want — plain English",
-      "body": "\"Add a login page\", \"fix this bug\" — the captain breaks it down and spins up the right agents to do it."
-    },
-    "cmdk": {
-      "title": "⌘K opens the command palette",
-      "body": "Search commands, switch workspaces, wake stuck agents, change themes — almost everything is one keystroke away."
+    "dismiss": "Dismiss",
+    "stage": {
+      "aria": "Startup progress",
+      "spawn": "Spawn agent",
+      "cli": "Launch CLI",
+      "tools": "Attach swarm tools",
+      "bootstrap": "Inject task"
     }
   },
   "common": {
@@ -293,7 +282,8 @@
     "resolving": "Merge conflicts — an AI is reconciling {{count}} file(s); check back in chat",
     "nothingToMerge": "The winner had nothing to merge",
     "recordedNoMerge": "Winner recorded (no merge performed)",
-    "empty": "No competitions yet. Start one to have multiple models implement the same need in parallel.",
+    "empty": "No competitions yet",
+    "emptyHint": "Start one above — multiple models implement the same need in parallel, then a judge compares and synthesizes the final version.",
     "status": {
       "running": "Running",
       "judging": "Judging",
@@ -313,7 +303,9 @@
     "title": "Research Committee",
     "subtitle": "N models answer in parallel → judge compares → synthesized verdict (driven by one zulu license)",
     "loading": "Loading models…",
-    "noModels": "No models available — configure a Comate License in Settings → Plugins first.",
+    "noModels": "No models available",
+    "noModelsHint": "Configure a Comate License in Settings → Plugins first, then pick 2–8 models for the panel here.",
+    "noModelsAction": "Open settings",
     "placeholder": "Ask something worth a multi-model consult (tech selection, competitive analysis, design review, red-teaming a risky call…)",
     "panelLabel": "Panel (pick 2–8 models · {{count}} selected)",
     "running": "Consulting… (~1–2 min)",
@@ -562,8 +554,8 @@
       "greetingBody": "Say what you want done. On send, the captain comes online, breaks it into a plan, delegates to members, and reports back here.",
       "starterHint": "Try starting with:",
       "starter": {
-        "refactor": "Refactor this function, extract the reusable logic",
-        "test": "Add failing-case tests for this code",
+        "swarm": "Send a worker to look at this directory; once it reports back, summarize for me",
+        "explore": "Look at this project's directory structure and explain each part in plain words",
         "bug": "Help me find the root cause of this bug"
       },
       "precheckTitle": "AI engine",
@@ -675,8 +667,8 @@
     "status": {
       "waitingDep": "waiting on deps",
       "error": "crashed",
-      "stalled": "may be stuck",
-      "noResponse": "not responding"
+      "stalled": "quiet for long",
+      "noResponse": "no response for long"
     },
     "activity": {
       "running": "Running {{label}}"
@@ -749,7 +741,9 @@
     "filter": "Filter",
     "members": "Members",
     "selectNode": "Click a node for details",
-    "empty": "No live agents. A spell will populate this graph.",
+    "empty": "No live agents",
+    "emptyHint": "Start a spell from chat — agent nodes and their collaboration edges appear on this graph live.",
+    "emptyAction": "Open chat",
     "cli": "CLI",
     "status": "status",
     "handoff": "handoff",
@@ -788,6 +782,10 @@
     "tagAll": "All",
     "ratio": "{{shown}} / {{total}}",
     "empty": "No matching recordings",
+    "emptyHint": "Try a different keyword or role tag.",
+    "noRecordings": "No recordings yet",
+    "noRecordingsHint": "Run a task from chat — every agent run leaves a replayable recording here.",
+    "noRecordingsAction": "Open chat",
     "live": "● live",
     "completed": "○ completed",
     "recording": "▶ recording…",
@@ -851,6 +849,7 @@
       "completed": "Done"
     },
     "empty": "Nothing here yet",
+    "emptyHint": "Notifications appear here automatically on member messages, blackboard writes, and state changes.",
     "loadError": "Failed to load notifications",
     "viewAll": "View all",
     "markRead": "Mark read",
@@ -921,7 +920,8 @@
       "recordings": "Recordings",
       "messages": "Messages",
       "tools": "Tools",
-      "context": "Context"
+      "context": "Context",
+      "more": "More"
     },
     "noRecordings": "This agent has no recordings yet",
     "noMessages": "No messages to or from this agent",
@@ -1139,7 +1139,8 @@
     "creating": "Creating…",
     "createdOk": "Created: {{desc}}",
     "createdPlain": "Scheduled job created.",
-    "empty": "No scheduled jobs yet. Fill in an expression and prompt above to create your first.",
+    "empty": "No scheduled jobs yet",
+    "emptyHint": "Fill in an expression and prompt above to create your first — the prompt is delivered to its workspace when it fires.",
     "count": "{{n}} scheduled jobs",
     "runNow": "Run now",
     "delete": "Delete",
@@ -1175,8 +1176,10 @@
     "workspacesLoadFailed": "Failed to load workspaces — please retry",
     "browseAllWarning": "Removes workspace isolation — lets you browse the whole machine. Use with care.",
     "previewCapped": "Preview limited to first {{size}}",
-    "noWorkspace": "Select a workspace to start browsing",
+    "noWorkspace": "No workspace selected",
+    "noWorkspaceHint": "Pick a workspace above to browse its directories and files.",
     "emptyDir": "This directory is empty",
+    "emptyDirHint": "Nothing to show — the directory may be empty, or everything in it was filtered out.",
     "workspacesLoadFailedShort": "Failed to load workspaces"
   },
   "tasks": {
@@ -1184,7 +1187,9 @@
     "subtitle": "Every worker is a task; status is derived from lifecycle automatically — or mark blocked / done / archived by hand.",
     "count": "{{n}} tasks",
     "loadError": "Failed to load tasks",
-    "empty": "No tasks yet — they appear once the captain spawns workers.",
+    "empty": "No tasks yet",
+    "emptyHint": "Cards appear here in status columns once the captain spawns workers.",
+    "emptyAction": "Open chat",
     "untitled": "Untitled",
     "manual": "manual",
     "live": "Running",
@@ -1249,7 +1254,8 @@
     "mainDirection": "Main direction",
     "create": "Create goal",
     "creating": "Creating…",
-    "empty": "No goals yet — create one to give the run a durable target.",
+    "empty": "No goals yet",
+    "emptyHint": "Fill in the objective and acceptance criteria on the left — its status and evidence are tracked here.",
     "updated": "Updated {{time}}",
     "evidence": "Evidence",
     "evidenceKind": "Evidence kind",
@@ -1316,7 +1322,9 @@
     "confirmResetDesc": "This deletes the current user pricing config and uses the server defaults again. Config path: {{path}}",
     "pricingRule": "Rule",
     "pricingMatchers": "Match",
-    "empty": "No usage yet — token counts and cost appear here once workers run.",
+    "empty": "No usage yet",
+    "emptyHint": "Token usage and cost estimates appear here once workers run.",
+    "emptyAction": "Open chat",
     "loadError": "Failed to load usage data",
     "chartTableCaption": "Daily token usage (bucketed by UTC day)",
     "day": "Date"
@@ -1516,7 +1524,8 @@
     "breadcrumbsTitle": "Activity",
     "breadcrumbsSubtitle": "Recent worker heartbeats (written automatically after each step)",
     "breadcrumbsCount": "{{n}} worker(s)",
-    "breadcrumbsEmpty": "No worker heartbeats yet. A line appears here when a dispatched worker hits a milestone (install / build / writing code, etc.).",
+    "breadcrumbsEmpty": "No worker heartbeats yet",
+    "breadcrumbsEmptyHint": "A line appears here automatically whenever a dispatched worker hits a milestone (install / build / writing code, etc.).",
     "readFailed": "Read failed: {{msg}}"
   },
   "home": {
@@ -1581,5 +1590,14 @@
       "recordings": "Recordings"
     },
     "wsStatus": "Swarm WS: {{status}}"
+  },
+  "needsYou": {
+    "title": "Needs you · {{count}}",
+    "more": "+{{count}}",
+    "openAgent": "Open {{role}}",
+    "kind": {
+      "error": "error",
+      "handoff": "no handoff"
+    }
   }
 }

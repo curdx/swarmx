@@ -7,6 +7,7 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Loader2, Users, Sparkles } from "lucide-react";
+import { EmptyState } from "@/components/EmptyState";
 import { api } from "@/api/http";
 import type { FusionConsultResponse } from "@/api/types";
 import { useWorkspaceContext } from "../Shell";
@@ -72,9 +73,15 @@ export default function ConsultView() {
         </p>
       )}
       {models && models.length === 0 && (
-        <p className="font-caption text-xs text-state-warning">
-          {t("consult.noModels", "没有可用模型 —— 先在「设置 → 插件」配置 Comate License。")}
-        </p>
+        <EmptyState
+          icon={<Users className="size-8" />}
+          title={t("consult.noModels")}
+          hint={t("consult.noModelsHint")}
+          primaryAction={{
+            label: t("consult.noModelsAction"),
+            href: "/settings/plugins",
+          }}
+        />
       )}
 
       {models && models.length > 0 && (

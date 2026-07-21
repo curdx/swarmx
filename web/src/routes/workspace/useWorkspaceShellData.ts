@@ -82,6 +82,10 @@ export interface WorkspaceShellData {
   /** Per-agent bounded activity stream, accumulated from the swarm WS so the
    *  drawer's Activity tab survives close/reopen/remount (NOT ephemeral). */
   agentActivityById: Record<string, AgentActivity[]>;
+  /** Latest cold-start stage per agent (shim_ready → mcp_ready →
+   *  bootstrap_injected), from `agent_stage` events. Drives the pending-card
+   *  stage bar; cleared on first activity or terminal state. */
+  agentStageById: Record<string, { stage: string; at: number }>;
   /** Live in-flight reasoning steps keyed by agent id, fed by
    *  `thought_trace_event` so the pending bubble grows its steps mid-turn. */
   reasoningById: Record<string, ReasoningSummary>;
@@ -137,6 +141,12 @@ export function useWorkspaceShellData(
     Record<string, ReasoningSummary>
   >({});
   const [unreadByFrom, setUnreadByFrom] = useState<Record<string, number>>({});
+  // Latest cold-start stage per agent (`agent_stage` events): drives the
+  // narrative stage bar on pending agent cards (see Chat.tsx). Cleared when
+  // the agent's first activity lands (first turn started) or the agent exits.
+  const [agentStageById, setAgentStageById] = useState<
+    Record<string, { stage: string; at: number }>
+  >({});
   const idToFromRef = useRef<Map<number, string>>(new Map());
   // The set of message ids we actually counted toward the user's unread badge
   // (agent→user, countsAsUserUnread). Decrement-on-read must only subtract ids
@@ -268,6 +278,16 @@ export function useWorkspaceShellData(
             if (cur?.state === ev.state) return prev; // no-op → stable ref
             return { ...prev, [ev.agent_id]: { ...cur, state: ev.state } };
           });
+          // Terminal states end the cold-start story either way (error card
+          // replaces the stage bar; exit removes the agent).
+          if (ev.state === "error" || ev.state === "exited") {
+            setAgentStageById((prev) => {
+              if (!(ev.agent_id in prev)) return prev;
+              const next = { ...prev };
+              delete next[ev.agent_id];
+              return next;
+            });
+          }
           scheduleRefresh();
           break;
         case "agent_activity":
@@ -289,6 +309,14 @@ export function useWorkspaceShellData(
               },
             },
           }));
+          // First activity = the first turn started → the cold-start stage
+          // bar has done its job; drop the stage so it never reappears.
+          setAgentStageById((prev) => {
+            if (!(ev.agent_id in prev)) return prev;
+            const next = { ...prev };
+            delete next[ev.agent_id];
+            return next;
+          });
           // Persistent stream for the drawer's Activity tab — append, with
           // same-seq (running → ok/error) replaced in place, bounded to the
           // last MAX_ACTIVITY. Survives close/reopen since it lives here, not
@@ -434,6 +462,15 @@ export function useWorkspaceShellData(
           }));
           break;
         }
+        case "agent_stage":
+          // Cold-start heartbeat (shim_ready → mcp_ready → bootstrap_injected).
+          // Just record the latest stage; the stage bar clears on the agent's
+          // first activity (see the agent_activity case) or terminal state.
+          setAgentStageById((prev) => ({
+            ...prev,
+            [ev.agent_id]: { stage: ev.stage, at: ev.at },
+          }));
+          break;
       }
     },
     onReconnect: () => {
@@ -624,6 +661,7 @@ export function useWorkspaceShellData(
     liveRead,
     agentStateById,
     agentActivityById,
+    agentStageById,
     reasoningById,
     activeWorkspaceUnread,
     totalUnread,

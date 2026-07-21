@@ -25,6 +25,7 @@ import { api } from "../../../api/http";
 import type { BlackboardEntry, BlackboardSnapshot, SwarmEvent } from "../../../api/types";
 import { useSwarmFeed } from "../../../hooks/useSwarmFeed";
 import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/EmptyState";
 import { cn } from "@/lib/cn";
 import { roleDisplayName } from "@/lib/agent";
 import { useWorkspaceContext } from "../Shell";
@@ -447,12 +448,11 @@ function BreadcrumbsCard({
       </div>
       <div className="max-h-[40vh] overflow-auto px-4 py-3">
         {rows.length === 0 ? (
-          <p className="font-caption text-xs text-foreground-tertiary">
-            {t(
-              "ledger.breadcrumbsEmpty",
-              "还没有 worker 写过心跳。派出去的 worker 完成里程碑(install / build / 写代码 等)时会在这里出现一行。",
-            )}
-          </p>
+          <EmptyState
+            icon={<Radio className="size-8" />}
+            title={t("ledger.breadcrumbsEmpty")}
+            hint={t("ledger.breadcrumbsEmptyHint")}
+          />
         ) : (
           <ul className="flex flex-col gap-2">
             {rows.map((r) => (

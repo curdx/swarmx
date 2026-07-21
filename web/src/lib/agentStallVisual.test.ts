@@ -8,7 +8,7 @@ import type { AgentInfo, AgentLiveState, MessageRecord } from "../api/types";
 // worker that's still producing activity or one that has no parent.
 
 const NOW = 1_000_000_000_000;
-const IDLE_AFTER_ACTIVE_MS = 600_000;
+const IDLE_AFTER_ACTIVE_MS = 1_800_000; // 必须与 agent.ts 的源值一致(30min)
 
 const labels = {
   spawning: "启动中",

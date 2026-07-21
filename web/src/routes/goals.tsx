@@ -23,6 +23,7 @@ import { api } from "@/api/http";
 import type { GoalEvidenceRecord, GoalRecord, GoalStatus, ThreadInfo } from "@/api/types";
 import { fmtTokens } from "@/lib/format";
 import { WorkspacePicker } from "@/components/WorkspacePicker";
+import { EmptyState } from "@/components/EmptyState";
 import {
   Select,
   SelectContent,
@@ -368,9 +369,11 @@ export default function GoalsRoute() {
                 </button>
               </div>
             ) : goals.length === 0 ? (
-              <div className="flex flex-1 items-center justify-center rounded-lg border border-border-subtle bg-surface-secondary px-4 py-10 text-center font-caption text-sm text-foreground-tertiary">
-                {t("goals.empty")}
-              </div>
+              <EmptyState
+                icon={<Flag className="size-8" />}
+                title={t("goals.empty")}
+                hint={t("goals.emptyHint")}
+              />
             ) : (
               goals.map((goal) => (
                 <GoalCard

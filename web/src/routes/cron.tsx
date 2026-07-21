@@ -12,10 +12,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
-import { Play, Trash2, Loader2, Check, X, Pencil, FolderPlus } from "lucide-react";
+import { Play, Trash2, Loader2, Check, X, Pencil, FolderPlus, Clock } from "lucide-react";
 import { api, ApiError } from "@/api/http";
 import type { CronJob, Workspace } from "@/api/types";
 import { cn } from "@/lib/cn";
+import { EmptyState } from "@/components/EmptyState";
 import { toast } from "@/lib/toast";
 import {
   describeCron,
@@ -542,9 +543,11 @@ export default function CronRoute() {
             </button>
           </div>
         ) : jobs.length === 0 ? (
-          <div className="rounded-lg border border-border-subtle bg-surface-secondary px-4 py-6 text-center font-caption text-sm text-foreground-tertiary">
-            {t("cron.empty")}
-          </div>
+          <EmptyState
+            icon={<Clock className="size-8" />}
+            title={t("cron.empty")}
+            hint={t("cron.emptyHint")}
+          />
         ) : (
           <>
             <div className="font-caption text-[11px] text-foreground-tertiary">{t("cron.count", { n: jobs.length })}</div>

@@ -108,6 +108,20 @@ pub enum SwarmEvent {
         steps: Vec<ThoughtTraceStep>,
         at: i64,
     },
+    /// A coarse bootstrap-stage heartbeat while an agent COLD-STARTS, so the
+    /// UI can show a narrative stage bar ("启动 CLI → 挂载 swarm 工具 → 注入
+    /// 任务") instead of a silent 30s spinner that reads as "wedged". Emitted
+    /// once per transition at: `shim_ready` (PTY up), `mcp_ready` (swarm tools
+    /// visible to the model), `bootstrap_injected` (first prompt submitted).
+    /// The "first turn" boundary needs no event — the first `AgentActivity`
+    /// after `bootstrap_injected` IS that signal. LOW-FREQUENCY by design.
+    AgentStage {
+        agent_id: String,
+        /// "shim_ready" | "mcp_ready" | "bootstrap_injected". Open string so
+        /// future stages don't need a schema bump.
+        stage: String,
+        at: i64,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

@@ -51,6 +51,7 @@ import {
   ConfirmActionDialog,
   type ConfirmActionState,
 } from "@/components/ConfirmActionDialog";
+import { EmptyState } from "@/components/EmptyState";
 import { agentInThread, directionBase } from "@/lib/thread";
 import { toast } from "@/lib/toast";
 import { cn } from "@/lib/cn";
@@ -865,10 +866,12 @@ export default function DagView() {
           </div>
         )}
         {liveAgents.length === 0 ? (
-          <div className="flex h-full flex-col items-center justify-center gap-3 text-foreground-tertiary">
-            <Activity className="size-10 opacity-40" />
-            <p className="font-caption text-sm">{t("dag.empty")}</p>
-          </div>
+          <EmptyState
+            icon={<Activity className="size-8" />}
+            title={t("dag.empty")}
+            hint={t("dag.emptyHint")}
+            primaryAction={{ label: t("dag.emptyAction"), href: ".." }}
+          />
         ) : (
           <ReactFlowProvider>
             <Canvas
