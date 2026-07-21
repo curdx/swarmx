@@ -24,7 +24,8 @@
 import { Link, Outlet, useLocation } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useEffect } from "react";
-import { Boxes, Command, Search } from "lucide-react";
+import { Command, Search } from "lucide-react";
+import { BrandMark } from "@/components/Brand";
 import { CommandPalette } from "@/components/CommandPalette";
 import { BackendDownBanner } from "@/components/BackendDownBanner";
 import { McpActivityBar } from "@/components/mcp/McpActivityBar";
@@ -110,9 +111,7 @@ export function AppShell() {
             className="group flex items-center gap-2 rounded-md px-1.5 py-1 transition-colors hover:bg-surface-tertiary"
             title={t("nav.chat")}
           >
-            <span className="flex size-7 items-center justify-center rounded-lg bg-accent-primary text-foreground-on-accent shadow-sm">
-              <Boxes className="size-4" strokeWidth={2.25} />
-            </span>
+            <BrandMark size={28} className="drop-shadow-sm" />
             <span className="font-mono text-[15px] font-semibold tracking-tight text-foreground-primary">
               swarmx
             </span>

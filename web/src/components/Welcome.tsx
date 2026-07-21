@@ -14,6 +14,7 @@
  */
 
 import { useTranslation } from "react-i18next";
+import { BrandMark } from "@/components/Brand";
 import {
   ArrowRight,
   ExternalLink,
@@ -40,7 +41,7 @@ export function Welcome({ onCreateWorkspace }: Props) {
       <div className="mx-auto flex w-full max-w-5xl flex-1 flex-col justify-center gap-8">
         <div className="flex flex-col gap-5">
           <div className="inline-flex w-fit items-center gap-2 rounded-full border border-accent-primary/15 bg-accent-primary/8 px-3 py-1 font-caption text-[11px] font-semibold tracking-wide text-accent-primary">
-            <Sparkles className="size-3.5" />
+            <BrandMark size={14} className="rounded-[4px]" />
             {t("welcome.eyebrow", "多 agent 协作工作台")}
           </div>
           <div className="grid gap-8 lg:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)] lg:items-start">
