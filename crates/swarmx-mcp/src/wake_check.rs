@@ -15,6 +15,12 @@
 //!     invalid" for Stop; the safe path is JSON-on-stdout + exit 0 for every
 //!     branch including errors.
 //!
+//! `--hook-format kimi` speaks Kimi Code's DIFFERENT Stop-hook protocol
+//! instead (kimi reads no stdout JSON): "block + continue" is signalled by
+//! **exit code 2** with the continuation message on **stderr**; a no-op is a
+//! bare exit 0 with no output. Everything upstream of the emit step (stdin
+//! parsing, agent-id resolution, throttling, consume_wakes) is identical.
+//!
 //! Loop prevention is dual-track:
 //!   1. `stop_hook_active` short-circuits when the CLI explicitly tells us
 //!      "this is a recursive call, please stop".
@@ -23,8 +29,8 @@
 //!      loop. Counter is cleared whenever unread drops to zero.
 //!
 //! Failure mode: any error (bad stdin, missing server, HTTP failure, file
-//! IO) collapses to `print!("{}")` + Ok(()). The hook MUST NOT prevent the
-//! agent from stopping; degrading to "no wake this turn" is always safe.
+//! IO) collapses to the format's no-op + exit 0. The hook MUST NOT prevent
+//! the agent from stopping; degrading to "no wake this turn" is always safe.
 
 use anyhow::Result;
 use clap::Args;
@@ -32,6 +38,19 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+/// Which CLI's Stop-hook protocol to speak. Selected by the `--hook-format`
+/// flag baked into the hook command the server writes into each CLI's config.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, clap::ValueEnum)]
+pub enum HookFormat {
+    /// claude / codex: JSON on stdout (`{}` noop, `{"decision":"block",
+    /// "reason":...}` wake), exit code ALWAYS 0.
+    #[default]
+    Claude,
+    /// Kimi Code: noop = bare exit 0 (no output); wake = the continuation
+    /// message on STDERR + exit code 2 (kimi's documented "block" signal).
+    Kimi,
+}
 
 #[derive(Debug, Args)]
 pub struct WakeCheckArgs {
@@ -68,6 +87,12 @@ pub struct WakeCheckArgs {
     /// Test-only; not advertised in help.
     #[arg(long, hide = true)]
     pub state_dir: Option<PathBuf>,
+
+    /// Which CLI's Stop-hook protocol to speak. Baked into the hook command
+    /// the server installs (kimi's config.toml entry carries
+    /// `--hook-format kimi`); defaults to the claude/codex JSON protocol.
+    #[arg(long, value_enum, default_value_t = HookFormat::Claude)]
+    pub hook_format: HookFormat,
 }
 
 /// Persisted between wake invocations. Kept tiny on purpose — corruption
@@ -93,16 +118,17 @@ const STDIN_MAX_BYTES: usize = 64 * 1024;
 /// fast in practice.
 const STDIN_TIMEOUT: Duration = Duration::from_millis(500);
 
-pub async fn run(args: WakeCheckArgs) -> Result<()> {
-    // From here on: every branch ends in emit_stdout(...) + Ok(()). No `?`
-    // bubbling that could result in a non-zero exit.
+pub async fn run(args: WakeCheckArgs) -> Result<i32> {
+    // From here on: every branch ends in an emit_* helper + Ok(<exit code>).
+    // The only non-zero code is kimi's documented "block" signal (2), raised
+    // deliberately AFTER we decide to wake — never an error propagation.
+    let format = args.hook_format;
 
     // ── 1. stdin: extract stop_hook_active + (maybe) agent_id ────────────
     let stdin_bytes = read_stdin_bounded().await;
     let stdin_json: Option<Value> = serde_json::from_slice(&stdin_bytes).ok();
     if parse_stop_hook_active(&stdin_bytes) {
-        emit_noop();
-        return Ok(());
+        return Ok(emit_noop(format));
     }
 
     // agent_id resolution order:
@@ -130,8 +156,7 @@ pub async fn run(args: WakeCheckArgs) -> Result<()> {
                         "wake-check: no --agent-id flag, no SWARMX_AGENT_ID env, \
                          and stdin lacks usable cwd; skipping wake"
                     );
-                    emit_noop();
-                    return Ok(());
+                    return Ok(emit_noop(format));
                 }
             },
         },
@@ -145,8 +170,7 @@ pub async fn run(args: WakeCheckArgs) -> Result<()> {
     let window_active = state.last_at_ms != 0
         && now_ms.saturating_sub(state.last_at_ms) < throttle_window_ms;
     if window_active && state.count >= args.max_wakes_per_window {
-        emit_noop();
-        return Ok(());
+        return Ok(emit_noop(format));
     }
 
     // ── 3. HTTP: POST /api/message/consume_wakes?to=<agent_id> ──────────
@@ -176,8 +200,7 @@ pub async fn run(args: WakeCheckArgs) -> Result<()> {
             // block the agent's stop because swarmx-server happens to be
             // down or the port changed.
             eprintln!("wake-check: {err}");
-            emit_noop();
-            return Ok(());
+            return Ok(emit_noop(format));
         }
     };
 
@@ -186,8 +209,7 @@ pub async fn run(args: WakeCheckArgs) -> Result<()> {
         // a wake unhindered (otherwise an agent that processed mail late
         // in the window would have to wait for the window to roll over).
         let _ = std::fs::remove_file(&state_path);
-        emit_noop();
-        return Ok(());
+        return Ok(emit_noop(format));
     }
 
     // ── 4. Persist throttle bump + emit wake ─────────────────────────────
@@ -236,26 +258,45 @@ pub async fn run(args: WakeCheckArgs) -> Result<()> {
          Do not produce any user-facing output about these wakes \
          outside the swarm tool calls."
     );
-    emit_block(&reason);
-    Ok(())
+    Ok(emit_block(format, &reason))
 }
 
 // ── stdout helpers ───────────────────────────────────────────────────────
 
-fn emit_noop() {
-    // Codex's docs are emphatic: stdout must be JSON. `{}` is a valid no-op.
-    print!("{{}}");
+/// Emit the format's no-op and return the process exit code (always 0 — the
+/// hook must never prevent the agent from stopping).
+fn emit_noop(format: HookFormat) -> i32 {
+    match format {
+        // Codex's docs are emphatic: stdout must be JSON. `{}` is a valid no-op.
+        HookFormat::Claude => print!("{{}}"),
+        // kimi: a bare exit 0 already means "allow the stop" — no output.
+        HookFormat::Kimi => {}
+    }
+    0
 }
 
-fn emit_block(reason: &str) {
-    let payload = json!({
-        "decision": "block",
-        "reason": reason,
-    });
-    // `to_string` (not `to_string_pretty`) — no trailing newline, no extra
-    // bytes. Both CLIs parse stdout strictly.
-    let s = serde_json::to_string(&payload).unwrap_or_else(|_| "{}".into());
-    print!("{s}");
+/// Emit the wake and return the process exit code: claude/codex synthesize
+/// the continuation from stdout JSON (exit 0); kimi reads the continuation
+/// message from STDERR and requires exit code 2 (its documented "block"
+/// signal — the ONLY non-zero code this binary deliberately returns).
+fn emit_block(format: HookFormat, reason: &str) -> i32 {
+    match format {
+        HookFormat::Claude => {
+            let payload = json!({
+                "decision": "block",
+                "reason": reason,
+            });
+            // `to_string` (not `to_string_pretty`) — no trailing newline, no
+            // extra bytes. Both CLIs parse stdout strictly.
+            let s = serde_json::to_string(&payload).unwrap_or_else(|_| "{}".into());
+            print!("{s}");
+            0
+        }
+        HookFormat::Kimi => {
+            eprintln!("{reason}");
+            2
+        }
+    }
 }
 
 // ── stdin helpers ────────────────────────────────────────────────────────
@@ -454,6 +495,7 @@ mod tests {
             throttle_secs: 30,
             max_wakes_per_window: 3,
             state_dir: Some(state_dir.to_path_buf()),
+            hook_format: HookFormat::Claude,
         }
     }
 
@@ -517,8 +559,9 @@ mod tests {
 
         let (addr, _) = start_stub(0).await;
         let args = args_for(addr, "test-agent", &state_dir);
-        run(args).await.unwrap();
+        let code = run(args).await.unwrap();
 
+        assert_eq!(code, 0, "claude-format noop exits 0");
         assert!(!path.exists(), "throttle file should be unlinked when count=0");
     }
 
@@ -528,8 +571,9 @@ mod tests {
         let state_dir = dir.path().to_path_buf();
         let (addr, _) = start_stub(3).await;
         let args = args_for(addr, "test-agent", &state_dir);
-        run(args).await.unwrap();
+        let code = run(args).await.unwrap();
 
+        assert_eq!(code, 0, "claude-format block still exits 0 (JSON-on-stdout protocol)");
         let path = throttle_path("test-agent", Some(&state_dir));
         let state = read_throttle(&path).expect("throttle file should exist");
         assert_eq!(state.count, 1);
@@ -608,6 +652,7 @@ mod tests {
             throttle_secs: 30,
             max_wakes_per_window: 3,
             state_dir: Some(state_dir.clone()),
+            hook_format: HookFormat::Claude,
         };
         run(args).await.unwrap();
         let path = throttle_path("test-agent", Some(&state_dir));
@@ -673,5 +718,51 @@ mod tests {
         let back: Value = serde_json::from_str(&s).unwrap();
         assert_eq!(back["decision"], json!("block"));
         assert_eq!(back["reason"], json!("test reason"));
+    }
+
+    // ── 4. kimi hook protocol (stderr + exit code 2 = block) ─────────────
+
+    #[tokio::test]
+    async fn kimi_noop_returns_zero() {
+        let dir = tempdir().unwrap();
+        let state_dir = dir.path().to_path_buf();
+        let (addr, _) = start_stub(0).await;
+        let args = WakeCheckArgs {
+            hook_format: HookFormat::Kimi,
+            ..args_for(addr, "test-agent", &state_dir)
+        };
+        let code = run(args).await.unwrap();
+        assert_eq!(code, 0, "kimi noop = bare exit 0 (allow the stop)");
+    }
+
+    #[tokio::test]
+    async fn kimi_block_returns_exit_code_2() {
+        let dir = tempdir().unwrap();
+        let state_dir = dir.path().to_path_buf();
+        let (addr, _) = start_stub(2).await;
+        let args = WakeCheckArgs {
+            hook_format: HookFormat::Kimi,
+            ..args_for(addr, "test-agent", &state_dir)
+        };
+        let code = run(args).await.unwrap();
+        assert_eq!(code, 2, "kimi wake = exit 2 (kimi's documented block signal)");
+        // The wake still rode the same throttle bookkeeping as claude's.
+        let path = throttle_path("test-agent", Some(&state_dir));
+        let state = read_throttle(&path).expect("throttle file should exist");
+        assert_eq!(state.count, 1);
+    }
+
+    #[tokio::test]
+    async fn kimi_http_error_degrades_to_zero() {
+        // Fail-open: a swarmx-server outage must not block kimi's stop either.
+        let dir = tempdir().unwrap();
+        let state_dir = dir.path().to_path_buf();
+        let addr = start_error_stub().await;
+        let args = WakeCheckArgs {
+            hook_format: HookFormat::Kimi,
+            ..args_for(addr, "test-agent", &state_dir)
+        };
+        let code = run(args).await.unwrap();
+        assert_eq!(code, 0, "kimi degrade path is also exit 0");
     }
 }

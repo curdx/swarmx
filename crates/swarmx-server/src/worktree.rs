@@ -393,12 +393,14 @@ pub fn ignore_managed_artifacts(repo_cwd: &Path) {
             ".claude/settings.local.json",
             ".codex/hooks.json",
             // The swarm MCP config we write per-agent: reasonix's root `.mcp.json`
-            // and zulu's `.comate/` (kernel dir). These are scaffolding, NOT the
+            // and zulu's `.comate/` / kimi's `.kimi-code/` (kernel/config dirs).
+            // These are scaffolding, NOT the
             // agent's work — if they leak into git they get committed by
             // contestants/the judge and merged into base, and they falsely read as
             // "the agent produced work" in the fusion completion checks.
             ".mcp.json",
             ".comate/",
+            ".kimi-code/",
         ],
     );
 }
@@ -759,6 +761,7 @@ mod tests {
         // read as "the agent produced work".
         assert!(body.contains(".mcp.json"), "reasonix root .mcp.json excluded");
         assert!(body.contains(".comate/"), "zulu .comate/ excluded");
+        assert!(body.contains(".kimi-code/"), "kimi .kimi-code/ excluded");
 
         // Idempotent: a second call must not duplicate the entries.
         ignore_managed_artifacts(&repo);

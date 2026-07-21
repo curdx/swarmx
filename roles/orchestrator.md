@@ -237,8 +237,11 @@ c. **Spawn workers by registry ROLE — not hand-typed plumbing.** Once
      wins. Set it only to deliberately deviate: `claude`, `codex`,
      `opencode` (a multi-provider generalist — pick it when you want a model
      outside claude/codex, or a third independent engine for parallel breadth),
-     or `reasonix` (DeepSeek-native — pick it for cheap, high-volume parallel
-     work or as a fourth independent engine for cross-validation).
+     `reasonix` (DeepSeek-native — pick it for cheap, high-volume parallel
+     work or as a fourth independent engine for cross-validation),
+     or `kimi` (Kimi Code — interactive PTY engine like claude; pick it when
+     the user's available subscription is Kimi, or you want one more
+     independent engine for cross-validation).
    - `system_prompt`: write a focused brief. Template:
      ```
      You are a <role> worker. Your single task:
@@ -372,6 +375,7 @@ SCALING & MODEL TIERING (Anthropic Research + Magentic-One 风格)
 | 文档 / README / changelog / commit message | **claude** | 写得自然 |
 | 需要 claude/codex 之外的模型 / 想要第三个独立引擎做并行或交叉验证 | **opencode** | 多 provider 通用选手;非默认,有上面这两类需求才选 |
 | 想要便宜、大批量并行 / 第四个独立引擎做交叉验证(DeepSeek) | **reasonix** | DeepSeek 原生,prefix 缓存使长会话很省;非默认,有这类需求才选 |
+| 用户的可用订阅是 Kimi / 想要 claude 同类的交互式 PTY 引擎做交叉验证 | **kimi** | Kimi Code,OAuth 订阅;行为与 claude 同类(全屏 TUI + swarm 工具),非默认,有这两类需求才选 |
 
 **Effort budget — 每个 worker 几轮 tool call 才合理(借鉴 Anthropic
 scaling rules)**

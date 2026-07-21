@@ -42,11 +42,15 @@ use uuid::Uuid;
 ///     ~100s (see `engine_probe::probe_timeout` opencode=100s / OPENCODE_TURN_
 ///     TIMEOUT=75s), so 150s ≈ 1.5× that — comfortably above a slow-but-fine
 ///     first turn, still bounded for a true wedge.
+///   - kimi likewise has no transcript tailer (PTY engine, no session-id flag
+///     to pin one to): its first-turn evidence is mailbox/blackboard writes,
+///     which can trail a long think. Same 150s budget as the other
+///     transcript-less engines.
 /// Keep the opencode value in sync with `opencode_tui::deliver_bootstrap`'s
 /// overall window (they're the coupled "did opencode start its first turn" pair).
 fn first_response_watchdog_ms(engine: &str) -> u64 {
     match engine {
-        "opencode" | "reasonix" => 150_000,
+        "opencode" | "reasonix" | "kimi" => 150_000,
         _ => 90_000,
     }
 }
@@ -385,6 +389,21 @@ fn install_hint_for(p: &CliPlugin) -> Option<CliInstallHint> {
             commands: vec!["npm install -g @comate/zulu".to_string()],
             verify_command: Some("zulu --version".to_string()),
             login_command: None,
+        }),
+        "kimi" => Some(CliInstallHint {
+            title: "Install Kimi Code".to_string(),
+            summary: "Official install script first (no Node.js required); npm is the \
+                      alternative (needs Node ≥ 22.19). Sign in via the OAuth device \
+                      flow (`kimi login`) or a Kimi Platform API key."
+                .to_string(),
+            docs_url: "https://www.kimi.com/code/docs/en/kimi-code-cli/guides/getting-started.html"
+                .to_string(),
+            commands: vec![
+                "curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash".to_string(),
+                "npm install -g @moonshot-ai/kimi-code".to_string(),
+            ],
+            verify_command: Some("kimi --version".to_string()),
+            login_command: Some("kimi login".to_string()),
         }),
         _ => None,
     }
@@ -1592,6 +1611,9 @@ pub(crate) fn spawn_bootstrap_inject(
     // alias). Empty ⇒ inject immediately (orchestrators / dep-less workers).
     deps: Vec<String>,
     swarm: std::sync::Arc<swarmx_swarm::Swarm>,
+    // The plugin catalog — used to read the agent's keystroke framing flags
+    // (e.g. kimi's `bracketed_paste`) off the slot's plugin id.
+    plugins: std::sync::Arc<crate::plugins::PluginRegistry>,
     // This worker's spawn time (unix-ms). A dep only satisfies the gate if its
     // latest blackboard write is at/after this — so a STALE key left on disk by
     // a PRIOR run on the same thread can't bypass the gate.
@@ -1856,6 +1878,41 @@ pub(crate) fn spawn_bootstrap_inject(
             }
             return;
         }
+        // kimi-class readiness gate: wait for the TUI's OWN settled banner
+        // (`bootstrap_ready_needle` in the manifest) before pasting. kimi's
+        // mcp-ready ping fires early (its tool fetch precedes the input
+        // pipeline becoming stable) — a paste landing in that window is
+        // silently eaten (ctx stays 0%; measured 2/4 spawns). Bounded: a
+        // missing banner injects anyway and the first-response watchdog
+        // judges the outcome. Empty needle (claude/codex) skips the gate.
+        let (ready_needle, ready_settle_ms) = {
+            let cli = slot_lock.lock().cli.clone();
+            match plugins.get(&cli) {
+                Some(p) => (
+                    p.bootstrap_ready_needle.clone(),
+                    p.bootstrap_ready_settle_ms,
+                ),
+                None => (String::new(), 0),
+            }
+        };
+        if !ready_needle.is_empty() {
+            let stream = slot_lock.lock().pty_stream();
+            let found = match stream {
+                Some(s) => {
+                    wait_for_pty_needle(&s, ready_needle.as_bytes(), BOOTSTRAP_READY_NEEDLE_TIMEOUT)
+                        .await
+                }
+                None => false,
+            };
+            if found {
+                if ready_settle_ms > 0 {
+                    tokio::time::sleep(std::time::Duration::from_millis(ready_settle_ms)).await;
+                }
+                tracing::debug!(source = ctx.source, agent = %agent_id, needle = %ready_needle, "bootstrap readiness needle seen; pasting");
+            } else {
+                tracing::warn!(source = ctx.source, agent = %agent_id, needle = %ready_needle, "bootstrap readiness needle not seen in time; injecting anyway");
+            }
+        }
         let pty_input = slot_lock.lock().pty_input();
         let Some(input_tx) = pty_input else {
             tracing::warn!(agent = %agent_id, "bootstrap: agent has no live PTY input; first turn not delivered");
@@ -1878,6 +1935,26 @@ pub(crate) fn spawn_bootstrap_inject(
                 .any(|r| prompt.contains(&format!("{{{r}_id}}")));
         let body = prompt.into_bytes();
         let body_len = body.len();
+        // kimi declares `bracketed_paste`: wrap the body in explicit
+        // `ESC[200~`…`ESC[201~` markers so its TUI treats the (large) paste as
+        // ONE atomic paste — without them the trailing `\r` can be absorbed
+        // as a newline mid-burst and the turn never starts (live-verified).
+        // Resolved off the slot's plugin id; claude/codex keep the raw-burst
+        // framing they're proven on. The settle scaling below still keys off
+        // the PROMPT length (markers add a constant 12 bytes).
+        let bracketed = {
+            let cli = slot_lock.lock().cli.clone();
+            plugins.get(&cli).map(|p| p.bracketed_paste).unwrap_or(false)
+        };
+        let body = if bracketed {
+            let mut b = Vec::with_capacity(body.len() + 12);
+            b.extend_from_slice(b"\x1b[200~");
+            b.extend_from_slice(&body);
+            b.extend_from_slice(b"\x1b[201~");
+            b
+        } else {
+            body
+        };
         // Submit as separate frames (paste body, settle, then \r): claude/
         // codex TUIs classify a burst containing newlines as a *paste*, so a
         // \r in the same burst becomes a literal newline rather than a submit.
@@ -1920,6 +1997,69 @@ pub(crate) fn spawn_bootstrap_inject(
             "bootstrap prompt injected"
         );
     });
+}
+
+/// How long the keystroke bootstrap waits for a plugin's
+/// `bootstrap_ready_needle` before giving up and pasting anyway. kimi's
+/// "MCP server … connected" banner lands <2s after spawn on a warm box; 45s
+/// covers a cold first run (plugin/theme init) while still leaving the 90s
+/// first-response watchdog room to judge a genuinely wedged agent.
+const BOOTSTRAP_READY_NEEDLE_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_secs(45);
+
+/// Scan an agent's PTY output for `needle` — ring buffer first, then live
+/// appends — returning `true` once found (`false` on timeout or stream
+/// close). Plain byte search over a rolling stitch window (needles are short
+/// ASCII banners; no decoding). Used by the keystroke bootstrap's
+/// kimi-class readiness gate: the TUI's own banner is the only trustworthy
+/// "input pipeline is stable" signal we have.
+async fn wait_for_pty_needle(
+    stream: &std::sync::Arc<crate::pty_stream::PtyStream>,
+    needle: &[u8],
+    timeout: std::time::Duration,
+) -> bool {
+    use crate::pty_stream::FetchResult;
+    if needle.is_empty() {
+        return true;
+    }
+    let deadline = tokio::time::Instant::now() + timeout;
+    let mut cursor: u32 = 0; // 0 = replay from the oldest still-buffered entry
+    let mut window: Vec<u8> = Vec::new();
+    /// Stitch across chunk boundaries without unbounded growth (a banner is
+    /// <100 bytes; 64KB of tail is far more than enough).
+    const WINDOW_CAP: usize = 64 * 1024;
+    loop {
+        match stream.fetch_since(cursor) {
+            FetchResult::Ok(entries) => {
+                for (seq, bytes) in entries {
+                    cursor = seq;
+                    window.extend_from_slice(&bytes);
+                }
+                if window.len() > WINDOW_CAP {
+                    let drop = window.len() - WINDOW_CAP;
+                    window.drain(..drop);
+                }
+                if window.windows(needle.len()).any(|w| w == needle) {
+                    return true;
+                }
+            }
+            FetchResult::Gap { current_seq } => {
+                // Buffer wrapped past us — resync and keep watching.
+                cursor = current_seq;
+                window.clear();
+            }
+        }
+        if stream.snapshot().closed {
+            return false;
+        }
+        tokio::select! {
+            _ = stream.wait_changed(cursor) => {}
+            _ = tokio::time::sleep_until(deadline) => return false,
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return false;
+        }
+    }
 }
 
 pub async fn spawn_worker(
@@ -2426,6 +2566,7 @@ pub async fn spawn_worker(
         },
         depends_on.clone(), // P1-D: gate the first turn on these minted keys
         state.swarm.clone(),
+        state.plugins.clone(),
         worker_spawn_ms,
         state.server_url.clone(),
     );
@@ -3126,6 +3267,7 @@ pub async fn run_spell(
             // resolved keys here to gate them too.
             Vec::new(),
             state.swarm.clone(),
+            state.plugins.clone(),
             now_ms(),
             state.server_url.clone(),
         );
@@ -3993,6 +4135,71 @@ mod p0_tests {
         assert!(
             err.1
                 .contains("Codex CLI: curl -fsSL https://chatgpt.com/codex/install.sh | sh")
+        );
+    }
+}
+
+#[cfg(test)]
+mod bootstrap_needle_tests {
+    use super::wait_for_pty_needle;
+    use bytes::Bytes;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn needle_found_in_existing_buffer() {
+        let stream = Arc::new(crate::pty_stream::PtyStream::new());
+        stream.append(Bytes::from_static(b"boot noise\r\n"));
+        stream.append(Bytes::from_static(
+            b"MCP server \"swarmx-swarm\" connected \xc2\xb7 11 tools (stdio)",
+        ));
+        assert!(
+            wait_for_pty_needle(
+                &stream,
+                b"MCP server \"swarmx-swarm\" connected",
+                Duration::from_millis(200),
+            )
+            .await
+        );
+    }
+
+    #[tokio::test]
+    async fn needle_stitched_across_chunks() {
+        let stream = Arc::new(crate::pty_stream::PtyStream::new());
+        stream.append(Bytes::from_static(b"MCP server \"swarmx-swa"));
+        let s2 = stream.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(30)).await;
+            s2.append(Bytes::from_static(b"rm\" connected \xc2\xb7 11 tools"));
+        });
+        assert!(
+            wait_for_pty_needle(
+                &stream,
+                b"MCP server \"swarmx-swarm\" connected",
+                Duration::from_secs(2),
+            )
+            .await
+        );
+    }
+
+    #[tokio::test]
+    async fn needle_absent_times_out() {
+        let stream = Arc::new(crate::pty_stream::PtyStream::new());
+        stream.append(Bytes::from_static(b"some other output"));
+        assert!(
+            !wait_for_pty_needle(&stream, b"never-appearing-banner", Duration::from_millis(150),)
+                .await
+        );
+    }
+
+    #[tokio::test]
+    async fn needle_absent_stream_closed_is_false() {
+        let stream = Arc::new(crate::pty_stream::PtyStream::new());
+        stream.append(Bytes::from_static(b"early exit"));
+        stream.close();
+        assert!(
+            !wait_for_pty_needle(&stream, b"never-appearing-banner", Duration::from_secs(5),).await,
+            "a closed stream must not wait out the full timeout"
         );
     }
 }

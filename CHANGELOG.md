@@ -7,6 +7,40 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Before tagging a release, run `node scripts/bump-version.mjs <x.y.z>` to sync
 the version across all four manifests.
 
+## [0.2.0] — 2026-07-20
+
+New engine: **Kimi Code** (`kimi`) joins the swarm as a first-class PTY
+engine, on par with claude/codex — spawn, wake, multi-agent delegation,
+activity, and usage all verified live and in a real browser (Playwright).
+
+### Added
+- **Kimi Code engine** (`cli-plugins/kimi.toml` + `cli/kimi.rs`): OAuth
+  subscription billing (`billing_surface = interactive-subscription`),
+  `--yolo` auto-approve, ambient `KIMI_MODEL_*` API-key override blocked by
+  default, `swarmx-mcp wake-check --hook-format kimi` Stop-hook protocol
+  (stderr + exit 2) patched idempotently into the user-level
+  `~/.kimi-code/config.toml`.
+- **Keystroke bootstrap hardening for large prompts**: new manifest fields
+  `bracketed_paste` (explicit `ESC[200~…201~` framing) and
+  `bootstrap_ready_needle` / `bootstrap_ready_settle_ms` (gate the paste on
+  the TUI's own settled banner). Fixes a live-verified race where kimi's TUI
+  silently ate the ~26KB bootstrap before its input pipeline was ready.
+- **kimi transcript tailer**: `transcript.rs` now tails
+  `~/.kimi-code/sessions/wd_*_<sha256(cwd)[:12]>/<session>/agents/main/
+  wire.jsonl`, feeding the Activity view (`tool.call`/`tool.result`) and the
+  Usage page (`usage.record`, `kimi-code/*` models) — previously both were
+  empty for kimi.
+
+### Changed
+- **kimi MCP injection relies on env inheritance**: `.kimi-code/mcp.json`
+  carries no per-agent values (verified: kimi's stdio MCP children inherit
+  the parent's env), so same-workspace agents can no longer overwrite each
+  other's MCP identity (the reasonix/zulu class of bug).
+- `swarm_spawn_worker`'s `cli` enum, fusion `valid_clis`, and the autopilot
+  fusion panel now include `kimi` (and `zulu`); the first-response watchdog
+  gives transcript-less engines (incl. kimi) a 150s window.
+- `roles/orchestrator.md`'s engine-selection guidance covers kimi.
+
 ## [Unreleased]
 
 Production-readiness hardening from the 2026-06 maturity audit

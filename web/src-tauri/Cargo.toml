@@ -7,7 +7,7 @@
 
 [package]
 name = "swarmx-tauri"
-version = "0.1.6"
+version = "0.2.0"
 edition = "2021"
 license = "MIT"
 description = "swarmx desktop shell (Tauri 2)"

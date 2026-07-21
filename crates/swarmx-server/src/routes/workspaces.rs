@@ -844,7 +844,7 @@ pub async fn create_fusion_handler(
     };
 
     // Auto-implement panel resolved above (autopilot fills it; else the caller's).
-    let valid_clis = ["claude", "codex", "opencode", "reasonix", "zulu"];
+    let valid_clis = ["claude", "codex", "opencode", "reasonix", "zulu", "kimi"];
 
     // Create one isolated contestant direction per label.
     let mut contestant_ids: Vec<String> = Vec::with_capacity(labels.len());
@@ -999,7 +999,7 @@ fn autopilot_panel(state: &AppState) -> std::collections::HashMap<String, String
                 .map(|p| crate::runtime_path::resolve_executable(&p.binary).is_some())
                 .unwrap_or(false)
     };
-    let clis: Vec<String> = ["claude", "codex", "opencode", "reasonix"]
+    let clis: Vec<String> = ["claude", "codex", "opencode", "reasonix", "kimi"]
         .into_iter()
         .filter(|c| ready(c))
         .take(3)
@@ -1581,6 +1581,7 @@ async fn spawn_panel_contestant(
         },
         Vec::new(),
         state.swarm.clone(),
+        state.plugins.clone(),
         spawn_ms,
         state.server_url.clone(),
     );
@@ -1779,6 +1780,7 @@ async fn spawn_auto_judge(
         },
         Vec::new(),
         state.swarm.clone(),
+        state.plugins.clone(),
         spawn_ms,
         state.server_url.clone(),
     );
@@ -2590,6 +2592,7 @@ async fn spawn_merge_resolver(
         },
         Vec::new(),
         state.swarm.clone(),
+        state.plugins.clone(),
         spawn_ms,
         state.server_url.clone(),
     );

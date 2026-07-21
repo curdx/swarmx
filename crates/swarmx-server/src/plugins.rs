@@ -58,6 +58,12 @@ pub enum McpFormat {
     /// `zulu inspect`). Per-agent identity in `args`/`env`. Written by
     /// `cli::zulu`.
     ZuluMcpJson,
+    /// kimi (Kimi Code): `<ws>/.kimi-code/mcp.json` carrying
+    /// `mcpServers.swarmx-swarm` (standard schema — kimi deep-merges the
+    /// project-level file over the user-level `~/.kimi-code/mcp.json`, so the
+    /// user's own servers survive). Per-agent identity in `args`/`env`.
+    /// Written by `cli::kimi`.
+    KimiMcpJson,
 }
 
 /// Where/how the wake Stop-hook is materialized (the timeout-unit divergence —
@@ -79,6 +85,15 @@ pub enum StopHookFormat {
     /// `consume_wakes` endpoint and re-prompts the session when wakes are
     /// pending — the opencode equivalent of the claude/codex Stop-hook wake.
     OpencodePlugin,
+    /// kimi (Kimi Code): kimi has NO project-level hooks, so `cli::kimi`
+    /// patches ONE managed `[[hooks]] event = "Stop"` entry into the
+    /// USER-LEVEL `config.toml` (`$KIMI_CODE_HOME`, else `~/.kimi-code`),
+    /// running `swarmx-mcp wake-check --hook-format kimi` (timeout in
+    /// SECONDS, kimi's native unit). It fires for every kimi session on the
+    /// machine but no-ops for non-swarmx ones (wake-check resolves
+    /// `SWARMX_AGENT_ID`, which only swarmx spawns carry). Idempotent and
+    /// self-healing on mcp-bin path drift — see `cli::kimi`.
+    KimiConfigToml,
 }
 
 /// How swarmx delivers a turn's prompt text (the first-turn bootstrap and
@@ -378,6 +393,35 @@ pub struct CliPlugin {
     /// keystrokes — see [`InputDelivery`] and `crate::opencode_tui`.
     #[serde(default)]
     pub input_delivery: InputDelivery,
+
+    /// Keystroke-delivery framing: wrap the bootstrap paste in explicit
+    /// bracketed-paste markers (`ESC[200~` … `ESC[201~`) instead of relying on
+    /// the TUI's burst heuristic. kimi's TUI intermittently wedges on a large
+    /// (~26KB) raw burst — the paste renders but the trailing `\r` is absorbed
+    /// as a newline and the turn never starts (context stays 0%; live-verified
+    /// twice, incl. a standalone PTY probe where the raw burst wedged the TUI
+    /// hard enough to resist Ctrl-C). The explicit markers make the paste
+    /// atomic: the closing `ESC[201~` ends it deterministically and the next
+    /// `\r` submits. Default false — claude/codex are proven on the raw-burst
+    /// path and don't need it.
+    #[serde(default)]
+    pub bracketed_paste: bool,
+
+    /// PTY-output needle that must appear BEFORE the keystroke bootstrap is
+    /// pasted. kimi fetches the MCP tool list EARLY (firing swarmx's
+    /// mcp-ready ping) but keeps initializing for another ~0.1-0.9s — a paste
+    /// landing before its "MCP server … connected" banner is silently eaten
+    /// when the input pipeline resets (ctx stays 0%; measured 2/4 spawns).
+    /// Empty = no gate (claude/codex paste right after mcp-ready and are
+    /// proven). The wait is bounded in the inject path — a missing needle
+    /// injects anyway and the first-response watchdog judges the outcome.
+    #[serde(default)]
+    pub bootstrap_ready_needle: String,
+    /// Extra settle (ms) AFTER the readiness needle appears, before the paste
+    /// — absorbs the TUI's final input-pipeline reset (kimi's banner→settled
+    /// gap measured at ~0.1-0.9s; 1000ms matches the observed good case).
+    #[serde(default)]
+    pub bootstrap_ready_settle_ms: u64,
 }
 
 fn default_home_env() -> String {
@@ -459,6 +503,7 @@ impl PluginRegistry {
                 include_str!("../../../cli-plugins/reasonix.toml"),
             ),
             ("zulu.toml", include_str!("../../../cli-plugins/zulu.toml")),
+            ("kimi.toml", include_str!("../../../cli-plugins/kimi.toml")),
         ];
         let mut plugins: HashMap<String, CliPlugin> = HashMap::new();
         for (name, content) in BUILTIN {
@@ -694,6 +739,55 @@ mod tests {
             "zulu passes the license explicitly; nothing ambient to block"
         );
 
+        // kimi (Kimi Code, interactive PTY like claude/codex): MCP via
+        // project-level `.kimi-code/mcp.json`; no trust gate; Stop hook is ONE
+        // managed entry in the USER-LEVEL config.toml (kimi has no
+        // project-level hooks), timeout in SECONDS; keystroke delivery;
+        // OAuth subscription billing with the ambient KIMI_MODEL_* API-key
+        // override family blocked.
+        let kimi = reg.get("kimi").expect("kimi plugin present");
+        assert_eq!(kimi.trust_format, TrustFormat::None);
+        assert_eq!(kimi.mcp_format, McpFormat::KimiMcpJson);
+        assert_eq!(kimi.stop_hook_format, StopHookFormat::KimiConfigToml);
+        assert_eq!(kimi.input_delivery, InputDelivery::Keystroke);
+        assert_eq!(kimi.billing_surface, BillingSurface::InteractiveSubscription);
+        assert!(
+            kimi.auto_inject_mcp,
+            "kimi injects swarm MCP via .kimi-code/mcp.json"
+        );
+        assert!(
+            kimi.auto_inject_stop_hook,
+            "kimi wake rides a config.toml [[hooks]] Stop entry"
+        );
+        assert!(
+            !kimi.auto_trust_workspace,
+            "kimi has no workspace trust gate"
+        );
+        assert!(
+            !kimi.native_tiers,
+            "kimi's model aliases aren't opus/sonnet/haiku tiers"
+        );
+        assert_eq!(kimi.model_args, vec!["--model", "{model}"]);
+        assert_eq!(kimi.default_args, vec!["--yolo"]);
+        assert!(
+            kimi.bracketed_paste,
+            "kimi's TUI wedges on large raw paste bursts — bootstrap must use explicit bracketed-paste markers",
+        );
+        assert_eq!(
+            kimi.bootstrap_ready_needle,
+            "MCP server \"swarmx-swarm\" connected",
+            "kimi's bootstrap must gate on its TUI's own MCP-connect banner (early pastes are eaten)",
+        );
+        assert_eq!(kimi.bootstrap_ready_settle_ms, 1000);
+        assert_eq!(
+            kimi.stop_hook_timeout, 10,
+            "kimi stop-hook timeout in SECONDS (their native unit, range 1-600)"
+        );
+        assert!(
+            kimi.blocked_env_prefixes.iter().any(|p| p == "KIMI_MODEL_"),
+            "kimi must block ambient KIMI_MODEL_* (API-key provider override) by default",
+        );
+
         // The codex "Hooks need review" auto-answer migrated from the old
         // auto_answer_hooks_dialog bool into a data-driven ready_plan step.
         assert!(
@@ -779,6 +873,7 @@ mod tests {
         assert!(reg.get("claude").is_some(), "claude must be embedded");
         assert!(reg.get("codex").is_some(), "codex must be embedded");
         assert!(reg.get("opencode").is_some(), "opencode must be embedded");
+        assert!(reg.get("kimi").is_some(), "kimi must be embedded");
     }
 
     /// Simulate the user-machine condition: load_layered with only unreachable
@@ -880,10 +975,11 @@ binary="x"
         assert!(reg.get("opencode").is_some(), "opencode from builtin floor");
         assert!(reg.get("reasonix").is_some(), "reasonix from builtin floor");
         assert!(reg.get("zulu").is_some(), "zulu from builtin floor");
+        assert!(reg.get("kimi").is_some(), "kimi from builtin floor");
         assert_eq!(
             reg.list().len(),
-            6,
-            "claude + codex + gemini + opencode(builtin) + reasonix(builtin) + zulu(builtin)"
+            7,
+            "claude + codex + gemini + opencode(builtin) + reasonix(builtin) + zulu(builtin) + kimi(builtin)"
         );
     }
 
@@ -914,10 +1010,11 @@ binary="x"
         assert!(reg.get("opencode").is_some(), "opencode stays from builtins");
         assert!(reg.get("reasonix").is_some(), "reasonix stays from builtins");
         assert!(reg.get("zulu").is_some(), "zulu stays from builtins");
+        assert!(reg.get("kimi").is_some(), "kimi stays from builtins");
         assert_eq!(
             reg.list().len(),
-            5,
-            "claude(dir) + codex(builtin) + opencode(builtin) + reasonix(builtin) + zulu(builtin)"
+            6,
+            "claude(dir) + codex(builtin) + opencode(builtin) + reasonix(builtin) + zulu(builtin) + kimi(builtin)"
         );
 
         // All-absent layers → fall back to the builtin catalog, not empty.
@@ -927,6 +1024,7 @@ binary="x"
         assert!(only_builtins.get("opencode").is_some());
         assert!(only_builtins.get("reasonix").is_some());
         assert!(only_builtins.get("zulu").is_some());
-        assert_eq!(only_builtins.list().len(), 5, "builtins are the floor");
+        assert!(only_builtins.get("kimi").is_some());
+        assert_eq!(only_builtins.list().len(), 6, "builtins are the floor");
     }
 }

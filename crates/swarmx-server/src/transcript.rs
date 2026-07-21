@@ -51,12 +51,13 @@ const MAX_LINE: usize = 512 * 1024;
 enum Flavor {
     Claude,
     Codex,
+    Kimi,
 }
 
 /// Spawn a background task that tails `agent_id`'s session transcript and emits
 /// `AgentActivity` for each tool call/result. `cli` is the plugin id
-/// (e.g. "claude" / "codex"); `cwd` is the worker's canonical workspace dir.
-/// No-op for an unknown CLI (no known transcript format).
+/// (e.g. "claude" / "codex" / "kimi"); `cwd` is the worker's canonical
+/// workspace dir. No-op for an unknown CLI (no known transcript format).
 pub fn spawn_tailer(
     swarm: Arc<Swarm>,
     store: Arc<swarmx_storage::Store>,
@@ -69,6 +70,8 @@ pub fn spawn_tailer(
         Flavor::Codex
     } else if cli.contains("claude") {
         Flavor::Claude
+    } else if cli.contains("kimi") {
+        Flavor::Kimi
     } else {
         tracing::debug!(agent = %agent_id, cli = %cli, "transcript: unknown CLI flavor, not tailing");
         return;
@@ -230,6 +233,7 @@ async fn locate(
         let found = match flavor {
             Flavor::Claude => claude_file(cwd, session_id),
             Flavor::Codex => codex_file(agent_id),
+            Flavor::Kimi => kimi_file(cwd),
         };
         if found.is_some() {
             return found;
@@ -308,6 +312,82 @@ fn codex_file(agent_id: &str) -> Option<PathBuf> {
             .and_then(|n| n.to_str())
             .is_some_and(|n| n.starts_with("rollout-") && n.ends_with(".jsonl"))
     })
+}
+
+/// kimi (Kimi Code): `<kimi_home>/sessions/wd_<slug>_<sha12>/<sessionId>/
+/// agents/main/wire.jsonl` — the session's complete wire log (documented on
+/// kimi's Data-locations page). The bucket hash is the first 12 hex chars of
+/// sha256 over the CANONICAL session cwd (kimi canonicalizes it — macOS
+/// /tmp → /private/tmp; verified against real buckets), so we canonicalize
+/// too and match the bucket by hash SUFFIX: the slug segment's rules aren't
+/// documented and the hash is the discriminator. Newest session dir inside
+/// the bucket wins — each spawn starts a fresh kimi session, so that's ours.
+/// (Two agents spawned into the same cwd in the same second could both land
+/// on the newest — accepted; claude solves this with a pinned `--session-id`,
+/// which kimi has no flag for.)
+fn kimi_file(cwd: &Path) -> Option<PathBuf> {
+    let home = crate::cli::kimi::kimi_home()?;
+    kimi_file_at(&home, cwd)
+}
+
+fn kimi_file_at(home: &Path, cwd: &Path) -> Option<PathBuf> {
+    let canonical = std::fs::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf());
+    let hash = sha256_hex_12(canonical.to_string_lossy().as_bytes());
+    let suffix = format!("_{hash}");
+    let bucket = newest_dir_matching(&home.join("sessions"), &|name| {
+        name.starts_with("wd_") && name.ends_with(&suffix)
+    })?;
+    // Newest session dir that has ALREADY materialized its wire.jsonl — a
+    // brand-new session dir can precede the file by a beat, so scanning all
+    // of them beats probing just the newest dir.
+    let mut best: Option<(SystemTime, PathBuf)> = None;
+    for e in std::fs::read_dir(&bucket).ok()?.flatten() {
+        if !e.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+            continue;
+        }
+        let wire = e.path().join("agents").join("main").join("wire.jsonl");
+        if !wire.is_file() {
+            continue;
+        }
+        if let Ok(m) = e.metadata().and_then(|m| m.modified()) {
+            if best.as_ref().is_none_or(|(bt, _)| m > *bt) {
+                best = Some((m, wire));
+            }
+        }
+    }
+    best.map(|(_, p)| p)
+}
+
+/// Newest (by mtime) immediate subdirectory of `dir` whose NAME matches
+/// `pred`. Distinct from [`newest`] (which walks FILES); kimi's session
+/// layout is two directory levels (`wd_<…>` bucket → `session_<id>`).
+fn newest_dir_matching(dir: &Path, pred: &dyn Fn(&str) -> bool) -> Option<PathBuf> {
+    let mut best: Option<(SystemTime, PathBuf)> = None;
+    for e in std::fs::read_dir(dir).ok()?.flatten() {
+        if !e.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+            continue;
+        }
+        let name = e.file_name();
+        if !pred(name.to_string_lossy().as_ref()) {
+            continue;
+        }
+        if let Ok(m) = e.metadata().and_then(|m| m.modified()) {
+            if best.as_ref().is_none_or(|(bt, _)| m > *bt) {
+                best = Some((m, e.path()));
+            }
+        }
+    }
+    best.map(|(_, p)| p)
+}
+
+/// First 12 hex chars of sha256 — kimi's session-bucket discriminator
+/// (`wd_<slug>_<hash>`), computed over the canonical cwd string.
+fn sha256_hex_12(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(bytes);
+    let digest = h.finalize();
+    digest[..6].iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// Newest (by mtime) file under `dir` matching `pred`. `recurse` walks
@@ -435,6 +515,7 @@ impl TailState {
             let tools = match self.flavor {
                 Flavor::Claude => parse_claude(&v),
                 Flavor::Codex => parse_codex(&v),
+                Flavor::Kimi => parse_kimi(&v),
             };
             for t in tools {
                 self.emit(t, swarm, agent_id);
@@ -653,6 +734,51 @@ fn parse_codex(v: &Value) -> Vec<ParsedTool> {
     out
 }
 
+/// kimi (Kimi Code): `context.append_loop_event` rows of the session's
+/// `wire.jsonl` (documented Data-locations layout). Tool starts are
+/// `event.type = "tool.call"` (`toolCallId`, `name`, `args`); completions are
+/// `event.type = "tool.result"` (same id, `result.output`, failures flagged
+/// by `result.isError`). Shapes verified against real 0.28 wire.jsonl files.
+fn parse_kimi(v: &Value) -> Vec<ParsedTool> {
+    let mut out = Vec::new();
+    if v.get("type").and_then(|t| t.as_str()) != Some("context.append_loop_event") {
+        return out;
+    }
+    let ev = match v.get("event") {
+        Some(e) => e,
+        None => return out,
+    };
+    match ev.get("type").and_then(|t| t.as_str()) {
+        Some("tool.call") => {
+            if let Some(id) = ev.get("toolCallId").and_then(|i| i.as_str()) {
+                let name = ev.get("name").and_then(|n| n.as_str()).unwrap_or("tool");
+                let label = summarize(name, ev.get("args").unwrap_or(&Value::Null));
+                out.push(ParsedTool::Start {
+                    tool_id: id.to_string(),
+                    label,
+                });
+            }
+        }
+        Some("tool.result") => {
+            if let Some(id) = ev.get("toolCallId").and_then(|i| i.as_str()) {
+                let result = ev.get("result").unwrap_or(&Value::Null);
+                let is_err = result
+                    .get("isError")
+                    .and_then(|b| b.as_bool())
+                    .unwrap_or(false);
+                let text = result.get("output").and_then(|o| o.as_str());
+                out.push(ParsedTool::End {
+                    tool_id: id.to_string(),
+                    ok: !is_err,
+                    result: text.and_then(result_summary),
+                });
+            }
+        }
+        _ => {}
+    }
+    out
+}
+
 /// One token-usage event parsed from a transcript line. Buffered on the
 /// `TailState` and persisted by the run loop into `agent_usage`.
 struct UsageDelta {
@@ -735,6 +861,42 @@ fn parse_usage(flavor: Flavor, v: &Value) -> Option<UsageDelta> {
                 output,
                 cache_read,
                 cache_write: 0,
+                at: now_ms(),
+            })
+        }
+        Flavor::Kimi => {
+            // kimi: `usage.record` rows of the session wire.jsonl. Gate on
+            // `usageScope == "turn"`: it's the ONLY scope seen in 1315 real
+            // samples, and skipping a future cumulative-scope row is how we
+            // dodge the double-count codex's `total_token_usage` would cause.
+            if v.get("type").and_then(|t| t.as_str()) != Some("usage.record") {
+                return None;
+            }
+            if v.get("usageScope").and_then(|s| s.as_str()) != Some("turn") {
+                return None;
+            }
+            let usage = v.get("usage")?;
+            // Field semantics INFERRED from real rows (no official spec): the
+            // components are reported separately, Anthropic-style (e.g.
+            // `{inputOther: 362, inputCacheRead: 23296}` on a warm-cache turn)
+            // — so input/cache_read/cache_write are treated DISJOINT, the
+            // same convention `cost_of` uses.
+            let input = usage_num(usage, "inputOther");
+            let output = usage_num(usage, "output");
+            let cache_read = usage_num(usage, "inputCacheRead");
+            let cache_write = usage_num(usage, "inputCacheCreation");
+            if input == 0 && output == 0 && cache_read == 0 && cache_write == 0 {
+                return None;
+            }
+            Some(UsageDelta {
+                model: v
+                    .get("model")
+                    .and_then(|m| m.as_str())
+                    .map(str::to_string),
+                input,
+                output,
+                cache_read,
+                cache_write,
                 at: now_ms(),
             })
         }
@@ -1075,5 +1237,142 @@ mod tests {
             let v: Value = serde_json::from_str(line).unwrap();
             assert!(parse_usage(flavor, &v).is_none(), "should be None: {line}");
         }
+    }
+
+    // ── kimi fixtures (real 0.28 wire.jsonl shapes; lock the fields we read) ──
+
+    #[test]
+    fn kimi_tool_call_makes_a_start_with_pretty_label() {
+        let line = r##"{"type":"context.append_loop_event","event":{"type":"tool.call","uuid":"tool_1","turnId":"0","step":1,"toolCallId":"tool_1","name":"mcp__swarmx-swarm__swarm_write_blackboard","args":{"path":"ws/main/task.ledger.md","content":"# Task Ledger"},"time":1784555566575}}"##;
+        let v: Value = serde_json::from_str(line).unwrap();
+        match one(&parse_kimi(&v)) {
+            ParsedTool::Start { tool_id, label } => {
+                assert_eq!(tool_id, "tool_1");
+                // mcp prefix stripped, salient arg (path) in the label.
+                assert!(label.starts_with("swarm_write_blackboard "), "label was {label:?}");
+                assert!(label.contains("task.ledger.md"), "label was {label:?}");
+            }
+            _ => panic!("expected Start"),
+        }
+    }
+
+    #[test]
+    fn kimi_builtin_tool_call_uses_command_arg() {
+        let line = r#"{"type":"context.append_loop_event","event":{"type":"tool.call","toolCallId":"tool_2","name":"Bash","args":{"command":"ls -la"},"time":1}}"#;
+        let v: Value = serde_json::from_str(line).unwrap();
+        match one(&parse_kimi(&v)) {
+            ParsedTool::Start { tool_id, label } => {
+                assert_eq!(tool_id, "tool_2");
+                assert_eq!(label, "Bash ls -la");
+            }
+            _ => panic!("expected Start"),
+        }
+    }
+
+    #[test]
+    fn kimi_tool_result_makes_an_ok_end() {
+        let line = r#"{"type":"context.append_loop_event","event":{"type":"tool.result","toolCallId":"tool_1","result":{"output":"total 0\ndrwxr-xr-x ."},"time":1}}"#;
+        let v: Value = serde_json::from_str(line).unwrap();
+        match one(&parse_kimi(&v)) {
+            ParsedTool::End {
+                tool_id,
+                ok,
+                result,
+            } => {
+                assert_eq!(tool_id, "tool_1");
+                assert!(ok);
+                assert!(result.clone().unwrap().contains("total 0"));
+            }
+            _ => panic!("expected End"),
+        }
+    }
+
+    #[test]
+    fn kimi_tool_result_is_error_makes_a_failed_end() {
+        let line = r#"{"type":"context.append_loop_event","event":{"type":"tool.result","toolCallId":"tool_9","result":{"isError":true,"output":"permission denied"},"time":1}}"#;
+        let v: Value = serde_json::from_str(line).unwrap();
+        match one(&parse_kimi(&v)) {
+            ParsedTool::End { tool_id, ok, .. } => {
+                assert_eq!(tool_id, "tool_9");
+                assert!(!ok, "isError must map to a failed End");
+            }
+            _ => panic!("expected End"),
+        }
+    }
+
+    #[test]
+    fn kimi_non_loop_rows_yield_nothing() {
+        for line in [
+            r#"{"type":"metadata"}"#,
+            r#"{"type":"turn.prompt","input":[{"type":"text","text":"hi"}]}"#,
+            r#"{"type":"context.append_loop_event","event":{"type":"step.begin","turnId":"0","step":1},"time":1}"#,
+        ] {
+            let v: Value = serde_json::from_str(line).unwrap();
+            assert!(parse_kimi(&v).is_empty(), "should be empty: {line}");
+        }
+    }
+
+    #[test]
+    fn kimi_usage_record_maps_disjoint_fields() {
+        let line = r#"{"type":"usage.record","model":"kimi-code/k3","usage":{"inputOther":362,"output":125,"inputCacheRead":23296,"inputCacheCreation":0},"usageScope":"turn","time":1}"#;
+        let v: Value = serde_json::from_str(line).unwrap();
+        let u = parse_usage(Flavor::Kimi, &v).expect("usage");
+        assert_eq!(u.model.as_deref(), Some("kimi-code/k3"));
+        assert_eq!(u.input, 362);
+        assert_eq!(u.output, 125);
+        assert_eq!(u.cache_read, 23296);
+        assert_eq!(u.cache_write, 0);
+    }
+
+    #[test]
+    fn kimi_usage_skips_non_turn_scope_and_zero_rows() {
+        // A future cumulative scope must not double-count.
+        let line = r#"{"type":"usage.record","model":"m","usage":{"inputOther":1,"output":1,"inputCacheRead":0,"inputCacheCreation":0},"usageScope":"total","time":1}"#;
+        let v: Value = serde_json::from_str(line).unwrap();
+        assert!(parse_usage(Flavor::Kimi, &v).is_none());
+        // All-zero turn row is noise, not usage.
+        let line = r#"{"type":"usage.record","usage":{"inputOther":0,"output":0,"inputCacheRead":0,"inputCacheCreation":0},"usageScope":"turn","time":1}"#;
+        let v: Value = serde_json::from_str(line).unwrap();
+        assert!(parse_usage(Flavor::Kimi, &v).is_none());
+    }
+
+    #[test]
+    fn kimi_bucket_hash_matches_real_workdirkey() {
+        // Real bucket on disk: `wd_demo3_2b1181f934bc` for
+        // `/private/tmp/swarmx-teststack/demo3` — locks the sha256[:12] rule.
+        assert_eq!(
+            sha256_hex_12(b"/private/tmp/swarmx-teststack/demo3"),
+            "2b1181f934bc"
+        );
+    }
+
+    #[test]
+    fn kimi_file_discovers_newest_session_with_wire() {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path();
+        let cwd = root.path().join("ws");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let canonical = std::fs::canonicalize(&cwd).unwrap();
+        let hash = sha256_hex_12(canonical.to_string_lossy().as_bytes());
+        let bucket = home.join("sessions").join(format!("wd_ws_{hash}"));
+        // Older session WITH wire, newer session WITHOUT (still initializing),
+        // plus a decoy bucket with a different hash.
+        let s_old = bucket.join("session_old");
+        let s_new = bucket.join("session_new");
+        std::fs::create_dir_all(s_old.join("agents/main")).unwrap();
+        std::fs::create_dir_all(&s_new).unwrap();
+        std::fs::write(s_old.join("agents/main/wire.jsonl"), "{}\n").unwrap();
+        let decoy = home.join("sessions").join("wd_ws_000000000000");
+        std::fs::create_dir_all(decoy.join("session_decoy/agents/main")).unwrap();
+        std::fs::write(
+            decoy.join("session_decoy/agents/main/wire.jsonl"),
+            "{}\n",
+        )
+        .unwrap();
+
+        let found = kimi_file_at(home, &cwd).expect("wire discovered");
+        // The wire-less newer session is SKIPPED in favour of the older one
+        // that actually has wire.jsonl; the decoy bucket (wrong hash) ignored.
+        assert_eq!(found, s_old.join("agents/main/wire.jsonl"));
     }
 }

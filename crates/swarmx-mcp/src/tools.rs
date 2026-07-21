@@ -171,8 +171,12 @@ pub fn tool_descriptors() -> Vec<Value> {
                     },
                     "cli": {
                         "type": "string",
-                        "description": "Optional CLI override (claude, codex, opencode, or reasonix). Omit to use the role's default_cli. Only set this to deliberately deviate from the role.",
-                        "enum": ["claude", "codex", "opencode", "reasonix"]
+                        "description": "Optional CLI override (claude, codex, opencode, reasonix, zulu, or kimi). Omit to use the role's default_cli. Only set this to deliberately deviate from the role.",
+                        // Keep in sync with cli-plugins/*.toml — the server
+                        // validates against the plugin registry, but the LLM
+                        // only sees THIS enum: a missing id makes that engine
+                        // unreachable for orchestrator-driven spawns.
+                        "enum": ["claude", "codex", "opencode", "reasonix", "zulu", "kimi"]
                     },
                     "model": {
                         "type": "string",

@@ -3,11 +3,12 @@
 //!   - **default** (no subcommand): tokio stdio loop driving the MCP
 //!     dispatcher. Stdin = newline-delimited JSON-RPC, stdout = same,
 //!     stderr = tracing. EOF on stdin shuts the process down gracefully.
-//!   - **`wake-check`**: invoked by Claude Code / Codex CLI as a Stop hook.
-//!     POSTs `/api/message/consume_wakes` (atomically claims pending wakes;
-//!     superseded the old `unread_count` GET, M6f) and emits a single JSON line
-//!     on stdout that tells the CLI whether to keep the agent's turn going.
-//!     Always exit 0; see `wake_check.rs` for the wire protocol.
+//!   - **`wake-check`**: invoked by Claude Code / Codex / Kimi CLI as a Stop
+//!     hook. POSTs `/api/message/consume_wakes` (atomically claims pending
+//!     wakes; superseded the old `unread_count` GET, M6f) and tells the CLI
+//!     whether to keep the agent's turn going — stdout JSON + exit 0 for
+//!     claude/codex, stderr + exit 2 for kimi (`--hook-format`). See
+//!     `wake_check.rs` for the wire protocol.
 //!
 //! Identity (default mode):
 //!   - `--agent-id` (or env `SWARMX_AGENT_ID`): which agent we speak for.
@@ -49,7 +50,7 @@ struct Cli {
 #[derive(Debug, Subcommand)]
 enum Cmd {
     /// Stop-hook helper: probe unread count and emit a continuation hint
-    /// for Claude Code / Codex when the agent has unread swarm messages.
+    /// for Claude Code / Codex / Kimi when the agent has unread swarm messages.
     WakeCheck(WakeCheckArgs),
 }
 
@@ -69,7 +70,12 @@ async fn main() -> Result<()> {
 
     match cli.cmd {
         Some(Cmd::WakeCheck(args)) => {
-            wake_check::run(args).await?;
+            let code = wake_check::run(args).await?;
+            if code != 0 {
+                // kimi's Stop-hook protocol: exit 2 = "block the stop, continue
+                // with the stderr message". The only non-zero path.
+                std::process::exit(code);
+            }
             Ok(())
         }
         None => {

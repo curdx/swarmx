@@ -145,7 +145,7 @@
   "welcome": {
     "eyebrow": "AI 团队协作工作台",
     "title": "派一支 AI 团队，在你的项目里分工干完一件事",
-    "subtitle": "复用你已装好、已登录的 AI 编码 CLI（Claude、Codex、OpenCode、Reasonix、Zulu…），把它们编成一支团队：你提需求，队长拆解派工，成员各自动手、互相协作，最后交付——全程在本地运行，沿用你现有的订阅。",
+    "subtitle": "复用你已装好、已登录的 AI 编码 CLI（Claude、Codex、OpenCode、Reasonix、Zulu、Kimi…），把它们编成一支团队：你提需求，队长拆解派工，成员各自动手、互相协作，最后交付——全程在本地运行，沿用你现有的订阅。",
     "panelTitle": "首次进入通常这样开始",
     "stepsBadge": "3 步",
     "primary": "新建工作空间",

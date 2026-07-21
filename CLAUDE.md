@@ -32,7 +32,7 @@ consistency. Append "[RULES I BROKE]: which, where, why."
 
 # swarmx — 项目工作约定
 
-swarmx 是一个浏览器仪表盘:在 PTY 下拉起真实的 `claude` / `codex` / `opencode` / `reasonix` CLI,
+swarmx 是一个浏览器仪表盘:在 PTY 下拉起真实的 `claude` / `codex` / `opencode` / `reasonix` / `zulu` / `kimi` CLI,
 把它们组成一个 swarm,让它们通过共享收件箱 + 黑板互相消息、协作完成一个任务。
 后端是 Rust(axum,loopback `127.0.0.1:7777`),前端是 Vite + React + xterm.js,
 桌面端用 Tauri 把后端作为 sidecar 打包。
@@ -156,7 +156,7 @@ reasonix 走 `reasonix serve` 的 HTTP/SSE(非 PTY,见 `reasonix_serve.rs`)。
 | `swarmx-protocol` | WebSocket 帧 schema、REST DTO,server 与各 client 共享 |
 | `swarmx-shim` | `execvp` 真 CLI 的 OSC 包装(每 agent 一个);CI harness-check 会校验它进了 Tauri externalBin |
 | `swarmx-pty` | `portable-pty` 包装 + 双线程桥接 + 单调 seq 环形缓冲 |
-| `swarmx-server` | axum HTTP/WS 网关。路由(`src/routes/`)、生命周期、pre-spawn 补丁、spell 执行器、role 注册表、`WakeCoordinator`、reaper、billing、engine-probe。各引擎适配在 `src/cli/{claude,codex,opencode,reasonix}.rs` |
+| `swarmx-server` | axum HTTP/WS 网关。路由(`src/routes/`)、生命周期、pre-spawn 补丁、spell 执行器、role 注册表、`WakeCoordinator`、reaper、billing、engine-probe。各引擎适配在 `src/cli/{claude,codex,opencode,reasonix,zulu,kimi}.rs` |
 | `swarmx-swarm` | 每 agent 收件箱、黑板 CRUD、notify-debouncer 文件监听 |
 | `swarmx-mcp` | stdio MCP server + `wake-check` 子命令 |
 | `swarmx-storage` | SQLite + FTS5,迁移、agents/messages/recordings/blackboard 表 |
@@ -184,7 +184,7 @@ recorder 落 `.cast` → 浏览器开 `/ws/pty/<agent_id>` 双向流 + `/ws/swar
 
 - `spells/init.md` —— `spells.rs` 的 `SpellRegistry::builtin()`
 - `roles/*.md`(8 个角色,含 orchestrator)—— `roles.rs` 的 `RoleRegistry::builtin()`
-- `cli-plugins/*.toml`(claude/codex/opencode/reasonix)—— `plugins.rs` 的 `PluginRegistry::builtin()`
+- `cli-plugins/*.toml`(claude/codex/opencode/reasonix/zulu/kimi)—— `plugins.rs` 的 `PluginRegistry::builtin()`
 
 磁盘上这三个目录现在只是**可选 overlay**(`default_*_dir()` 解析:`SWARMX_*_DIR` > `CARGO_MANIFEST_DIR` 相对 >
 裸相对),**当前 overlay 为空**——即编译进去的 builtin 才是生效内容。所以「目录没打进 .app」不再致命。

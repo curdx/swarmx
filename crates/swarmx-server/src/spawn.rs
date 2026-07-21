@@ -1348,6 +1348,9 @@ mod billing_policy_tests {
             effort_args: Vec::new(),
             effort_levels: HashMap::new(),
             input_delivery: InputDelivery::Keystroke,
+            bracketed_paste: false,
+            bootstrap_ready_needle: String::new(),
+            bootstrap_ready_settle_ms: 0,
         }
     }
 

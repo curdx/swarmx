@@ -145,7 +145,7 @@
   "welcome": {
     "eyebrow": "AI team workspace",
     "title": "Send an AI team to get something done in your project",
-    "subtitle": "Reuse the AI coding CLIs you've already installed and signed in to (Claude, Codex, OpenCode, Reasonix, Zulu…) as one team: you give the goal, a captain breaks it down and assigns the work, members do it and coordinate, then ship — all running locally on your existing subscriptions.",
+    "subtitle": "Reuse the AI coding CLIs you've already installed and signed in to (Claude, Codex, OpenCode, Reasonix, Zulu, Kimi…) as one team: you give the goal, a captain breaks it down and assigns the work, members do it and coordinate, then ship — all running locally on your existing subscriptions.",
     "panelTitle": "A typical first run",
     "stepsBadge": "3 steps",
     "primary": "Create workspace",

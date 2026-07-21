@@ -1,0 +1,107 @@
+# Kimi Code CLI plugin (Moonshot AI) — interactive PTY, like claude/codex.
+#
+# Spawned under swarmx-shim. HOME is passed through so the agent reuses the
+# OAuth credentials `kimi login` wrote under ~/.kimi-code/ (config.toml +
+# credential store) — swarmx never reads or persists those tokens.
+#
+# Format notes (all verified against the official docs + kimi 0.27.0):
+#   - MCP: project-level `<ws>/.kimi-code/mcp.json` (standard `mcpServers`
+#     schema, deep-merged over the user-level ~/.kimi-code/mcp.json — the
+#     user's own servers survive). The entry carries NO per-agent values:
+#     kimi spawns stdio MCP children inheriting its process env (verified
+#     live on 0.28), and swarmx puts SWARMX_AGENT_ID/SWARMX_SERVER_URL in
+#     every spawn's env — so identity flows per-agent through the process
+#     tree and the file is identical for every agent, making it safe under
+#     shared-workspace layouts (no last-writer-wins identity bug).
+#   - Stop hook: kimi has NO project-level hooks — `[[hooks]]` lives only in
+#     the user-level config.toml ($KIMI_CODE_HOME or ~/.kimi-code). cli::kimi
+#     patches ONE managed entry there (idempotent, self-healing on path
+#     drift); it fires for every kimi session but no-ops outside swarmx
+#     agents (wake-check resolves SWARMX_AGENT_ID, which non-swarmx
+#     sessions lack). kimi's hook protocol differs from claude/codex: block
+#     is exit code 2 with the reason on stderr — hence wake-check speaks
+#     `--hook-format kimi` here.
+#   - Trust: kimi has no "trust this folder" gate.
+#   - Permissions: `--yolo` auto-approves regular tool calls (incl. MCP
+#     tools) — the kimi equivalent of claude's --dangerously-skip-permissions;
+#     without it every swarm_* call would park the PTY on a manual approve.
+
+id = "kimi"
+display_name = "Kimi Code"
+binary = "kimi"
+default_args = ["--yolo"]
+home_env = "HOME"
+
+# kimi's default surface is the interactive OAuth subscription (kimi login /
+# membership quota), same class as claude's. Keep it there by default.
+billing_surface = "interactive-subscription"
+requires_explicit_billing_opt_in = false
+# Ambient KIMI_MODEL_* (esp. KIMI_MODEL_NAME + KIMI_MODEL_API_KEY) synthesizes
+# a temporary API-key provider that OVERRIDES the subscription default model —
+# an ambient paid-API path, the same class of leak claude's ANTHROPIC_ block
+# guards. Strip the whole family by default; an explicit per-user plugin
+# overlay can re-enable it deliberately.
+blocked_env_prefixes = ["KIMI_MODEL_"]
+
+# No workspace trust gate in kimi.
+auto_trust_workspace = false
+trust_format = "none"
+
+# MCP: `<ws>/.kimi-code/mcp.json` (project level, standard mcpServers schema),
+# written by cli::kimi. A kimi worker CAN call swarm_* tools.
+auto_inject_mcp = true
+mcp_format = "kimi-mcp-json"
+
+# Wake: user-level config.toml `[[hooks]] event="Stop"` running
+# `swarmx-mcp wake-check --hook-format kimi`. kimi's timeout unit is SECONDS
+# (range 1-600, their default 30).
+auto_inject_stop_hook = true
+stop_hook_format = "kimi-config-toml"
+stop_hook_timeout = 10
+# kimi has no "update available" nag that blocks a headless PTY (upgrades are
+# explicit via `kimi upgrade` / tui.toml auto_install, not a startup gate).
+auto_dismiss_update = false
+
+# Full-screen TUI driven by keystroke injection, like claude/codex. Give the
+# TUI a beat to attach its input handler (codex-class settle, not claude's 0).
+input_delivery = "keystroke"
+input_settle_ms = 300
+
+# kimi's TUI intermittently wedges on a large raw paste burst (the bootstrap
+# renders but never submits — context stays 0%; live-verified). Explicit
+# bracketed-paste markers make the ~26KB bootstrap atomic so the trailing
+# Enter always submits (probe-verified: submits + turn starts + Ctrl-C clean).
+bracketed_paste = true
+
+# …and the paste must not land BEFORE the TUI settles: kimi fetches the MCP
+# tool list EARLY (firing swarmx's mcp-ready ping) but keeps initializing for
+# another ~0.1-0.9s — a paste in that window is silently eaten when the input
+# pipeline resets (ctx stays 0%; measured 2/4 spawns, the other 2 raced past
+# the banner by luck). Gate the paste on OUR OWN server's connect banner
+# (always present: auto_inject_mcp writes swarmx-swarm into
+# .kimi-code/mcp.json) plus a 1s margin. If the banner never comes (MCP
+# broken), the inject proceeds after a bounded timeout and the
+# first-response watchdog judges.
+bootstrap_ready_needle = 'MCP server "swarmx-swarm" connected'
+bootstrap_ready_settle_ms = 1000
+
+# `-m/--model <alias>` selects a model alias from config.toml [models.*] for
+# this launch. Aliases are user/managed-defined (kimi-code/k3,
+# kimi-code/kimi-for-coding, …) — NOT claude's opus/sonnet/haiku vocabulary.
+model_args = ["--model", "{model}"]
+native_tiers = false
+
+# No effort CLI flag: thinking effort is config (`[thinking] effort`) or the
+# KIMI_MODEL_THINKING_EFFORT env — which the blocked-env guard strips. Leave
+# empty (model's own default_effort applies).
+effort_args = []
+
+# Health needles — none shipped: kimi's logged-out / quota-exceeded TUI text
+# hasn't been captured from a verified run, and we don't ship guessed
+# substrings (a wrong needle stays silent). Until captured, those failures
+# surface via the first-response watchdog. Add verified entries here to
+# upgrade to instant fail:
+# [[health_needles]]
+# needle = "<verified substring>"
+# reason = "Kimi 未登录,请在终端运行 kimi login"
+# kind = "auth"
