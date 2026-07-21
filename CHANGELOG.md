@@ -7,6 +7,45 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Before tagging a release, run `node scripts/bump-version.mjs <x.y.z>` to sync
 the version across all four manifests.
 
+## [0.3.0] — 2026-07-21
+
+「Mission Control」体验重构 + SwarmX 品牌。Agent 冷启动不再黑盒,「需要我」
+有了全局收件箱,onboarding 改成任务式,深浅主题一键切换,产品有了自己的标。
+
+### Added
+- **冷启动阶段条**:new `agent_stage` WS event (shim_ready → mcp_ready →
+  bootstrap_injected); dispatch cards render a four-step stage chain
+  (拉起 agent → 启动 CLI → 挂载 swarm 工具 → 注入任务), completed chain shown
+  on ready too.
+- **「需要我」全局收件箱** (`deriveNeedsYou` + NeedsYouBar): agents that are
+  errored or exited-without-handoff aggregate into a top strip, one click to
+  the drawer; empty means it disappears.
+- **Thinking-liveness pulses in the transcript tailer**: kimi `llm.request`,
+  codex `reasoning`, claude `thinking` blocks now emit system-level activity,
+  so long reasoning keeps `last_activity_at` fresh — slow-but-alive is
+  distinguishable from wedged.
+- **Theme quick-toggle** in the activity bar footer (light → dark → system).
+- **SwarmX brand mark**: four worker nodes forming an X around a captain node;
+  one source (`Brand.tsx`) feeding the top bar, favicon, and the full Tauri
+  icon set (mac/Windows/Linux/iOS/Android).
+
+### Changed
+- Onboarding is task-driven: reworked empty-state starters (first one demos a
+  swarm dispatch); the 4-step tour overlay is retired.
+- 11 views' empty states unified: icon + what-appears-here + how-to-make-it +
+  primary action where meaningful.
+- Agent drawer defaults to the Activity tab; Recordings/Context move into a
+  More menu.
+- Stall honesty: NeedsYou no longer includes "suspected-stuck" (a slow-but-
+  alive agent is not a decision); member-row stall thresholds raised to
+  15/15/30 min with factual labels.
+
+### Fixed
+- The dispatch task card could never render (known-id seeding effect raced the
+  new-agent detection effect — every roster change marked all agents known
+  first); fixed with render-time lazy init. Attach window widened to 180s for
+  LLM-paced dispatches (a real 71s dispatch was missing the old 15s window).
+
 ## [0.2.0] — 2026-07-20
 
 New engine: **Kimi Code** (`kimi`) joins the swarm as a first-class PTY
